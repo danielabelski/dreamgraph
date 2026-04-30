@@ -31,12 +31,15 @@ import {
   type HeatmapResult,
 } from "./api";
 import type { GraphSnapshot } from "./types";
+import type { GraphEvent } from "./sse";
 import { createScene, hasWebGL2 } from "./three/scene";
 import { LayoutBridge } from "./three/layout3d";
+import { Minimap3D } from "./three/Minimap3D";
 import { NodeSystem } from "./three/NodeSystem";
 import { SplineSet } from "./three/splines";
 import { TubeSystem } from "./three/TubeSystem";
 import { ParticleSystem } from "./three/ParticleSystem";
+import { WavefrontSystem } from "./three/WavefrontSystem";
 
 interface Graph3DCanvasProps {
   prefs: ExplorerPrefs;
@@ -45,6 +48,12 @@ interface Graph3DCanvasProps {
   selected?: string | null;
   /** Click handler — same shape as `GraphCanvas.onSelect`. */
   onSelect?: (nodeId: string | null) => void;
+  /**
+   * Live SSE stream from the daemon. Used to spawn wavefronts on
+   * `dream.cycle.completed` and could power per-node pulses in a
+   * follow-up. The newest event is at index 0; we only act on the head.
+   */
+  liveEvents?: GraphEvent[];
   /** Surface a fatal init error to the parent so it can fall back to 2D. */
   onFatal?: (message: string) => void;
 }
@@ -54,6 +63,7 @@ export default function Graph3DCanvas({
   snapshot,
   selected,
   onSelect,
+  liveEvents,
   onFatal,
 }: Graph3DCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -68,13 +78,29 @@ export default function Graph3DCanvas({
   onSelectRef.current = onSelect;
   const statusRef = useRef<HTMLDivElement | null>(null);
   /** Imperative handle filled in by the mount effect; null until then. */
-  const apiRef = useRef<{ setSelected(id: string | null): void } | null>(null);
+  const apiRef = useRef<{
+    setSelected(id: string | null): void;
+    triggerWave(color?: number | string): void;
+  } | null>(null);
 
   // Push selection updates from React → renderer without re-mounting.
   useEffect(() => {
     selectedRef.current = selected ?? null;
     apiRef.current?.setSelected(selected ?? null);
   }, [selected]);
+
+  // Trigger a wavefront whenever a new dream.cycle.completed event
+  // arrives. We key off the seq of the head event so a stable list
+  // doesn't re-fire on every render.
+  const lastWaveSeqRef = useRef<number>(0);
+  useEffect(() => {
+    if (!liveEvents || liveEvents.length === 0) return;
+    const head = liveEvents[0];
+    if (head.kind !== "dream.cycle.completed") return;
+    if (head.seq <= lastWaveSeqRef.current) return;
+    lastWaveSeqRef.current = head.seq;
+    apiRef.current?.triggerWave(0xa0dcff);
+  }, [liveEvents]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -127,9 +153,16 @@ export default function Graph3DCanvas({
       const splines = new SplineSet(snap.nodes, snap.edges);
       const tubeSystem = new TubeSystem(splines);
       const particleSystem = new ParticleSystem(splines);
+      const wavefrontSystem = new WavefrontSystem();
       nodeSystem.addTo(bundle.scene);
       tubeSystem.addTo(bundle.scene);
       particleSystem.addTo(bundle.scene);
+      wavefrontSystem.addTo(bundle.scene);
+
+      // Minimap overlay (Slice E2). DOM-based; sits absolutely over the
+      // canvas so it survives a renderer rebuild without state loss.
+      const minimap = new Minimap3D();
+      minimap.attachTo(container);
 
       // Apply the initial selection — it might have been set in 2D before
       // the user toggled to 3D, so we shouldn't wait for a click.
@@ -281,6 +314,23 @@ export default function Graph3DCanvas({
           nodeSystem.applyLayout(positions);
           splines.applyLayout(positions);
           tubeSystem.rebuild();
+          // Recompute wavefront bounds + minimap nodes once layout settles.
+          const c = new Vector3();
+          let radius = 10;
+          if (positions.length > 0) {
+            const box = new Box3();
+            const v = new Vector3();
+            for (const p of positions) {
+              v.set(p.x, p.y, p.z);
+              box.expandByPoint(v);
+            }
+            box.getCenter(c);
+            const size = new Vector3();
+            box.getSize(size);
+            radius = Math.max(size.x, size.y, size.z) * 0.5 || 10;
+          }
+          wavefrontSystem.setBounds(c, radius);
+          minimap.setNodes(positions.map((p) => ({ id: p.id, x: p.x, z: p.z })));
           if (!framedYet) {
             framedYet = true;
             frameAll(positions, bundle.camera, controls);
@@ -369,6 +419,8 @@ export default function Graph3DCanvas({
         // populated the splines; before that the curves are placeholders
         // and stepping them just wastes work.
         if (framedYet && !particlesPaused) particleSystem.update(dt, now / 1000);
+        wavefrontSystem.tick(now / 1000);
+        minimap.setCamera(bundle.camera, controls.target);
         composer.render();
         raf = requestAnimationFrame(tick);
       };
@@ -378,6 +430,9 @@ export default function Graph3DCanvas({
         setSelected(id) {
           nodeSystem.setSelected(id);
           renderStatus();
+        },
+        triggerWave(color = 0xa0dcff) {
+          wavefrontSystem.trigger(performance.now() / 1000, color);
         },
       };
 
@@ -396,6 +451,8 @@ export default function Graph3DCanvas({
         nodeSystem.dispose();
         tubeSystem.dispose();
         particleSystem.dispose();
+        wavefrontSystem.dispose();
+        minimap.dispose();
         composer.dispose();
         bloomPass.dispose();
         bundle.dispose();

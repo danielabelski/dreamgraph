@@ -271,6 +271,7 @@ export function App() {
               snapshot={snapshot}
               selected={selected}
               onSelect={setSelected}
+              liveEvents={liveEvents}
               onFatal={(msg) => {
                 setRender3dError(msg);
                 setRenderMode("2d");
