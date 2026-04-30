@@ -268,6 +268,7 @@ export function App() {
           >
             <Graph3DCanvas
               prefs={prefs}
+              snapshot={snapshot}
               onFatal={(msg) => {
                 setRender3dError(msg);
                 setRenderMode("2d");

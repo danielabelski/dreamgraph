@@ -1,41 +1,45 @@
 /**
- * DreamGraph Explorer — 3D canvas (Slice A skeleton).
+ * DreamGraph Explorer — 3D canvas (Slice B: static graph rendering).
  *
- * plans/EXPLORER_3D_MODE.md §12.A
+ * plans/EXPLORER_3D_MODE.md §12.B
  *
- * Scope for this slice: mount a working WebGL2 scene with orbit camera,
- * fog, and a faint reference grid. No nodes, no edges, no particles —
- * those land in slices B and C. The deliverable is "the toggle works,
- * 2D still works, and switching back and forth doesn't leak GPU memory."
+ * Slice A shipped the empty scene + camera + toggle. Slice B adds:
+ *   - layout via d3-force-3d running in a Web Worker
+ *   - NodeSystem (instanced spheres) + EdgeSystem (line segments)
+ *   - snapshot prop wiring + camera-frame on first layout
  *
- * Code is split: pure Three.js plumbing lives in `./three/scene.ts`,
- * React only owns lifecycle (mount, resize, dispose, camera persistence).
+ * Out of scope here: tubes (Slice C — they share the spline plumbing
+ * with particles), particles, hover/select rim shaders, bloom.
  */
 
 import { useEffect, useRef } from "react";
+import { Box3, Vector3, type PerspectiveCamera } from "three";
 import {
   patchExplorerPrefs,
   type ExplorerPrefs,
 } from "./api";
+import type { GraphSnapshot } from "./types";
 import { createScene, hasWebGL2 } from "./three/scene";
+import { LayoutBridge } from "./three/layout3d";
+import { NodeSystem } from "./three/NodeSystem";
+import { EdgeSystem } from "./three/EdgeSystem";
 
 interface Graph3DCanvasProps {
   prefs: ExplorerPrefs;
+  snapshot: GraphSnapshot;
   /** Surface a fatal init error to the parent so it can fall back to 2D. */
   onFatal?: (message: string) => void;
 }
 
-/**
- * Three.js canvas. Uses dynamic import for OrbitControls so the lazy
- * boundary in App.tsx still pays off — pulling controls statically here
- * would defeat code splitting on the orbit-controls subtree.
- */
-export default function Graph3DCanvas({ prefs, onFatal }: Graph3DCanvasProps) {
+export default function Graph3DCanvas({ prefs, snapshot, onFatal }: Graph3DCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // Latest prefs in a ref so the camera-persistence callback always sees
-  // the current values without re-creating the scene on every prefs change.
+  // Latest values in refs so the long-lived effect can read them without
+  // tearing down the scene on every prop change.
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const statusRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -50,9 +54,6 @@ export default function Graph3DCanvas({ prefs, onFatal }: Graph3DCanvasProps) {
     let raf = 0;
     let cleanup: (() => void) | null = null;
 
-    // Async wrapper so we can `await import(...)` without blocking the
-    // initial mount. Three.js itself is already a static import via
-    // ./three/scene, but OrbitControls lives in the examples subtree.
     (async () => {
       const { OrbitControls } = (await import(
         "three/examples/jsm/controls/OrbitControls.js"
@@ -73,23 +74,17 @@ export default function Graph3DCanvas({ prefs, onFatal }: Graph3DCanvasProps) {
       controls.target.set(...prefsRef.current.camera3d.target);
       controls.update();
 
-      // Resize observer — keep the renderer in step with the flex/grid
-      // container without polling rAF for size deltas.
-      const resize = () => {
-        const w = container.clientWidth;
-        const h = container.clientHeight;
-        if (w === 0 || h === 0) return;
-        bundle.renderer.setSize(w, h, false);
-        bundle.camera.aspect = w / h;
-        bundle.camera.updateProjectionMatrix();
-      };
-      const ro = new ResizeObserver(resize);
-      ro.observe(container);
+      // Build the renderable graph from the current snapshot.
+      const snap = snapshotRef.current;
+      const nodeSystem = new NodeSystem(snap.nodes);
+      const edgeSystem = new EdgeSystem(snap.nodes, snap.edges);
+      nodeSystem.addTo(bundle.scene);
+      edgeSystem.addTo(bundle.scene);
 
       // Persist camera changes back to the daemon, but only when the user
       // stops moving — otherwise we'd POST every frame.
       let saveTimer: ReturnType<typeof setTimeout> | null = null;
-      const queueCameraSave = () => {
+      const queueCameraSave = (): void => {
         if (saveTimer) clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
           const pos = bundle.camera.position;
@@ -104,6 +99,52 @@ export default function Graph3DCanvas({ prefs, onFatal }: Graph3DCanvasProps) {
       };
       controls.addEventListener("end", queueCameraSave);
 
+      // Run the force layout off-thread, then push positions into both
+      // systems and frame the camera. Failures are non-fatal — a bare
+      // graph at the origin is still better than a crashed canvas.
+      const bridge = new LayoutBridge();
+      const startedAt = performance.now();
+      let framedYet = false;
+      bridge
+        .compute(
+          snap.nodes.map((n) => ({ id: n.id })),
+          snap.edges.map((e) => ({ s: e.s, t: e.t, conf: e.conf })),
+        )
+        .then((positions) => {
+          if (disposed) return;
+          nodeSystem.applyLayout(positions);
+          edgeSystem.applyLayout(positions);
+          if (!framedYet) {
+            framedYet = true;
+            frameAll(positions, bundle.camera, controls);
+            queueCameraSave();
+          }
+          if (statusRef.current) {
+            const ms = Math.round(performance.now() - startedAt);
+            statusRef.current.innerHTML =
+              `<strong>3D</strong> · ${snap.nodes.length} nodes · ` +
+              `${snap.edges.length} edges · layout ${ms} ms`;
+          }
+        })
+        .catch((err: unknown) => {
+          if ((err as Error).message === "layout-superseded") return;
+          // eslint-disable-next-line no-console
+          console.warn("[explorer-3d] layout failed:", err);
+        });
+
+      // Resize observer — keep the renderer in step with the flex/grid
+      // container without polling rAF for size deltas.
+      const resize = () => {
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if (w === 0 || h === 0) return;
+        bundle.renderer.setSize(w, h, false);
+        bundle.camera.aspect = w / h;
+        bundle.camera.updateProjectionMatrix();
+      };
+      const ro = new ResizeObserver(resize);
+      ro.observe(container);
+
       const tick = () => {
         if (disposed) return;
         controls.update();
@@ -117,6 +158,9 @@ export default function Graph3DCanvas({ prefs, onFatal }: Graph3DCanvasProps) {
         controls.removeEventListener("end", queueCameraSave);
         controls.dispose();
         ro.disconnect();
+        bridge.dispose();
+        nodeSystem.dispose();
+        edgeSystem.dispose();
         bundle.dispose();
       };
     })().catch((err: unknown) => {
@@ -128,18 +172,49 @@ export default function Graph3DCanvas({ prefs, onFatal }: Graph3DCanvasProps) {
       if (raf) cancelAnimationFrame(raf);
       cleanup?.();
     };
-    // Intentionally only depend on mount — prefs are read via prefsRef so
-    // toggling grid/quality at runtime won't tear the scene down. Slice D
-    // will add explicit prop-driven updates.
+    // Intentionally only depend on mount — prefs and snapshot are read via
+    // refs so toggling grid/quality at runtime won't tear the scene down.
+    // Slice C will add a snapshot-delta path that re-runs the layout in
+    // place and updates the existing systems.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <div className="canvas-wrap canvas-3d">
       <div ref={containerRef} className="canvas" />
-      <div className="status">
-        <strong>3D</strong> · slice A · empty scene
+      <div className="status" ref={statusRef}>
+        <strong>3D</strong> · slice B · laying out…
       </div>
     </div>
   );
+}
+
+/**
+ * Compute a bounding box from positions, then move the camera back so the
+ * whole cloud fits in the current FOV with a comfortable margin.
+ */
+function frameAll(
+  positions: readonly { x: number; y: number; z: number }[],
+  camera: PerspectiveCamera,
+  controls: { target: Vector3; update(): void },
+): void {
+  if (positions.length === 0) return;
+  const box = new Box3();
+  const v = new Vector3();
+  for (const p of positions) {
+    v.set(p.x, p.y, p.z);
+    box.expandByPoint(v);
+  }
+  const center = new Vector3();
+  const size = new Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+  const radius = Math.max(size.x, size.y, size.z) * 0.5 || 10;
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const distance = (radius / Math.tan(fovRad / 2)) * 1.5 + 12;
+  const dir = new Vector3(1, 0.6, 1).normalize();
+  camera.position.copy(center).add(dir.multiplyScalar(distance));
+  controls.target.copy(center);
+  camera.lookAt(center);
+  controls.update();
 }
