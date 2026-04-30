@@ -5,6 +5,15 @@
   "version": "8.2.0",
   "icon": "media/dreamgraph-icon.png",
   "publisher": "siteledger-solutions",
+  "homepage": "https://dreamgraph.nofs.ai/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mmethodz/dreamgraph.git",
+    "directory": "extensions/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/mmethodz/dreamgraph/issues"
+  },
   "license": "DreamGraph License v1.0",
   "engines": {
     "vscode": "^1.100.0"

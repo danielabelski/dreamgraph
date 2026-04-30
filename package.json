@@ -2,6 +2,14 @@
   "name": "dreamgraph",
   "version": "8.2.0",
   "description": "Graph-first cognitive daemon with MCP tools, CLI, dashboard, Explorer, and VS Code integration",
+  "homepage": "https://dreamgraph.nofs.ai/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mmethodz/dreamgraph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mmethodz/dreamgraph/issues"
+  },
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "main": "dist/index.js",

@@ -9,6 +9,9 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/license-source--available-orange)
 [![CodeQL Advanced](https://github.com/mmethodz/dreamgraph/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/mmethodz/dreamgraph/actions/workflows/codeql.yml)
+[![Website](https://img.shields.io/badge/website-dreamgraph.nofs.ai-8b7cff)](https://dreamgraph.nofs.ai/)
+
+**Website:** [dreamgraph.nofs.ai](https://dreamgraph.nofs.ai/) — overview, guide, downloads, and screenshots in a friendlier format than this README.
 
 DreamGraph is a graph-first cognitive daemon for MCP-enabled development environments. It combines an instance-scoped daemon, CLI, VS Code extension, dashboard, and a persistent knowledge graph so the graph—not any single file or one-off code read—becomes the system’s source of truth.
 

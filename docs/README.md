@@ -1,5 +1,7 @@
 # DreamGraph Documentation
 
+**Project website:** [dreamgraph.nofs.ai](https://dreamgraph.nofs.ai/) · **User guide:** [`guide/`](../guide/README.md)
+
 This directory contains DreamGraph documentation, but the **canonical living docs entry** is:
 
 - [docs/index.md](index.md)

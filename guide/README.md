@@ -2,6 +2,8 @@
 
 Welcome. This guide is the friendly, hand-written companion to DreamGraph. It is intended for **humans who want to use the system**, not for the system documenting itself.
 
+This same guide is also published on the website: **[dreamgraph.nofs.ai](https://dreamgraph.nofs.ai/guide/overview)** — same content, nicer reading experience.
+
 If you are looking for the auto-generated reference (every tool, every parameter, every schema), that lives in [`docs/`](../docs/). This guide is the part you read first.
 
 ---

@@ -2,6 +2,8 @@
 
 One-command install from source. Builds the MCP server, deploys the `dg` CLI globally, and installs the VS Code extension with DreamGraph Explorer.
 
+> Prefer a guided walkthrough with screenshots? See the install page on the website: **[dreamgraph.nofs.ai/guide/installation](https://dreamgraph.nofs.ai/guide/installation)**.
+
 ---
 
 ## Prerequisites
