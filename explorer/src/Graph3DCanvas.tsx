@@ -25,8 +25,10 @@ import {
   type PerspectiveCamera,
 } from "three";
 import {
+  fetchHeatmap,
   patchExplorerPrefs,
   type ExplorerPrefs,
+  type HeatmapResult,
 } from "./api";
 import type { GraphSnapshot } from "./types";
 import { createScene, hasWebGL2 } from "./three/scene";
@@ -159,6 +161,41 @@ export default function Graph3DCanvas({
       };
       reducedMotionMql.addEventListener("change", onMotionPrefChange);
 
+      // Heatmap mode (Slice E1). Off by default; toggle with H. While on,
+      // we re-fetch the aggregate every 30s so newly-routed events show
+      // up without forcing the user to bounce the view. The window is
+      // fixed at 1 hour for v1 — a UI affordance can land later.
+      let heatmapOn = false;
+      let heatmapTimer: ReturnType<typeof setInterval> | null = null;
+      let lastHeatmap: HeatmapResult | null = null;
+      const HEATMAP_REFRESH_MS = 30_000;
+      const HEATMAP_WINDOW_S = 3600;
+      const refreshHeatmap = async (): Promise<void> => {
+        if (!heatmapOn) return;
+        const result = await fetchHeatmap(HEATMAP_WINDOW_S);
+        if (disposed || !heatmapOn) return;
+        lastHeatmap = result;
+        const map = new Map<string, number>(result.nodes);
+        tubeSystem.applyHeatmap(map, result.max_count);
+        renderStatus();
+      };
+      const setHeatmapEnabled = (on: boolean): void => {
+        if (heatmapOn === on) return;
+        heatmapOn = on;
+        if (on) {
+          void refreshHeatmap();
+          heatmapTimer = setInterval(refreshHeatmap, HEATMAP_REFRESH_MS);
+        } else {
+          if (heatmapTimer) {
+            clearInterval(heatmapTimer);
+            heatmapTimer = null;
+          }
+          lastHeatmap = null;
+          tubeSystem.applyHeatmap(null, 0);
+          renderStatus();
+        }
+      };
+
       // Persist camera changes back to the daemon, but only when the user
       // stops moving — otherwise we'd POST every frame.
       let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -270,6 +307,15 @@ export default function Graph3DCanvas({
           `bloom ${bloomEnabled ? "on" : "off"}`,
           particlesPaused ? "paused" : "playing",
         ];
+        if (heatmapOn) {
+          bits.push(
+            lastHeatmap
+              ? `heat ${lastHeatmap.total_events} ev/${Math.round(
+                  lastHeatmap.window_seconds / 60,
+                )}m`
+              : "heat loading",
+          );
+        }
         if (sel) bits.push(`sel <strong>${sel}</strong>`);
         statusRef.current.innerHTML = bits.join(" · ");
       };
@@ -304,6 +350,8 @@ export default function Graph3DCanvas({
           e.preventDefault();
         } else if (e.key === "f" || e.key === "F") {
           if (lastPositions.length > 0) frameAll(lastPositions, bundle.camera, controls);
+        } else if (e.key === "h" || e.key === "H") {
+          setHeatmapEnabled(!heatmapOn);
         } else if (e.key === "Escape") {
           onSelectRef.current?.(null);
         }
@@ -335,6 +383,7 @@ export default function Graph3DCanvas({
 
       cleanup = () => {
         if (saveTimer) clearTimeout(saveTimer);
+        if (heatmapTimer) clearInterval(heatmapTimer);
         controls.removeEventListener("end", queueCameraSave);
         controls.dispose();
         ro.disconnect();

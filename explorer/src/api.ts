@@ -78,6 +78,41 @@ export function fetchStats(): Promise<StatsResult> {
   return getJson<StatsResult>("/explorer/api/stats");
 }
 
+/* ------------------------------------------------------------------ */
+/*  Slice E1 — recent-traffic heatmap                                 */
+/* ------------------------------------------------------------------ */
+
+export interface HeatmapResult {
+  window_seconds: number;
+  generated_at: string;
+  total_events: number;
+  max_count: number;
+  /** [id, count] tuples sorted by count desc, then id asc. */
+  nodes: Array<[string, number]>;
+}
+
+/**
+ * Read recent per-entity traffic counts from `event_log.json`. Returns
+ * an empty result on any error so the UI can fail open silently.
+ */
+export async function fetchHeatmap(
+  windowSeconds = 3600,
+): Promise<HeatmapResult> {
+  try {
+    return await getJson<HeatmapResult>(
+      `/explorer/api/heatmap?window=${windowSeconds}`,
+    );
+  } catch {
+    return {
+      window_seconds: windowSeconds,
+      generated_at: new Date().toISOString(),
+      total_events: 0,
+      max_count: 0,
+      nodes: [],
+    };
+  }
+}
+
 export interface CandidateRow {
   dream_id: string;
   dream_type: "node" | "edge";

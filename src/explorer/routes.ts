@@ -28,6 +28,7 @@ import { handleEventsStream } from "./events.js";
 import { graphMutationService } from "./mutations.js";
 import { handleReasonSuggest } from "./reason-suggest.js";
 import { loadExplorerPrefs, patchExplorerPrefs } from "./prefs.js";
+import { coerceWindowSeconds, getHeatmap } from "./heatmap.js";
 import {
   getNeighborhood,
   getNodeRecord,
@@ -361,6 +362,16 @@ export async function handleExplorerRoute(
 
     if (req.method === "GET" && pathname === "/explorer/api/stats") {
       await handleStatsRoute(res);
+      return true;
+    }
+
+    // Slice E1 (Explorer 3D heatmap mode):
+    // recent traffic per entity, derived from event_log.json.
+    if (req.method === "GET" && pathname === "/explorer/api/heatmap") {
+      const qs = parseQuery(req.url ?? "");
+      const windowSeconds = coerceWindowSeconds(qs.get("window"));
+      const result = await timeRoute("heatmap", () => getHeatmap(windowSeconds));
+      json(res, 200, result);
       return true;
     }
 

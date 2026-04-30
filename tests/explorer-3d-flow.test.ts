@@ -114,6 +114,97 @@ describe("TubeSystem", () => {
       tubes.dispose();
     }
   });
+
+  it("getEdgeRanges returns one tightly-packed range per visible edge", () => {
+    const { nodes, edges } = smallGraph();
+    const splines = new SplineSet(nodes, edges);
+    splines.applyLayout([
+      { id: "a", x: 0, y: 0, z: 0 },
+      { id: "b", x: 5, y: 0, z: 0 },
+      { id: "c", x: 0, y: 5, z: 0 },
+    ]);
+    const tubes = new TubeSystem(splines);
+    try {
+      tubes.rebuild();
+      const ranges = tubes.getEdgeRanges();
+      expect(ranges.length).toBe(edges.length);
+      // Ranges must tile the merged color attribute: range[i].start ===
+      // sum of previous counts. Otherwise heatmap recoloring writes into
+      // the wrong edge.
+      let cursor = 0;
+      for (const r of ranges) {
+        expect(r.start).toBe(cursor);
+        expect(r.count).toBeGreaterThan(0);
+        cursor += r.count;
+      }
+      const col = tubes.mesh.geometry.getAttribute("color");
+      expect(col.count).toBe(cursor);
+    } finally {
+      tubes.dispose();
+    }
+  });
+
+  it("applyHeatmap recolors hot edges and restores them when cleared", () => {
+    const { nodes, edges } = smallGraph();
+    const splines = new SplineSet(nodes, edges);
+    splines.applyLayout([
+      { id: "a", x: 0, y: 0, z: 0 },
+      { id: "b", x: 5, y: 0, z: 0 },
+      { id: "c", x: 0, y: 5, z: 0 },
+    ]);
+    const tubes = new TubeSystem(splines);
+    try {
+      tubes.rebuild();
+      const colorAttr = tubes.mesh.geometry.getAttribute("color");
+      const arr = colorAttr.array as Float32Array;
+      // Snapshot the very first vertex of edge[0] so we can compare.
+      const r0 = arr[0];
+      const g0 = arr[1];
+      const b0 = arr[2];
+
+      // 'a' is endpoint of edges 0 ("a→b") and 2 ("a→c"); a heat value of
+      // max_count on 'a' should brighten both edges and shift them warm.
+      const heat = new Map<string, number>([["a", 5]]);
+      tubes.applyHeatmap(heat, 5);
+      // Brighter than the cool base on at least one channel (warm tint).
+      expect(arr[0] + arr[1]).toBeGreaterThan(r0 + g0);
+      expect((colorAttr as { version: number }).version).toBeGreaterThan(0);
+
+      // Clearing restores the base palette exactly.
+      tubes.applyHeatmap(null, 0);
+      expect(arr[0]).toBeCloseTo(r0, 6);
+      expect(arr[1]).toBeCloseTo(g0, 6);
+      expect(arr[2]).toBeCloseTo(b0, 6);
+    } finally {
+      tubes.dispose();
+    }
+  });
+
+  it("applyHeatmap leaves cold edges at their base color", () => {
+    const { nodes, edges } = smallGraph();
+    const splines = new SplineSet(nodes, edges);
+    splines.applyLayout([
+      { id: "a", x: 0, y: 0, z: 0 },
+      { id: "b", x: 5, y: 0, z: 0 },
+      { id: "c", x: 0, y: 5, z: 0 },
+    ]);
+    const tubes = new TubeSystem(splines);
+    try {
+      tubes.rebuild();
+      const ranges = tubes.getEdgeRanges();
+      const colorAttr = tubes.mesh.geometry.getAttribute("color");
+      const arr = colorAttr.array as Float32Array;
+      // Edge 1 is "b→c". Heat only on "a" — edge 1 should be untouched.
+      const e1 = ranges[1];
+      const before = [arr[e1.start * 3], arr[e1.start * 3 + 1], arr[e1.start * 3 + 2]];
+      tubes.applyHeatmap(new Map([["a", 4]]), 4);
+      expect(arr[e1.start * 3]).toBeCloseTo(before[0], 6);
+      expect(arr[e1.start * 3 + 1]).toBeCloseTo(before[1], 6);
+      expect(arr[e1.start * 3 + 2]).toBeCloseTo(before[2], 6);
+    } finally {
+      tubes.dispose();
+    }
+  });
 });
 
 describe("pushParticlesForEdge", () => {
