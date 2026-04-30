@@ -175,6 +175,7 @@ export function postClientMetrics(batch: ClientMetricsBatch): void {
 
 export type ExplorerRenderMode = "2d" | "3d";
 export type ExplorerQuality = "auto" | "high" | "medium" | "low";
+export type ExplorerLayoutMode3D = "force" | "radial";
 
 export interface ExplorerCamera3D {
   target: [number, number, number];
@@ -193,6 +194,8 @@ export interface ExplorerPrefs {
    * Keyed by node id; recalled with Shift+R. Server caps + coerces.
    */
   cameraPresets3d: Record<string, ExplorerCamera3D>;
+  /** 3D layout strategy. Toggled with `L` key in 3D mode. */
+  layoutMode3d: ExplorerLayoutMode3D;
 }
 
 export const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = {
@@ -203,6 +206,7 @@ export const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = {
   showGrid3d: false,
   bloom3d: true,
   cameraPresets3d: {},
+  layoutMode3d: "force",
 };
 
 /**

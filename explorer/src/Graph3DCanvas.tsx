@@ -369,46 +369,63 @@ export default function Graph3DCanvas({
       const startedAt = performance.now();
       let framedYet = false;
       let lastPositions: { id: string; x: number; y: number; z: number }[] = [];
-      bridge
-        .compute(
-          snap.nodes.map((n) => ({ id: n.id })),
-          snap.edges.map((e) => ({ s: e.s, t: e.t, conf: e.conf })),
-        )
-        .then((positions) => {
-          if (disposed) return;
-          lastPositions = positions;
-          nodeSystem.applyLayout(positions);
-          splines.applyLayout(positions);
-          tubeSystem.rebuild();
-          // Recompute wavefront bounds + minimap nodes once layout settles.
-          const c = new Vector3();
-          let radius = 10;
-          if (positions.length > 0) {
-            const box = new Box3();
-            const v = new Vector3();
-            for (const p of positions) {
-              v.set(p.x, p.y, p.z);
-              box.expandByPoint(v);
-            }
-            box.getCenter(c);
-            const size = new Vector3();
-            box.getSize(size);
-            radius = Math.max(size.x, size.y, size.z) * 0.5 || 10;
+      let currentLayoutMode: "force" | "radial" = prefsRef.current.layoutMode3d ?? "force";
+
+      const applyPositions = (
+        positions: { id: string; x: number; y: number; z: number }[],
+      ): void => {
+        lastPositions = positions;
+        nodeSystem.applyLayout(positions);
+        splines.applyLayout(positions);
+        tubeSystem.rebuild();
+        // Recompute wavefront bounds + minimap nodes once layout settles.
+        const c = new Vector3();
+        let radius = 10;
+        if (positions.length > 0) {
+          const box = new Box3();
+          const v = new Vector3();
+          for (const p of positions) {
+            v.set(p.x, p.y, p.z);
+            box.expandByPoint(v);
           }
-          wavefrontSystem.setBounds(c, radius);
-          minimap.setNodes(positions.map((p) => ({ id: p.id, x: p.x, z: p.z })));
-          if (!framedYet) {
-            framedYet = true;
-            frameAll(positions, bundle.camera, controls);
-            queueCameraSave();
-          }
-          renderStatus();
-        })
-        .catch((err: unknown) => {
-          if ((err as Error).message === "layout-superseded") return;
-          // eslint-disable-next-line no-console
-          console.warn("[explorer-3d] layout failed:", err);
-        });
+          box.getCenter(c);
+          const size = new Vector3();
+          box.getSize(size);
+          radius = Math.max(size.x, size.y, size.z) * 0.5 || 10;
+        }
+        wavefrontSystem.setBounds(c, radius);
+        minimap.setNodes(positions.map((p) => ({ id: p.id, x: p.x, z: p.z })));
+        if (!framedYet) {
+          framedYet = true;
+          frameAll(positions, bundle.camera, controls);
+          queueCameraSave();
+        }
+      };
+
+      const runLayoutNow = (mode: "force" | "radial"): void => {
+        currentLayoutMode = mode;
+        bridge
+          .compute(
+            snap.nodes.map((n) => ({ id: n.id })),
+            snap.edges.map((e) => ({ s: e.s, t: e.t, conf: e.conf })),
+            mode === "radial"
+              ? { mode: "radial", radialRoot: selectedRef.current ?? undefined }
+              : { mode: "force" },
+          )
+          .then((positions) => {
+            if (disposed) return;
+            applyPositions(positions);
+            renderStatus(`layout: ${mode}`);
+          })
+          .catch((err: unknown) => {
+            if ((err as Error).message === "layout-superseded") return;
+            // eslint-disable-next-line no-console
+            console.warn("[explorer-3d] layout failed:", err);
+          });
+      };
+
+      // Kick off the initial layout using the persisted mode.
+      runLayoutNow(currentLayoutMode);
 
       const renderStatus = (toast?: string): void => {
         if (!statusRef.current) return;
@@ -475,6 +492,14 @@ export default function Graph3DCanvas({
         } else if (e.shiftKey && (e.key === "R" || e.key === "r")) {
           recallPresetForSelected();
           e.preventDefault();
+        } else if (e.key === "l" || e.key === "L") {
+          // Slice E4: cycle 3D layout strategy.
+          const next: "force" | "radial" =
+            currentLayoutMode === "force" ? "radial" : "force";
+          // Reset framing so the new shape gets centered + zoomed to fit.
+          framedYet = false;
+          runLayoutNow(next);
+          void patchExplorerPrefs({ layoutMode3d: next });
         } else if (e.key === "Escape") {
           onSelectRef.current?.(null);
         }

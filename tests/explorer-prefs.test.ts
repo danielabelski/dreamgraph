@@ -172,6 +172,23 @@ describe("Explorer prefs — camera presets (Slice E3)", () => {
   });
 });
 
+describe("Explorer prefs — layout mode (Slice E4)", () => {
+  it("defaults to force layout", () => {
+    expect(DEFAULT_PREFS.layoutMode3d).toBe("force");
+    expect(coercePrefs({}).layoutMode3d).toBe("force");
+  });
+
+  it("preserves valid layoutMode3d values", () => {
+    expect(coercePrefs({ layoutMode3d: "radial" }).layoutMode3d).toBe("radial");
+    expect(coercePrefs({ layoutMode3d: "force" }).layoutMode3d).toBe("force");
+  });
+
+  it("falls back to default for unknown layoutMode3d", () => {
+    expect(coercePrefs({ layoutMode3d: "spiral" }).layoutMode3d).toBe("force");
+    expect(coercePrefs({ layoutMode3d: 42 }).layoutMode3d).toBe("force");
+  });
+});
+
 describe("Explorer prefs — disk I/O", () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "dg-prefs-"));

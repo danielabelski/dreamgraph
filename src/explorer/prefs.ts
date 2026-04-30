@@ -24,6 +24,7 @@ import { logger } from "../utils/logger.js";
 
 export type ExplorerRenderMode = "2d" | "3d";
 export type ExplorerQuality = "auto" | "high" | "medium" | "low";
+export type ExplorerLayoutMode3D = "force" | "radial";
 
 export interface ExplorerCamera3D {
   /** [x, y, z] — what the camera is looking at. */
@@ -46,6 +47,12 @@ export interface ExplorerPrefs {
    * silently — see `coercePrefs`.
    */
   cameraPresets3d: Record<string, ExplorerCamera3D>;
+  /**
+   * 3D layout strategy. "force" runs the d3-force-3d simulation;
+   * "radial" places nodes on Fibonacci-sphere shells by BFS depth from
+   * the highest-degree root.
+   */
+  layoutMode3d: ExplorerLayoutMode3D;
 }
 
 export const DEFAULT_PREFS: ExplorerPrefs = {
@@ -59,6 +66,7 @@ export const DEFAULT_PREFS: ExplorerPrefs = {
   showGrid3d: false,
   bloom3d: true,
   cameraPresets3d: {},
+  layoutMode3d: "force",
 };
 
 const PREFS_FILE = "explorer_prefs.json";
@@ -140,6 +148,10 @@ export function coercePrefs(input: unknown): ExplorerPrefs {
     bloom3d:
       typeof input.bloom3d === "boolean" ? input.bloom3d : DEFAULT_PREFS.bloom3d,
     cameraPresets3d: presets,
+    layoutMode3d:
+      input.layoutMode3d === "radial" || input.layoutMode3d === "force"
+        ? input.layoutMode3d
+        : DEFAULT_PREFS.layoutMode3d,
   };
 }
 
