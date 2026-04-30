@@ -135,6 +135,69 @@ export function postClientMetrics(batch: ClientMetricsBatch): void {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Explorer 3D mode (plans/EXPLORER_3D_MODE.md §9) — UI prefs        */
+/* ------------------------------------------------------------------ */
+
+export type ExplorerRenderMode = "2d" | "3d";
+export type ExplorerQuality = "auto" | "high" | "medium" | "low";
+
+export interface ExplorerCamera3D {
+  target: [number, number, number];
+  position: [number, number, number];
+}
+
+export interface ExplorerPrefs {
+  version: 1;
+  renderMode: ExplorerRenderMode;
+  camera3d: ExplorerCamera3D;
+  quality3d: ExplorerQuality;
+  showGrid3d: boolean;
+  bloom3d: boolean;
+}
+
+export const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = {
+  version: 1,
+  renderMode: "2d",
+  camera3d: { target: [0, 0, 0], position: [40, 24, 40] },
+  quality3d: "auto",
+  showGrid3d: false,
+  bloom3d: true,
+};
+
+/**
+ * Read UI prefs from the daemon. Falls back to defaults on any failure —
+ * the Explorer must be usable even when the prefs file is unwritable.
+ */
+export async function fetchExplorerPrefs(): Promise<ExplorerPrefs> {
+  try {
+    return await getJson<ExplorerPrefs>("/explorer/api/prefs");
+  } catch {
+    return { ...DEFAULT_EXPLORER_PREFS };
+  }
+}
+
+/**
+ * Patch UI prefs. Fire-and-forget by design: a failed write should never
+ * disrupt the user's session — they'll just lose the persisted choice.
+ * Returns the merged prefs the daemon settled on, or `null` on error.
+ */
+export async function patchExplorerPrefs(
+  patch: Partial<ExplorerPrefs>,
+): Promise<ExplorerPrefs | null> {
+  try {
+    const res = await fetch("/explorer/api/prefs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ExplorerPrefs;
+  } catch {
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Phase 4 / Slice 1 (frontend) — curated mutation helpers           */
 /* ------------------------------------------------------------------ */
 

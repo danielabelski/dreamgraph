@@ -1,6 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchSnapshot, fetchStats, SnapshotVersionError } from "./api";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DEFAULT_EXPLORER_PREFS,
+  fetchExplorerPrefs,
+  fetchSnapshot,
+  fetchStats,
+  patchExplorerPrefs,
+  SnapshotVersionError,
+  type ExplorerPrefs,
+  type ExplorerRenderMode,
+} from "./api";
 import { GraphCanvas } from "./GraphCanvas";
+
+// 3D canvas is split into its own chunk so the Three.js + OrbitControls
+// payload is only paid by users who actually flip the toggle.
+const Graph3DCanvas = lazy(() => import("./Graph3DCanvas"));
 import { SearchBar } from "./SearchBar";
 import { FiltersPanel } from "./FiltersPanel";
 import { Inspector } from "./Inspector";
@@ -43,7 +56,28 @@ export function App() {
   const [mode, setMode] = useState<ExplorerMode>("atlas");
   const [rightTab, setRightTab] = useState<RightTab>("inspector");
   const [conflictBanner, setConflictBanner] = useState(false);
+  const [prefs, setPrefs] = useState<ExplorerPrefs>(DEFAULT_EXPLORER_PREFS);
+  const [render3dError, setRender3dError] = useState<string | null>(null);
   const { events: liveEvents, pulses, connected: sseConnected } = useEventStream();
+
+  // Hydrate the renderer mode from the daemon on mount. Defaults stand
+  // until the prefs file roundtrips so first paint is never blocked.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchExplorerPrefs().then((p) => {
+      if (!cancelled) setPrefs(p);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setRenderMode = (next: ExplorerRenderMode) => {
+    if (next === prefs.renderMode) return;
+    setRender3dError(null);
+    setPrefs((p) => ({ ...p, renderMode: next }));
+    void patchExplorerPrefs({ renderMode: next });
+  };
 
   const [leftWidth, setLeftWidth] = useState<number>(() => readNum("dg.explorer.leftWidth", LEFT_DEFAULT));
   const [rightWidth, setRightWidth] = useState<number>(() => readNum("dg.explorer.rightWidth", RIGHT_DEFAULT));
@@ -153,6 +187,22 @@ export function App() {
             Focus
           </button>
         </div>
+        <div className="mode-toggle" role="group" aria-label="Renderer">
+          <button
+            className={`mode-btn${prefs.renderMode === "2d" ? " active" : ""}`}
+            onClick={() => setRenderMode("2d")}
+            title="Classic 2D Sigma renderer"
+          >
+            2D
+          </button>
+          <button
+            className={`mode-btn${prefs.renderMode === "3d" ? " active" : ""}`}
+            onClick={() => setRenderMode("3d")}
+            title="Experimental 3D Three.js renderer (slice A)"
+          >
+            3D ✨
+          </button>
+        </div>
         {snapshot ? (
           <span className="meta">
             instance <strong>{snapshot.instance_uuid.slice(0, 8)}</strong>
@@ -208,14 +258,32 @@ export function App() {
       />
 
       {snapshot ? (
-        <GraphCanvas
-          snapshot={snapshot}
-          onSelect={setSelected}
-          filters={filters}
-          mode={mode}
-          selected={selected}
-          pulses={pulses}
-        />
+        prefs.renderMode === "3d" && !render3dError ? (
+          <Suspense
+            fallback={
+              <div className="canvas-wrap">
+                <div className="status">loading 3D renderer…</div>
+              </div>
+            }
+          >
+            <Graph3DCanvas
+              prefs={prefs}
+              onFatal={(msg) => {
+                setRender3dError(msg);
+                setRenderMode("2d");
+              }}
+            />
+          </Suspense>
+        ) : (
+          <GraphCanvas
+            snapshot={snapshot}
+            onSelect={setSelected}
+            filters={filters}
+            mode={mode}
+            selected={selected}
+            pulses={pulses}
+          />
+        )
       ) : (
         <div className="canvas-wrap">
           <div className="status">

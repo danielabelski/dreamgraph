@@ -27,6 +27,7 @@ import { handleSpaRequest } from "./static.js";
 import { handleEventsStream } from "./events.js";
 import { graphMutationService } from "./mutations.js";
 import { handleReasonSuggest } from "./reason-suggest.js";
+import { loadExplorerPrefs, patchExplorerPrefs } from "./prefs.js";
 import {
   getNeighborhood,
   getNodeRecord,
@@ -375,6 +376,28 @@ export async function handleExplorerRoute(
     // curated mutations. Read-only from the graph perspective.
     if (req.method === "POST" && pathname === "/explorer/api/reason-suggest") {
       await handleReasonSuggest(req, res);
+      return true;
+    }
+
+    // Explorer 3D mode (plans/EXPLORER_3D_MODE.md §9):
+    // tiny per-instance UI preference store. Loopback-only, never read by
+    // the cognitive engine. Defaults silently if the file is missing/corrupt.
+    if (req.method === "GET" && pathname === "/explorer/api/prefs") {
+      const prefs = await loadExplorerPrefs();
+      json(res, 200, prefs);
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/explorer/api/prefs") {
+      let patch: unknown;
+      try {
+        patch = await readJsonBody(req);
+      } catch (err) {
+        jsonError(res, 400, "bad_request", (err as Error).message);
+        return true;
+      }
+      const next = await patchExplorerPrefs(patch);
+      json(res, 200, next);
       return true;
     }
 
