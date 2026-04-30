@@ -269,6 +269,8 @@ export function App() {
             <Graph3DCanvas
               prefs={prefs}
               snapshot={snapshot}
+              selected={selected}
+              onSelect={setSelected}
               onFatal={(msg) => {
                 setRender3dError(msg);
                 setRenderMode("2d");

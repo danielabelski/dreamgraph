@@ -96,11 +96,13 @@ describe("NodeSystem", () => {
     const { nodes } = smallGraph();
     const sys = new NodeSystem(nodes);
     try {
-      expect(sys.mesh.count).toBe(nodes.length);
+      // Slice D split nodes across one InstancedMesh per type, so the
+      // total count lives in `metas.length` instead of `mesh.count`.
       expect(sys.metas).toHaveLength(nodes.length);
       for (const m of sys.metas) {
         const node = nodes.find((n) => n.id === m.id)!;
         expect(m.radius).toBeCloseTo(nodeRadius(node), 6);
+        expect(m.type).toBe(node.type);
       }
     } finally {
       sys.dispose();
