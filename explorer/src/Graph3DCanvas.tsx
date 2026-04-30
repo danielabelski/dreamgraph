@@ -22,7 +22,9 @@ import type { GraphSnapshot } from "./types";
 import { createScene, hasWebGL2 } from "./three/scene";
 import { LayoutBridge } from "./three/layout3d";
 import { NodeSystem } from "./three/NodeSystem";
-import { EdgeSystem } from "./three/EdgeSystem";
+import { SplineSet } from "./three/splines";
+import { TubeSystem } from "./three/TubeSystem";
+import { ParticleSystem } from "./three/ParticleSystem";
 
 interface Graph3DCanvasProps {
   prefs: ExplorerPrefs;
@@ -77,9 +79,12 @@ export default function Graph3DCanvas({ prefs, snapshot, onFatal }: Graph3DCanva
       // Build the renderable graph from the current snapshot.
       const snap = snapshotRef.current;
       const nodeSystem = new NodeSystem(snap.nodes);
-      const edgeSystem = new EdgeSystem(snap.nodes, snap.edges);
+      const splines = new SplineSet(snap.nodes, snap.edges);
+      const tubeSystem = new TubeSystem(splines);
+      const particleSystem = new ParticleSystem(splines);
       nodeSystem.addTo(bundle.scene);
-      edgeSystem.addTo(bundle.scene);
+      tubeSystem.addTo(bundle.scene);
+      particleSystem.addTo(bundle.scene);
 
       // Persist camera changes back to the daemon, but only when the user
       // stops moving — otherwise we'd POST every frame.
@@ -113,7 +118,8 @@ export default function Graph3DCanvas({ prefs, snapshot, onFatal }: Graph3DCanva
         .then((positions) => {
           if (disposed) return;
           nodeSystem.applyLayout(positions);
-          edgeSystem.applyLayout(positions);
+          splines.applyLayout(positions);
+          tubeSystem.rebuild();
           if (!framedYet) {
             framedYet = true;
             frameAll(positions, bundle.camera, controls);
@@ -123,7 +129,8 @@ export default function Graph3DCanvas({ prefs, snapshot, onFatal }: Graph3DCanva
             const ms = Math.round(performance.now() - startedAt);
             statusRef.current.innerHTML =
               `<strong>3D</strong> · ${snap.nodes.length} nodes · ` +
-              `${snap.edges.length} edges · layout ${ms} ms`;
+              `${snap.edges.length} edges · ${particleSystem.metas.length} particles · ` +
+              `layout ${ms} ms`;
           }
         })
         .catch((err: unknown) => {
@@ -145,9 +152,17 @@ export default function Graph3DCanvas({ prefs, snapshot, onFatal }: Graph3DCanva
       const ro = new ResizeObserver(resize);
       ro.observe(container);
 
+      let lastFrame = performance.now();
       const tick = () => {
         if (disposed) return;
+        const now = performance.now();
+        const dt = Math.min(0.1, (now - lastFrame) / 1000);
+        lastFrame = now;
         controls.update();
+        // Particles only have something to advance once the layout has
+        // populated the splines; before that the curves are placeholders
+        // and stepping them just wastes work.
+        if (framedYet) particleSystem.update(dt, now / 1000);
         bundle.renderer.render(bundle.scene, bundle.camera);
         raf = requestAnimationFrame(tick);
       };
@@ -160,7 +175,8 @@ export default function Graph3DCanvas({ prefs, snapshot, onFatal }: Graph3DCanva
         ro.disconnect();
         bridge.dispose();
         nodeSystem.dispose();
-        edgeSystem.dispose();
+        tubeSystem.dispose();
+        particleSystem.dispose();
         bundle.dispose();
       };
     })().catch((err: unknown) => {
@@ -183,7 +199,7 @@ export default function Graph3DCanvas({ prefs, snapshot, onFatal }: Graph3DCanva
     <div className="canvas-wrap canvas-3d">
       <div ref={containerRef} className="canvas" />
       <div className="status" ref={statusRef}>
-        <strong>3D</strong> · slice B · laying out…
+        <strong>3D</strong> · slice C · laying out…
       </div>
     </div>
   );

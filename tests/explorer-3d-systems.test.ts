@@ -12,7 +12,6 @@
 import { describe, expect, it } from "vitest";
 import { runLayout } from "../explorer/src/three/layoutEngine";
 import { NodeSystem, nodeRadius } from "../explorer/src/three/NodeSystem";
-import { EdgeSystem } from "../explorer/src/three/EdgeSystem";
 import type { ExplorerEdge, ExplorerNode } from "../explorer/src/types";
 
 function smallGraph(): { nodes: ExplorerNode[]; edges: ExplorerEdge[] } {
@@ -123,51 +122,6 @@ describe("NodeSystem", () => {
       expect([mb.x, mb.y, mb.z]).toEqual([-4, 5, -6]);
       // Untouched nodes remain at the origin.
       expect([mc.x, mc.y, mc.z]).toEqual([0, 0, 0]);
-    } finally {
-      sys.dispose();
-    }
-  });
-});
-
-describe("EdgeSystem", () => {
-  it("emits two vertices per edge and skips orphans", () => {
-    const { nodes, edges } = smallGraph();
-    const orphans: ExplorerEdge[] = [
-      ...edges,
-      { s: "ghost", t: "a", kind: "validated", conf: 1 },
-      { s: "a", t: "missing", kind: "dream", conf: 0.3 },
-    ];
-    const sys = new EdgeSystem(nodes, orphans);
-    try {
-      // Only the three real edges should land in metas.
-      expect(sys.metas).toHaveLength(edges.length);
-      const positionAttr = sys.object.geometry.getAttribute("position");
-      expect(positionAttr.count).toBe(edges.length * 2);
-    } finally {
-      sys.dispose();
-    }
-  });
-
-  it("applyLayout writes both endpoints into the position buffer", () => {
-    const { nodes, edges } = smallGraph();
-    const sys = new EdgeSystem(nodes, edges);
-    try {
-      sys.applyLayout([
-        { id: "a", x: 1, y: 0, z: 0 },
-        { id: "b", x: 0, y: 2, z: 0 },
-        { id: "c", x: 0, y: 0, z: 3 },
-        { id: "d", x: -1, y: -1, z: -1 },
-      ]);
-      const pos = sys.object.geometry.getAttribute("position") as {
-        array: Float32Array;
-        version: number;
-      };
-      // Edge 0 is a→b, so vertex 0 = (1,0,0), vertex 1 = (0,2,0).
-      expect(Array.from(pos.array.slice(0, 6))).toEqual([1, 0, 0, 0, 2, 0]);
-      // Edge 2 is a→d → vertices 4,5 → (1,0,0), (-1,-1,-1).
-      expect(Array.from(pos.array.slice(12, 18))).toEqual([1, 0, 0, -1, -1, -1]);
-      // BufferAttribute.needsUpdate is a setter that bumps `version`.
-      expect(pos.version).toBeGreaterThan(0);
     } finally {
       sys.dispose();
     }
