@@ -247,6 +247,72 @@ export default function Graph3DCanvas({
       };
       controls.addEventListener("end", queueCameraSave);
 
+      // Camera preset tween (Slice E3). When the operator hits Shift+R
+      // we ease over `PRESET_TWEEN_MS` from the current pose to the
+      // saved one. Track the in-flight tween so a second recall cancels
+      // the first cleanly instead of fighting it.
+      const PRESET_TWEEN_MS = 450;
+      let activeTween:
+        | {
+            startedAt: number;
+            fromPos: Vector3;
+            fromTarget: Vector3;
+            toPos: Vector3;
+            toTarget: Vector3;
+          }
+        | null = null;
+      const tickPresetTween = (nowMs: number): void => {
+        if (!activeTween) return;
+        const t = Math.min(1, (nowMs - activeTween.startedAt) / PRESET_TWEEN_MS);
+        // smoothstep for a calmer arrival than pure linear lerp.
+        const e = t * t * (3 - 2 * t);
+        bundle.camera.position.lerpVectors(activeTween.fromPos, activeTween.toPos, e);
+        controls.target.lerpVectors(activeTween.fromTarget, activeTween.toTarget, e);
+        if (t >= 1) {
+          activeTween = null;
+          // Persist the new resting pose just like a manual move would.
+          queueCameraSave();
+        }
+      };
+      const savePresetForSelected = (): void => {
+        const id = selectedRef.current;
+        if (!id) {
+          renderStatus("select a node first");
+          return;
+        }
+        const pos = bundle.camera.position;
+        const tgt = controls.target;
+        const next: Record<string, { position: [number, number, number]; target: [number, number, number] }> = {
+          ...(prefsRef.current.cameraPresets3d ?? {}),
+          [id]: {
+            position: [pos.x, pos.y, pos.z],
+            target: [tgt.x, tgt.y, tgt.z],
+          },
+        };
+        void patchExplorerPrefs({ cameraPresets3d: next });
+        renderStatus(`preset saved → ${id}`);
+      };
+      const recallPresetForSelected = (): void => {
+        const id = selectedRef.current;
+        if (!id) {
+          renderStatus("select a node first");
+          return;
+        }
+        const preset = prefsRef.current.cameraPresets3d?.[id];
+        if (!preset) {
+          renderStatus(`no preset for ${id}`);
+          return;
+        }
+        activeTween = {
+          startedAt: performance.now(),
+          fromPos: bundle.camera.position.clone(),
+          fromTarget: controls.target.clone(),
+          toPos: new Vector3(...preset.position),
+          toTarget: new Vector3(...preset.target),
+        };
+        renderStatus(`recall → ${id}`);
+      };
+
       // Raycaster + a single shared NDC vector → no per-pointer alloc.
       const raycaster = new Raycaster();
       const ndc = new Vector2();
@@ -344,7 +410,7 @@ export default function Graph3DCanvas({
           console.warn("[explorer-3d] layout failed:", err);
         });
 
-      const renderStatus = (): void => {
+      const renderStatus = (toast?: string): void => {
         if (!statusRef.current) return;
         const ms = Math.round(performance.now() - startedAt);
         const sel = selectedRef.current;
@@ -367,6 +433,7 @@ export default function Graph3DCanvas({
           );
         }
         if (sel) bits.push(`sel <strong>${sel}</strong>`);
+        if (toast) bits.push(`<em>${toast}</em>`);
         statusRef.current.innerHTML = bits.join(" · ");
       };
 
@@ -402,6 +469,12 @@ export default function Graph3DCanvas({
           if (lastPositions.length > 0) frameAll(lastPositions, bundle.camera, controls);
         } else if (e.key === "h" || e.key === "H") {
           setHeatmapEnabled(!heatmapOn);
+        } else if (e.shiftKey && (e.key === "S" || e.key === "s")) {
+          savePresetForSelected();
+          e.preventDefault();
+        } else if (e.shiftKey && (e.key === "R" || e.key === "r")) {
+          recallPresetForSelected();
+          e.preventDefault();
         } else if (e.key === "Escape") {
           onSelectRef.current?.(null);
         }
@@ -420,6 +493,7 @@ export default function Graph3DCanvas({
         // and stepping them just wastes work.
         if (framedYet && !particlesPaused) particleSystem.update(dt, now / 1000);
         wavefrontSystem.tick(now / 1000);
+        tickPresetTween(now);
         minimap.setCamera(bundle.camera, controls.target);
         composer.render();
         raf = requestAnimationFrame(tick);

@@ -188,6 +188,11 @@ export interface ExplorerPrefs {
   quality3d: ExplorerQuality;
   showGrid3d: boolean;
   bloom3d: boolean;
+  /**
+   * Per-node camera poses saved by the operator (Shift+S in 3D mode).
+   * Keyed by node id; recalled with Shift+R. Server caps + coerces.
+   */
+  cameraPresets3d: Record<string, ExplorerCamera3D>;
 }
 
 export const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = {
@@ -197,6 +202,7 @@ export const DEFAULT_EXPLORER_PREFS: ExplorerPrefs = {
   quality3d: "auto",
   showGrid3d: false,
   bloom3d: true,
+  cameraPresets3d: {},
 };
 
 /**

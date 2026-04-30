@@ -39,6 +39,13 @@ export interface ExplorerPrefs {
   quality3d: ExplorerQuality;
   showGrid3d: boolean;
   bloom3d: boolean;
+  /**
+   * Per-node saved camera poses for the 3D mode. Keyed by node id; each
+   * entry stores the orbit-controls target plus the camera position so
+   * the SPA can re-frame on Shift+R. Coercion drops malformed entries
+   * silently — see `coercePrefs`.
+   */
+  cameraPresets3d: Record<string, ExplorerCamera3D>;
 }
 
 export const DEFAULT_PREFS: ExplorerPrefs = {
@@ -51,9 +58,17 @@ export const DEFAULT_PREFS: ExplorerPrefs = {
   quality3d: "auto",
   showGrid3d: false,
   bloom3d: true,
+  cameraPresets3d: {},
 };
 
 const PREFS_FILE = "explorer_prefs.json";
+
+/**
+ * Hard cap on persisted camera presets to keep the prefs file from
+ * growing unboundedly when the operator hammers Shift+S across a large
+ * graph. Excess entries are silently dropped during coercion.
+ */
+export const MAX_CAMERA_PRESETS = 256;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -96,6 +111,25 @@ export function coercePrefs(input: unknown): ExplorerPrefs {
       : [...DEFAULT_PREFS.camera3d.position],
   };
 
+  // Camera presets: per-node {target, position}. Drop malformed entries
+  // silently and cap the total count so a runaway SPA can't grow the
+  // file unboundedly. Keys must be non-empty strings.
+  const presets: Record<string, ExplorerCamera3D> = {};
+  if (isPlainObject(input.cameraPresets3d)) {
+    const raw = input.cameraPresets3d as Record<string, unknown>;
+    let kept = 0;
+    for (const [id, value] of Object.entries(raw)) {
+      if (kept >= MAX_CAMERA_PRESETS) break;
+      if (typeof id !== "string" || id.length === 0) continue;
+      if (!isPlainObject(value)) continue;
+      const t = (value as Record<string, unknown>).target;
+      const p = (value as Record<string, unknown>).position;
+      if (!isVec3(t) || !isVec3(p)) continue;
+      presets[id] = { target: [...t], position: [...p] };
+      kept++;
+    }
+  }
+
   return {
     version: 1,
     renderMode,
@@ -105,6 +139,7 @@ export function coercePrefs(input: unknown): ExplorerPrefs {
       typeof input.showGrid3d === "boolean" ? input.showGrid3d : DEFAULT_PREFS.showGrid3d,
     bloom3d:
       typeof input.bloom3d === "boolean" ? input.bloom3d : DEFAULT_PREFS.bloom3d,
+    cameraPresets3d: presets,
   };
 }
 

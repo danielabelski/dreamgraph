@@ -122,6 +122,56 @@ describe("Explorer prefs — coercion", () => {
   });
 });
 
+describe("Explorer prefs — camera presets (Slice E3)", () => {
+  it("defaults to an empty preset map", () => {
+    expect(coercePrefs({}).cameraPresets3d).toEqual({});
+    expect(DEFAULT_PREFS.cameraPresets3d).toEqual({});
+  });
+
+  it("preserves well-formed presets", () => {
+    const out = coercePrefs({
+      cameraPresets3d: {
+        nodeA: { position: [1, 2, 3], target: [4, 5, 6] },
+        nodeB: { position: [7, 8, 9], target: [0, 0, 0] },
+      },
+    });
+    expect(out.cameraPresets3d.nodeA).toEqual({
+      position: [1, 2, 3],
+      target: [4, 5, 6],
+    });
+    expect(out.cameraPresets3d.nodeB.position).toEqual([7, 8, 9]);
+  });
+
+  it("drops malformed preset entries silently", () => {
+    const out = coercePrefs({
+      cameraPresets3d: {
+        good: { position: [1, 2, 3], target: [4, 5, 6] },
+        badVec: { position: [1, 2], target: [1, 2, 3] },
+        notObj: "nope",
+        missing: { position: [1, 2, 3] },
+        "": { position: [1, 2, 3], target: [4, 5, 6] },
+      },
+    });
+    expect(Object.keys(out.cameraPresets3d)).toEqual(["good"]);
+  });
+
+  it("ignores a non-object cameraPresets3d field", () => {
+    expect(coercePrefs({ cameraPresets3d: "nope" }).cameraPresets3d).toEqual({});
+    expect(coercePrefs({ cameraPresets3d: 42 }).cameraPresets3d).toEqual({});
+    expect(coercePrefs({ cameraPresets3d: [1, 2, 3] }).cameraPresets3d).toEqual({});
+  });
+
+  it("caps the preset count to prevent unbounded growth", async () => {
+    const presets: Record<string, { position: number[]; target: number[] }> = {};
+    for (let i = 0; i < 1000; i++) {
+      presets[`n${i}`] = { position: [i, 0, 0], target: [0, 0, 0] };
+    }
+    const out = coercePrefs({ cameraPresets3d: presets });
+    expect(Object.keys(out.cameraPresets3d).length).toBeLessThanOrEqual(256);
+    expect(Object.keys(out.cameraPresets3d).length).toBeGreaterThan(0);
+  });
+});
+
 describe("Explorer prefs — disk I/O", () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "dg-prefs-"));
@@ -161,6 +211,17 @@ describe("Explorer prefs — disk I/O", () => {
   it("ignores garbage in the patch payload", async () => {
     const merged = await patchExplorerPrefs({ renderMode: "hologram" });
     expect(merged.renderMode).toBe("2d");
+  });
+
+  it("round-trips camera presets through patch + reload", async () => {
+    const merged = await patchExplorerPrefs({
+      cameraPresets3d: {
+        nodeA: { position: [10, 20, 30], target: [1, 2, 3] },
+      },
+    });
+    expect(merged.cameraPresets3d.nodeA.position).toEqual([10, 20, 30]);
+    const reloaded = await loadExplorerPrefs();
+    expect(reloaded.cameraPresets3d.nodeA.target).toEqual([1, 2, 3]);
   });
 });
 
