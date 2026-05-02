@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **8.0.0**
+Version: **8.2.1**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -46,7 +46,7 @@ The `dg` CLI is responsible for:
 - user-facing control flow for local installations
 
 ### VS Code Extension
-The extension integrates DreamGraph into the editor and currently lives under `extensions/vscode/src/`. It surfaces the chat panel, dashboard, the Explorer (interactive Sigma.js graph with curated tension/candidate mutations), and changed-files view. The Explorer SPA itself lives under `explorer/src/` and is bundled to `dist/explorer-spa/`, served by the daemon at `/explorer/`.
+The extension integrates DreamGraph into the editor and currently lives under `extensions/vscode/src/`. It surfaces the chat panel, dashboard, the Explorer (interactive graph with curated tension/candidate mutations — selectable 2D Sigma.js view or 3D Three.js view), and changed-files view. The Explorer SPA itself lives under `explorer/src/` and is bundled to `dist/explorer-spa/`, served by the daemon at `/explorer/`.
 
 ## Source Layout
 

@@ -55,7 +55,7 @@ Use the dashboard as your at-a-glance health check *and* as the primary place to
 
 ### 3. DreamGraph Explorer
 
-The interactive graph view. Big enough to deserve its own page — see [7. The Explorer](07-the-explorer.md).
+The interactive graph view, with a toolbar toggle between a 2D canvas (Sigma.js) and a 3D canvas (Three.js). Big enough to deserve its own page — see [7. The Explorer](07-the-explorer.md).
 
 ### 4. Changed files
 

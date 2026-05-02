@@ -1,6 +1,6 @@
 # 7. The Explorer
 
-> **TL;DR** — The Explorer is the interactive graph view. Use it to browse entities, inspect details, review tensions, promote/reject candidate edges, and watch the engine think in real time.
+> **TL;DR** — The Explorer is the interactive graph view. Use it to browse entities, inspect details, review tensions, promote/reject candidate edges, and watch the engine think in real time. Choose between a fast 2D canvas (Sigma.js) and a cinematic 3D canvas (Three.js) from the toolbar.
 
 The Explorer is available two ways:
 
@@ -16,8 +16,8 @@ Both surface the same SPA. The browser is nice on a second monitor.
 ```
 ┌──────────────────┬───────────────────────┬──────────────────┐
 │  Filters         │                       │  Inspector       │
-│  Search          │      Graph canvas     │  (selected node  │
-│  Tensions        │       (Sigma.js)      │   or edge)       │
+│  Search          │   Graph canvas (2D)   │  (selected node  │
+│  Tensions        │   or 3D scene         │   or edge)       │
 │  Candidates      │                       │                  │
 ├──────────────────┴───────────────────────┴──────────────────┤
 │  Event dock — live cycle, normalization, mutation events    │
@@ -26,10 +26,24 @@ Both surface the same SPA. The browser is nice on a second monitor.
 
 ---
 
+## Render mode: 2D vs 3D
+
+The toolbar has a **render mode toggle** between two canvases. Both show the same graph, the same selection, the same filters — they just paint differently:
+
+- **2D (Sigma.js)** — the default. Fast WebGL canvas with crisp labels, ideal for dense graphs and quick scans.
+- **3D (Three.js)** — a cinematic spatial layout with crystal-glass nodes, additive flow tubes, atmospheric depth, bloom, and anti-aliasing. Useful for exploring topology, presentations, or just enjoying your architecture.
+
+The 3D mode preserves your camera position, presets, and grid/bloom toggles in Explorer prefs (`renderMode`, `camera3d`, `cameraPresets3d`, `showGrid3d`, `bloom3d`). Switching back to 2D is instant; selection state is shared.
+
+Use 3D when you want to *see* the shape of the system. Use 2D when you want to *work* it.
+
+---
+
 ## Graph canvas
 
-- **Pan** with click-drag.
+- **Pan** with click-drag (2D) or right-drag (3D).
 - **Zoom** with the scroll wheel.
+- **Orbit** the 3D scene with left-drag.
 - **Click a node** to select it. Selection lights up the inspector and the connected edges.
 - **Hover** for a quick label tooltip.
 

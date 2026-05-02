@@ -318,9 +318,39 @@ function renderExplorerHtml(url: string): string {
     </style>
   </head>
   <body>
-    <iframe src="${url}" title="DreamGraph Explorer"></iframe>
+    <iframe id="dg-explorer-iframe" src="${url}" title="DreamGraph Explorer"></iframe>
+    <script>
+      // Relay messages from the VS Code extension host (which can only
+      // postMessage into this top-level webview) down to the Explorer
+      // iframe so commands like \`dreamgraph.toggleGpuMetrics\` reach it.
+      window.addEventListener('message', function (e) {
+        var data = e && e.data;
+        if (!data || typeof data !== 'object') return;
+        if (typeof data.type !== 'string' || data.type.indexOf('dreamgraph.') !== 0) return;
+        var f = document.getElementById('dg-explorer-iframe');
+        if (f && f.contentWindow) {
+          f.contentWindow.postMessage(data, '*');
+        }
+      });
+    </script>
   </body>
 </html>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Command: Toggle GPU Metrics overlay in Explorer                   */
+/* ------------------------------------------------------------------ */
+
+export async function toggleGpuMetricsCommand(): Promise<void> {
+  if (!explorerPanel) {
+    void vscode.window.showInformationMessage(
+      "DreamGraph: open the Explorer first to toggle the GPU metrics overlay.",
+    );
+    return;
+  }
+  void explorerPanel.webview.postMessage({
+    type: "dreamgraph.toggleGpuMetrics",
+  });
 }
 
 

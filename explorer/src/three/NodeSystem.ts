@@ -21,15 +21,19 @@ import {
   ConeGeometry,
   CylinderGeometry,
   DodecahedronGeometry,
+  InstancedBufferAttribute,
   InstancedMesh,
   type BufferGeometry,
-  MeshStandardMaterial,
+  NormalBlending,
   Object3D,
   OctahedronGeometry,
   Raycaster,
   type Scene,
+  ShaderMaterial,
   TetrahedronGeometry,
   TorusGeometry,
+  UniformsLib,
+  UniformsUtils,
 } from "three";
 import { nodeRenderColor } from "../theme";
 import type { ExplorerNode, ExplorerNodeType } from "../types";
@@ -51,7 +55,7 @@ interface Bucket {
   type: ExplorerNodeType;
   mesh: InstancedMesh;
   geometry: BufferGeometry;
-  material: MeshStandardMaterial;
+  material: ShaderMaterial;
   metas: NodeInstanceMeta[];
 }
 
@@ -99,6 +103,18 @@ export class NodeSystem {
   /** Currently hovered / selected ids — used to suppress duplicate writes. */
   private hoveredId: string | null = null;
   private selectedId: string | null = null;
+  /**
+   * Optional focus set (Slice F2). When non-null, instances NOT in this
+   * set are dimmed via a per-instance color multiplier so the eye is
+   * drawn to the selected node and its 2-hop neighbourhood.
+   */
+  private focusSet: Set<string> | null = null;
+  /**
+   * Optional visibility predicate. When set, instances rejected by the
+   * predicate are scaled to zero AND skipped during raycast so filtered
+   * nodes don't intercept clicks meant for visible neighbours.
+   */
+  private visiblePredicate: ((meta: NodeInstanceMeta) => boolean) | null = null;
 
   constructor(nodes: readonly ExplorerNode[]) {
     // Group nodes by type so each bucket can size its InstancedMesh exactly.
@@ -111,22 +127,41 @@ export class NodeSystem {
 
     for (const [type, group] of byType) {
       const geometry = geometryForType(type);
-      const material = new MeshStandardMaterial({
-        roughness: 0.45,
-        metalness: 0.15,
-        flatShading: true,
-      });
+      // Slice G: glass material. Each bucket gets its own ShaderMaterial
+      // clone so dispose() can free them independently, but they all
+      // share the same vertex/fragment programs (three.js compiles per
+      // unique shader source, so the GPU keeps a single program object).
+      const material = makeGlassMaterial();
       const mesh = new InstancedMesh(geometry, material, group.length);
       mesh.frustumCulled = false;
       // Userdata lets the raycast loop map a hit back to a node id without
       // reverse-searching every meta list.
       mesh.userData["nodeBucketType"] = type;
 
+      // Per-instance visibility flag (1 = visible, 0 = hidden by filter).
+      // Stored separately from the matrix so we can toggle it without
+      // recomputing positions, and respected in raycast() to skip hidden
+      // hits that the scaled-to-zero matrix would otherwise still report.
+      const visibleAttr = new InstancedBufferAttribute(new Float32Array(group.length), 1);
+      for (let i = 0; i < group.length; i++) visibleAttr.setX(i, 1);
+      mesh.geometry.setAttribute("aVisible", visibleAttr);
+
       const metas: NodeInstanceMeta[] = [];
       for (let i = 0; i < group.length; i++) {
         const n = group[i];
         const radius = nodeRadius(n);
         const baseColor = new Color(nodeRenderColor(n.type, n.health));
+        // Push per-type colors well into vivid territory so node hues
+        // read distinctly against the dark background and the tube
+        // palette. Phase 8 — +0.05 saturation lift on top of the Phase 6
+        // bump so colours pop in midtones without overpowering tubes.
+        {
+          const hsl = { h: 0, s: 0, l: 0 };
+          baseColor.getHSL(hsl);
+          const s = Math.min(1, Math.max(hsl.s, 0.62) + 0.50);
+          const l = Math.min(0.80, Math.max(hsl.l, 0.42));
+          baseColor.setHSL(hsl.h, s, l);
+        }
         const meta: NodeInstanceMeta = {
           id: n.id,
           type: n.type,
@@ -165,7 +200,48 @@ export class NodeSystem {
     }
     for (const bucket of this.buckets.values()) {
       bucket.mesh.instanceMatrix.needsUpdate = true;
+      // CRITICAL for selection: InstancedMesh raycast uses boundingSphere
+      // for an early-out, but the auto-computed sphere only reflects the
+      // *initial* matrix layout (everything at origin). Once nodes spread
+      // out the sphere stays tiny and rays past the origin miss every
+      // instance — nodes appear unselectable.
+      bucket.mesh.computeBoundingSphere();
     }
+  }
+
+  /**
+   * Highlight a focus subset (Slice F2). Pass `null` to clear focus and
+   * restore every instance to full intensity.
+   */
+  setFocus(focusSet: Set<string> | null): void {
+    this.focusSet = focusSet;
+    for (const meta of this.metas) this.writeInstance(meta);
+    for (const bucket of this.buckets.values()) {
+      if (bucket.mesh.instanceColor) bucket.mesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Apply (or clear) a visibility predicate. Hidden instances scale to
+   * zero and are skipped by raycast. Pass `null` to show everything.
+   */
+  setVisibilityFilter(pred: ((meta: NodeInstanceMeta) => boolean) | null): void {
+    this.visiblePredicate = pred;
+    for (const meta of this.metas) this.writeInstance(meta);
+    for (const bucket of this.buckets.values()) {
+      bucket.mesh.instanceMatrix.needsUpdate = true;
+      const va = bucket.mesh.geometry.getAttribute("aVisible") as InstancedBufferAttribute | undefined;
+      if (va) va.needsUpdate = true;
+      bucket.mesh.computeBoundingSphere();
+    }
+  }
+
+  /** True iff this node is currently shown by the active filter. */
+  isVisible(id: string): boolean {
+    const meta = this.indexById.get(id);
+    if (!meta) return false;
+    if (!this.visiblePredicate) return true;
+    return this.visiblePredicate(meta);
   }
 
   setHovered(id: string | null): void {
@@ -203,9 +279,14 @@ export class NodeSystem {
       const hits = ray.intersectObject(bucket.mesh, false);
       for (const h of hits) {
         if (h.instanceId === undefined) continue;
+        const meta = bucket.metas[h.instanceId];
+        if (!meta) continue;
+        // Filtered-out nodes are scaled to zero but `intersectObject` can
+        // still report the degenerate triangle as a hit; skip them so the
+        // click falls through to whatever's actually visible behind.
+        if (this.visiblePredicate && !this.visiblePredicate(meta)) continue;
         if (!best || h.distance < best.distance) {
-          const meta = bucket.metas[h.instanceId];
-          if (meta) best = { id: meta.id, distance: h.distance };
+          best = { id: meta.id, distance: h.distance };
         }
       }
     }
@@ -214,6 +295,25 @@ export class NodeSystem {
 
   addTo(scene: Scene): void {
     for (const bucket of this.buckets.values()) scene.add(bucket.mesh);
+  }
+
+  /** Advance the glass shader clock; call once per frame from the render loop. */
+  setTime(seconds: number): void {
+    for (const bucket of this.buckets.values()) {
+      bucket.material.uniforms["uTime"].value = seconds;
+    }
+  }
+
+  /**
+   * Multiply rim/emissive strength by `factor` (1.0 = baseline). Used by
+   * photo-mode capture to crank the glass highlights for the saved PNG
+   * without touching the live interactive look. Pass 1.0 to restore.
+   */
+  setRimBoost(factor: number): void {
+    for (const bucket of this.buckets.values()) {
+      bucket.material.uniforms["uRimStrength"].value = BASE_RIM_STRENGTH * factor;
+      bucket.material.uniforms["uEmissiveStrength"].value = BASE_EMISSIVE * factor;
+    }
   }
 
   dispose(): void {
@@ -249,13 +349,21 @@ export class NodeSystem {
     if (!bucket) return;
     const isSelected = this.selectedId === meta.id;
     const isHovered = this.hoveredId === meta.id;
-    const scale =
+    const visible = !this.visiblePredicate || this.visiblePredicate(meta);
+    const baseScale =
       meta.radius * (isSelected ? SELECT_SCALE : isHovered ? HOVER_SCALE : 1);
+    const scale = visible ? baseScale : 0;
 
     this.proxy.position.set(meta.x, meta.y, meta.z);
     this.proxy.scale.setScalar(scale);
     this.proxy.updateMatrix();
     bucket.mesh.setMatrixAt(meta.index, this.proxy.matrix);
+
+    // Mirror visibility into the per-instance attribute so the fresnel
+    // shader can fade the colour out smoothly even though the geometry
+    // is collapsed (mostly belt-and-braces — zero-scale already culls).
+    const va = bucket.mesh.geometry.getAttribute("aVisible") as InstancedBufferAttribute | undefined;
+    if (va) va.setX(meta.index, visible ? 1 : 0);
 
     if (isSelected || isHovered) {
       // Brighten by tinting toward white via the per-instance color.
@@ -265,10 +373,15 @@ export class NodeSystem {
       this.tmpColor.r = Math.min(this.tmpColor.r, 1);
       this.tmpColor.g = Math.min(this.tmpColor.g, 1);
       this.tmpColor.b = Math.min(this.tmpColor.b, 1);
-      bucket.mesh.setColorAt(meta.index, this.tmpColor);
     } else {
-      bucket.mesh.setColorAt(meta.index, meta.baseColor);
+      this.tmpColor.copy(meta.baseColor);
     }
+    // Apply Slice F2 focus dimming on top of the highlight tint so the
+    // selected/hovered node still pops while the rest of the graph fades.
+    if (this.focusSet && !this.focusSet.has(meta.id)) {
+      this.tmpColor.multiplyScalar(0.18);
+    }
+    bucket.mesh.setColorAt(meta.index, this.tmpColor);
   }
 }
 
@@ -280,4 +393,199 @@ export function nodeRadius(n: ExplorerNode): number {
   const degreeTerm = Math.log1p(n.degree) * 0.45;
   const confTerm = 0.25 * n.confidence;
   return Math.max(0.4, 0.6 + degreeTerm + confTerm);
+}
+
+// ─── Glass material (Slice G) ──────────────────────────────────────────
+//
+// Custom ShaderMaterial that gives nodes a translucent "glass architecture"
+// look: faint inner body, strong fresnel rim, subtle emissive glow tinted
+// by the per-instance colour. Designed to share the program across all
+// node-type buckets — three.js compiles per source string, so we pay the
+// link cost once even though each bucket holds its own clone for safe
+// independent disposal.
+//
+// Uniforms:
+//   uTime              — seconds, drives selection pulse if needed.
+//   uOpacity           — base translucency (0..1).
+//   uEmissiveStrength  — internal glow multiplier on per-instance colour.
+//   uRimStrength       — fresnel highlight multiplier.
+//   uRimPower          — fresnel exponent (higher = thinner rim).
+//   uRimColor          — tint for the rim highlight (cool white default).
+//
+// We rely on three.js auto-injecting `instanceMatrix` and `instanceColor`
+// when the mesh is an InstancedMesh with `instanceColor` set, so the
+// vertex shader just references them under the matching `#define`s.
+
+// Phase 6 — engineered glass / crystal pass.
+// Phase 8 lifted opacity + emissive floor a touch so non-highlighted
+// nodes carry visible presence after the AA chain darkened midtones.
+// Rim/specular untouched (highlights already preserved by ACES).
+const BASE_OPACITY = 0.62;
+const BASE_EMISSIVE = 0.20;
+const BASE_RIM_STRENGTH = 1.05;
+const BASE_RIM_POWER = 2.8;
+
+const NODE_VERTEX_SHADER = /* glsl */ `
+#include <common>
+#include <fog_pars_vertex>
+
+attribute float aVisible;
+
+varying vec3 vColor;
+varying vec3 vNormalView;
+varying vec3 vViewDir;
+varying float vVisible;
+// Phase 6 — per-instance scale (~node radius) so the fragment shader
+// can dial up crystalline detail (sharper rim, specular, internal
+// depth gradient) on large nodes without changing small-node read.
+varying float vSize;
+// Object-space position (unit-ish, since geometries are unit-sized).
+// Used to drive a subtle vertical depth gradient inside large nodes.
+varying vec3  vObjPos;
+
+void main() {
+  vVisible = aVisible;
+  vObjPos = position;
+
+  #ifdef USE_INSTANCING_COLOR
+    vColor = instanceColor;
+  #else
+    vColor = vec3(1.0);
+  #endif
+
+  vec3 transformed = position;
+  vec3 transformedNormal = normal;
+  #ifdef USE_INSTANCING
+    mat3 im = mat3(instanceMatrix);
+    transformed = (instanceMatrix * vec4(position, 1.0)).xyz;
+    transformedNormal = im * normal;
+    // Average column length ≈ uniform scale (we only use uniform scale
+    // upstream). Cheaper than a full svd and accurate for our case.
+    vSize = (length(im[0]) + length(im[1]) + length(im[2])) / 3.0;
+  #else
+    vSize = 1.0;
+  #endif
+
+  vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
+  vNormalView = normalize(normalMatrix * transformedNormal);
+  vViewDir = normalize(-mvPosition.xyz);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}
+`;
+
+const NODE_FRAGMENT_SHADER = /* glsl */ `
+#include <common>
+#include <fog_pars_fragment>
+
+uniform float uTime;
+uniform float uOpacity;
+uniform float uEmissiveStrength;
+uniform float uRimStrength;
+uniform float uRimPower;
+uniform vec3  uRimColor;
+
+varying vec3  vColor;
+varying vec3  vNormalView;
+varying vec3  vViewDir;
+varying float vVisible;
+varying float vSize;
+varying vec3  vObjPos;
+
+void main() {
+  if (vVisible < 0.5) discard;
+
+  vec3 N = normalize(vNormalView);
+  vec3 V = normalize(vViewDir);
+  float NoV = clamp(dot(N, V), 0.0, 1.0);
+
+  // 0 → small leaf nodes (radius ~0.6), 1 → big hubs (radius ~1.6+).
+  // Drives crystal-only embellishments so small nodes stay simple and
+  // large nodes pick up specular, depth gradient, and a sharper rim.
+  float largeWeight = smoothstep(0.95, 1.6, vSize);
+
+  // Body — slightly steeper face/edge contrast than before so flat
+  // faces of the dodecahedron / cube actually read as planes instead
+  // of bleeding into the rim. Edges get darker, faces get brighter.
+  // Phase 8 lifted the face term so non-highlighted nodes stay visible
+  // in the darker scene without flattening edge contrast.
+  float facing = pow(NoV, 0.62);
+  vec3 body = vColor * (0.32 + 0.46 * facing);
+
+  // Internal depth gradient (large nodes only) — fakes a refractive
+  // top-to-bottom shift inside the volume. Subtle so it never reads as
+  // banding, and weighted by largeWeight so leaf nodes are unaffected.
+  float vertical = clamp(vObjPos.y * 0.5 + 0.5, 0.0, 1.0);
+  float depthGrad = mix(0.84, 1.18, vertical);
+  body *= mix(1.0, depthGrad, largeWeight);
+
+  // Internal emissive — tinted by instance colour so each node type
+  // glows in its own hue. Trimmed slightly inside large nodes so the
+  // body reads cleaner / less hazy; small nodes keep full emissive.
+  vec3 emissive = vColor * uEmissiveStrength * mix(1.0, 0.85, largeWeight);
+
+  // Fresnel rim — pow(1 - N·V). Sharpens (higher exponent) and
+  // brightens on large nodes so corners and edges of crystals catch
+  // light the way real glass does. Small nodes keep the gentler rim.
+  float rimPow = mix(uRimPower, uRimPower + 0.6, largeWeight);
+  float fresnel = pow(1.0 - NoV, rimPow);
+  float rimMul = mix(uRimStrength, uRimStrength * 1.20, largeWeight);
+  vec3  rimTint = mix(uRimColor, vColor + vec3(0.20), 0.55);
+  vec3  rim = rimTint * fresnel * rimMul;
+
+  // Specular — Blinn-Phong half-vector against a fixed view-space key
+  // light direction (matches the world-space key light in scene.ts
+  // closely enough for a stylised highlight). Tight exponent so the
+  // hot spot is small, and only enabled on large nodes so leaves don't
+  // sparkle and the dense-hub blowout problem doesn't return.
+  vec3 L = normalize(vec3(0.40, 0.70, 0.60));
+  vec3 H = normalize(L + V);
+  float specTerm = pow(max(dot(N, H), 0.0), 72.0);
+  vec3  specular = vec3(specTerm) * (0.55 * largeWeight);
+
+  vec3 outCol = body + emissive + rim;
+  // Soft hue-preserving roll-off — divides by (1 + maxChannel) so peaks
+  // taper toward (but never reach) 1.0 while preserving the colour
+  // ratio. Keeps blue nodes blue-hot, gold nodes gold-hot, etc., even
+  // before tone mapping kicks in downstream.
+  float peak = max(max(outCol.r, outCol.g), outCol.b);
+  outCol = outCol / (1.0 + 0.45 * peak);
+  // Specular sits on top of the roll-off so the highlight stays sharp
+  // and white. ACES tone mapping downstream prevents it from clipping
+  // even though it can briefly push channels above 1.0.
+  outCol += specular;
+
+  // Glass alpha — translucent body + rim alpha boost so silhouettes
+  // remain crisp even when the body is faint. Slight per-size lift
+  // keeps large hubs reading as solid volumes; clamped so additive
+  // bloom on top doesn't chase past 1.0 and turn glass into milk.
+  float alpha = uOpacity + fresnel * 0.34 + 0.06 * largeWeight;
+  alpha = clamp(alpha, 0.0, 0.95);
+
+  gl_FragColor = vec4(outCol, alpha);
+  #include <fog_fragment>
+}
+`;
+
+function makeGlassMaterial(): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: UniformsUtils.merge([
+      UniformsLib.fog,
+      {
+        uTime:             { value: 0 },
+        uOpacity:          { value: BASE_OPACITY },
+        uEmissiveStrength: { value: BASE_EMISSIVE },
+        uRimStrength:      { value: BASE_RIM_STRENGTH },
+        uRimPower:         { value: BASE_RIM_POWER },
+        uRimColor:         { value: new Color(0xc8e4ff) },
+      },
+    ]),
+    vertexShader: NODE_VERTEX_SHADER,
+    fragmentShader: NODE_FRAGMENT_SHADER,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: NormalBlending,
+    fog: true,
+  });
 }

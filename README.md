@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v8.2.0 — Bedrock
+# DreamGraph v8.2.1 — Bedrock
 
-![Version](https://img.shields.io/badge/version-8.2.0-blue)
+![Version](https://img.shields.io/badge/version-8.2.1-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -68,7 +68,7 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 - **Daemon** — the long-running DreamGraph runtime with stdio or HTTP transport
 - **MCP tool surface** — tools for graph queries, enrichment, source inspection, cognition, ADRs, workflows, and remediation
 - **CLI (`dg`)** — instance creation, attach/detach, start/stop, status, scan, enrich, schedule, export, fork, and migration
-- **VS Code extension** — chat, dashboard, Explorer (interactive graph + curated mutations), changed-files view, daemon connection, and local support tools
+- **VS Code extension** — chat, dashboard, Explorer (interactive 2D/3D graph + curated mutations), changed-files view, daemon connection, and local support tools
 - **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, and dream-cycle reasoning
 - **Datastore-as-Hub** — first-class `datastore` entities, live schema introspection (`scan_database`), and the `schema_grounding` dream strategy for multi-repo SaaS projects sharing a backend (set `DATABASE_URL`; inert otherwise)
 
@@ -278,7 +278,7 @@ DreamGraph has six major surfaces:
 - **Daemon runtime** — the MCP-capable service layer exposed through stdio or HTTP
 - **CLI** — operational control over instances and daemon lifecycle
 - **VS Code extension** — the primary interactive editor experience for chat, dashboard, changed-files context, daemon connection, and local-tool execution
-- **DreamGraph Explorer** — the interactive graph surface for browsing entities, tensions, candidates, and curated graph mutations, available in a web browser or through the VS Code extension
+- **DreamGraph Explorer** — the interactive graph surface for browsing entities, tensions, candidates, and curated graph mutations, available in a web browser or through the VS Code extension; supports both a 2D Sigma.js canvas and a 3D Three.js canvas (toggle in the Explorer toolbar)
 
 For deeper architectural detail, see:
 - [docs/architecture.md](docs/architecture.md)

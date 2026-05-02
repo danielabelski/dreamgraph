@@ -40,7 +40,7 @@ Plain-language definitions of every DreamGraph-specific term in this guide.
 
 **Evidence (count and score).** How many independent sources support a dream. Promotion requires evidence_count ≥ 2 and evidence score ≥ 0.40.
 
-**Explorer.** The interactive graph view. Available in the VS Code extension and at `http://localhost:<port>/explorer/`.
+**Explorer.** The interactive graph view. Available in the VS Code extension and at `http://localhost:<port>/explorer/`. Supports a 2D canvas (Sigma.js) and a 3D canvas (Three.js); toggle from the toolbar.
 
 **Fact graph.** The trusted, validated knowledge layer. Sum of features, workflows, data model, UI registry, ADRs, and validated edges.
 

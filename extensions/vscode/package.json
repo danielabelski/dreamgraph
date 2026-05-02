@@ -2,7 +2,7 @@
   "name": "dreamgraph-vscode",
   "displayName": "DreamGraph",
   "description": "DreamGraph-native development agent — intentional context, architectural discipline, knowledge-grounded AI.",
-  "version": "8.2.0",
+  "version": "8.2.1",
   "icon": "media/dreamgraph-icon.png",
   "publisher": "siteledger-solutions",
   "homepage": "https://dreamgraph.nofs.ai/",
@@ -107,6 +107,10 @@
       {
         "command": "dreamgraph.openExplorer",
         "title": "DreamGraph: Open Explorer"
+      },
+      {
+        "command": "dreamgraph.toggleGpuMetrics",
+        "title": "DreamGraph: Toggle GPU Metrics"
       },
       {
         "command": "dreamgraph.restoreSidebar",

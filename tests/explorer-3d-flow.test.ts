@@ -10,10 +10,6 @@
 import { describe, expect, it } from "vitest";
 import { SplineSet } from "../explorer/src/three/splines";
 import { TubeSystem } from "../explorer/src/three/TubeSystem";
-import {
-  ParticleSystem,
-  pushParticlesForEdge,
-} from "../explorer/src/three/ParticleSystem";
 import type { ExplorerEdge, ExplorerNode } from "../explorer/src/types";
 
 function smallGraph(): { nodes: ExplorerNode[]; edges: ExplorerEdge[] } {
@@ -208,83 +204,16 @@ describe("TubeSystem", () => {
 });
 
 describe("pushParticlesForEdge", () => {
-  it("validated kind scales with confidence (min 2)", () => {
-    const out: ReturnType<typeof collect> = [];
-    pushParticlesForEdge(out, 0, "validated", 1.0);
-    expect(out.length).toBe(6);
-    out.length = 0;
-    pushParticlesForEdge(out, 0, "validated", 0.0);
-    expect(out.length).toBe(2);
-  });
-
-  it("tension emits 2 forward + 2 back", () => {
-    const out: ReturnType<typeof collect> = [];
-    pushParticlesForEdge(out, 0, "tension", 0.5);
-    expect(out.length).toBe(4);
-    expect(out.filter((p) => p.direction === 1)).toHaveLength(2);
-    expect(out.filter((p) => p.direction === -1)).toHaveLength(2);
-  });
-
-  it("candidate, dream, fact spawn fixed counts", () => {
-    const c: ReturnType<typeof collect> = [];
-    pushParticlesForEdge(c, 0, "candidate", 1);
-    pushParticlesForEdge(c, 0, "dream", 1);
-    pushParticlesForEdge(c, 0, "fact", 1);
-    expect(c.filter((p) => p.kind === "candidate")).toHaveLength(3);
-    expect(c.filter((p) => p.kind === "dream")).toHaveLength(4);
-    expect(c.filter((p) => p.kind === "fact")).toHaveLength(2);
+  it.skip("ParticleSystem removed in Slice F1 — flow now lives on the tube shader", () => {
+    // Intentionally skipped: kept as a tombstone so future readers see
+    // why these tests vanished. See explorer/src/three/TubeSystem.ts.
   });
 });
 
 describe("ParticleSystem", () => {
-  it("instances one mesh slot per particle and advances offsets on update", () => {
-    const { nodes, edges } = smallGraph();
-    const splines = new SplineSet(nodes, edges);
-    splines.applyLayout([
-      { id: "a", x: 0, y: 0, z: 0 },
-      { id: "b", x: 5, y: 0, z: 0 },
-      { id: "c", x: 0, y: 5, z: 0 },
-    ]);
-    const particles = new ParticleSystem(splines);
-    try {
-      const expected =
-        6 /* validated conf=1 */ + 4 /* tension */ + 4; /* dream */
-      expect(particles.metas).toHaveLength(expected);
-      expect(particles.mesh.count).toBe(expected);
-
-      const before = particles.metas[0].offset;
-      particles.update(0.5, 0.5);
-      const after = particles.metas[0].offset;
-      // Offset must have advanced by speed * dt (mod 1).
-      expect(after).not.toBe(before);
-      // Validated speed = 0.18, dt = 0.5 → +0.09.
-      expect(((after - before + 1) % 1)).toBeCloseTo(0.09, 5);
-    } finally {
-      particles.dispose();
-    }
-  });
-
-  it("update is safe on an empty graph", () => {
-    const splines = new SplineSet([], []);
-    const particles = new ParticleSystem(splines);
-    try {
-      expect(() => particles.update(0.016, 0)).not.toThrow();
-      expect(particles.mesh.count).toBe(0);
-    } finally {
-      particles.dispose();
-    }
-  });
+  it.skip("ParticleSystem removed in Slice F1", () => {});
 });
 
-// Helper used by the spawn tests — local because the meta type isn't
-// exported and we don't want to widen the public surface for tests.
-type Particle = {
-  edgeIndex: number;
-  offset: number;
-  speed: number;
-  direction: 1 | -1;
-  kind: ExplorerEdge["kind"];
-};
-function collect(): Particle[] {
-  return [];
-}
+// (legacy local Particle type removed alongside ParticleSystem)
+type Particle = never;
+function _unused(_p: Particle): void {}

@@ -272,6 +272,7 @@ export function App() {
               selected={selected}
               onSelect={setSelected}
               liveEvents={liveEvents}
+              filters={filters}
               onFatal={(msg) => {
                 setRender3dError(msg);
                 setRenderMode("2d");
