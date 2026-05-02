@@ -151,15 +151,18 @@ export class NodeSystem {
         const n = group[i];
         const radius = nodeRadius(n);
         const baseColor = new Color(nodeRenderColor(n.type, n.health));
-        // Push per-type colors well into vivid territory so node hues
-        // read distinctly against the dark background and the tube
-        // palette. Phase 8 — +0.05 saturation lift on top of the Phase 6
-        // bump so colours pop in midtones without overpowering tubes.
+        // Push per-type colors into vivid-but-elegant territory so node
+        // hues read distinctly against the dark background and the tube
+        // palette. Phase 9 dialled saturation back from a +0.50 boost
+        // with floor 0.62 to a +0.30 boost with floor 0.55 — colours
+        // remain clearly identifiable per type but no longer push toward
+        // neon. Lightness floor lifted slightly (0.42 → 0.46) to keep
+        // midtones readable.
         {
           const hsl = { h: 0, s: 0, l: 0 };
           baseColor.getHSL(hsl);
-          const s = Math.min(1, Math.max(hsl.s, 0.62) + 0.50);
-          const l = Math.min(0.80, Math.max(hsl.l, 0.42));
+          const s = Math.min(0.92, Math.max(hsl.s, 0.55) + 0.30);
+          const l = Math.min(0.78, Math.max(hsl.l, 0.46));
           baseColor.setHSL(hsl.h, s, l);
         }
         const meta: NodeInstanceMeta = {
@@ -504,19 +507,19 @@ void main() {
   // large nodes pick up specular, depth gradient, and a sharper rim.
   float largeWeight = smoothstep(0.95, 1.6, vSize);
 
-  // Body — slightly steeper face/edge contrast than before so flat
-  // faces of the dodecahedron / cube actually read as planes instead
-  // of bleeding into the rim. Edges get darker, faces get brighter.
-  // Phase 8 lifted the face term so non-highlighted nodes stay visible
-  // in the darker scene without flattening edge contrast.
-  float facing = pow(NoV, 0.62);
-  vec3 body = vColor * (0.32 + 0.46 * facing);
+  // Body — face/edge contrast tuned for readability over drama. Phase 9
+  // lifted the dark face term (0.32 → 0.40) and softened the face
+  // brighten (0.46 → 0.36) so unlit sides stay legible and lit sides
+  // don't push midtones into a high-contrast cinematic look.
+  float facing = pow(NoV, 0.70);
+  vec3 body = vColor * (0.40 + 0.36 * facing);
 
   // Internal depth gradient (large nodes only) — fakes a refractive
-  // top-to-bottom shift inside the volume. Subtle so it never reads as
-  // banding, and weighted by largeWeight so leaf nodes are unaffected.
+  // top-to-bottom shift inside the volume. Phase 9 narrowed the
+  // gradient (0.84–1.18 → 0.92–1.10) so large hubs read as gentle
+  // glass volumes rather than high-contrast jewels.
   float vertical = clamp(vObjPos.y * 0.5 + 0.5, 0.0, 1.0);
-  float depthGrad = mix(0.84, 1.18, vertical);
+  float depthGrad = mix(0.92, 1.10, vertical);
   body *= mix(1.0, depthGrad, largeWeight);
 
   // Internal emissive — tinted by instance colour so each node type

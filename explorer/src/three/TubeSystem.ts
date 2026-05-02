@@ -60,7 +60,7 @@ const HEAT_COLOR = new Color(1.0, 0.55, 0.15);
 const HEAT_BRIGHTNESS = 1.2;
 
 /** Default focus level for off-focus edges when selection is active. */
-const DEFAULT_DIMMED_FOCUS = 0.18;
+const DEFAULT_DIMMED_FOCUS = 0.30;
 
 /** Per-kind motion table — replaces the old ParticleSystem motion table. */
 const KIND_MOTION: Record<
@@ -161,10 +161,11 @@ float pulse(float t) {
 void main() {
   if (vHidden > 0.5) discard;
   // Base tube glow, scaled by confidence so low-trust edges fade back.
-  // Phase 8 lifted from 0.22 + 0.40*conf so non-flow midtones of tubes
-  // stay visible after the AA / tone-mapping chain darkened the buffer.
-  // The hue-preserving roll-off below still prevents dense-hub blowout.
-  float baseI = 0.30 + 0.50 * vConfidence;
+  // Phase 9 lifted the floor (0.30 → 0.42) and softened the confidence
+  // slope so even medium / low-trust edges remain clearly visible
+  // without needing the flow head to draw them in. The hue-preserving
+  // roll-off below still prevents dense-hub blowout.
+  float baseI = 0.42 + 0.48 * vConfidence;
   vec3 base = vColor * baseI;
 
   float flow;
@@ -201,10 +202,11 @@ void main() {
 
   // Alpha rises with the flow head + rim so dim trails don't pile up
   // to opaque but silhouettes still hold against the dark scene.
-  // Capped lower than before — the additive accumulation in dense hubs
-  // was the main blowout source.
-  float alpha = 0.12 + 0.42 * flow + 0.16 * fresnel;
-  alpha *= mix(0.4, 1.0, vFocus);
+  // Phase 9 lifted the alpha floor (0.12 → 0.20) and the dimmed-focus
+  // alpha floor (0.4 → 0.55) so non-pulsing tube segments and dimmed
+  // edges remain legible without piling up in dense hubs.
+  float alpha = 0.20 + 0.40 * flow + 0.18 * fresnel;
+  alpha *= mix(0.55, 1.0, vFocus);
 
   gl_FragColor = vec4(col, alpha);
 
@@ -214,15 +216,15 @@ void main() {
     // vanish into the void. Instead we apply a gentle intensity falloff
     // with a hue-preserving floor so distant edges keep their colour and
     // a faint glow even at the far rim — atmospheric haze, not blackout.
-    // Phase 8 raised the far-distance brightness floor (0.55 → 0.70) and
-    // emissive floor (0.05 → 0.07) so distant structure stays clearly
-    // legible in the brighter scene.
+    // Phase 9 raised the far-distance brightness floor (0.70 → 0.82)
+    // and the alpha floor (0.72 → 0.84) so medium / far edges remain
+    // legible — distance now communicates depth without erasing edges.
   #ifdef USE_FOG
     float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
-    float atten = mix(1.0, 0.70, fogFactor);
+    float atten = mix(1.0, 0.82, fogFactor);
     gl_FragColor.rgb *= atten;
     gl_FragColor.rgb += vColor * fogFactor * 0.07;
-    gl_FragColor.a *= mix(1.0, 0.72, fogFactor);
+    gl_FragColor.a *= mix(1.0, 0.84, fogFactor);
   #endif
 }
 `;

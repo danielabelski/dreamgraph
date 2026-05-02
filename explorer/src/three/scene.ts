@@ -100,13 +100,12 @@ export function createScene(opts: CreateSceneOpts): SceneBundle {
   // them to flat white, so dense hubs of overlapping additive tubes
   // retain colour and shape rather than blowing out. Phase 8 lifted
   // exposure 0.95 → 1.10 to restore midtone luminance after the AA /
-  // MSAA chain darkened the resolved buffer (multisample resolve plus
-  // sRGB conversion was crushing midtones into the toe of the curve).
-  // ACES still protects the highlights at this exposure so dense hubs
-  // don't blow out. sRGB output ensures the post-tonemap framebuffer is
-  // encoded correctly for the browser surface.
+  // MSAA chain darkened the resolved buffer. Phase 9 settled at 1.06
+  // alongside the per-shader floor lifts (tube baseI 0.42, node body
+  // 0.40) so global contrast eases off without crushing the dark
+  // background or losing depth.
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.10;
+  renderer.toneMappingExposure = 1.06;
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.setSize(container.clientWidth, container.clientHeight, false);
   renderer.domElement.style.position = "absolute";

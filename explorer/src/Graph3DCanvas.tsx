@@ -234,7 +234,10 @@ export default function Graph3DCanvas({
         map: haloTex,
         color: new Color(0xa8d8ff),
         transparent: true,
-        opacity: 0.95,
+        // Phase 9 — reduced halo opacity ~20% (0.95 → 0.76) so the
+        // selected-node glow is a clear focus indicator instead of
+        // dominating the whole scene.
+        opacity: 0.76,
         depthWrite: false,
         depthTest: true,
         blending: AdditiveBlending,
@@ -261,18 +264,16 @@ export default function Graph3DCanvas({
         const degree = node?.degree ?? 0;
         const r = node ? Math.max(1.4, 0.6 + Math.log1p(degree) * 0.45 + 0.25 * node.confidence) : 1.4;
         haloMesh.position.set(pos.x, pos.y, pos.z);
-        // Phase 7 — degree-adaptive aura. Big hubs get a noticeably
-        // larger, softer halo (energy nucleus) so the surrounding bloom
-        // rays own the centre instead of a tight white core. Small nodes
-        // keep a tighter, brighter glow because there's nothing else to
-        // visually anchor them.
-        //   degree  0 → scale ≈ 6.5,  opacity ≈ 0.95 (tight, bright)
-        //   degree 10 → scale ≈ 7.7,  opacity ≈ 0.85
-        //   degree 30 → scale ≈ 8.6,  opacity ≈ 0.72
-        //   degree 80 → scale ≈ 9.7,  opacity ≈ 0.55 (wide, soft)
-        const auraGrowth = Math.log1p(degree) * 0.75; // ≈ ln(deg+1) bonus
-        haloMesh.scale.setScalar(r * (6.5 + auraGrowth));
-        const coreOpacity = Math.max(0.55, 0.95 - degree * 0.005);
+        // Phase 9 — selected-node glow trimmed ~20%. The halo size and
+        // opacity were dialled back so the glow remains a clear focus
+        // signal without dominating the surrounding graph.
+        //   degree  0 → scale ≈ 5.6,  opacity ≈ 0.78 (tight, calmer)
+        //   degree 10 → scale ≈ 6.6,  opacity ≈ 0.69
+        //   degree 30 → scale ≈ 7.4,  opacity ≈ 0.59
+        //   degree 80 → scale ≈ 8.4,  opacity ≈ 0.45 (wide, soft)
+        const auraGrowth = Math.log1p(degree) * 0.65; // ≈ ln(deg+1) bonus
+        haloMesh.scale.setScalar(r * (5.6 + auraGrowth));
+        const coreOpacity = Math.max(0.45, 0.78 - degree * 0.0042);
         haloMat.opacity = coreOpacity;
         haloMesh.visible = true;
       };
@@ -422,9 +423,9 @@ export default function Graph3DCanvas({
       composer.addPass(new renderPassMod.RenderPass(bundle.scene, bundle.camera));
       const bloomPass = new bloomMod.UnrealBloomPass(
         new Vector2(container.clientWidth, container.clientHeight),
-        0.55, // strength — was 0.70, reduced so dense hubs don't blow out
-        0.35, // radius   — was 0.40, tighter halo for crisper highlights
-        0.85, // threshold — only true peaks bloom (rest is tone-mapped)
+        0.45, // strength  — Phase 9: lowered 0.55 → 0.45 so bloom adds glow without dominating
+        0.32, // radius    — slightly tighter so bloom stays a halo, not a wash
+        0.88, // threshold — only true peaks bloom (rest is tone-mapped)
       );
       composer.addPass(bloomPass);
       // Phase 7 — SMAA pass after bloom catches any remaining sub-pixel
@@ -887,8 +888,8 @@ export default function Graph3DCanvas({
         // clipping even at the higher exposure, so the saved PNG is
         // dramatic without going milky. Restored in restoreLiveQuality.
         const prevExposure = bundle.renderer.toneMappingExposure;
-        bundle.renderer.toneMappingExposure = 1.22;
-        nodeSystem.setRimBoost(1.25);
+        bundle.renderer.toneMappingExposure = 1.16;
+        nodeSystem.setRimBoost(1.20);
         // Force a synchronous render so the readback below sees the
         // current frame even if requestAnimationFrame hasn't ticked
         // since the last paint.
