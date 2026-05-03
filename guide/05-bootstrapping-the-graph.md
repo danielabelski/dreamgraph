@@ -60,6 +60,32 @@ dg curate my-project --dry-run    # preview what would change
 
 Curate trims duplicates, merges near-equivalent entities, and resolves easy contradictions. Run it after big enrich passes.
 
+### `dg bootstrap` — the operator override (v8.2.5+)
+
+```powershell
+dg bootstrap my-project
+dg bootstrap my-project --mode re_enrich
+dg bootstrap my-project --mode full --force
+```
+
+DreamGraph normally drives its own bootstrap chain the first time the LLM becomes ready (see `cognitive_status.llm_readiness`). `dg bootstrap` is the **manual escape hatch** for the cases where the auto-driver doesn't fit:
+
+- The instance pre-dates the auto-readiness watcher and was never bootstrapped.
+- You upgraded the LLM model and want existing entities re-enriched against it.
+- You want a clean slate (`--mode full --force`) without recreating the instance.
+
+**Modes:**
+
+| Mode | Behavior |
+|---|---|
+| `auto` (default) | `full` on a fresh instance, `re_enrich` on a populated one. |
+| `full` | Always rescan source + run LLM enrichment + ADR discovery. May take several minutes. |
+| `re_enrich` | Refresh model-derived metadata only (no source rescan). Use after a model swap. |
+
+`--force` bypasses the bootstrap-registry's fingerprint dedupe — useful when the same provider/model fingerprint was already recorded but you still want to re-run.
+
+For day-to-day work you almost never need this. Reach for `dg scan` / `dg enrich` first; reach for `dg bootstrap` when those aren't enough.
+
 ---
 
 ## Where the graph lives
