@@ -76,6 +76,7 @@ function createFallbackPlan(): ContextPlan {
     budgetPolicy: {
       maxTokens: 1200,
       reserveTokens: 240,
+      reserveGraphTokens: 800,
       allowFullActiveFile: false,
       includeOptionalEvidence: true,
     },

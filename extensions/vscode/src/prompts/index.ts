@@ -10,10 +10,11 @@ import { ARCHITECT_EXPLAIN } from "./architect-explain.js";
 import { ARCHITECT_VALIDATE } from "./architect-validate.js";
 import { ARCHITECT_PATCH } from "./architect-patch.js";
 import { ARCHITECT_SUGGEST } from "./architect-suggest.js";
-import type { EditorContextEnvelope } from "../types.js";
+import type { EditorContextEnvelope, ArchitectLensSelection } from "../types.js";
 import { getAutonomyInstructionBlock, type AutonomyInstructionState } from "../autonomy.js";
 import { getStructuredResponseContractBlock } from "../autonomy-contract.js";
 import { getReportingInstructionBlock } from "../reporting.js";
+import { lensLabel } from "../architect-lens.js";
 
 /* ------------------------------------------------------------------ */
 /*  Task types                                                        */
@@ -200,8 +201,17 @@ export function assemblePrompt(
   additionalInstructions?: string,
   autonomyState?: AutonomyInstructionState,
   provider?: string,
+  lens?: ArchitectLensSelection,
 ): AssembledPrompt {
   const parts: string[] = [ARCHITECT_CORE];
+
+  // Architect lens overlay (Phase 5 #10 / ADR-100). Silent unless material —
+  // injected directly after the core identity so it can colour every later
+  // block (overlay, evidence, reporting) without needing a second pass.
+  const lensBlock = getArchitectLensBlock(lens);
+  if (lensBlock) {
+    parts.push(lensBlock);
+  }
 
   // Task overlay
   const overlay = TASK_OVERLAYS[task];
@@ -308,6 +318,75 @@ export function inferTask(
       return "chat";
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Architect Lens (Phase 5 #10 / ADR-100)                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Returns a lens overlay block — or an empty string when the lens is
+ * `generic` / non-material (silent default per ADR-100).
+ *
+ * Each lens nudges the architect toward a different reasoning protocol
+ * (different evidence, different ADRs, different verification step) while
+ * leaving the core identity and tool catalogue untouched.
+ */
+function getArchitectLensBlock(lens?: ArchitectLensSelection): string {
+  if (!lens || !lens.material || lens.lens === "generic") return "";
+
+  const label = lensLabel(lens.lens);
+  const protocol = LENS_PROTOCOLS[lens.lens] ?? "";
+  if (!protocol) return "";
+
+  return [
+    `## Architect Lens: ${label}`,
+    `_Selected by intent detector (${lens.confidence.toFixed(2)} confidence — ${lens.reason}). Begin your response with the line "Architect Lens: ${label}" so the user can see which mode is active._`,
+    "",
+    protocol,
+  ].join("\n");
+}
+
+const LENS_PROTOCOLS: Record<string, string> = {
+  performance: [
+    "Reason about runtime cost first, correctness second.",
+    "- Always identify the dominant cost (CPU, IO, allocation, network round-trips, N+1).",
+    "- Prefer measurements / Big-O reasoning over speculation; ask for a benchmark when unclear.",
+    "- Reach for cognitive evidence: causal chains, temporal patterns, hot-path tensions.",
+    "- Propose the smallest change that removes the dominant cost; defer micro-optimisations.",
+  ].join("\n"),
+  security: [
+    "Treat every input as hostile until proven otherwise.",
+    "- Map the trust boundary the change crosses (network, FS, IPC, untrusted code).",
+    "- Cite OWASP / DreamGraph threat-log entries when relevant; pull `dream://threats` if available.",
+    "- Prefer principle-of-least-privilege diffs; never widen surface without explicit justification.",
+    "- Call out secrets, auth, RLS, injection, and serialisation concerns even if not asked.",
+  ].join("\n"),
+  reliability: [
+    "Reason about failure modes before happy paths.",
+    "- Enumerate retries, timeouts, idempotency, partial-failure recovery, and resource leaks.",
+    "- Prefer explicit error contracts and atomic writes; surface race conditions or unbounded waits.",
+    "- Pull tensions tagged stability/reliability and active ADRs governing error handling.",
+  ].join("\n"),
+  refactor: [
+    "Preserve behaviour exactly; change only structure.",
+    "- State the invariant being preserved at the top of the response.",
+    "- Prefer mechanical, reversible passes (extract/rename/inline) over speculative redesigns.",
+    "- Pull related local conventions and sibling patterns; cite them when justifying the shape.",
+    "- Flag any test gaps that make the refactor unsafe.",
+  ].join("\n"),
+  debug: [
+    "Form a single causal hypothesis before suggesting a fix.",
+    "- Restate the observed vs expected behaviour in one sentence each.",
+    "- Walk the data path from trigger → failure point; cite the specific files/lines you read.",
+    "- Prefer a minimal repro or logging step before edits when the cause is uncertain.",
+  ].join("\n"),
+  review: [
+    "Act as a careful reviewer, not a coauthor.",
+    "- Group findings by severity (blocking / nit / question); never invent issues.",
+    "- Cite the exact file and approximate line for each finding.",
+    "- Acknowledge what is good before what is wrong; keep tone collegial.",
+  ].join("\n"),
+};
 
 /* ------------------------------------------------------------------ */
 /*  Anthropic Pacing Discipline                                       */

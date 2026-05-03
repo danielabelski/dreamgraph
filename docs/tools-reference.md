@@ -24,6 +24,8 @@ Trigger a full AWAKE → REM → NORMALIZING → AWAKE cycle. Generates speculat
 
 **Post-cycle hooks (v5.1):** `maybeAutoNarrate()` — generates a chapter every 10 cycles; `checkTensionThresholds()` — dispatches event if tension count exceeds limit.
 
+**Tension resolver hooks (v8.2):** After narrating, `dream_cycle` runs `runTensionResolverCycle({maxSamples:5})` and `validateResolutionCandidates()`. The resolver proposes resolution candidates for unresolved tensions (heuristic strategy by tension type, or LLM proposer when configured), decrements validation windows, and either confirms, accepts as wont_fix, or escalates with an urgency bump. Summary is appended to the `dream_cycle` return string and surfaced in `cognitive_status` under `tensionStats.resolution_pipeline`. See [cognitive-engine.md](cognitive-engine.md#tension-resolution-lifecycle).
+
 #### `normalize_dreams`
 
 Manually run normalization on existing dream graph.
@@ -548,7 +550,9 @@ This is a convenience orchestrator. All individual tools (`init_graph`, `enrich_
 | `targets` | string[] | all three | Subset of `["features", "workflows", "data_model"]` to populate. |
 | `repos` | string[] | all configured | Specific repo names to scan. |
 
-**Returns:** Summary with counts for repos scanned, files discovered, UI files detected, technology detected, features/workflows/data_model inserted/updated/total, index entries rebuilt, LLM tokens used, and any warnings.
+**Returns:** Summary with counts for repos scanned, files discovered, UI files detected, technology detected, features/workflows/data_model inserted/updated/total, **auxiliary entities (test_suite/configuration/automation_script/mcp_tool) inserted/updated/total**, index entries rebuilt, LLM tokens used, and any warnings.
+
+**Phase 2.5 — auxiliary entity merge (v8.2):** After LLM enrichment and before index rebuild, `scan_project` classifies every scanned file into one of four auxiliary kinds (tests / config / scripts / MCP tools) and persists them to `data/auxiliary_entities.json` via `mergeAuxiliaryEntities`. The rebuilt `index.json` includes one row per auxiliary entry with `type` set to the kind. See [data-model.md](data-model.md#auxiliary-entities-auxiliary_entitiesjson) for schema.
 
 ---
 
@@ -720,10 +724,17 @@ Export knowledge graph as structured Markdown for documentation sites.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `output_dir` | string | yes | Output directory |
-| `sections` | enum[] | yes | `features`, `data_model`, `workflows`, `architecture`, `ui_registry`, `cognitive_status`, `api_reference`, `all` |
+| `sections` | enum[] | yes | `features`, `data_model`, `datastores`, `auxiliary`, `tensions`, `workflows`, `architecture`, `ui_registry`, `cognitive_status`, `api_reference`, `all` |
 | `format` | enum | no | `docusaurus`, `nextra`, `mkdocs`, `plain` (default) |
 | `include_diagrams` | boolean | no | Mermaid inline (default: true) |
 | `include_cognitive` | boolean | no | Cognitive status (default: false) |
+
+**Section coverage (v8.2):**
+- `datastores` — reads `datastores.json` and emits one index page plus a per-datastore page including the introspected table list (populated by `scan_database`).
+- `auxiliary` — reads `auxiliary_entities.json` and emits one page per kind: registered MCP tools, test suites, configuration files, automation scripts.
+- `tensions` — reads `tension_log.json` and emits a single page summarizing open signals by type, the highest-urgency open tensions, and any pending resolution candidates with their strategy + validation window.
+
+When `sections` includes `all`, every section above is exported (cognitive_status only when `include_cognitive=true`).
 
 ---
 
@@ -868,7 +879,7 @@ System resources (registered in [src/resources/register.ts](../src/resources/reg
 | `system://data-model` | Entity definitions and relationships |
 | `system://datastores` | Shared infrastructure (databases) referenced by data_model. Includes scanned table metadata. Empty when no datastore is configured. |
 | `system://capabilities` | Server capabilities, strategies & available tools |
-| `system://index` | Central entity index for fast lookup and cross-resource linking |
+| `system://index` | Central entity index for fast lookup and cross-resource linking. `type` covers features/workflows/data_model plus the four auxiliary kinds (`test_suite`, `configuration`, `automation_script`, `mcp_tool`) populated by `scan_project`. |
 
 ---
 

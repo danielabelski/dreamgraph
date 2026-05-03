@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **8.2.1**
+Version: **8.2.5**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -114,6 +114,9 @@ src/
   src/server/server.ts
   src/tools/adr-historian.ts
   src/tools/api-surface.ts
+  src/tools/auxiliary-classifier.ts
+  src/tools/auxiliary-generators.ts
+  src/tools/auxiliary-store.ts
   src/tools/code-senses.ts
   src/tools/db-senses.ts
   src/tools/enrich-seed-data.ts
@@ -125,6 +128,7 @@ src/
   src/tools/register.ts
   src/tools/runtime-senses.ts
   src/tools/scan-project.ts
+  src/tools/scan-types.ts
   src/tools/search-data-model.ts
   src/tools/solidify-insight.ts
   src/tools/ui-registry.ts

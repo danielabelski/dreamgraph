@@ -136,6 +136,27 @@ Tensions can be:
 - resolved by humans or the system
 - revisited if contradictory evidence reappears
 
+### Tension Resolution Lifecycle
+
+Every `dream_cycle` invokes a two-stage resolver after normalization:
+
+1. **Proposer pass** (`runTensionResolverCycle`) — selects up to 5 unresolved tensions that have neither a pending resolution candidate nor a prior failed attempt, sorted by urgency. Each selected tension receives a candidate via either an LLM proposer or the heuristic fallback. Heuristic strategies by tension type:
+   - `missing_link` → `merge`
+   - `weak_connection` → `mediator`
+   - `ungrounded_dream` → `wont_fix`
+   - `hard_query` → `reframe`
+   - `code_insight` (and default) → `split`
+
+   Each candidate carries `{ strategy, rationale, proposed_at, validation_window, source }`. The default validation window is 3 dream cycles.
+
+2. **Validation pass** (`validateResolutionCandidates`) — decrements `validation_window` for every open candidate and inspects the validated edges between the tension's entities:
+   - Bridging edge present + window expired → `resolveTension(system, confirmed_fixed)` with the bridge as evidence.
+   - No bridge + window expired + strategy `wont_fix` → `resolveTension(system, wont_fix)`.
+   - No bridge + window expired + any other strategy → escalate: bump urgency by 0.05 (capped at 1.0), set `attempted=true`, clear the candidate so future cycles can retry with a different strategy.
+   - Window > 0 → leave as awaiting.
+
+Resolver activity is summarized in the `dream_cycle` return string and surfaced in `cognitive_status` under `tensionStats.resolution_pipeline` (`pending_candidates`, `awaiting_validation`, `by_strategy`). The pipeline field is omitted when there is no active candidate.
+
 ---
 
 ## Normalizer and Dreamer Separation

@@ -380,6 +380,7 @@ test('evidence-order and omission contract: environment ranks below hard constra
     budgetPolicy: {
       maxTokens: 1600,
       reserveTokens: 320,
+      reserveGraphTokens: 240,
       allowFullActiveFile: false,
       includeOptionalEvidence: true,
     },
@@ -519,7 +520,7 @@ test('evaluation fixture plan: representative task packets preserve sufficiency 
     ],
     omitted: [],
     confidence: 0.8,
-    tokenUsage: { used: 76, budget: 1600, reserved: 320 },
+    tokenUsage: { used: 76, budget: 1600, reserved: 320, reservedGraph: 240, usedGraph: 28 },
   };
 
   const environmentText = packet.evidence.find((item) => item.kind === 'environment')?.content ?? '';

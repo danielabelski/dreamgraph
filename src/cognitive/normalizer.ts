@@ -23,11 +23,19 @@
  * - Can upgrade rejected → latent or latent → validated
  * - Generates tension signals for rejected edges with confidence ≥ 0.30
  *
- * Promotion thresholds:
+ * Promotion thresholds (strict / steady-state):
  * - confidence >= 0.62 AND plausibility >= 0.45 AND evidence >= 0.4 AND evidence_count >= 2
  *   → validated (promoted to fact-adjacent space)
  * - plausibility >= 0.35 AND not contradicted → latent (kept in speculative memory)
  * - everything else → rejected
+ *
+ * Cold-start bootstrap (ADR-096):
+ * - Active until either entity-count reaches the floor (≥50 entities & ≥10
+ *   validated edges) OR the bootstrap window elapses (20 cycles or 24h).
+ * - Relaxed gate: confidence ≥ 0.50, evidence ≥ 0.30, evidence_count ≥ 1.
+ * - exit_reason ("size" | "window" | "manual") is recorded on every exit.
+ * - Live tuning floors come from `getActiveCognitiveTuning()`; the runtime
+ *   values shown above are defaults — do not treat them as constants.
  *
  * NORMALIZING state is REQUIRED. Engine enforces this.
  */
@@ -896,7 +904,7 @@ export async function normalize(
 
   // Resolve promotion config from active policy profile
   const tuning = await getActiveCognitiveTuning();
-  const promo: PromotionConfig = {
+  const strictPromo: PromotionConfig = {
     promotion_confidence: tuning.promotion_confidence,
     promotion_plausibility: tuning.promotion_plausibility,
     promotion_evidence: tuning.promotion_evidence,
@@ -904,11 +912,39 @@ export async function normalize(
     retention_plausibility: tuning.retention_plausibility,
     max_contradiction: tuning.max_contradiction,
   };
+
+  // ADR-096: cold-start bootstrap relaxation.
+  // On a fresh instance the strict gate is unreachable because entity-
+  // existence is required as evidence (entities don't exist yet). During
+  // cold-start we relax the floor to ~0.50 confidence and lower the
+  // evidence requirements so the dream→normalize→promote loop can
+  // produce its first actionable output. Guard rails (ADR-096):
+  //   - relaxed floor MUST NOT exceed 0.50
+  //   - dual exit condition (entity-count OR window) MUST remain
+  //   - exit_reason MUST be populated on every exit event
+  const isColdStart = engine.isColdStart();
+  if (isColdStart) engine.markBootstrapStart();
+  const promo: PromotionConfig = isColdStart
+    ? {
+        // Cap at the ADR-096 ceiling — never raise above 0.50 here.
+        promotion_confidence: Math.min(
+          strictPromo.promotion_confidence,
+          engine.getBootstrapRelaxedConfidenceFloor()
+        ),
+        promotion_plausibility: Math.min(strictPromo.promotion_plausibility, 0.4),
+        promotion_evidence: Math.min(strictPromo.promotion_evidence, 0.3),
+        promotion_evidence_count: 1,
+        retention_plausibility: strictPromo.retention_plausibility,
+        max_contradiction: strictPromo.max_contradiction,
+      }
+    : strictPromo;
   const effectiveThreshold = threshold ?? promo.promotion_confidence;
 
   const cycle = engine.nextNormalizationCycle();
   logger.info(
-    `Normalization cycle #${cycle} starting (threshold: ${effectiveThreshold}, strict: ${strict}, profile tuning: confidence=${promo.promotion_confidence}, evidence_count=${promo.promotion_evidence_count})`
+    `Normalization cycle #${cycle} starting (threshold: ${effectiveThreshold}, strict: ${strict}, ` +
+      `bootstrap: ${isColdStart ? "cold_start (relaxed gate)" : "graduated"}, ` +
+      `profile tuning: confidence=${strictPromo.promotion_confidence}, evidence_count=${strictPromo.promotion_evidence_count})`
   );
 
   // Load fact graph and dream graph
@@ -1160,6 +1196,26 @@ export async function normalize(
       `(${counts.validated} validated, ${counts.latent} latent, ${counts.rejected} rejected), ` +
       `${promotedEdges.length} edges promoted, ${promotedNodeCount} entities promoted, ${blockedByGate} blocked by gate`
   );
+
+  // ADR-096: evaluate cold-start dual exit condition AFTER this cycle's
+  // promotions. Both branches (entity-count OR window) MUST remain wired
+  // and exit_reason MUST be populated on every exit (guard rails).
+  if (isColdStart) {
+    const entityCount = lookup.entityIds.size;
+    let validatedEdgeCount = 0;
+    try {
+      const validatedFile = await engine.loadValidatedEdges();
+      validatedEdgeCount = validatedFile.edges.length;
+    } catch (err) {
+      logger.debug(
+        `Cold-start exit eval: validated_edges count unavailable: ${err instanceof Error ? err.message : err}`
+      );
+    }
+    const exitReason = engine.evaluateBootstrapExit(entityCount, validatedEdgeCount);
+    if (exitReason) {
+      await engine.graduateBootstrap(exitReason);
+    }
+  }
 
   return {
     cycle,

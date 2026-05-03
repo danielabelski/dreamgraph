@@ -453,9 +453,27 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
       // Post-cycle hooks
       try { await maybeAutoNarrate(); } catch { /* swallow */ }
 
+      // Phase 4 #8 — tension resolution lifecycle. Best-effort: never block
+      // the dream cycle's success summary on resolver failures.
+      let resolverSummary = "";
+      try {
+        const proposeResult = await engine.runTensionResolverCycle({ maxSamples: 5 });
+        const validateResult = await engine.validateResolutionCandidates();
+        resolverSummary =
+          `, resolver(proposed=${proposeResult.proposed}, ` +
+          `confirmed=${validateResult.confirmed}, ` +
+          `wont_fix=${validateResult.accepted_wont_fix}, ` +
+          `escalated=${validateResult.escalated})`;
+      } catch (err) {
+        logger.warn(
+          `dream_cycle: tension resolver pass failed — continuing. ` +
+          `Error: ${err instanceof Error ? err.message : err}`
+        );
+      }
+
       if (engine.getState() !== "awake") await engine.interrupt();
 
-      return `dream_cycle(${strategy}): ${dreamResult.edges.length} edges, ${normResult.promotedEdges.length} promoted, ${normResult.rejected} rejected`;
+      return `dream_cycle(${strategy}): ${dreamResult.edges.length} edges, ${normResult.promotedEdges.length} promoted, ${normResult.rejected} rejected${resolverSummary}`;
     }
 
     case "nightmare_cycle": {

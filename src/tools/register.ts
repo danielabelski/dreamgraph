@@ -22,6 +22,7 @@ import { registerInitGraphTool } from "./init-graph.js";
 import { registerEnrichSeedDataTool } from "./enrich-seed-data.js";
 import { registerScanProjectTool } from "./scan-project.js";
 import { registerApiSurfaceTools } from "./api-surface.js";
+import { registerBootstrapInstanceTool } from "./bootstrap-instance.js";
 import { logger } from "../utils/logger.js";
 
 export function registerTools(server: McpServer): void {
@@ -42,6 +43,7 @@ export function registerTools(server: McpServer): void {
   registerEnrichSeedDataTool(server);
   registerScanProjectTool(server);
   registerApiSurfaceTools(server);
+  registerBootstrapInstanceTool(server);
 
-  logger.info("Registered 31 tools");
+  logger.info("Registered 32 tools");
 }

@@ -214,7 +214,16 @@ export interface Datastore extends ResourceEntry {
 // ---------------------------------------------------------------------------
 
 export interface IndexEntry {
-  type: "feature" | "workflow" | "data_model" | "capability" | "datastore";
+  type:
+    | "feature"
+    | "workflow"
+    | "data_model"
+    | "capability"
+    | "datastore"
+    | "test_suite"
+    | "configuration"
+    | "automation_script"
+    | "mcp_tool";
   uri: string;
   name: string;
   source_repo: string;
@@ -222,6 +231,39 @@ export interface IndexEntry {
 
 export interface ResourceIndex {
   entities: Record<string, IndexEntry>;
+}
+
+// ---------------------------------------------------------------------------
+// Auxiliary entities (Phase 5 #9)
+//
+// Tests, configuration files, automation scripts, and MCP tool registrations
+// that are first-class citizens of the project graph but do not belong to
+// the feature/workflow/data_model trio. Persisted to data/auxiliary_entities.json.
+// ---------------------------------------------------------------------------
+
+export type AuxiliaryEntityKind =
+  | "test_suite"
+  | "configuration"
+  | "automation_script"
+  | "mcp_tool";
+
+export interface AuxiliaryEntity extends ResourceEntry {
+  kind: AuxiliaryEntityKind;
+  uri: string;
+  /** Free-form tags (e.g. "vitest", "github-actions", "tsconfig"). */
+  tags?: string[];
+  /** Per-kind metadata (counts, registered tool names, etc.). */
+  meta?: Record<string, unknown>;
+}
+
+export interface AuxiliaryEntitiesFile {
+  metadata: {
+    description: string;
+    schema_version: string;
+    last_scanned: string | null;
+    total: number;
+  };
+  entries: AuxiliaryEntity[];
 }
 
 // ---------------------------------------------------------------------------

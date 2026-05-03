@@ -1,5 +1,5 @@
 /**
- * DreamGraph v8.2.1 — Bedrock Web Dashboard.
+ * DreamGraph v8.2.5 — Bedrock Web Dashboard.
  *
  * Self-contained HTTP route handlers that render status, config,
  * and live documentation pages as HTML.  Zero external dependencies —

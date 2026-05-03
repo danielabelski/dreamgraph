@@ -43,7 +43,7 @@ import { cmdSchedule } from "./commands/schedule.js";
 
 function printUsage(): void {
   console.log(`
-DreamGraph CLI — Instance Management (v8.2.1 Bedrock)
+DreamGraph CLI — Instance Management (v8.2.5 Bedrock)
 
 Usage:
   dg <command> [options]
@@ -56,6 +56,7 @@ Commands:
   instances switch <query>    Set the active instance for the current shell
   status <query>              Show instance cognitive state
   scan <query>                Trigger a project scan on a running instance
+  bootstrap <query>           Force LLM-driven bootstrap / re-enrichment (ADR-098 #4)
   curate <query>              Improve graph signal quality on a running instance
   enrich <query>              Expand graph coverage on a running instance
   schedule <query> [--add|…]  Manage dream schedules on a running instance
@@ -77,7 +78,7 @@ Run 'dg <command> --help' for command-specific options.
 }
 
 function printVersion(): void {
-  console.log("DreamGraph CLI v8.2.1 (Bedrock)");
+  console.log("DreamGraph CLI v8.2.5 (Bedrock)");
 }
 
 /* ------------------------------------------------------------------ */
@@ -177,6 +178,12 @@ async function main(): Promise<void> {
       case "scan":
         await cmdScan(positional.slice(1), flags);
         break;
+
+      case "bootstrap": {
+        const { cmdBootstrap } = await import("./commands/bootstrap.js");
+        await cmdBootstrap(positional.slice(1), flags);
+        break;
+      }
 
       case "enrich": {
         const { cmdEnrich } = await import("./commands/enrich.js");

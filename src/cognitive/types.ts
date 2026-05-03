@@ -300,6 +300,25 @@ export interface DreamEdge {
 // Dream Graph File Structure
 // ---------------------------------------------------------------------------
 
+/**
+ * Cold-start bootstrap state — ADR-096.
+ *
+ * On a fresh instance the graph contains no fact entities and no validated
+ * edges, so the strict promotion gate (entity-existence required) is
+ * unreachable. During cold-start we drop entity-existence as evidence and
+ * relax the confidence floor to 0.50 so the dream → normalize → promote
+ * loop can produce its first actionable output.
+ *
+ * Exit is dual-condition (whichever fires first):
+ *   (A) entity-count threshold reached: ≥ 50 entities AND ≥ 10 validated edges
+ *   (B) bootstrap window elapsed: 20 dream cycles OR 24h of daemon uptime
+ *
+ * `bootstrap_exit_reason` MUST be populated on every cold-start exit (ADR-096
+ * guard rail) so the floors can be tuned empirically from telemetry.
+ */
+export type BootstrapState = "cold_start" | "graduated";
+export type BootstrapExitReason = "size" | "window" | "manual";
+
 export interface DreamGraphMetadata {
   description: string;
   schema_version: string;
@@ -308,6 +327,14 @@ export interface DreamGraphMetadata {
   last_normalization: string | null;
   total_normalization_cycles: number;
   created_at: string;
+  /** ADR-096: cold-start bootstrap mode. Defaults to "cold_start" on fresh instances. */
+  bootstrap_state?: BootstrapState;
+  /** ISO 8601 — when the daemon first observed cold-start (i.e. when normalize() first ran on a fresh graph). */
+  bootstrap_started_at?: string | null;
+  /** ISO 8601 — when the bootstrap window exited (null while still in cold-start). */
+  bootstrap_exited_at?: string | null;
+  /** Why bootstrap exited. MUST be populated on every exit event (ADR-096). */
+  bootstrap_exit_reason?: BootstrapExitReason | null;
 }
 
 export interface DreamGraphFile {
@@ -474,6 +501,31 @@ export type TensionResolutionType =
 /** Who resolved the tension */
 export type TensionResolutionAuthority = "human" | "system";
 
+/**
+ * Phase 4 #8 — proposed resolution awaiting validation.
+ * The resolver stamps a candidate on an open tension, then a later
+ * cycle confirms (→ resolveTension) or escalates (urgency bump).
+ */
+export type TensionResolutionStrategy =
+  | "merge"      // Two entities are actually one — merge their identity.
+  | "mediator"   // A third entity sits between them — surface the bridge.
+  | "split"      // The tension entity is doing too much — split it.
+  | "reframe"    // The query/expectation is wrong — restate the problem.
+  | "wont_fix";  // Acknowledged but intentional — close as accepted risk.
+
+export interface TensionResolutionCandidate {
+  /** Hypothesis kind (drives validation strategy) */
+  strategy: TensionResolutionStrategy;
+  /** Human-readable rationale for the candidate */
+  rationale: string;
+  /** ISO 8601 when the candidate was proposed */
+  proposed_at: string;
+  /** Cycles remaining until validation deadline (0 = validate now) */
+  validation_window: number;
+  /** Source of the proposal — heuristic fallback or LLM call */
+  source: "heuristic" | "llm";
+}
+
 /** A tension signal: something the system noticed was hard / missing / weak */
 export interface TensionSignal {
   id: string;
@@ -499,6 +551,13 @@ export interface TensionSignal {
   resolved: boolean;
   /** Tension TTL -- decays each cycle; expires when <= 0 */
   ttl: number;
+  /**
+   * Phase 4 #8 — proposed resolution awaiting validation.
+   * Set by `engine.proposeTensionResolution`; consumed by
+   * `engine.validateResolutionCandidates`. Absent on freshly recorded
+   * tensions and on tensions whose previous candidate was escalated.
+   */
+  resolution_candidate?: TensionResolutionCandidate;
 }
 
 /**
@@ -647,6 +706,15 @@ export interface TensionStats {
   total: number;
   unresolved: number;
   top_urgency: TensionSignal | null;
+  /**
+   * Phase 4 #8 — resolution-lifecycle pipeline depth. Optional so older
+   * snapshots remain valid; absent when the resolver has never run.
+   */
+  resolution_pipeline?: {
+    pending_candidates: number;
+    awaiting_validation: number;
+    by_strategy: Record<TensionResolutionStrategy, number>;
+  };
 }
 
 /** Full cognitive state for introspection */
@@ -667,6 +735,49 @@ export interface CognitiveState {
     provider: string;
     model: string;
     available: boolean;
+  };
+  /** ADR-096: cold-start bootstrap status (only present when meaningful — i.e. at least one normalization cycle has run). */
+  bootstrap?: BootstrapStatus;
+  /**
+   * ADR-098 (Slice 2A): live LLM-readiness probe status.
+   * Surfaces what the watcher has observed: are all effective models
+   * resolved AND is the provider answering a real completion call?
+   * The field shape is opaque here to avoid a circular import; see
+   * `LlmReadinessStatus` in `cognitive/llm-readiness.ts`.
+   */
+  llm_readiness?: unknown;
+  /**
+   * ADR-098 (Slice 2B): per-fingerprint bootstrap audit log tail.
+   * `total` is the full count; `recent` is up to the last 5 entries.
+   * The entry shape is opaque here to avoid a circular import; see
+   * `BootstrapHistoryEntry` in `cognitive/bootstrap-registry.ts`.
+   */
+  bootstrap_history?: {
+    total: number;
+    recent: unknown[];
+  };
+}
+
+/**
+ * Bootstrap status surfaced via cognitive_status — ADR-096.
+ * Present once the engine has run at least one normalization cycle.
+ */
+export interface BootstrapStatus {
+  state: BootstrapState;
+  started_at: string | null;
+  exited_at: string | null;
+  exit_reason: BootstrapExitReason | null;
+  /** Wall-clock seconds since bootstrap started (capped at the 24h ceiling). */
+  age_seconds: number | null;
+  /** Dream cycles observed since bootstrap started. */
+  cycles_in_bootstrap: number;
+  /** Tunable floors currently in effect (informational; ADR-096 guard rails). */
+  thresholds: {
+    min_entities: number;
+    min_validated_edges: number;
+    max_cycles: number;
+    max_hours: number;
+    relaxed_confidence_floor: number;
   };
 }
 
@@ -1202,6 +1313,9 @@ export interface GenerateUIMigrationOutput {
 export type LivingDocsSection =
   | "features"
   | "data_model"
+  | "datastores"
+  | "auxiliary"
+  | "tensions"
   | "workflows"
   | "architecture"
   | "ui_registry"

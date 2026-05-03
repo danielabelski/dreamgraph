@@ -383,3 +383,66 @@ export async function bootstrapNewInstance(): Promise<void> {
     // Non-fatal — the daemon continues normally, user can scan manually
   }
 }
+
+// ---------------------------------------------------------------------------
+// Re-enrichment (ADR-098 Slice 2C)
+// ---------------------------------------------------------------------------
+
+export interface ReEnrichmentResult {
+  ran: boolean;
+  reason: string;
+  adrs_recorded: number;
+  total_adrs: number;
+}
+
+/**
+ * Re-run model-dependent enrichment WITHOUT a source rescan.
+ *
+ * ADR-098 guard rail #2 forbids a full rescan on fingerprint rotation
+ * (provider/model/endpoint change). This helper refreshes the parts of the
+ * graph whose semantics are LLM-derived — currently the auto-discovered
+ * ADRs — using the now-current model. Existing seed-data entity ids are
+ * left untouched (guard rail #3); a future expansion may also re-derive
+ * descriptions/keywords/links for existing entities.
+ *
+ * Safe to invoke from anywhere; non-fatal on failure.
+ */
+export async function runReEnrichment(repoName?: string): Promise<ReEnrichmentResult> {
+  const scope = getActiveScope();
+  const tag = scope ? ` [${scope.uuid.slice(0, 8)}]` : "";
+  const repo = repoName ?? Object.keys(config.repos)[0] ?? "unknown";
+
+  if (await isFreshInstance()) {
+    logger.info(`[re-enrich]${tag} Instance has no seed data — re-enrichment skipped`);
+    return {
+      ran: false,
+      reason: "instance is fresh; nothing to re-enrich (run full bootstrap)",
+      adrs_recorded: 0,
+      total_adrs: await getADRCount(),
+    };
+  }
+
+  logger.info(`[re-enrich]${tag} Refreshing model-derived metadata (ADR discovery)…`);
+  try {
+    const recorded = await discoverAndRecordADRs(repo);
+    const total = await getADRCount();
+    logger.info(
+      `[re-enrich]${tag} Re-enrichment complete: ${recorded} new ADRs (${total} total)`,
+    );
+    return {
+      ran: true,
+      reason: "ok",
+      adrs_recorded: recorded,
+      total_adrs: total,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`[re-enrich]${tag} Failed: ${msg}`);
+    return {
+      ran: false,
+      reason: `failed: ${msg}`,
+      adrs_recorded: 0,
+      total_adrs: await getADRCount().catch(() => 0),
+    };
+  }
+}

@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 import type { McpClient } from "./mcp-client.js";
 import type { DaemonClient, GraphContextResponse } from "./daemon-client.js";
 import { detectIntent, type IntentDetectionInput } from "./intent-detector.js";
+import { detectArchitectLens } from "./architect-lens.js";
 import { ContextCache } from "./context-cache.js";
 import {
   fetchDreamInsights,
@@ -32,6 +33,46 @@ import type {
 /** Estimate token count using chars/4 heuristic (conservative). */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Graph evidence reserve (ADR-097)                                  */
+/* ------------------------------------------------------------------ */
+
+/** Evidence kinds that draw from the hard-reserved graph slice (ADR-097). */
+const GRAPH_EVIDENCE_KINDS: ReadonlySet<import("./types.js").ContextEvidenceKind> =
+  new Set([
+    "feature",
+    "workflow",
+    "adr",
+    "ui",
+    "api",
+    "tension",
+    "causal",
+    "temporal",
+    "data_model",
+    "cognitive_status",
+  ]);
+
+function isGraphEvidenceKind(kind: import("./types.js").ContextEvidenceKind): boolean {
+  return GRAPH_EVIDENCE_KINDS.has(kind);
+}
+
+/**
+ * Compute the hard-reserved graph token slice per ADR-097 absolute caps.
+ *  - ≤8k  window: clamp(15%, 800, 1200)
+ *  - ≤32k window: clamp(15%, 2000, 4000)
+ *  - 128k+ window: dynamic, capped at 10% of window (max 12000)
+ */
+function computeGraphReserve(maxTokens: number): number {
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return 0;
+  if (maxTokens <= 8_000) {
+    return Math.max(800, Math.min(1200, Math.floor(maxTokens * 0.15)));
+  }
+  if (maxTokens <= 32_000) {
+    return Math.max(2_000, Math.min(4_000, Math.floor(maxTokens * 0.15)));
+  }
+  return Math.min(12_000, Math.floor(maxTokens * 0.1));
 }
 
 function summarizeSelection(startLine: number, endLine: number): string {
@@ -729,6 +770,62 @@ export class ContextBuilder {
     evidence: import("./types.js").EvidenceItem[],
     usableBudget: number,
     codeRetryOptions?: { fileContent: string; envelope: EditorContextEnvelope },
+    graphReserve?: number,
+  ): {
+    included: import("./types.js").EvidenceItem[];
+    omitted: Array<{
+      title: string;
+      reason: string;
+      required: boolean;
+      kind?: import("./types.js").ContextEvidenceKind;
+    }>;
+    used: number;
+    /** Tokens consumed from the graph reserve (ADR-097). 0 when graphReserve unused. */
+    usedGraph: number;
+  } {
+    // ADR-097: when a positive graph reserve is supplied, partition graph evidence
+    // out of the general pool so it cannot be squeezed by code/environment items.
+    if (graphReserve && graphReserve > 0) {
+      const graphItems = evidence.filter((e) => isGraphEvidenceKind(e.kind));
+      const otherItems = evidence.filter((e) => !isGraphEvidenceKind(e.kind));
+      const graphRes = this._runBudgetLoop(graphItems, graphReserve);
+      const generalBudget = Math.max(
+        200,
+        usableBudget - graphReserve,
+      );
+      const generalRes = this._runBudgetLoop(
+        otherItems,
+        generalBudget,
+        codeRetryOptions,
+      );
+      // Re-order included items by their position in the original evidence list so
+      // downstream rendering preserves the planner's priority ordering.
+      const indexById = new Map<import("./types.js").EvidenceItem, number>();
+      evidence.forEach((item, idx) => indexById.set(item, idx));
+      const combined = [...graphRes.included, ...generalRes.included].sort(
+        (a, b) => (indexById.get(a) ?? 0) - (indexById.get(b) ?? 0),
+      );
+      return {
+        included: combined,
+        omitted: [...graphRes.omitted, ...generalRes.omitted],
+        used: graphRes.used + generalRes.used,
+        usedGraph: graphRes.used,
+      };
+    }
+    const result = this._runBudgetLoop(evidence, usableBudget, codeRetryOptions);
+    return { ...result, usedGraph: 0 };
+  }
+
+  /**
+   * Inner budget-allocation loop. Iterates a pre-sorted evidence list and partitions
+   * items into included vs omitted without exceeding `usableBudget` tokens. When
+   * `codeRetryOptions` is provided, a code item that would bust the budget gets a
+   * `_trimActiveFile` retry before being marked omitted.
+   */
+  private _runBudgetLoop(
+    evidence: import("./types.js").EvidenceItem[],
+    usableBudget: number,
+    codeRetryOptions?: { fileContent: string; envelope: EditorContextEnvelope },
   ): {
     included: import("./types.js").EvidenceItem[];
     omitted: Array<{
@@ -814,9 +911,15 @@ export class ContextBuilder {
 
     const budget = plan.budgetPolicy.maxTokens;
     const reserved = plan.budgetPolicy.reserveTokens;
+    const reservedGraph = plan.budgetPolicy.reserveGraphTokens;
     const usableBudget = Math.max(200, budget - reserved);
 
-    const { included, omitted, used } = this._applyBudget(evidence, usableBudget);
+    const { included, omitted, used, usedGraph } = this._applyBudget(
+      evidence,
+      usableBudget,
+      undefined,
+      reservedGraph,
+    );
     const instrumentationResult = await import("./context-builder.instrumentation.js").then((m) =>
       m.buildContextInstrumentation(
         included,
@@ -844,6 +947,7 @@ export class ContextBuilder {
         intentMode: plan.intentMode,
         summary: plan.taskSummary,
         commandSource: options?.commandSource,
+        lens: plan.lens,
       },
       primaryAnchor: plan.primaryAnchor,
       secondaryAnchors: plan.secondaryAnchors,
@@ -854,6 +958,8 @@ export class ContextBuilder {
         used,
         budget,
         reserved,
+        reservedGraph,
+        usedGraph,
       },
       contextText,
       safetyWarnings,
@@ -976,7 +1082,12 @@ export class ContextBuilder {
 
     if (preferredScope === "focused_excerpt") {
       const fileContent = editor.document.getText();
-      const excerptBudget = Math.floor(plan.budgetPolicy.maxTokens * 0.4);
+      // ADR-097: subtract the hard-reserved graph slice before allocating to the file excerpt.
+      const codePool = Math.max(
+        0,
+        plan.budgetPolicy.maxTokens - plan.budgetPolicy.reserveGraphTokens,
+      );
+      const excerptBudget = Math.floor(codePool * 0.4);
       return this._trimActiveFile(fileContent, envelope, excerptBudget);
     }
 
@@ -1089,9 +1200,15 @@ export class ContextBuilder {
     budgetPolicy: {
       maxTokens: this._options.maxContextTokens,
       reserveTokens: Math.min(1200, Math.floor(this._options.maxContextTokens * 0.2)),
+      reserveGraphTokens: computeGraphReserve(this._options.maxContextTokens),
       allowFullActiveFile: false,
       includeOptionalEvidence: envelope.intentConfidence >= 0.5,
     },
+    lens: detectArchitectLens({
+      prompt: prompt ?? "",
+      intentMode: envelope.intentMode,
+      commandSource,
+    }),
     environmentPolicy: {
       forceInclude: forceEnvironment,
       softTokenCeiling: 220,
@@ -1130,6 +1247,7 @@ export class ContextBuilder {
       budgetPolicy: {
         maxTokens: this._options.maxContextTokens,
         reserveTokens: Math.min(1200, Math.floor(this._options.maxContextTokens * 0.2)),
+        reserveGraphTokens: computeGraphReserve(this._options.maxContextTokens),
         allowFullActiveFile: false,
         includeOptionalEvidence: true,
       },

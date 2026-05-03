@@ -134,6 +134,13 @@ All tensions: unresolved questions, inconsistencies, discovered gaps. Active cap
 | `resolution.type` | string | `confirmed_fixed` \| `false_positive` \| `wont_fix` |
 | `resolution.authority` | string | `human` \| `system` |
 | `resolution.cycle` | number | When resolved |
+| `attempted` | boolean | At least one resolution candidate has been validated and escalated. Prevents the resolver from re-proposing the same strategy on every cycle |
+| `resolution_candidate` | object? | Pending resolution proposal awaiting validation. Removed when the tension resolves or after escalation |
+| `resolution_candidate.strategy` | string | `merge` \| `mediator` \| `split` \| `reframe` \| `wont_fix` |
+| `resolution_candidate.rationale` | string | Why this strategy was chosen |
+| `resolution_candidate.proposed_at` | string | ISO timestamp of the proposer pass that created the candidate |
+| `resolution_candidate.validation_window` | number | Dream cycles remaining before the candidate is judged. Decremented by `validateResolutionCandidates` each cycle |
+| `resolution_candidate.source` | string | `heuristic` \| `llm` |
 
 ---
 
@@ -275,7 +282,36 @@ The immutable knowledge base — **never modified by the cognitive system**. Wri
 | `features.json` | Feature entities with cross-links (GraphLink[]) |
 | `workflows.json` | Operational workflows with steps, triggers, actors |
 | `data_model.json` | Data entity definitions with key fields, relationships |
+| `auxiliary_entities.json` | Project entities discovered by `scan_project` that are *not* features/workflows/data_model: test suites, configuration files, automation scripts, registered MCP tools |
 | `index.json` | Entity ID → resource URI lookup |
+
+### Auxiliary Entities (`auxiliary_entities.json`)
+
+Populated by `scan_project` during Phase 2.5 (after LLM enrichment, before index rebuild). Each entry classifies a single project file by `kind`:
+
+- `test_suite` — files matching `*.test.*`/`*.spec.*` or under `tests/`, `test/`, `__tests__/`, `spec/`, `specs/`, `e2e/` directories
+- `configuration` — `package.json`, `tsconfig*.json`, `pyproject.toml`, `*.config.*`, `.env*`, `.eslintrc*`, `.prettierrc*`, `.editorconfig`, `.npmrc`, `.nvmrc`, `*.toml`, `*.ya?ml`, `*.ini`, etc.
+- `automation_script` — `*.sh`, `*.ps1`, `*.bat`, `*.cmd`, `Makefile`, `Dockerfile`, `docker-compose*.yml`, files under `scripts/`/`bin/`, GitHub Actions workflows
+- `mcp_tool` — TypeScript/JavaScript modules under `src/tools/`. Tool names are extracted from `server.tool("name", ...)` and `registerXTool(...)` patterns within the first 8 KB of each file
+
+Classification follows a strict priority (tests → mcp_tool → automation_script → configuration); a file matches at most one kind.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `metadata.description` | string | Free-text purpose |
+| `metadata.schema_version` | string | Currently `"1.0.0"` |
+| `metadata.last_scanned` | string | ISO timestamp of the most recent merge |
+| `metadata.total` | number | Total entries after merge |
+| `entries[].id` | string | Stable id of form `<kind>_<sanitized_name>` |
+| `entries[].kind` | string | `test_suite` \| `configuration` \| `automation_script` \| `mcp_tool` |
+| `entries[].name` | string | Display name |
+| `entries[].uri` | string | Resource URI: `<kind>://<id>` (mcp_tool uses `tool://<tool_name>`) |
+| `entries[].source_files` | string[] | Files contributing to the entity (multiple when ids collide) |
+| `entries[].source_repo` | string | Repo name from the originating scan |
+| `entries[].tags` | string[]? | Optional classification tags |
+| `entries[].meta` | object? | Optional kind-specific metadata |
+
+Index integration: each auxiliary entry is added to `index.json` as `{ type: <kind>, uri, name, source_repo }`, exposing the four new entity types alongside features/workflows/data_model.
 
 ### Capabilities Registry (`capabilities.json`)
 

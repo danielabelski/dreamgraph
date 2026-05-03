@@ -159,6 +159,39 @@ export type IntentMode =
   | "ask_dreamgraph"
   | "manual";
 
+/**
+ * Architect lens (ADR-100, Phase 5 #10) — orthogonal to IntentMode.
+ *
+ *   IntentMode says **where** the model should look (selection / file / graph).
+ *   ArchitectLens says **how** it should reason (perf / refactor / reliability / etc).
+ *
+ * `generic` is the silent default — the prompt assembler skips the lens
+ * directive entirely when this value is selected, per ADR-100's
+ * "visible when useful, silent otherwise" rule.
+ */
+export type ArchitectLens =
+  | "performance"
+  | "refactor"
+  | "reliability"
+  | "security"
+  | "review"
+  | "debug"
+  | "generic";
+
+/** Lens selection metadata carried on ContextPlan and ReasoningPacket. */
+export interface ArchitectLensSelection {
+  lens: ArchitectLens;
+  /** 0..1 — the plan emits a header badge only when confidence is material. */
+  confidence: number;
+  /** Short human-readable trigger ("keyword: bottleneck", "intent: debug", ...). */
+  reason: string;
+  /**
+   * True when the lens materially changes the reasoning (different evidence
+   * pulled, different ADR set, etc). When false the badge is suppressed.
+   */
+  material: boolean;
+}
+
 export interface EditorContextEnvelope {
   workspaceRoot: string;
   instanceId: string | null;
@@ -297,6 +330,13 @@ export interface CodeReadPlan {
 export interface BudgetPolicy {
   maxTokens: number;
   reserveTokens: number;
+  /**
+   * Hard-reserved token slice for graph evidence (ADR-097).
+   * Curated graph items (feature/workflow/adr/ui/api/tension/causal/temporal/data_model/cognitive_status)
+   * compete only against this slice; non-graph evidence cannot consume it.
+   * Sized per absolute caps: 8k→800-1200, 32k→2-4k, 128k+→dynamic ≤10%.
+   */
+  reserveGraphTokens: number;
   allowFullActiveFile: boolean;
   includeOptionalEvidence: boolean;
 }
@@ -310,6 +350,11 @@ export interface ContextPlan {
   optionalEvidence: ContextEvidenceKind[];
   codeReadPlan: CodeReadPlan[];
   budgetPolicy: BudgetPolicy;
+  /**
+   * Architect lens selection (Phase 5 #10 / ADR-100). Optional so the planner
+   * may omit it for trivial paths; consumers must treat absence as `generic`.
+   */
+  lens?: ArchitectLensSelection;
   environmentPolicy?: {
     forceInclude: boolean;
     softTokenCeiling: number;
@@ -334,6 +379,8 @@ export interface ReasoningPacket {
     intentMode: IntentMode;
     summary: string;
     commandSource?: string;
+    /** Phase 5 #10 / ADR-100 — selected architect lens, if any. */
+    lens?: ArchitectLensSelection;
   };
   primaryAnchor?: SemanticAnchor;
   secondaryAnchors: SemanticAnchor[];
@@ -349,6 +396,10 @@ export interface ReasoningPacket {
     used: number;
     budget: number;
     reserved: number;
+    /** Hard-reserved graph slice size in tokens (ADR-097). */
+    reservedGraph: number;
+    /** Tokens consumed from the graph reserve by curated graph evidence. */
+    usedGraph: number;
   };
   contextText: string;
   safetyWarnings: string[];

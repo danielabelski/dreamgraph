@@ -180,7 +180,7 @@ export class ContextInspector implements vscode.Disposable {
       `  - Evidence omitted: ${packet.omitted.length}`,
     );
     this._contextChannel.appendLine(
-      `  - Token usage: ${packet.tokenUsage.used}/${packet.tokenUsage.budget} (reserved ${packet.tokenUsage.reserved})`,
+      `  - Token usage: ${packet.tokenUsage.used}/${packet.tokenUsage.budget} (reserved ${packet.tokenUsage.reserved}, graph ${packet.tokenUsage.usedGraph}/${packet.tokenUsage.reservedGraph})`,
     );
 
     if (instrumentation) {

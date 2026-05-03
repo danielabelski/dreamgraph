@@ -54,6 +54,9 @@ import {
   generateStructuralDataModel,
 } from "./structural-generators.js";
 import { shouldSkipScanDirectory } from "./scanner-artifact-policy.js";
+import { classifyAuxiliaryFile } from "./auxiliary-classifier.js";
+import { generateAuxiliaryEntities } from "./auxiliary-generators.js";
+import { mergeAuxiliaryEntities, loadAuxiliaryEntities } from "./auxiliary-store.js";
 import type {
   Feature,
   Workflow,
@@ -154,6 +157,12 @@ async function scanProject(
 ): Promise<ProjectScan> {
   const files: ScannedFile[] = [];
   const uiFiles: ScannedFile[] = [];
+  const auxiliaryFiles: ProjectScan["auxiliaryFiles"] = {
+    test_suite: [],
+    configuration: [],
+    automation_script: [],
+    mcp_tool: [],
+  };
   const manifestContent: Record<string, string> = {};
   const topLevelDirs: string[] = [];
   const technology = await detectTechnology(repoRoot);
@@ -207,21 +216,21 @@ async function scanProject(
         }
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
+        const abs = entryPath;
+        const rel = path.relative(repoRoot, abs).replace(/\\/g, "/");
+        let size = 0;
+        try { size = (await fs.stat(abs)).size; } catch { /* ignore */ }
+
+        const scanned: ScannedFile = {
+          abs,
+          rel,
+          name: entry.name,
+          ext,
+          dirParts: path.dirname(rel).split("/").filter(Boolean),
+          size,
+        };
+
         if (CODE_EXTENSIONS.has(ext)) {
-          const abs = entryPath;
-          const rel = path.relative(repoRoot, abs).replace(/\\/g, "/");
-          let size = 0;
-          try { size = (await fs.stat(abs)).size; } catch { /* ignore */ }
-
-          const scanned: ScannedFile = {
-            abs,
-            rel,
-            name: entry.name,
-            ext,
-            dirParts: path.dirname(rel).split("/").filter(Boolean),
-            size,
-          };
-
           files.push(scanned);
 
           // Check if it's a UI file
@@ -229,13 +238,20 @@ async function scanProject(
             uiFiles.push(scanned);
           }
         }
+
+        // Auxiliary classification (Phase 5 #9). Independent of CODE_EXTENSIONS
+        // so we also surface .json/.yaml/.toml/.sh/.ps1 etc.
+        const auxKind = classifyAuxiliaryFile(rel, entry.name);
+        if (auxKind) {
+          auxiliaryFiles[auxKind].push(scanned);
+        }
       }
     }
   }
 
   await walk(repoRoot, 0);
 
-  return { repoName, repoRoot, technology, files, manifestContent, uiFiles, topLevelDirs };
+  return { repoName, repoRoot, technology, files, manifestContent, uiFiles, topLevelDirs, auxiliaryFiles };
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +457,22 @@ async function rebuildIndex(): Promise<number> {
     entities[d.id] = { type: "data_model", uri: `dreamgraph://resource/data_model/${d.id}`, name: d.name, source_repo: d.source_repo };
   }
 
+  // Phase 5 #9 — surface auxiliary entities in the index so downstream
+  // tools (`query_resource`, `system://index`) can find them.
+  try {
+    const aux = await loadAuxiliaryEntities();
+    for (const e of aux.entries) {
+      entities[e.id] = {
+        type: e.kind,
+        uri: e.uri,
+        name: e.name,
+        source_repo: e.source_repo,
+      };
+    }
+  } catch (err) {
+    logger.warn(`scan_project: failed to fold auxiliary entities into index: ${err instanceof Error ? err.message : err}`);
+  }
+
   const index: ResourceIndex = { entities };
   await atomicWriteFile(dataPath("index.json"), JSON.stringify(index, null, 2));
   invalidateCache("index.json");
@@ -470,6 +502,13 @@ export interface ScanProjectResult {
   features: { inserted: number; updated: number; total: number };
   workflows: { inserted: number; updated: number; total: number };
   data_model: { inserted: number; updated: number; total: number };
+  /** Phase 5 #9 — auxiliary entities (tests/configs/scripts/MCP tools). */
+  auxiliary?: {
+    inserted: number;
+    updated: number;
+    total: number;
+    by_kind: { test_suite: number; configuration: number; automation_script: number; mcp_tool: number };
+  };
   index_entries: number;
   llm_tokens_used: number;
   dream_cycle?: {
@@ -768,6 +807,39 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     }
   }
 
+  // Phase 2.5 — auxiliary entity merge (Phase 5 #9). Always runs;
+  // structural-only, no LLM dependency. Failures are non-fatal.
+  let auxiliaryResult: ScanProjectResult["auxiliary"];
+  try {
+    progress("Merging auxiliary entities (tests/configs/scripts/MCP tools)…");
+    const allAux = [];
+    const byKind = { test_suite: 0, configuration: 0, automation_script: 0, mcp_tool: 0 };
+    for (const scan of scans) {
+      byKind.test_suite += scan.auxiliaryFiles.test_suite.length;
+      byKind.configuration += scan.auxiliaryFiles.configuration.length;
+      byKind.automation_script += scan.auxiliaryFiles.automation_script.length;
+      byKind.mcp_tool += scan.auxiliaryFiles.mcp_tool.length;
+      const entries = await generateAuxiliaryEntities(scan);
+      allAux.push(...entries);
+    }
+    if (allAux.length > 0) {
+      const merged = await mergeAuxiliaryEntities(allAux);
+      auxiliaryResult = { ...merged, by_kind: byKind };
+      logger.info(
+        `scan_project: auxiliary entities — ${merged.inserted} new, ${merged.updated} updated, ` +
+        `${merged.total} total (tests=${byKind.test_suite}, config=${byKind.configuration}, ` +
+        `scripts=${byKind.automation_script}, mcp_tools=${byKind.mcp_tool})`
+      );
+      progress(`Auxiliary: ${merged.inserted} new, ${merged.updated} updated, ${merged.total} total`);
+    } else {
+      auxiliaryResult = { inserted: 0, updated: 0, total: 0, by_kind: byKind };
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Auxiliary entity merge failed: ${msg}`);
+    logger.warn(`scan_project: auxiliary merge error: ${msg}`);
+  }
+
   progress("Rebuilding resource index…");
   const indexEntries = await rebuildIndex();
   logger.info(`scan_project: index rebuilt with ${indexEntries} entries`);
@@ -864,6 +936,11 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     : "";
   const adrSummary = adrsRecorded > 0 ? ` ADRs: ${adrsRecorded} discovered.` : "";
   const partialSummary = partialModeUsed ? " Adaptive partial scan mode avoided timeout and preserved partial enrichment." : "";
+  const auxSummary = auxiliaryResult && auxiliaryResult.total > 0
+    ? ` Auxiliary: ${auxiliaryResult.inserted} new / ${auxiliaryResult.total} total ` +
+      `(tests=${auxiliaryResult.by_kind.test_suite}, config=${auxiliaryResult.by_kind.configuration}, ` +
+      `scripts=${auxiliaryResult.by_kind.automation_script}, mcp_tools=${auxiliaryResult.by_kind.mcp_tool}).`
+    : "";
 
   const summary =
     `Scan complete: ${scans.length} repo(s), ${totalFiles} files. ` +
@@ -872,6 +949,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     `Workflows: ${workflowResult.inserted} new / ${workflowResult.total} total. ` +
     `Data model: ${dataModelResult.inserted} new / ${dataModelResult.total} total. ` +
     `Index: ${indexEntries} entries.` +
+    auxSummary +
     partialSummary +
     dreamSummary +
     adrSummary +
@@ -888,6 +966,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     features: featureResult,
     workflows: workflowResult,
     data_model: dataModelResult,
+    auxiliary: auxiliaryResult,
     index_entries: indexEntries,
     llm_tokens_used: totalTokens,
     dream_cycle: dreamCycleResult,

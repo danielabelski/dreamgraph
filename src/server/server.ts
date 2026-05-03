@@ -19,6 +19,8 @@ import {
 } from "../cognitive/register.js";
 import { registerDisciplineResource } from "../discipline/register.js";
 import { startScheduler, stopScheduler } from "../cognitive/scheduler.js";
+import { startLlmReadinessWatcher, stopLlmReadinessWatcher } from "../cognitive/llm-readiness.js";
+import { wireBootstrapOnReady } from "../cognitive/bootstrap-driver.js";
 import { recordToolCall } from "../instance/index.js";
 import { logger } from "../utils/logger.js";
 
@@ -149,8 +151,22 @@ export function createServer(): McpServer {
   // v5.2 — Start the dream scheduler
   startScheduler(config.scheduler);
 
+  // ADR-098 (Slice 2A) — Start the LLM-readiness watcher. Probes the
+  // configured provider with a real completion call on a fixed interval
+  // and surfaces state via `cognitive_status`. The watcher is observable-
+  // only at this stage; bootstrap-firing on the ready transition is wired
+  // in Slice 2B.
+  startLlmReadinessWatcher();
+
+  // ADR-098 (Slice 2B) — Subscribe the bootstrap chain to ready transitions.
+  // Idempotent. Fires `bootstrapNewInstance()` exactly once per fingerprint
+  // for fresh instances; logs+skips fingerprint rotations on populated
+  // instances pending the Slice 2C re-enrich-only path.
+  wireBootstrapOnReady();
+
   // Clean shutdown — flush logs before exiting so daemon can verify
   const gracefulExit = () => {
+    stopLlmReadinessWatcher();
     stopScheduler();
     logger.info("Shutdown complete");
     // Allow stderr to flush to the log file descriptor before exiting

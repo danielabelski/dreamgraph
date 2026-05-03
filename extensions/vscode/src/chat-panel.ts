@@ -689,6 +689,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     additionalInstructions || undefined,
     autonomyInstructionState,
     provider,
+    contextResult.reasoningPacket?.task?.lens,
   );
 
   const conversation: ArchitectMessage[] = [
@@ -1492,6 +1493,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             budgetPolicy: {
               maxTokens: 0,
               reserveTokens: 0,
+              reserveGraphTokens: 0,
               allowFullActiveFile: false,
               includeOptionalEvidence: true,
             },
@@ -1783,7 +1785,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       const contextResult = envelope
         ? await this._buildPromptContext(task, envelope, prompt, 'continuation')
         : { assembledContext: '', reasoningPacket: null };
-      const { system } = assemblePrompt(task, envelope, contextResult.assembledContext || undefined, undefined, autonomyInstruction, provider);
+      const { system } = assemblePrompt(task, envelope, contextResult.assembledContext || undefined, undefined, autonomyInstruction, provider, contextResult.reasoningPacket?.task?.lens);
 
       const llmMessages: ArchitectMessage[] = [{ role: 'system', content: system }];
       // Bounded history: same caps as handleUserMessage (last 20 turns, per-message char caps).

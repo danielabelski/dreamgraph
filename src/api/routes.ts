@@ -45,6 +45,7 @@ import type {
   ADRLogFile,
   UIRegistryFile,
   ApiSurface,
+  DataModelEntity,
 } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
@@ -241,7 +242,19 @@ async function handleGetInstance(
  * This is NOT an editor-context service. The daemon has no knowledge of
  * editor state. It returns graph facts only.
  *
+ * **Improvement #6 — transitive context (Phase 4):** when `depth > 1` or a
+ * `named_query` preset is supplied, the seed set of features is expanded by
+ * BFS over the link graph (validated_edges + workflow links + ADR
+ * affected_entities). Reached entities are added at relevance decayed by
+ * graph distance so direct hits still rank above indirect ones.
+ *
+ * Named query presets (sugar over depth/direction):
+ *   - `dependents_of_data_model`  → depth=2, direction="upstream"
+ *   - `workflows_reading`         → depth=1, direction="both", workflow-only
+ *   - `features_touching_file_group` → depth=2, direction="both"
+ *
  * @see TDD §8.1 — GraphContextRequest / GraphContextResponse
+ * @see plans/GRAPH_META_ARCHITECT_DEEP_ANALYSIS.md §6 — Phase 4 #6
  */
 interface GraphContextRequest {
   file_path?: string;
@@ -250,6 +263,184 @@ interface GraphContextRequest {
   include_ui?: boolean;
   include_api_surface?: boolean;
   include_tensions?: boolean;
+  /** BFS expansion depth over the link graph (1 = direct only, max 3). */
+  depth?: number;
+  /** Direction of edge traversal during expansion. */
+  direction?: "upstream" | "downstream" | "both";
+  /** Preset that overrides depth/direction/filter for common reasoning queries. */
+  named_query?:
+    | "dependents_of_data_model"
+    | "workflows_reading"
+    | "features_touching_file_group";
+}
+
+/** Maximum BFS depth honored regardless of caller value (curation guard). */
+const MAX_GRAPH_CONTEXT_DEPTH = 3;
+
+type GraphDirection = "upstream" | "downstream" | "both";
+
+/** Lightweight TTL cache for hot transitive expansions (Phase 4 #6). */
+interface GraphContextCacheEntry {
+  value: unknown;
+  expires: number;
+}
+const GRAPH_CONTEXT_CACHE = new Map<string, GraphContextCacheEntry>();
+const GRAPH_CONTEXT_CACHE_TTL_MS = 30_000;
+const GRAPH_CONTEXT_CACHE_MAX_ENTRIES = 64;
+
+function getGraphContextCache(key: string): unknown | null {
+  const entry = GRAPH_CONTEXT_CACHE.get(key);
+  if (!entry) return null;
+  if (entry.expires <= Date.now()) {
+    GRAPH_CONTEXT_CACHE.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setGraphContextCache(key: string, value: unknown): void {
+  if (GRAPH_CONTEXT_CACHE.size >= GRAPH_CONTEXT_CACHE_MAX_ENTRIES) {
+    // Evict oldest (insertion order is preserved by Map).
+    const firstKey = GRAPH_CONTEXT_CACHE.keys().next().value;
+    if (firstKey !== undefined) GRAPH_CONTEXT_CACHE.delete(firstKey);
+  }
+  GRAPH_CONTEXT_CACHE.set(key, {
+    value,
+    expires: Date.now() + GRAPH_CONTEXT_CACHE_TTL_MS,
+  });
+}
+
+/**
+ * Build an undirected adjacency map across the fact graph using
+ * validated edges, workflow links, ADR affected-entity sets, and
+ * data-model `links` / `relationships`. Data-model coverage matters
+ * because tasks that start from a datastore expand poorly otherwise.
+ */
+function buildEdgeIndex(
+  validatedEdges: ReadonlyArray<{ from?: unknown; to?: unknown }>,
+  workflows: ReadonlyArray<Workflow>,
+  adrDecisions: ReadonlyArray<Record<string, unknown>>,
+  dataModel: ReadonlyArray<DataModelEntity> = [],
+): { downstream: Map<string, Set<string>>; upstream: Map<string, Set<string>> } {
+  const downstream = new Map<string, Set<string>>();
+  const upstream = new Map<string, Set<string>>();
+  const link = (from: string, to: string): void => {
+    if (!from || !to || from === to) return;
+    let d = downstream.get(from);
+    if (!d) downstream.set(from, (d = new Set()));
+    d.add(to);
+    let u = upstream.get(to);
+    if (!u) upstream.set(to, (u = new Set()));
+    u.add(from);
+  };
+  for (const e of validatedEdges) {
+    if (typeof e.from === "string" && typeof e.to === "string") link(e.from, e.to);
+  }
+  for (const w of workflows) {
+    if (!w.id) continue;
+    const links = Array.isArray(w.links) ? (w.links as unknown[]) : [];
+    for (const l of links) {
+      const to = typeof l === "string" ? l : (l as Record<string, unknown>)?.to
+        ?? (l as Record<string, unknown>)?.target;
+      if (typeof to === "string") link(w.id, to);
+    }
+  }
+  for (const adr of adrDecisions) {
+    const id = typeof adr.id === "string" ? adr.id : null;
+    if (!id) continue;
+    const ctx = adr.context as Record<string, unknown> | undefined;
+    const affected = ctx && Array.isArray(ctx.affected_entities)
+      ? (ctx.affected_entities as unknown[])
+      : [];
+    for (const e of affected) {
+      if (typeof e === "string") link(id, e);
+    }
+  }
+  for (const dm of dataModel) {
+    const rec = dm as unknown as Record<string, unknown>;
+    const id = typeof rec.id === "string" ? (rec.id as string) : null;
+    if (!id) continue;
+    const links = Array.isArray(rec.links) ? (rec.links as unknown[]) : [];
+    for (const l of links) {
+      const to = typeof l === "string"
+        ? l
+        : (l as Record<string, unknown>)?.target ?? (l as Record<string, unknown>)?.to;
+      if (typeof to === "string") link(id, to);
+    }
+    const rels = Array.isArray(rec.relationships) ? (rec.relationships as unknown[]) : [];
+    for (const r of rels) {
+      const to = typeof r === "string"
+        ? r
+        : (r as Record<string, unknown>)?.target ?? (r as Record<string, unknown>)?.to;
+      if (typeof to === "string") link(id, to);
+    }
+  }
+  return { downstream, upstream };
+}
+
+/**
+ * BFS from `seedIds` over the supplied edge index up to `depth` hops.
+ * Returns each reached node with its minimum distance from any seed.
+ * Seeds themselves are returned at distance 0.
+ */
+function bfsTransitive(
+  seedIds: Iterable<string>,
+  index: ReturnType<typeof buildEdgeIndex>,
+  depth: number,
+  direction: GraphDirection,
+): Map<string, number> {
+  const distances = new Map<string, number>();
+  const queue: Array<{ id: string; d: number }> = [];
+  for (const id of seedIds) {
+    if (!distances.has(id)) {
+      distances.set(id, 0);
+      queue.push({ id, d: 0 });
+    }
+  }
+  const cap = Math.min(Math.max(1, depth), MAX_GRAPH_CONTEXT_DEPTH);
+  while (queue.length > 0) {
+    const { id, d } = queue.shift()!;
+    if (d >= cap) continue;
+    const neighbours = new Set<string>();
+    if (direction === "downstream" || direction === "both") {
+      for (const n of index.downstream.get(id) ?? []) neighbours.add(n);
+    }
+    if (direction === "upstream" || direction === "both") {
+      for (const n of index.upstream.get(id) ?? []) neighbours.add(n);
+    }
+    for (const n of neighbours) {
+      if (!distances.has(n)) {
+        distances.set(n, d + 1);
+        queue.push({ id: n, d: d + 1 });
+      }
+    }
+  }
+  return distances;
+}
+
+/**
+ * Resolve named-query presets into concrete depth/direction overrides.
+ * Returns null when the named_query is unknown or unset.
+ */
+function resolveNamedQuery(
+  named: GraphContextRequest["named_query"],
+): { depth: number; direction: GraphDirection } | null {
+  switch (named) {
+    case "dependents_of_data_model":
+      return { depth: 2, direction: "upstream" };
+    case "workflows_reading":
+      return { depth: 1, direction: "both" };
+    case "features_touching_file_group":
+      return { depth: 2, direction: "both" };
+    default:
+      return null;
+  }
+}
+
+/** Decay function: 1 / (1 + d) keeps direct hits authoritative and indirects honest. */
+function transitiveRelevance(base: number, distance: number): number {
+  if (distance <= 0) return base;
+  return Math.round((base / (1 + distance)) * 100) / 100;
 }
 
 async function handlePostGraphContext(
@@ -265,11 +456,41 @@ async function handlePostGraphContext(
     const includeApiSurface = body.include_api_surface ?? true;
     const includeTensions = body.include_tensions ?? true;
 
+    // Phase 4 #6 — transitive expansion controls.
+    const namedPreset = resolveNamedQuery(body.named_query);
+    const requestedDepth = namedPreset?.depth ?? body.depth ?? 1;
+    const depth = Math.min(
+      Math.max(1, Math.floor(requestedDepth) || 1),
+      MAX_GRAPH_CONTEXT_DEPTH,
+    );
+    const direction: GraphDirection =
+      namedPreset?.direction ?? body.direction ?? "both";
+    const namedQueryFilter = body.named_query ?? null;
+
+    // TTL cache (Phase 4 #6) — keyed by canonical request shape.
+    const cacheKey = JSON.stringify({
+      filePath,
+      featureIds: [...featureIds].sort(),
+      includeAdrs,
+      includeUi,
+      includeApiSurface,
+      includeTensions,
+      depth,
+      direction,
+      namedQueryFilter,
+    });
+    const cached = getGraphContextCache(cacheKey);
+    if (cached) {
+      json(res, 200, cached);
+      return;
+    }
+
     // Load all data sources in parallel
-    const [features, workflows, adrLog, uiRegistry, tensionFile, apiSurface, cogStatus] =
+    const [features, workflows, dataModel, adrLog, uiRegistry, tensionFile, apiSurface, cogStatus] =
       await Promise.all([
         loadJsonArray<Feature>("features.json"),
         loadJsonArray<Workflow>("workflows.json"),
+        loadJsonArray<DataModelEntity>("data_model.json").catch(() => [] as DataModelEntity[]),
         includeAdrs
           ? loadOrEmpty(
               () => loadJsonValidated("adr_log.json", AdrLogFileSchema) as Promise<ADRLogFile>,
@@ -345,6 +566,30 @@ async function handlePostGraphContext(
         })
       : [];
 
+    // Match data_model entities by file path or explicit ID overlap.
+    // We don't surface them in the response (the contract is unchanged for
+    // now), but they are first-class anchors for BFS expansion below.
+    const matchedDataModel = dataModel.filter((dm) => {
+      const rec = dm as unknown as Record<string, unknown>;
+      const id = typeof rec.id === "string" ? rec.id : "";
+      if (!id) return false;
+      if (featureIds.includes(id)) return true;
+      if (filePath) {
+        const single = typeof rec.source_file === "string" ? (rec.source_file as string) : null;
+        if (single && single.includes(filePath)) return true;
+        const files = Array.isArray(rec.source_files) ? (rec.source_files as unknown[]) : [];
+        if (
+          files.some((sf) => {
+            const p = typeof sf === "string" ? sf : (sf as Record<string, unknown>)?.path;
+            return typeof p === "string" && p.includes(filePath);
+          })
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+
     // Match UI elements by source file
     const matchedUiElements = includeUi
       ? (uiRegistry.elements as unknown as Array<Record<string, unknown>> ?? []).filter(
@@ -411,6 +656,98 @@ async function handlePostGraphContext(
         : []
       : [];
 
+    // ── Phase 4 #6 — transitive BFS expansion ────────────────────────────────
+    // Default depth=1 means no expansion (BFS terminates immediately on the
+    // seeds). For deeper queries we walk validated edges + workflow links +
+    // ADR affected_entities in the requested direction(s) and add newly
+    // reached entities at relevance decayed by their graph distance.
+    let transitiveDistances = new Map<string, number>();
+    let transitiveExpanded = 0;
+    if (depth > 1) {
+      try {
+        const validated = await engine.loadValidatedEdges();
+        const edgeIndex = buildEdgeIndex(
+          validated.edges,
+          workflows,
+          (adrLog.decisions as unknown as Array<Record<string, unknown>>) ?? [],
+          dataModel,
+        );
+        // Seed from ALL strong initial anchors so a task that starts from a
+        // datastore, workflow, or ADR expands as usefully as a feature task:
+        //   - matched feature IDs
+        //   - matched workflow IDs
+        //   - matched data_model IDs
+        //   - matched ADR IDs + their affected_entities
+        const seeds = new Set<string>(featureIdSet);
+        for (const w of matchedWorkflows) if (w.id) seeds.add(w.id);
+        for (const dm of matchedDataModel) {
+          const id = (dm as unknown as Record<string, unknown>).id;
+          if (typeof id === "string") seeds.add(id);
+        }
+        for (const a of matchedAdrs) {
+          if (typeof a.id === "string") seeds.add(a.id);
+          const ctx = a.context as Record<string, unknown> | undefined;
+          const affected = ctx && Array.isArray(ctx.affected_entities)
+            ? (ctx.affected_entities as unknown[])
+            : [];
+          for (const e of affected) {
+            if (typeof e === "string") seeds.add(e);
+          }
+        }
+        transitiveDistances = bfsTransitive(seeds, edgeIndex, depth, direction);
+      } catch (err) {
+        logger.warn(
+          `graph-context: BFS expansion failed, returning direct matches only — ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+
+    /** Look up an entity's graph distance from the seed set. */
+    const distanceOf = (id: string | undefined): number => {
+      if (!id) return 0;
+      const d = transitiveDistances.get(id);
+      return d === undefined ? 0 : d;
+    };
+
+    // Augment the matched sets with newly-reached IDs (distance > 0 and not
+    // already matched). Each augmented entity inherits the same shape as a
+    // direct match but its relevance is decayed by its distance.
+    if (transitiveDistances.size > 0) {
+      const matchedFeatureIds = new Set(matchedFeatures.map((f) => f.id));
+      for (const f of features) {
+        const d = transitiveDistances.get(f.id);
+        if (d !== undefined && d > 0 && !matchedFeatureIds.has(f.id)) {
+          matchedFeatures.push(f);
+          transitiveExpanded++;
+        }
+      }
+      const matchedWorkflowIds = new Set(matchedWorkflows.map((w) => w.id));
+      for (const w of workflows) {
+        const d = transitiveDistances.get(w.id);
+        if (d !== undefined && d > 0 && !matchedWorkflowIds.has(w.id)) {
+          matchedWorkflows.push(w);
+          transitiveExpanded++;
+        }
+      }
+      if (includeAdrs) {
+        const matchedAdrIds = new Set(
+          matchedAdrs.map((a) => (typeof a.id === "string" ? a.id : "")).filter(Boolean),
+        );
+        const allAdrs = (adrLog.decisions as unknown as Array<Record<string, unknown>>) ?? [];
+        for (const adr of allAdrs) {
+          const id = typeof adr.id === "string" ? adr.id : null;
+          if (!id) continue;
+          const d = transitiveDistances.get(id);
+          if (d !== undefined && d > 0 && !matchedAdrIds.has(id)) {
+            matchedAdrs.push(adr);
+            transitiveExpanded++;
+          }
+        }
+      }
+    }
+
     // ── Relevance scoring ──────────────────────────────────────────────────────
     // Score each matched entity so the extension can propagate real graph-distance
     // values instead of hardcoded constants. Scores are in [0, 1].
@@ -421,16 +758,25 @@ async function handlePostGraphContext(
     //              partial / status-other → 0.85
     //  ui_elements: source-file match → 0.85; no source info → 0.7
     //  tensions:   urgency already numeric (0–1) — use directly; missing → 0.75
+    //
+    // Phase 4 #6: when an entity was added via BFS expansion (distance > 0)
+    // its base relevance is decayed by 1/(1+distance) before serialization.
 
-    json(res, 200, {
+    const responsePayload = {
       ok: true,
       file_path: filePath,
-      features: matchedFeatures.map((f) => ({
-        id: f.id,
-        name: f.name,
-        relevance: featureIds.includes(f.id) ? 1.0 : 0.85,
-      })),
+      features: matchedFeatures.map((f) => {
+        const d = distanceOf(f.id);
+        const base = featureIds.includes(f.id) ? 1.0 : 0.85;
+        return {
+          id: f.id,
+          name: f.name,
+          relevance: transitiveRelevance(base, d),
+          ...(d > 0 ? { distance: d } : {}),
+        };
+      }),
       workflows: matchedWorkflows.map((w) => {
+        const d = distanceOf(w.id);
         // Prefer file-path match over link-match — file match is more direct
         const isFilePath =
           filePath &&
@@ -439,24 +785,30 @@ async function handlePostGraphContext(
             const p = typeof sf === "string" ? sf : (sf as Record<string, unknown>)?.path;
             return typeof p === "string" && p.includes(filePath);
           });
+        const base = isFilePath ? 0.8 : 0.75;
         return {
           id: w.id,
           name: w.name,
-          relevance: isFilePath ? 0.8 : 0.75,
+          relevance: transitiveRelevance(base, d),
+          ...(d > 0 ? { distance: d } : {}),
         };
       }),
       adrs: matchedAdrs.map((a) => {
+        const id = typeof a.id === "string" ? a.id : "";
+        const d = distanceOf(id);
         const isAccepted =
           typeof a.status === "string" && a.status.toLowerCase() === "accepted";
         const affected = ((a.context as Record<string, unknown>)?.affected_entities as string[]) ?? [];
         const fullyMatched =
           affected.length > 0 && affected.every((e) => featureIdSet.has(e));
+        const base = isAccepted && fullyMatched ? 1.0 : 0.85;
         return {
           id: a.id,
           title: a.title,
           status: a.status,
           summary: (a.decision as Record<string, unknown>)?.chosen ?? "",
-          relevance: isAccepted && fullyMatched ? 1.0 : 0.85,
+          relevance: transitiveRelevance(base, d),
+          ...(d > 0 ? { distance: d } : {}),
         };
       }),
       ui_elements: matchedUiElements.map((el) => ({
@@ -478,7 +830,19 @@ async function handlePostGraphContext(
         };
       }),
       cognitive_state: cogStatus.current_state,
-    });
+      transitive: {
+        depth,
+        direction,
+        named_query: namedQueryFilter,
+        expanded: transitiveExpanded,
+        max_depth_reached:
+          transitiveDistances.size > 0
+            ? Math.max(0, ...Array.from(transitiveDistances.values()))
+            : 0,
+      },
+    };
+    setGraphContextCache(cacheKey, responsePayload);
+    json(res, 200, responsePayload);
   } catch (err) {
     logger.error("POST /api/graph-context error:", err);
     if (err instanceof Error && err.message === "Invalid JSON body") {

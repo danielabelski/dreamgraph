@@ -246,6 +246,32 @@ async function loadTensions(): Promise<Record<string, unknown>> {
   }
 }
 
+async function loadDatastores(): Promise<Record<string, unknown>[]> {
+  try {
+    return await loadJsonArray<Record<string, unknown>>("datastores.json");
+  } catch {
+    return [];
+  }
+}
+
+async function loadAuxiliaryEntitiesFile(): Promise<{
+  metadata: { last_scanned?: string | null; total?: number };
+  entries: Record<string, unknown>[];
+}> {
+  try {
+    const raw = await loadJsonData<{
+      metadata?: { last_scanned?: string | null; total?: number };
+      entries?: Record<string, unknown>[];
+    }>("auxiliary_entities.json");
+    return {
+      metadata: raw.metadata ?? {},
+      entries: Array.isArray(raw.entries) ? raw.entries : [],
+    };
+  } catch {
+    return { metadata: {}, entries: [] };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Section generators — each returns an array of FileBuffer entries
 // ---------------------------------------------------------------------------
@@ -704,6 +730,223 @@ async function genUIRegistry(
   return files;
 }
 
+async function genDatastores(
+  fmt: LivingDocsFormat
+): Promise<FileBuffer[]> {
+  const stores = await loadDatastores();
+  if (!stores.length) return [];
+  const files: FileBuffer[] = [];
+
+  // Index
+  let idx = frontmatter(fmt, "Datastores", 4);
+  idx += "# Datastores\n\n";
+  idx += "Shared infrastructure (databases, caches, event buses) referenced by the data model. Populated by datastore bootstrap and `scan_database`.\n\n";
+  idx += "| ID | Name | Kind | Repos | Tables | Last Scanned |\n";
+  idx += "|----|------|------|-------|--------|--------------|\n";
+  for (const d of stores) {
+    const tables = Array.isArray(d.tables) ? (d.tables as unknown[]).length : 0;
+    const repos = Array.isArray(d.repos) ? (d.repos as string[]).join(", ") : "-";
+    idx += `| ${d.id ?? "-"} | ${d.name ?? "-"} | ${d.kind ?? "-"} | ${repos || "-"} | ${tables} | ${d.last_scanned_at ?? "never"} |\n`;
+  }
+  files.push({
+    path: "datastores/_index.md",
+    section: "datastores",
+    content: idx,
+  });
+
+  // Per-datastore page
+  for (const d of stores) {
+    const id = String(d.id ?? "datastore");
+    let md = frontmatter(fmt, String(d.name ?? id));
+    md += `# ${d.name ?? id}\n\n`;
+    if (d.description) md += `> ${d.description}\n\n`;
+    md += `**Kind:** \`${d.kind ?? "unknown"}\`  \n`;
+    if (d.url_hint) md += `**URL hint:** \`${d.url_hint}\`  \n`;
+    if (Array.isArray(d.repos) && (d.repos as string[]).length) {
+      md += `**Repos:** ${(d.repos as string[]).join(", ")}  \n`;
+    }
+    if (d.last_scanned_at) md += `**Last scanned:** ${d.last_scanned_at}  \n`;
+    if (Array.isArray(d.tags) && (d.tags as string[]).length) {
+      md += `**Tags:** ${(d.tags as string[]).join(", ")}  \n`;
+    }
+    md += "\n";
+
+    const tables = Array.isArray(d.tables)
+      ? (d.tables as Record<string, unknown>[])
+      : [];
+    if (tables.length) {
+      md += `## Tables (${tables.length})\n\n`;
+      md += "| Schema | Name | Columns | FK Count | Rows (est) |\n";
+      md += "|--------|------|---------|----------|------------|\n";
+      for (const t of tables) {
+        md += `| ${t.schema ?? "-"} | ${t.name ?? "-"} | ${t.columns ?? "-"} | ${t.fk_count ?? "-"} | ${t.rows_estimate ?? "-"} |\n`;
+      }
+      md += "\n";
+    } else {
+      md += "*No tables introspected yet. Run `scan_database` to populate.*\n\n";
+    }
+
+    files.push({
+      path: `datastores/${slugify(id)}.md`,
+      section: "datastores",
+      content: md,
+    });
+  }
+  return files;
+}
+
+async function genAuxiliary(
+  fmt: LivingDocsFormat
+): Promise<FileBuffer[]> {
+  const file = await loadAuxiliaryEntitiesFile();
+  if (!file.entries.length) return [];
+  const files: FileBuffer[] = [];
+
+  const byKind = new Map<string, Record<string, unknown>[]>();
+  for (const e of file.entries) {
+    const kind = String(e.kind ?? "other");
+    const arr = byKind.get(kind) ?? [];
+    arr.push(e);
+    byKind.set(kind, arr);
+  }
+
+  const KIND_LABELS: Record<string, string> = {
+    test_suite: "Test Suites",
+    configuration: "Configuration",
+    automation_script: "Automation Scripts",
+    mcp_tool: "MCP Tools",
+  };
+  const KIND_ORDER = ["mcp_tool", "test_suite", "configuration", "automation_script"];
+
+  // Index
+  let idx = frontmatter(fmt, "Auxiliary Entities", 5);
+  idx += "# Auxiliary Entities\n\n";
+  idx += "Project entities discovered by `scan_project` that are not features, workflows, or data model entries: tests, configuration files, automation scripts, and registered MCP tools.\n\n";
+  if (file.metadata.last_scanned) {
+    idx += `*Last scanned: ${file.metadata.last_scanned} — ${file.metadata.total ?? file.entries.length} entries*\n\n`;
+  }
+  idx += "## Summary\n\n";
+  idx += "| Kind | Count |\n|------|-------|\n";
+  for (const kind of KIND_ORDER) {
+    const arr = byKind.get(kind);
+    if (arr?.length) idx += `| ${KIND_LABELS[kind] ?? kind} | ${arr.length} |\n`;
+  }
+  idx += "\n";
+  files.push({
+    path: "auxiliary/_index.md",
+    section: "auxiliary",
+    content: idx,
+  });
+
+  // One page per kind
+  for (const kind of KIND_ORDER) {
+    const arr = byKind.get(kind);
+    if (!arr?.length) continue;
+    const label = KIND_LABELS[kind] ?? kind;
+    let md = frontmatter(fmt, label);
+    md += `# ${label} (${arr.length})\n\n`;
+    md += "| ID | Name | URI | Source Files | Tags |\n";
+    md += "|----|------|-----|--------------|------|\n";
+    for (const e of arr) {
+      const sources = Array.isArray(e.source_files)
+        ? (e.source_files as string[]).map((p) => `\`${p}\``).join(", ")
+        : "-";
+      const tags = Array.isArray(e.tags)
+        ? (e.tags as string[]).join(", ")
+        : "-";
+      md += `| \`${e.id ?? "-"}\` | ${e.name ?? "-"} | \`${e.uri ?? "-"}\` | ${sources || "-"} | ${tags || "-"} |\n`;
+    }
+    md += "\n";
+    files.push({
+      path: `auxiliary/${slugify(kind)}.md`,
+      section: "auxiliary",
+      content: md,
+    });
+  }
+  return files;
+}
+
+async function genTensions(
+  fmt: LivingDocsFormat
+): Promise<FileBuffer[]> {
+  const file = await loadTensions();
+  const signals = Array.isArray((file as { signals?: unknown[] }).signals)
+    ? ((file as { signals: Record<string, unknown>[] }).signals)
+    : [];
+  if (!signals.length) return [];
+
+  const files: FileBuffer[] = [];
+
+  const open = signals.filter((s) => !s.resolved);
+  const withCandidate = open.filter((s) => !!s.resolution_candidate);
+  const escalated = open.filter((s) => s.attempted);
+  const meta = (file as { metadata?: Record<string, unknown> }).metadata ?? {};
+
+  let md = frontmatter(fmt, "Tensions", 6);
+  md += "# Active Tensions\n\n";
+  md += "Unresolved questions, contradictions, and gaps tracked by the cognitive engine. The tension resolver proposes candidate resolutions during each `dream_cycle` and validates them against newly promoted edges.\n\n";
+
+  md += "## Summary\n\n";
+  md += "| Metric | Count |\n|--------|-------|\n";
+  md += `| Open signals | ${open.length} |\n`;
+  md += `| With pending resolution candidate | ${withCandidate.length} |\n`;
+  md += `| Previously escalated (attempted) | ${escalated.length} |\n`;
+  md += `| Total resolved (archived) | ${meta.total_resolved ?? 0} |\n`;
+  md += "\n";
+
+  // By type
+  const byType = new Map<string, number>();
+  for (const s of open) {
+    const t = String(s.type ?? "unknown");
+    byType.set(t, (byType.get(t) ?? 0) + 1);
+  }
+  if (byType.size) {
+    md += "## Open Tensions by Type\n\n";
+    md += "| Type | Count |\n|------|-------|\n";
+    for (const [t, n] of [...byType.entries()].sort((a, b) => b[1] - a[1])) {
+      md += `| ${t} | ${n} |\n`;
+    }
+    md += "\n";
+  }
+
+  // Top open tensions by urgency
+  const topOpen = [...open]
+    .sort((a, b) => Number(b.urgency ?? 0) - Number(a.urgency ?? 0))
+    .slice(0, 25);
+  md += `## Highest-Urgency Open Tensions (top ${topOpen.length})\n\n`;
+  md += "| ID | Type | Urgency | Domain | Entities | Description |\n";
+  md += "|----|------|---------|--------|----------|-------------|\n";
+  for (const s of topOpen) {
+    const ents = Array.isArray(s.entities)
+      ? (s.entities as string[]).slice(0, 3).join(", ")
+      : "-";
+    const desc = String(s.description ?? "").replace(/\|/g, "\\|").slice(0, 120);
+    md += `| \`${s.id}\` | ${s.type ?? "-"} | ${Number(s.urgency ?? 0).toFixed(2)} | ${s.domain ?? "-"} | ${ents} | ${desc} |\n`;
+  }
+  md += "\n";
+
+  // Pending resolution candidates
+  if (withCandidate.length) {
+    md += `## Pending Resolution Candidates (${withCandidate.length})\n\n`;
+    md += "Proposed by `runTensionResolverCycle` and awaiting `validateResolutionCandidates` to close, escalate, or accept as `wont_fix`.\n\n";
+    md += "| Tension | Strategy | Source | Window | Proposed At | Rationale |\n";
+    md += "|---------|----------|--------|--------|-------------|-----------|\n";
+    for (const s of withCandidate) {
+      const c = s.resolution_candidate as Record<string, unknown>;
+      const rat = String(c.rationale ?? "").replace(/\|/g, "\\|").slice(0, 120);
+      md += `| \`${s.id}\` | ${c.strategy ?? "-"} | ${c.source ?? "-"} | ${c.validation_window ?? "-"} | ${c.proposed_at ?? "-"} | ${rat} |\n`;
+    }
+    md += "\n";
+  }
+
+  files.push({
+    path: "tensions/_index.md",
+    section: "tensions",
+    content: md,
+  });
+  return files;
+}
+
 async function genCognitiveStatus(
   fmt: LivingDocsFormat
 ): Promise<FileBuffer[]> {
@@ -836,6 +1079,9 @@ async function genIndex(
   const sectionLabels: Record<string, string> = {
     features: "Feature Catalog",
     data_model: "Data Model",
+    datastores: "Datastores",
+    auxiliary: "Auxiliary Entities",
+    tensions: "Tensions",
     workflows: "Workflows",
     architecture: "Architecture Decisions",
     ui_registry: "UI Registry",
@@ -893,7 +1139,7 @@ export function registerLivingDocsTools(server: McpServer): void {
       sections: z
         .array(z.string())
         .describe(
-          "Sections to export. Each must be one of: features, data_model, workflows, architecture, ui_registry, cognitive_status, api_reference, all."
+          "Sections to export. Each must be one of: features, data_model, datastores, auxiliary, tensions, workflows, architecture, ui_registry, cognitive_status, api_reference, all."
         ),
       format: z
         .string()
@@ -928,7 +1174,7 @@ export function registerLivingDocsTools(server: McpServer): void {
           }
 
           // Validate sections
-          const VALID_SECTIONS: LivingDocsSection[] = ["features", "data_model", "workflows", "architecture", "ui_registry", "cognitive_status", "api_reference", "all"];
+          const VALID_SECTIONS: LivingDocsSection[] = ["features", "data_model", "datastores", "auxiliary", "tensions", "workflows", "architecture", "ui_registry", "cognitive_status", "api_reference", "all"];
           for (const s of params.sections) {
             if (!VALID_SECTIONS.includes(s as LivingDocsSection)) {
               return error("INVALID_SECTION", `Invalid section '${s}'. Must be one of: ${VALID_SECTIONS.join(", ")}`);
@@ -945,6 +1191,9 @@ export function registerLivingDocsTools(server: McpServer): void {
             wanted = new Set<LivingDocsSection>([
               "features",
               "data_model",
+              "datastores",
+              "auxiliary",
+              "tensions",
               "workflows",
               "architecture",
               "ui_registry",
@@ -967,6 +1216,18 @@ export function registerLivingDocsTools(server: McpServer): void {
           if (wanted.has("data_model")) {
             buffers.push(...(await genDataModel(fmt)));
             sectionsExported.push("data_model");
+          }
+          if (wanted.has("datastores")) {
+            buffers.push(...(await genDatastores(fmt)));
+            sectionsExported.push("datastores");
+          }
+          if (wanted.has("auxiliary")) {
+            buffers.push(...(await genAuxiliary(fmt)));
+            sectionsExported.push("auxiliary");
+          }
+          if (wanted.has("tensions")) {
+            buffers.push(...(await genTensions(fmt)));
+            sectionsExported.push("tensions");
           }
           if (wanted.has("workflows")) {
             buffers.push(...(await genWorkflows(fmt, diagrams)));

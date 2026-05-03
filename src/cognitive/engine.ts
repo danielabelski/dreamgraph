@@ -33,6 +33,7 @@ import { getActiveCognitiveTuning } from "../instance/index.js";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { withFileLock } from "../utils/mutex.js";
 import { graphEventBus } from "../graph/events.js";
+import { getLlmReadinessStatus } from "./llm-readiness.js";
 import type {
   CognitiveStateName,
   CognitiveState,
@@ -49,10 +50,15 @@ import type {
   TensionDomain,
   TensionResolutionType,
   TensionResolutionAuthority,
+  TensionResolutionStrategy,
+  TensionResolutionCandidate,
   ResolvedTension,
   TensionConfig,
   DreamHistoryEntry,
   DreamHistoryFile,
+  BootstrapState,
+  BootstrapExitReason,
+  BootstrapStatus,
 } from "./types.js";
 import type { Feature, Workflow, DataModelEntity, ResourceIndex, IndexEntry } from "../types/index.js";
 import { DEFAULT_DECAY, DEFAULT_PROMOTION, DEFAULT_TENSION_CONFIG } from "./types.js";
@@ -106,6 +112,44 @@ class CognitiveEngine {
   private reinforcementMemory = new Map<string, ReinforcementMemory>();
   private static readonly MEMORY_TTL_CYCLES = Number(process.env.DG_MEMORY_TTL_CYCLES) || 30;
 
+  // -------------------------------------------------------------------------
+  // Cold-start bootstrap state — ADR-096
+  // -------------------------------------------------------------------------
+  // On a fresh instance the strict promotion gate is unreachable because
+  // entity-existence is required as evidence but no entities exist yet.
+  // Cold-start mode relaxes the gate until the dual exit condition trips:
+  //   (A) entity-count threshold reached
+  //   (B) bootstrap window elapsed (cycles or wall-clock)
+  // exit_reason MUST be populated on every exit (ADR-096 guard rail).
+  // -------------------------------------------------------------------------
+  private bootstrapState: BootstrapState = "cold_start";
+  private bootstrapStartedAt: string | null = null;
+  private bootstrapExitedAt: string | null = null;
+  private bootstrapExitReason: BootstrapExitReason | null = null;
+  /** Dream cycle counter snapshot at the moment cold-start began. */
+  private bootstrapStartCycle = 0;
+
+  /**
+   * Tunable cold-start floors. Overridable via env for testing/telemetry tuning.
+   * ADR-096 guard rails: relaxed floor MUST NOT exceed 0.50 confidence;
+   * window MUST NOT exceed 24h.
+   */
+  private static readonly BOOTSTRAP_MIN_ENTITIES =
+    Number(process.env.DG_BOOTSTRAP_MIN_ENTITIES) || 50;
+  private static readonly BOOTSTRAP_MIN_VALIDATED_EDGES =
+    Number(process.env.DG_BOOTSTRAP_MIN_VALIDATED_EDGES) || 10;
+  private static readonly BOOTSTRAP_MAX_CYCLES =
+    Number(process.env.DG_BOOTSTRAP_MAX_CYCLES) || 20;
+  private static readonly BOOTSTRAP_MAX_HOURS = Math.min(
+    Number(process.env.DG_BOOTSTRAP_MAX_HOURS) || 24,
+    24 // ADR-096 guard rail: never exceed 24h
+  );
+  /** ADR-096 guard rail: relaxed confidence floor MUST NOT exceed 0.50. */
+  private static readonly BOOTSTRAP_RELAXED_CONFIDENCE = Math.min(
+    Number(process.env.DG_BOOTSTRAP_RELAXED_CONFIDENCE) || 0.5,
+    0.5
+  );
+
   /**
    * Hydrate counters from the persisted dream graph.
    * Called once at startup so the engine doesn't restart counting from 0
@@ -122,9 +166,29 @@ class CognitiveEngine {
         this.totalNormalizationCycles = graph.metadata.total_normalization_cycles;
         this.lastNormalization = graph.metadata.last_normalization;
       }
+      // ADR-096: hydrate cold-start bootstrap state.
+      // Default is "cold_start" if metadata is silent (i.e. instance pre-dates this field).
+      this.bootstrapState = graph.metadata.bootstrap_state ?? "cold_start";
+      this.bootstrapStartedAt = graph.metadata.bootstrap_started_at ?? null;
+      this.bootstrapExitedAt = graph.metadata.bootstrap_exited_at ?? null;
+      this.bootstrapExitReason = graph.metadata.bootstrap_exit_reason ?? null;
+      // If a mature instance is being upgraded (has cycles + validated edges already),
+      // graduate it on hydrate so it doesn't unnecessarily re-enter cold-start.
+      if (
+        this.bootstrapState === "cold_start" &&
+        this.bootstrapStartedAt === null &&
+        this.totalNormalizationCycles >= CognitiveEngine.BOOTSTRAP_MAX_CYCLES
+      ) {
+        this.bootstrapState = "graduated";
+        this.bootstrapExitedAt = new Date().toISOString();
+        this.bootstrapExitReason = "window";
+        logger.info(
+          `Cognitive hydrate: graduating mature instance (${this.totalNormalizationCycles} normalization cycles) out of cold-start (exit_reason=window)`
+        );
+      }
       if (this.totalDreamCycles > 0 || this.totalNormalizationCycles > 0) {
         logger.info(
-          `Cognitive engine hydrated: ${this.totalDreamCycles} dream cycles, ${this.totalNormalizationCycles} normalization cycles`
+          `Cognitive engine hydrated: ${this.totalDreamCycles} dream cycles, ${this.totalNormalizationCycles} normalization cycles, bootstrap=${this.bootstrapState}`
         );
       }
     } catch (err) {
@@ -310,6 +374,133 @@ class CognitiveEngine {
     return this.totalNormalizationCycles;
   }
 
+  // -------------------------------------------------------------------------
+  // Cold-start bootstrap API — ADR-096
+  // -------------------------------------------------------------------------
+
+  /** Whether the engine is currently in cold-start bootstrap mode. */
+  isColdStart(): boolean {
+    return this.bootstrapState === "cold_start";
+  }
+
+  /**
+   * Stamp the cold-start start timestamp the first time normalization runs
+   * during cold-start. Idempotent: subsequent calls are no-ops.
+   */
+  markBootstrapStart(): void {
+    if (this.bootstrapState !== "cold_start") return;
+    if (this.bootstrapStartedAt !== null) return;
+    this.bootstrapStartedAt = new Date().toISOString();
+    this.bootstrapStartCycle = this.totalNormalizationCycles;
+    logger.info(
+      `Cold-start bootstrap started at ${this.bootstrapStartedAt} (cycle ${this.bootstrapStartCycle}); ` +
+        `relaxed promotion gate active until exit (entities≥${CognitiveEngine.BOOTSTRAP_MIN_ENTITIES} & validated_edges≥${CognitiveEngine.BOOTSTRAP_MIN_VALIDATED_EDGES}, OR ${CognitiveEngine.BOOTSTRAP_MAX_CYCLES} cycles, OR ${CognitiveEngine.BOOTSTRAP_MAX_HOURS}h, whichever first)`
+    );
+  }
+
+  /**
+   * Evaluate the dual-condition exit (ADR-096). Pure function — does not
+   * mutate engine state. Returns null if cold-start should continue, or
+   * the exit reason if it should graduate.
+   *
+   * Dual condition (whichever fires first):
+   *   (A) entity-count threshold reached
+   *   (B) bootstrap window elapsed (cycles or wall-clock)
+   */
+  evaluateBootstrapExit(
+    entityCount: number,
+    validatedEdgeCount: number
+  ): BootstrapExitReason | null {
+    if (this.bootstrapState !== "cold_start") return null;
+    // Defensive: if start was never marked, don't graduate yet.
+    if (this.bootstrapStartedAt === null) return null;
+
+    // Condition A — quality-based (entity-count + validated edges).
+    if (
+      entityCount >= CognitiveEngine.BOOTSTRAP_MIN_ENTITIES &&
+      validatedEdgeCount >= CognitiveEngine.BOOTSTRAP_MIN_VALIDATED_EDGES
+    ) {
+      return "size";
+    }
+
+    // Condition B — window-based (cycles OR wall-clock).
+    const cyclesInBootstrap = this.totalNormalizationCycles - this.bootstrapStartCycle;
+    if (cyclesInBootstrap >= CognitiveEngine.BOOTSTRAP_MAX_CYCLES) return "window";
+    const startedMs = Date.parse(this.bootstrapStartedAt);
+    if (Number.isFinite(startedMs)) {
+      const ageHours = (Date.now() - startedMs) / 3_600_000;
+      if (ageHours >= CognitiveEngine.BOOTSTRAP_MAX_HOURS) return "window";
+    }
+    return null;
+  }
+
+  /**
+   * Graduate from cold-start bootstrap. Records the exit timestamp and
+   * reason in engine state and persists via the next saveDreamGraph().
+   * exit_reason MUST be populated (ADR-096 guard rail).
+   */
+  async graduateBootstrap(reason: BootstrapExitReason): Promise<void> {
+    if (this.bootstrapState !== "cold_start") return;
+    this.bootstrapState = "graduated";
+    this.bootstrapExitedAt = new Date().toISOString();
+    this.bootstrapExitReason = reason;
+    const cyclesInBootstrap =
+      this.totalNormalizationCycles - this.bootstrapStartCycle;
+    logger.info(
+      `Cold-start bootstrap exited at ${this.bootstrapExitedAt} (exit_reason=${reason}, cycles_in_bootstrap=${cyclesInBootstrap}); ` +
+        `strict promotion gate now active`
+    );
+    // Persist immediately by rewriting the dream graph (saveDreamGraph syncs
+    // bootstrap fields). Caller may also save shortly after — that's fine,
+    // saveDreamGraph is idempotent.
+    try {
+      const graph = await this.loadDreamGraph();
+      await this.saveDreamGraph(graph);
+    } catch (err) {
+      logger.warn(
+        `graduateBootstrap: failed to persist exit (will retry on next save): ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }
+
+  /** Build the bootstrap status surfaced via cognitive_status. */
+  getBootstrapStatus(): BootstrapStatus {
+    let ageSeconds: number | null = null;
+    if (this.bootstrapStartedAt) {
+      const startedMs = Date.parse(this.bootstrapStartedAt);
+      const endedMs = this.bootstrapExitedAt
+        ? Date.parse(this.bootstrapExitedAt)
+        : Date.now();
+      if (Number.isFinite(startedMs) && Number.isFinite(endedMs)) {
+        ageSeconds = Math.max(0, Math.round((endedMs - startedMs) / 1000));
+      }
+    }
+    return {
+      state: this.bootstrapState,
+      started_at: this.bootstrapStartedAt,
+      exited_at: this.bootstrapExitedAt,
+      exit_reason: this.bootstrapExitReason,
+      age_seconds: ageSeconds,
+      cycles_in_bootstrap:
+        this.bootstrapStartedAt === null
+          ? 0
+          : this.totalNormalizationCycles - this.bootstrapStartCycle,
+      thresholds: {
+        min_entities: CognitiveEngine.BOOTSTRAP_MIN_ENTITIES,
+        min_validated_edges: CognitiveEngine.BOOTSTRAP_MIN_VALIDATED_EDGES,
+        max_cycles: CognitiveEngine.BOOTSTRAP_MAX_CYCLES,
+        max_hours: CognitiveEngine.BOOTSTRAP_MAX_HOURS,
+        relaxed_confidence_floor:
+          CognitiveEngine.BOOTSTRAP_RELAXED_CONFIDENCE,
+      },
+    };
+  }
+
+  /** Relaxed confidence floor in effect during cold-start (ADR-096). */
+  getBootstrapRelaxedConfidenceFloor(): number {
+    return CognitiveEngine.BOOTSTRAP_RELAXED_CONFIDENCE;
+  }
+
   /** Get current decay config */
   getDecayConfig(): DecayConfig {
     return { ...this.decayConfig };
@@ -354,6 +545,10 @@ class CognitiveEngine {
         last_normalization: null,
         total_normalization_cycles: this.totalNormalizationCycles,
         created_at: new Date().toISOString(),
+        bootstrap_state: this.bootstrapState,
+        bootstrap_started_at: this.bootstrapStartedAt,
+        bootstrap_exited_at: this.bootstrapExitedAt,
+        bootstrap_exit_reason: this.bootstrapExitReason,
       },
       nodes: [],
       edges: [],
@@ -365,6 +560,11 @@ class CognitiveEngine {
     data.metadata.total_cycles = this.totalDreamCycles;
     data.metadata.total_normalization_cycles = this.totalNormalizationCycles;
     if (this.lastNormalization) data.metadata.last_normalization = this.lastNormalization;
+    // ADR-096: persist cold-start bootstrap state alongside cycle counters.
+    data.metadata.bootstrap_state = this.bootstrapState;
+    data.metadata.bootstrap_started_at = this.bootstrapStartedAt;
+    data.metadata.bootstrap_exited_at = this.bootstrapExitedAt;
+    data.metadata.bootstrap_exit_reason = this.bootstrapExitReason;
     await withFileLock("dream_graph.json", async () => {
       await atomicWriteFile(dreamGraphPath(), JSON.stringify(data, null, 2));
     });
@@ -1320,6 +1520,239 @@ class CognitiveEngine {
     return result;
   }
 
+  // -------------------------------------------------------------------------
+  // Tension Resolution Lifecycle (Phase 4 #8)
+  //
+  // A two-phase pipeline that lets the system *propose* a fix for an open
+  // tension and then *validate* whether the fix actually landed.
+  //
+  //   1. proposeTensionResolution  → stamps a candidate on the tension.
+  //   2. runTensionResolverCycle   → bulk proposer (heuristic or injected LLM).
+  //   3. validateResolutionCandidates → after the validation_window expires:
+  //        - confirms (resolveTension/confirmed_fixed) when bridging evidence
+  //          appears in validated_edges,
+  //        - accepts wont_fix candidates as resolved/wont_fix,
+  //        - escalates everything else (urgency bump, candidate cleared,
+  //          attempted=true).
+  //   4. getResolutionPipelineStats surfaces queue depth for cognitive_status.
+  // -------------------------------------------------------------------------
+
+  /** Stamp a resolution candidate onto an open tension (idempotent — overwrites). */
+  async proposeTensionResolution(
+    tensionId: string,
+    candidate: Omit<TensionResolutionCandidate, "proposed_at"> & { proposed_at?: string }
+  ): Promise<TensionSignal | null> {
+    let updated: TensionSignal | null = null;
+    await withFileLock("tension_log.json", async () => {
+      const tensions = await this.loadTensions();
+      const idx = tensions.signals.findIndex((s) => s.id === tensionId);
+      if (idx === -1) return;
+      const signal = tensions.signals[idx];
+      if (signal.resolved) return;
+      signal.resolution_candidate = {
+        strategy: candidate.strategy,
+        rationale: candidate.rationale,
+        validation_window: Math.max(1, candidate.validation_window),
+        source: candidate.source,
+        proposed_at: candidate.proposed_at ?? new Date().toISOString(),
+      };
+      tensions.signals[idx] = signal;
+      await atomicWriteFile(tensionPath(), JSON.stringify(tensions, null, 2));
+      updated = signal;
+    });
+    return updated;
+  }
+
+  /**
+   * Heuristic candidate generator. Maps tension type → a sensible default
+   * strategy + rationale. Used when no LLM proposer is supplied.
+   */
+  private heuristicCandidate(sig: TensionSignal): Omit<TensionResolutionCandidate, "proposed_at"> {
+    const window = 3;
+    switch (sig.type) {
+      case "missing_link":
+        return {
+          strategy: "merge",
+          rationale: `Entities ${sig.entities.slice(0, 2).join(" / ")} repeatedly co-occur without a graph link — propose a direct edge or identity merge.`,
+          validation_window: window,
+          source: "heuristic",
+        };
+      case "weak_connection":
+        return {
+          strategy: "mediator",
+          rationale: `Connection between ${sig.entities.slice(0, 2).join(" / ")} is weak — look for a third entity sitting on the bridge.`,
+          validation_window: window,
+          source: "heuristic",
+        };
+      case "ungrounded_dream":
+        return {
+          strategy: "wont_fix",
+          rationale: `Dream remains ungrounded after ${sig.occurrences} observation(s); accept as speculative and close.`,
+          validation_window: window,
+          source: "heuristic",
+        };
+      case "hard_query":
+        return {
+          strategy: "reframe",
+          rationale: `Query repeatedly fails to land — the question or expected schema may need restating.`,
+          validation_window: window,
+          source: "heuristic",
+        };
+      case "code_insight":
+      default:
+        return {
+          strategy: "split",
+          rationale: `Code-level signal suggests ${sig.entities[0] ?? "this entity"} is doing too much; consider splitting responsibilities.`,
+          validation_window: window,
+          source: "heuristic",
+        };
+    }
+  }
+
+  /**
+   * Bulk proposer pass. Picks the top-N most urgent open tensions that don't
+   * already carry a candidate and stamps one on each.
+   */
+  async runTensionResolverCycle(opts?: {
+    maxSamples?: number;
+    proposer?: (sig: TensionSignal) => Promise<Omit<TensionResolutionCandidate, "proposed_at"> | null> | Omit<TensionResolutionCandidate, "proposed_at"> | null;
+  }): Promise<{ proposed: number; skipped: number }> {
+    const maxSamples = Math.max(1, opts?.maxSamples ?? 5);
+    const tensions = await this.loadTensions();
+    const candidates = tensions.signals
+      .filter((s) => !s.resolved && !s.resolution_candidate && !s.attempted)
+      .sort((a, b) => b.urgency - a.urgency)
+      .slice(0, maxSamples);
+
+    let proposed = 0;
+    let skipped = 0;
+    for (const sig of candidates) {
+      let candidate: Omit<TensionResolutionCandidate, "proposed_at"> | null = null;
+      if (opts?.proposer) {
+        try {
+          candidate = await opts.proposer(sig);
+        } catch (err) {
+          logger.warn(
+            `runTensionResolverCycle: proposer threw for ${sig.id} — falling back to heuristic. ` +
+            `Error: ${err instanceof Error ? err.message : err}`
+          );
+        }
+      }
+      if (!candidate) candidate = this.heuristicCandidate(sig);
+      if (!candidate) { skipped++; continue; }
+      await this.proposeTensionResolution(sig.id, candidate);
+      proposed++;
+    }
+    return { proposed, skipped };
+  }
+
+  /**
+   * Validation pass — runs each cycle. Decrements validation_window; when
+   * window hits 0, classifies the candidate as confirmed / accepted / escalated
+   * based on the current validated-edges graph.
+   */
+  async validateResolutionCandidates(): Promise<{
+    confirmed: number;
+    accepted_wont_fix: number;
+    escalated: number;
+    awaiting: number;
+  }> {
+    const validated = await this.loadValidatedEdges();
+    const edgePairs = new Set<string>();
+    for (const e of validated.edges) {
+      if (e.from && e.to) {
+        edgePairs.add(`${e.from}\u0000${e.to}`);
+        edgePairs.add(`${e.to}\u0000${e.from}`);
+      }
+    }
+
+    const decisions: Array<{ id: string; outcome: "confirmed" | "wont_fix" | "escalate" }> = [];
+    const tensions = await this.loadTensions();
+
+    for (const sig of tensions.signals) {
+      if (sig.resolved || !sig.resolution_candidate) continue;
+      sig.resolution_candidate.validation_window -= 1;
+      if (sig.resolution_candidate.validation_window > 0) continue;
+
+      const ents = sig.entities;
+      const hasBridge = ents.length >= 2 && (() => {
+        for (let i = 0; i < ents.length; i++) {
+          for (let j = i + 1; j < ents.length; j++) {
+            if (edgePairs.has(`${ents[i]}\u0000${ents[j]}`)) return true;
+          }
+        }
+        return false;
+      })();
+
+      if (hasBridge) {
+        decisions.push({ id: sig.id, outcome: "confirmed" });
+      } else if (sig.resolution_candidate.strategy === "wont_fix") {
+        decisions.push({ id: sig.id, outcome: "wont_fix" });
+      } else {
+        decisions.push({ id: sig.id, outcome: "escalate" });
+      }
+    }
+
+    // Persist the window-decrement first so the counters above are durable
+    // even if the resolveTension calls below short-circuit.
+    await this.saveTensions(tensions);
+
+    let confirmed = 0;
+    let accepted_wont_fix = 0;
+    let escalated = 0;
+
+    for (const d of decisions) {
+      if (d.outcome === "confirmed") {
+        await this.resolveTension(d.id, "system", "confirmed_fixed", "validated_edges contains a bridging connection between tension entities");
+        confirmed++;
+      } else if (d.outcome === "wont_fix") {
+        await this.resolveTension(d.id, "system", "wont_fix", "resolution candidate proposed wont_fix and validation window expired");
+        accepted_wont_fix++;
+      } else {
+        // Escalate: bump urgency, mark attempted, clear the failed candidate.
+        await withFileLock("tension_log.json", async () => {
+          const t = await this.loadTensions();
+          const idx = t.signals.findIndex((s) => s.id === d.id);
+          if (idx === -1) return;
+          const s = t.signals[idx];
+          s.urgency = Math.min(1, Math.round((s.urgency + 0.05) * 100) / 100);
+          s.attempted = true;
+          delete s.resolution_candidate;
+          t.signals[idx] = s;
+          await atomicWriteFile(tensionPath(), JSON.stringify(t, null, 2));
+        });
+        escalated++;
+      }
+    }
+
+    const awaiting = (await this.loadTensions()).signals.filter(
+      (s) => !s.resolved && !!s.resolution_candidate
+    ).length;
+
+    return { confirmed, accepted_wont_fix, escalated, awaiting };
+  }
+
+  /** Pipeline stats for cognitive_status. */
+  async getResolutionPipelineStats(): Promise<{
+    pending_candidates: number;
+    by_strategy: Record<TensionResolutionStrategy, number>;
+    awaiting_validation: number;
+  }> {
+    const tensions = await this.loadTensions();
+    const by_strategy: Record<TensionResolutionStrategy, number> = {
+      merge: 0, mediator: 0, split: 0, reframe: 0, wont_fix: 0,
+    };
+    let pending = 0;
+    let awaiting = 0;
+    for (const s of tensions.signals) {
+      if (s.resolved || !s.resolution_candidate) continue;
+      pending++;
+      by_strategy[s.resolution_candidate.strategy]++;
+      if (s.resolution_candidate.validation_window > 0) awaiting++;
+    }
+    return { pending_candidates: pending, by_strategy, awaiting_validation: awaiting };
+  }
+
   /**
    * Infer the domain of a tension from the entity IDs and description.
    * Simple keyword-based heuristic.
@@ -1529,6 +1962,15 @@ class CognitiveEngine {
             ? unresolved.sort((a, b) => b.urgency - a.urgency)[0]
             : null,
       };
+      // Phase 4 #8 — surface resolver pipeline stats. Best-effort.
+      try {
+        const pipeline = await this.getResolutionPipelineStats();
+        if (pipeline.pending_candidates > 0 || pipeline.awaiting_validation > 0) {
+          tensionStats.resolution_pipeline = pipeline;
+        }
+      } catch (err) {
+        logger.debug(`getStatus: resolution pipeline stats unavailable: ${err instanceof Error ? err.message : err}`);
+      }
     } catch (err) {
       logger.debug(`getStatus: tension stats unavailable: ${err instanceof Error ? err.message : err}`);
     }
@@ -1574,6 +2016,34 @@ class CognitiveEngine {
         } catch (err) {
           logger.debug(`getStatus: LLM info unavailable: ${err instanceof Error ? err.message : err}`);
           return { provider: "none", model: "", available: false };
+        }
+      })(),
+      // ADR-096: surface cold-start bootstrap status only once normalization
+      // has actually run at least once (otherwise the field would be
+      // misleading on a fresh, dormant instance).
+      bootstrap:
+        this.bootstrapStartedAt !== null || this.bootstrapState === "graduated"
+          ? this.getBootstrapStatus()
+          : undefined,
+      // ADR-098 (Slice 2A): surface live LLM-readiness probe state. May be
+      // null if the watcher hasn't completed its first probe yet.
+      llm_readiness: getLlmReadinessStatus() ?? undefined,
+      // ADR-098 (Slice 2B): per-fingerprint bootstrap audit log. Compact
+      // tail (last 5 entries) keeps `cognitive_status` light for dashboards;
+      // forensic consumers should read `data/llm_bootstrap_log.json`.
+      bootstrap_history: await (async () => {
+        try {
+          const { getBootstrapHistory } = await import("./bootstrap-registry.js");
+          const all = await getBootstrapHistory();
+          return {
+            total: all.length,
+            recent: all.slice(-5),
+          };
+        } catch (err) {
+          logger.debug(
+            `getStatus: bootstrap history unavailable: ${err instanceof Error ? err.message : err}`,
+          );
+          return undefined;
         }
       })(),
     };
