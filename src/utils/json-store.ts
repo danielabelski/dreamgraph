@@ -91,6 +91,7 @@ export const STORE_TRUST_TIERS: Record<string, TrustTier> = {
   "lucid_log.json": "internal",
   "threat_log.json": "internal",
   "system_story.json": "internal",
+  "remediation_log.json": "internal",
 
   // Ephemeral / rebuildable
   "index.json": "ephemeral",

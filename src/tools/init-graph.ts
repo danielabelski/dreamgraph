@@ -769,6 +769,21 @@ export function registerInitGraphTool(server: McpServer): void {
             /* LLM module not loaded yet — skip advice */
           }
 
+          // v8.2.7 — graph-integrity self-healing. init_graph writes seed files
+          // directly (bypassing executeEnrichSeedData), so symmetrize links once
+          // at the tail. Best-effort, never blocks the result.
+          try {
+            const { applyBidirectionalBacklinks } = await import("./graph-integrity.js");
+            const bl = await applyBidirectionalBacklinks();
+            if (bl.entities_needing_backlinks > 0) {
+              logger.info(
+                `init_graph: post-init backlinks added reciprocals on ${bl.entities_needing_backlinks} entities`,
+              );
+            }
+          } catch (err) {
+            logger.warn(`init_graph: backlink hook failed — ${err instanceof Error ? err.message : String(err)}`);
+          }
+
           logger.info(`init_graph: ${summary}`);
 
           return success<InitGraphResult>({

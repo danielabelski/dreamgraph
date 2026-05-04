@@ -34,6 +34,12 @@ import { atomicWriteFile } from "../utils/atomic-write.js";
 import { withFileLock } from "../utils/mutex.js";
 import { graphEventBus } from "../graph/events.js";
 import { getLlmReadinessStatus } from "./llm-readiness.js";
+import {
+  buildTensionPlanContext,
+  proposeResolutionCandidateFromPlan,
+  type TensionPlanContext,
+} from "./intervention.js";
+import { executeEnrichSeedData } from "../tools/enrich-seed-data.js";
 import type {
   CognitiveStateName,
   CognitiveState,
@@ -636,10 +642,17 @@ class CognitiveEngine {
 
       // Tension-aware decay: halve rate for edges involving tension entities
       const tensionRelevant = tensionEntityIds.has(edge.from) || tensionEntityIds.has(edge.to);
-      const decayRate = tensionRelevant
-        ? (edge.decay_rate ?? this.decayConfig.decay_rate) * 0.5
-        : (edge.decay_rate ?? this.decayConfig.decay_rate);
-      const ttlDecrement = tensionRelevant ? 0.5 : 1;
+      // Rejected-edge fast decay: 2x rate, 2x ttl drain — overrides tension protection
+      // so normalizer-rejected hypotheses can actually expire instead of being
+      // re-reinforced into permanence by deterministic strategies.
+      const isRejected = edge.status === "rejected";
+      const baseDecay = edge.decay_rate ?? this.decayConfig.decay_rate;
+      const decayRate = isRejected
+        ? baseDecay * 2
+        : tensionRelevant
+          ? baseDecay * 0.5
+          : baseDecay;
+      const ttlDecrement = isRejected ? 2 : tensionRelevant ? 0.5 : 1;
 
       // Apply decay
       const newTtl = (edge.ttl ?? this.decayConfig.ttl) - ttlDecrement;
@@ -754,18 +767,41 @@ class CognitiveEngine {
       const existing = existingByKey.get(key);
 
       if (existing) {
-        // REINFORCE: increase confidence, reset TTL, bump count
+        // REJECTED edges must NEVER be reinforced. Deterministic strategies
+        // (symmetry_completion, gap_detection, causal_replay, …) re-derive the
+        // same edge every cycle; without this guard, +0.12 reinforcement bumps
+        // outpace the −0.05 decay and saturate confidence at 1.0 even though
+        // the normalizer already judged the edge unsupported. Drop the duplicate
+        // silently — the existing rejected edge will continue to decay.
+        if (existing.status === "rejected") {
+          mergeCount++;
+          logger.debug(
+            `Duplicate suppressed (rejected, no reinforcement): "${candidate.id}" → "${existing.id}" ` +
+              `(conf=${existing.confidence}, reinf_count=${existing.reinforcement_count ?? 0})`
+          );
+          continue;
+        }
+
+        // Diminishing-returns reinforcement curve. Same-edge re-derivation
+        // contributes proportionally less the more often it has already been
+        // counted, so confidence asymptotes well below 1.0 unless distinct
+        // evidence keeps arriving. Formula: bump = base * (1 / (1 + n * 0.1))
+        // → after 10 reinforcements the per-merge boost is halved; after 40
+        // it's roughly 1/5th of the original.
+        const priorCount = existing.reinforcement_count ?? 0;
+        const dampening = 1 / (1 + priorCount * 0.1);
+        const bump = candidate.confidence * 0.3 * dampening;
         existing.confidence = Math.min(
-          Math.round((existing.confidence + candidate.confidence * 0.3) * 100) / 100,
+          Math.round((existing.confidence + bump) * 100) / 100,
           1.0
         );
         existing.ttl = this.decayConfig.ttl; // Reset TTL
-        existing.reinforcement_count = (existing.reinforcement_count ?? 0) + 1;
+        existing.reinforcement_count = priorCount + 1;
         existing.last_reinforced_cycle = currentCycle;
         mergeCount++;
         logger.debug(
           `Duplicate suppressed: "${candidate.id}" merged into "${existing.id}" ` +
-            `(reinforcement #${existing.reinforcement_count}, conf=${existing.confidence})`
+            `(reinforcement #${existing.reinforcement_count}, +${bump.toFixed(3)}, conf=${existing.confidence})`
         );
       } else {
         // CHECK REINFORCEMENT MEMORY — inherit evidence from expired incarnations
@@ -834,12 +870,20 @@ class CognitiveEngine {
       const existing = existingByName.get(key);
 
       if (existing) {
+        // Mirror edge logic: skip rejected, dampened reinforcement curve.
+        if (existing.status === "rejected") {
+          mergeCount++;
+          continue;
+        }
+        const priorCount = existing.reinforcement_count ?? 0;
+        const dampening = 1 / (1 + priorCount * 0.1);
+        const bump = candidate.confidence * 0.3 * dampening;
         existing.confidence = Math.min(
-          Math.round((existing.confidence + candidate.confidence * 0.3) * 100) / 100,
+          Math.round((existing.confidence + bump) * 100) / 100,
           1.0
         );
         existing.ttl = this.decayConfig.ttl;
-        existing.reinforcement_count = (existing.reinforcement_count ?? 0) + 1;
+        existing.reinforcement_count = priorCount + 1;
         existing.last_reinforced_cycle = currentCycle;
         mergeCount++;
       } else {
@@ -1612,11 +1656,19 @@ class CognitiveEngine {
   /**
    * Bulk proposer pass. Picks the top-N most urgent open tensions that don't
    * already carry a candidate and stamps one on each.
+   *
+   * v8.2.6 — the heuristic path now defers to the intervention engine
+   * (`proposeResolutionCandidateFromPlan`) so each candidate carries a
+   * concrete `proposed_action` (an `enrich_seed_data` payload or a
+   * `resolve_tension` call) instead of a strategy keyword. When
+   * `DREAMGRAPH_AUTO_APPLY_RESOLUTION_PLANS=1` is set, `graph_enrichment`
+   * payloads are executed immediately so the next dream cycle can observe
+   * the new edge and the validation pass can confirm it.
    */
   async runTensionResolverCycle(opts?: {
     maxSamples?: number;
     proposer?: (sig: TensionSignal) => Promise<Omit<TensionResolutionCandidate, "proposed_at"> | null> | Omit<TensionResolutionCandidate, "proposed_at"> | null;
-  }): Promise<{ proposed: number; skipped: number }> {
+  }): Promise<{ proposed: number; skipped: number; auto_applied: number }> {
     const maxSamples = Math.max(1, opts?.maxSamples ?? 5);
     const tensions = await this.loadTensions();
     const candidates = tensions.signals
@@ -1624,8 +1676,25 @@ class CognitiveEngine {
       .sort((a, b) => b.urgency - a.urgency)
       .slice(0, maxSamples);
 
+    if (candidates.length === 0) return { proposed: 0, skipped: 0, auto_applied: 0 };
+
+    // Build the per-cycle planner context once (loads data_model + dream_graph).
+    let planCtx: TensionPlanContext | null = null;
+    try {
+      planCtx = await buildTensionPlanContext();
+    } catch (err) {
+      logger.warn(
+        `runTensionResolverCycle: failed to build plan context — falling back to keyword heuristic. ` +
+        `Error: ${err instanceof Error ? err.message : err}`
+      );
+    }
+
+    const autoApply = process.env.DREAMGRAPH_AUTO_APPLY_RESOLUTION_PLANS === "1"
+      || process.env.DREAMGRAPH_AUTO_APPLY_RESOLUTION_PLANS === "true";
+
     let proposed = 0;
     let skipped = 0;
+    let auto_applied = 0;
     for (const sig of candidates) {
       let candidate: Omit<TensionResolutionCandidate, "proposed_at"> | null = null;
       if (opts?.proposer) {
@@ -1638,12 +1707,56 @@ class CognitiveEngine {
           );
         }
       }
+      if (!candidate && planCtx) {
+        try {
+          candidate = proposeResolutionCandidateFromPlan(sig, planCtx);
+        } catch (err) {
+          logger.warn(
+            `runTensionResolverCycle: intervention bridge threw for ${sig.id} — falling back to keyword heuristic. ` +
+            `Error: ${err instanceof Error ? err.message : err}`
+          );
+        }
+      }
       if (!candidate) candidate = this.heuristicCandidate(sig);
       if (!candidate) { skipped++; continue; }
       await this.proposeTensionResolution(sig.id, candidate);
       proposed++;
+
+      // Auto-apply: execute graph_enrichment payloads immediately.
+      if (
+        autoApply &&
+        candidate.proposed_action &&
+        "tool" in candidate.proposed_action &&
+        candidate.proposed_action.tool === "enrich_seed_data"
+      ) {
+        try {
+          const action = candidate.proposed_action;
+          const result = await executeEnrichSeedData({
+            target: action.target,
+            entries: action.entries,
+            mode: action.mode,
+          });
+          if (result.success) {
+            auto_applied++;
+            logger.info(
+              `runTensionResolverCycle: auto-applied enrich_seed_data for ${sig.id} — ` +
+              `${(result.data as { entries_inserted: number; entries_updated: number }).entries_inserted} new, ` +
+              `${(result.data as { entries_inserted: number; entries_updated: number }).entries_updated} updated`
+            );
+          } else {
+            logger.warn(
+              `runTensionResolverCycle: auto-apply for ${sig.id} failed — ${result.error?.code}: ${result.error?.message}`
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            `runTensionResolverCycle: auto-apply for ${sig.id} threw — ` +
+            `${err instanceof Error ? err.message : err}`
+          );
+        }
+      }
     }
-    return { proposed, skipped };
+    return { proposed, skipped, auto_applied };
   }
 
   /**
@@ -1658,12 +1771,22 @@ class CognitiveEngine {
     awaiting: number;
   }> {
     const validated = await this.loadValidatedEdges();
-    const edgePairs = new Set<string>();
+
+    // v8.2.6 — index bridges by entity-pair AND by validation timestamp so
+    // we can require the bridge to have appeared *after* the candidate was
+    // proposed. A pre-existing bridge no longer counts as evidence that the
+    // resolution worked.
+    const bridgeFirstSeen = new Map<string, number>(); // key -> earliest validated_at ms
     for (const e of validated.edges) {
-      if (e.from && e.to) {
-        edgePairs.add(`${e.from}\u0000${e.to}`);
-        edgePairs.add(`${e.to}\u0000${e.from}`);
-      }
+      if (!e.from || !e.to) continue;
+      const ts = e.validated_at ? Date.parse(e.validated_at) : NaN;
+      const stamp = Number.isFinite(ts) ? ts : 0;
+      const k1 = `${e.from}\u0000${e.to}`;
+      const k2 = `${e.to}\u0000${e.from}`;
+      const prev1 = bridgeFirstSeen.get(k1);
+      const prev2 = bridgeFirstSeen.get(k2);
+      if (prev1 === undefined || stamp < prev1) bridgeFirstSeen.set(k1, stamp);
+      if (prev2 === undefined || stamp < prev2) bridgeFirstSeen.set(k2, stamp);
     }
 
     const decisions: Array<{ id: string; outcome: "confirmed" | "wont_fix" | "escalate" }> = [];
@@ -1674,17 +1797,24 @@ class CognitiveEngine {
       sig.resolution_candidate.validation_window -= 1;
       if (sig.resolution_candidate.validation_window > 0) continue;
 
+      const proposedAtMs = Date.parse(sig.resolution_candidate.proposed_at);
+      const proposedThreshold = Number.isFinite(proposedAtMs) ? proposedAtMs : 0;
+
       const ents = sig.entities;
-      const hasBridge = ents.length >= 2 && (() => {
+      const hasFreshBridge = ents.length >= 2 && (() => {
         for (let i = 0; i < ents.length; i++) {
           for (let j = i + 1; j < ents.length; j++) {
-            if (edgePairs.has(`${ents[i]}\u0000${ents[j]}`)) return true;
+            const ts = bridgeFirstSeen.get(`${ents[i]}\u0000${ents[j]}`);
+            if (ts === undefined) continue;
+            // Strict: bridge must have first appeared at or after proposal.
+            // Allow a small clock-skew tolerance of 1 second.
+            if (ts >= proposedThreshold - 1000) return true;
           }
         }
         return false;
       })();
 
-      if (hasBridge) {
+      if (hasFreshBridge) {
         decisions.push({ id: sig.id, outcome: "confirmed" });
       } else if (sig.resolution_candidate.strategy === "wont_fix") {
         decisions.push({ id: sig.id, outcome: "wont_fix" });

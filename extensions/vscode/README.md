@@ -1,4 +1,4 @@
-# DreamGraph v8.2.5 — Bedrock
+# DreamGraph v8.2.6 — Bedrock
 ### The Autonomous Cognitive Layer for Sovereign Development.
 
 DreamGraph is a model-agnostic, graph-grounded development agent. It replaces brute-force context dumping with architectural discipline, ensuring your project's logic remains persistent regardless of which LLM you choose to plug in.
@@ -9,7 +9,7 @@ DreamGraph is a model-agnostic, graph-grounded development agent. It replaces br
 * **Autonomous Normalization:** Background 'Dream Cycles' continuously map and resolve architectural tensions.
 * **100% Local Privacy:** Your database, your daemon, your keys. Sovereign by design.
 
-## 🛠 Status: v8.2.5 "Bedrock"
+## 🛠 Status: v8.2.6 "Bedrock"
 * **Engine:** Active
 * **Explorer:** Production-ready graph browsing and curated mutations
 * **Governance:** ADR-enforced

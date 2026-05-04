@@ -63,7 +63,10 @@ Dream candidates are scored using structural evidence, recurrence, signal qualit
 - **rejected** → discarded
 
 ### 3. Decay
-Unreinforced dreams and stale tensions decay or expire over time.
+Unreinforced dreams and stale tensions decay or expire over time. As of v8.2.6:
+
+- **Rejected edges and nodes** decay at **2× the normal rate** and bypass the tension-protection halving so they leave the dream graph quickly. Reinforcement is **disabled** for rejected memory — a strategy that keeps re-deriving the same rejected hypothesis can no longer pump its confidence back up.
+- **Latent edges and nodes** use a **diminishing-returns reinforcement curve**: each subsequent re-derivation contributes a smaller bump (`bump = candidate.confidence * 0.3 / (1 + reinforcement_count * 0.1)`), so confidence cannot saturate at 1.0 from same-strategy re-derivation alone.
 
 ### 4. Promotion and memory
 Validated edges become part of long-term architectural understanding and can influence future reasoning, documentation, and remediation planning.
@@ -140,22 +143,47 @@ Tensions can be:
 
 Every `dream_cycle` invokes a two-stage resolver after normalization:
 
-1. **Proposer pass** (`runTensionResolverCycle`) — selects up to 5 unresolved tensions that have neither a pending resolution candidate nor a prior failed attempt, sorted by urgency. Each selected tension receives a candidate via either an LLM proposer or the heuristic fallback. Heuristic strategies by tension type:
-   - `missing_link` → `merge`
-   - `weak_connection` → `mediator`
-   - `ungrounded_dream` → `wont_fix`
-   - `hard_query` → `reframe`
-   - `code_insight` (and default) → `split`
+1. **Proposer pass** (`runTensionResolverCycle`) — selects up to 5 unresolved tensions that have neither a pending resolution candidate nor a prior failed attempt, sorted by urgency. Each selected tension receives a candidate via, in order of preference:
+   1. **LLM proposer** — active whenever LLM readiness is `ready`. The normalizer model is asked for `{strategy, rationale, validation_window}` in strict JSON mode.
+   2. **Intervention bridge** (v8.2.6) — reuses the remediation planner (`strategyForTension`) so the candidate is grounded in the data-model:
+      - any participant entity missing from `data_model.json` → `wont_fix` plan,
+      - both entities exist but no relationship/link → `merge` strategy with a pre-built `enrich_seed_data` payload attached as `proposed_action`,
+      - source-level mismatches → `mediator` (missing/weak link) or `split` (code insight).
+   3. **Keyword heuristic** — final fallback if the planner cannot build a context.
 
-   Each candidate carries `{ strategy, rationale, proposed_at, validation_window, source }`. The default validation window is 3 dream cycles.
+   Each candidate carries `{ strategy, rationale, proposed_at, validation_window, source, proposed_action? }`. The default validation window is 3 dream cycles.
+
+   When `DREAMGRAPH_AUTO_APPLY_RESOLUTION_PLANS=1` is set, candidates whose `proposed_action.tool === "enrich_seed_data"` are executed immediately so the new edge can be observed by the next cycle's validation pass.
 
 2. **Validation pass** (`validateResolutionCandidates`) — decrements `validation_window` for every open candidate and inspects the validated edges between the tension's entities:
-   - Bridging edge present + window expired → `resolveTension(system, confirmed_fixed)` with the bridge as evidence.
-   - No bridge + window expired + strategy `wont_fix` → `resolveTension(system, wont_fix)`.
-   - No bridge + window expired + any other strategy → escalate: bump urgency by 0.05 (capped at 1.0), set `attempted=true`, clear the candidate so future cycles can retry with a different strategy.
+   - **Fresh** bridging edge present (`validated_at >= proposed_at - 1s`) + window expired → `resolveTension(system, confirmed_fixed)` with the bridge as evidence. Pre-existing bridges no longer count as confirmation.
+   - No fresh bridge + window expired + strategy `wont_fix` → `resolveTension(system, wont_fix)`.
+   - No fresh bridge + window expired + any other strategy → escalate: bump urgency by 0.05 (capped at 1.0), set `attempted=true`, clear the candidate so future cycles can retry with a different strategy.
    - Window > 0 → leave as awaiting.
 
-Resolver activity is summarized in the `dream_cycle` return string and surfaced in `cognitive_status` under `tensionStats.resolution_pipeline` (`pending_candidates`, `awaiting_validation`, `by_strategy`). The pipeline field is omitted when there is no active candidate.
+Resolver activity is summarized in the `dream_cycle` return string (now including `auto_applied`) and surfaced in `cognitive_status` under `tensionStats.resolution_pipeline` (`pending_candidates`, `awaiting_validation`, `by_strategy`). The pipeline field is omitted when there is no active candidate.
+
+---
+
+## Self-Healing Graph Integrity
+
+Added in v8.2.6. The fact graph used to accumulate **orphans** (degree-0 entities), **dangling link targets** (`A → B` where `B` does not exist as a node), and **asymmetric edges** (`A → B` with no reciprocal `B → A`) every time a new entity was created. Cleanup was always manual.
+
+Four entry points now run self-healing passes automatically:
+
+| Entry point | Pass(es) |
+|---|---|
+| `dream_cycle` (when promotions occurred) | `autoWireOrphans()` (LLM-driven `wire_links`, capped at 25) → `applyBidirectionalBacklinks()` |
+| `enrich_seed_data` (after successful insert/update) | `applyBidirectionalBacklinks()` |
+| `scan_project` (end of `runScanProject`, when real seeds were written) | `applyBidirectionalBacklinks()` |
+| `init_graph` (before final `success` return) | `applyBidirectionalBacklinks()` |
+
+Implementation lives in [src/tools/graph-integrity.ts](../src/tools/graph-integrity.ts):
+
+- **`applyBidirectionalBacklinks()`** — pure-data, idempotent. For every fact-graph link `A → B` whose target `B` is also a fact-graph entity, ensures `B.links` contains a reciprocal `B → A` with an inverted relationship label (`depends_on ↔ supports`, `contains ↔ part_of`, etc.). Writes go through `executeEnrichSeedData` in merge mode with a new internal `_skipIntegrityHooks: true` flag that prevents recursion.
+- **`autoWireOrphans()`** — wraps `executeWireLinksProgrammatic` from [src/tools/wire-links.ts](../src/tools/wire-links.ts). No-op when no LLM is configured.
+
+All hooks are best-effort: failures are logged but never abort the host operation. Diagnostics are available via the `scripts/audit-orphans.mjs` and `scripts/add-backlinks.mjs` utilities.
 
 ---
 

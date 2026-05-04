@@ -524,6 +524,13 @@ export interface TensionResolutionCandidate {
   validation_window: number;
   /** Source of the proposal — heuristic fallback or LLM call */
   source: "heuristic" | "llm";
+  /**
+   * v8.2.6 — concrete, executable follow-up. Either an `enrich_seed_data`
+   * payload (for graph_enrichment plans) or a `resolve_tension` call (for
+   * wont_fix / source-change plans). Populated by the intervention-engine
+   * bridge so callers can either review or auto-apply the proposal.
+   */
+  proposed_action?: RemediationEnrichmentAction | RemediationResolutionCall;
 }
 
 /** A tension signal: something the system noticed was hard / missing / weak */
@@ -809,6 +816,18 @@ export interface DreamInsights {
   clusters: DreamCluster[];
   /** Unresolved tensions directing next REM */
   active_tensions: TensionSignal[];
+  /**
+   * Tensions bucketed by `type`. Counts only — full lists are in
+   * `active_tensions`. Helps the agent pick the right remediation
+   * strategy without scanning the full list.
+   */
+  tensions_by_type?: Record<string, number>;
+  /**
+   * Tensions where the same dream has been rejected repeatedly
+   * (occurrences ≥ 3). These are signals the user should either
+   * confirm (enrich the link) or refute (record an ADR).
+   */
+  recurrent_rejections?: TensionSignal[];
   /** Edges about to expire */
   expiring_soon: DreamEdge[];
   /** Summary statistics */
@@ -1657,6 +1676,41 @@ export interface FileChange {
   rationale: string;
 }
 
+/**
+ * Classifier for the *kind* of intervention a plan represents.
+ *
+ * - `source_change`     — Edit one or more real source files.
+ * - `graph_enrichment`  — Update entries in `data_model.json` /
+ *                        `features.json` / etc. (no source code touched).
+ * - `wont_fix`          — Tension cannot be acted on (phantom target,
+ *                        intentional separation, out-of-scope).
+ * - `merge`             — Two entities should be collapsed.
+ * - `rescan`            — The fact graph is stale; re-run scan_project.
+ */
+export type RemediationInterventionType =
+  | "source_change"
+  | "graph_enrichment"
+  | "wont_fix"
+  | "merge"
+  | "rescan";
+
+/** Suggested follow-up call to close a tension via `resolve_tension`. */
+export interface RemediationResolutionCall {
+  tool: "resolve_tension";
+  tension_id: string;
+  resolved_by: "human" | "system";
+  resolution_type: "confirmed_fixed" | "false_positive" | "wont_fix";
+  evidence: string;
+}
+
+/** Suggested follow-up call to enrich a data-model / feature / workflow entry. */
+export interface RemediationEnrichmentAction {
+  tool: "enrich_seed_data";
+  target: "data_model" | "features" | "workflows" | "capabilities";
+  mode: "merge";
+  entries: Array<Record<string, unknown>>;
+}
+
 /** A single step in a remediation plan */
 export interface RemediationStep {
   order: number;
@@ -1664,6 +1718,12 @@ export interface RemediationStep {
   files: FileChange[];
   tests_to_add: string[];
   estimated_effort: "trivial" | "small" | "medium" | "large";
+  /**
+   * Optional structured action that an agent can execute verbatim.
+   * Populated for `graph_enrichment` and `wont_fix` plans so the caller
+   * does not have to reverse-engineer the right tool invocation.
+   */
+  action?: RemediationEnrichmentAction | RemediationResolutionCall;
 }
 
 /** A complete remediation plan for a validated tension */
@@ -1672,6 +1732,8 @@ export interface RemediationPlan {
   tension_id: string;
   title: string;
   severity: "critical" | "high" | "medium" | "low";
+  /** What kind of intervention this plan represents (v8.3+). */
+  intervention_type: RemediationInterventionType;
   steps: RemediationStep[];
   /** ADR IDs that may conflict with this remediation */
   adr_conflicts: string[];
@@ -1679,6 +1741,12 @@ export interface RemediationPlan {
   new_tensions_predicted: string[];
   confidence: number;
   generated_at: string;
+  /** Set when a previous plan for the same tension exists and is now stale. */
+  supersedes?: string;
+  /** Set when this plan has been replaced by a newer plan. */
+  superseded_by?: string;
+  /** Pre-built `resolve_tension` call to close the tension after the steps run. */
+  resolution_call?: RemediationResolutionCall;
 }
 
 /** Output of remediation plan generation */
@@ -1687,7 +1755,22 @@ export interface RemediationPlanOutput {
   total_tensions_analyzed: number;
   plans_generated: number;
   skipped_low_urgency: number;
+  /** Tensions excluded because they were stale (TTL low / not seen recently). */
+  skipped_stale?: number;
   timestamp: string;
+}
+
+/** Persistent store for remediation plans (`data/remediation_log.json`). */
+export interface RemediationLogFile {
+  metadata: {
+    description: string;
+    schema_version: string;
+    last_updated: string | null;
+  };
+  /** Most-recent active plan per tension_id. */
+  current: Record<string, RemediationPlan>;
+  /** Append-only history of superseded / closed plans. */
+  history: RemediationPlan[];
 }
 
 // ===========================================================================

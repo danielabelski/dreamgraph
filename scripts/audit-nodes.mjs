@@ -1,0 +1,16 @@
+import { readFileSync } from "node:fs";
+const p = process.argv[2];
+const j = JSON.parse(readFileSync(p, "utf8"));
+console.log(`nodes=${j.nodes.length} edges=${j.edges.length}`);
+const byStatus = {};
+for (const n of j.nodes) byStatus[n.status ?? "?"] = (byStatus[n.status ?? "?"] ?? 0) + 1;
+console.log("status:", byStatus);
+const byConf = {};
+for (const n of j.nodes) byConf[n.confidence] = (byConf[n.confidence] ?? 0) + 1;
+console.log("confidence dist:", byConf);
+const high = j.nodes.filter(n => n.confidence >= 0.95 && n.status !== "rejected").slice(0, 10);
+console.log("high-conf non-rejected sample:");
+for (const n of high) console.log(`  ${n.id ?? n.name} conf=${n.confidence} reinf=${n.reinforcement_count} status=${n.status} strat=${n.source_strategy}`);
+const inflated = j.nodes.filter(n => (n.reinforcement_count ?? 0) > 20);
+console.log(`nodes with reinforcement>20: ${inflated.length}`);
+for (const n of inflated.slice(0,5)) console.log(`  ${n.id ?? n.name} conf=${n.confidence} reinf=${n.reinforcement_count} status=${n.status}`);

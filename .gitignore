@@ -28,6 +28,12 @@ Thumbs.db
 # Local strategy / campaign working docs
 .strategy/
 
+# Codex CLI local config (per-developer)
+.codex/
+
+# VS Code extension build artifacts
+*.vsix
+
 plans/
 plans/DREAMGRAPH EVENTS AND HOOKS.txt
 plans/DG - THE DREAMGRAPH CLI.txt

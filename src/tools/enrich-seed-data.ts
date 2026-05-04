@@ -436,6 +436,195 @@ interface EnrichResult {
 }
 
 // ---------------------------------------------------------------------------
+// Core executor (callable from inside the engine for auto-apply paths)
+// ---------------------------------------------------------------------------
+
+export interface ExecuteEnrichSeedDataInput {
+  target: string;
+  entries: Array<Record<string, unknown>>;
+  mode?: string;
+  strict?: boolean;
+  /**
+   * Internal flag — when true, skip the post-write self-healing pass
+   * (bidirectional backlinks). Set by integrity hooks to prevent recursion
+   * when they themselves call back into executeEnrichSeedData.
+   */
+  _skipIntegrityHooks?: boolean;
+}
+
+/**
+ * Programmatic counterpart to the MCP `enrich_seed_data` tool. Runs the same
+ * validate → merge → write → reindex pipeline but returns a structured
+ * `ToolResponse<EnrichResult>` directly. Used by the tension-resolver
+ * auto-apply path (see `validateResolutionCandidates`) so that confirmed
+ * `graph_enrichment` plans can land without an external tool round-trip.
+ */
+export async function executeEnrichSeedData(
+  input: ExecuteEnrichSeedDataInput,
+): Promise<ToolResponse<EnrichResult>> {
+  const target = input.target;
+  const entries = input.entries;
+  const mode = input.mode ?? "merge";
+  const strict = input.strict ?? false;
+
+  const VALID_TARGETS = Object.keys(TARGET_FILES);
+  if (!VALID_TARGETS.includes(target)) {
+    return error(
+      "INVALID_TARGET",
+      `Invalid target '${target}'. Must be one of: ${VALID_TARGETS.join(", ")}`,
+    );
+  }
+  const VALID_MODES = ["merge", "replace"];
+  if (!VALID_MODES.includes(mode)) {
+    return error(
+      "INVALID_MODE",
+      `Invalid mode '${mode}'. Must be one of: ${VALID_MODES.join(", ")}`,
+    );
+  }
+
+  const filename = TARGET_FILES[target as SeedTarget];
+  const validationErrors: string[] = [];
+
+  let validated: Array<Feature | Workflow | DataModelEntity | CapabilityEntity>;
+  switch (target) {
+    case "features": {
+      validated = [];
+      for (const raw of entries) {
+        const parsed = FeatureEntrySchema.safeParse(raw);
+        if (parsed.success) validated.push(entryToFeature(parsed.data));
+        else validationErrors.push(
+          `Feature entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        );
+      }
+      break;
+    }
+    case "workflows": {
+      validated = [];
+      for (const raw of entries) {
+        const parsed = WorkflowEntrySchema.safeParse(raw);
+        if (parsed.success) {
+          const wf = entryToWorkflow(parsed.data);
+          if (wf.steps?.length) {
+            const needsRenumber = wf.steps.some((s: WorkflowStep) => s.order === 0);
+            if (needsRenumber) wf.steps.forEach((s: WorkflowStep, i: number) => { s.order = i + 1; });
+          }
+          validated.push(wf);
+        } else {
+          validationErrors.push(
+            `Workflow entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+          );
+        }
+      }
+      break;
+    }
+    case "data_model": {
+      validated = [];
+      for (const raw of entries) {
+        const parsed = DataModelEntrySchema.safeParse(raw);
+        if (parsed.success) validated.push(entryToDataModel(parsed.data));
+        else validationErrors.push(
+          `Data model entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        );
+      }
+      break;
+    }
+    case "capabilities": {
+      validated = [];
+      for (const raw of entries) {
+        const parsed = CapabilityEntrySchema.safeParse(raw);
+        if (parsed.success) validated.push(entryToCapability(parsed.data));
+        else validationErrors.push(
+          `Capability entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        );
+      }
+      break;
+    }
+    default:
+      validated = [];
+  }
+
+  if (validated.length === 0) {
+    return error(
+      "NO_VALID_ENTRIES",
+      `All ${entries.length} entries failed validation: ${validationErrors.join(" | ")}`,
+    );
+  }
+
+  if (strict && validationErrors.length > 0) {
+    return error(
+      "STRICT_VALIDATION_FAILED",
+      `strict=true: ${validationErrors.length} of ${entries.length} entries failed validation; ` +
+        `nothing was persisted. Errors: ${validationErrors.join(" | ")}`,
+    );
+  }
+
+  type SeedEntity = Feature | Workflow | DataModelEntity | CapabilityEntity;
+
+  let merged: SeedEntity[];
+  let inserted: number;
+  let updated: number;
+
+  if (mode === "replace") {
+    merged = validated;
+    inserted = validated.length;
+    updated = 0;
+    logger.info(`enrich_seed_data: replace mode — discarding existing ${filename} data`);
+  } else {
+    const existing = stripTemplateStubs(await loadJsonArray<SeedEntity>(filename));
+    const mergeResult = mergeById<SeedEntity>(existing, validated);
+    merged = mergeResult.merged;
+    inserted = mergeResult.inserted;
+    updated = mergeResult.updated;
+  }
+
+  await writeSeed(filename, merged);
+  logger.info(
+    `enrich_seed_data: wrote ${filename} — ${inserted} new, ${updated} updated, ${merged.length} total`,
+  );
+
+  const indexEntries = await rebuildIndex();
+  logger.info(`enrich_seed_data: index rebuilt with ${indexEntries} entries`);
+
+  // Post-write self-healing pass: ensure new/updated links have reciprocal
+  // back-references. Skipped when called by an integrity hook itself
+  // (recursion guard) or when nothing actually changed.
+  if (!input._skipIntegrityHooks && (inserted > 0 || updated > 0)) {
+    try {
+      const { applyBidirectionalBacklinks } = await import("./graph-integrity.js");
+      const bl = await applyBidirectionalBacklinks();
+      if (bl.entities_needing_backlinks > 0) {
+        logger.info(
+          `enrich_seed_data: backlink pass added reciprocals on ${bl.entities_needing_backlinks} entities`,
+        );
+      }
+    } catch (e) {
+      logger.warn(`enrich_seed_data: backlink hook failed — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  const modeLabel = mode === "replace" ? "Replaced" : "Enriched";
+  const summary =
+    `${modeLabel} ${target}: ${inserted} inserted, ${updated} updated, ${merged.length} total entries. ` +
+    `Index: ${indexEntries} entries.` +
+    (validationErrors.length > 0
+      ? ` ${validationErrors.length} entries skipped (validation errors).`
+      : "");
+
+  return success<EnrichResult>({
+    target: target as SeedTarget,
+    file: filename,
+    mode: mode as "merge" | "replace",
+    entries_received: entries.length,
+    entries_inserted: inserted,
+    entries_updated: updated,
+    total_entries: merged.length,
+    index_entries: indexEntries,
+    validation_errors: validationErrors,
+    message: summary,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -494,185 +683,10 @@ export function registerEnrichSeedDataTool(server: McpServer): void {
         ),
     },
     async ({ target, entries, mode, strict }) => {
-      // ---- Validate target and mode server-side (no client enum caching) ----
-      const VALID_TARGETS = Object.keys(TARGET_FILES);
-      if (!VALID_TARGETS.includes(target)) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              success: false,
-              error: `Invalid target '${target}'. Must be one of: ${VALID_TARGETS.join(", ")}`,
-            }),
-          }],
-        };
-      }
-      const VALID_MODES = ["merge", "replace"];
-      if (!VALID_MODES.includes(mode)) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              success: false,
-              error: `Invalid mode '${mode}'. Must be one of: ${VALID_MODES.join(", ")}`,
-            }),
-          }],
-        };
-      }
-
       logger.info(`enrich_seed_data: ${entries.length} entries for '${target}' (mode=${mode})`);
 
       const result = await safeExecute<EnrichResult>(
-        async (): Promise<ToolResponse<EnrichResult>> => {
-          const filename = TARGET_FILES[target as SeedTarget];
-          const validationErrors: string[] = [];
-
-          // ----- Validate entries against the target schema -----
-          let validated: Array<Feature | Workflow | DataModelEntity | CapabilityEntity>;
-
-          switch (target) {
-            case "features": {
-              validated = [];
-              for (const raw of entries) {
-                const parsed = FeatureEntrySchema.safeParse(raw);
-                if (parsed.success) {
-                  validated.push(entryToFeature(parsed.data));
-                } else {
-                  validationErrors.push(
-                    `Feature entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-                  );
-                }
-              }
-              break;
-            }
-            case "workflows": {
-              validated = [];
-              for (const raw of entries) {
-                const parsed = WorkflowEntrySchema.safeParse(raw);
-                if (parsed.success) {
-                  // Re-number steps that have order=0 (from string coercion or missing order)
-                  const wf = entryToWorkflow(parsed.data);
-                  if (wf.steps?.length) {
-                    const needsRenumber = wf.steps.some((s: WorkflowStep) => s.order === 0);
-                    if (needsRenumber) {
-                      wf.steps.forEach((s: WorkflowStep, i: number) => { s.order = i + 1; });
-                    }
-                  }
-                  validated.push(wf);
-                } else {
-                  validationErrors.push(
-                    `Workflow entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-                  );
-                }
-              }
-              break;
-            }
-            case "data_model": {
-              validated = [];
-              for (const raw of entries) {
-                const parsed = DataModelEntrySchema.safeParse(raw);
-                if (parsed.success) {
-                  validated.push(entryToDataModel(parsed.data));
-                } else {
-                  validationErrors.push(
-                    `Data model entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-                  );
-                }
-              }
-              break;
-            }
-            case "capabilities": {
-              validated = [];
-              for (const raw of entries) {
-                const parsed = CapabilityEntrySchema.safeParse(raw);
-                if (parsed.success) {
-                  validated.push(entryToCapability(parsed.data));
-                } else {
-                  validationErrors.push(
-                    `Capability entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-                  );
-                }
-              }
-              break;
-            }
-            default:
-              // Should never happen — already validated above
-              validated = [];
-          }
-
-          if (validated.length === 0) {
-            return error(
-              "NO_VALID_ENTRIES",
-              `All ${entries.length} entries failed validation: ${validationErrors.join(" | ")}`,
-            );
-          }
-
-          // ----- Strict mode: any validation failure rejects the whole batch -----
-          if (strict && validationErrors.length > 0) {
-            return error(
-              "STRICT_VALIDATION_FAILED",
-              `strict=true: ${validationErrors.length} of ${entries.length} entries failed validation; ` +
-                `nothing was persisted. Errors: ${validationErrors.join(" | ")}`,
-            );
-          }
-
-          // ----- Load existing, strip stubs, merge or replace -----
-          type SeedEntity = Feature | Workflow | DataModelEntity | CapabilityEntity;
-
-          let merged: SeedEntity[];
-          let inserted: number;
-          let updated: number;
-
-          if (mode === "replace") {
-            // Clean replacement — ignore existing, write only validated entries
-            merged = validated;
-            inserted = validated.length;
-            updated = 0;
-            logger.info(
-              `enrich_seed_data: replace mode — discarding existing ${filename} data`,
-            );
-          } else {
-            // Merge mode — upsert by id
-            const existing = stripTemplateStubs(
-              await loadJsonArray<SeedEntity>(filename),
-            );
-            const mergeResult = mergeById<SeedEntity>(existing, validated);
-            merged = mergeResult.merged;
-            inserted = mergeResult.inserted;
-            updated = mergeResult.updated;
-          }
-
-          // ----- Write merged data -----
-          await writeSeed(filename, merged);
-          logger.info(
-            `enrich_seed_data: wrote ${filename} — ${inserted} new, ${updated} updated, ${merged.length} total`,
-          );
-
-          // ----- Rebuild index -----
-          const indexEntries = await rebuildIndex();
-          logger.info(`enrich_seed_data: index rebuilt with ${indexEntries} entries`);
-
-          const modeLabel = mode === "replace" ? "Replaced" : "Enriched";
-          const summary =
-            `${modeLabel} ${target}: ${inserted} inserted, ${updated} updated, ${merged.length} total entries. ` +
-            `Index: ${indexEntries} entries.` +
-            (validationErrors.length > 0
-              ? ` ${validationErrors.length} entries skipped (validation errors).`
-              : "");
-
-          return success<EnrichResult>({
-            target: target as SeedTarget,
-            file: filename,
-            mode: mode as "merge" | "replace",
-            entries_received: entries.length,
-            entries_inserted: inserted,
-            entries_updated: updated,
-            total_entries: merged.length,
-            index_entries: indexEntries,
-            validation_errors: validationErrors,
-            message: summary,
-          });
-        },
+        () => executeEnrichSeedData({ target, entries, mode, strict }),
       );
 
       return {

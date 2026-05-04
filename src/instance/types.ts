@@ -235,6 +235,7 @@ export const DATA_STUBS: Record<string, unknown> = {
   "tension_log.json":       { tensions: [] },
   "dream_history.json":     { cycles: [] },
   "adr_log.json":           { decisions: [] },
+  "remediation_log.json":   { metadata: { description: "Remediation plans \u2014 current per tension + history of superseded plans", schema_version: "1.0", last_updated: null }, current: {}, history: [] },
   "ui_registry.json":       { elements: [] },
   "event_log.json":         { events: [] },
   "meta_log.json":          { analyses: [] },

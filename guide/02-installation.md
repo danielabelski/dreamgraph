@@ -112,6 +112,8 @@ After upgrading: **restart any running daemons and reload VS Code windows**. The
 dg restart <instance-name>
 ```
 
+> **If you are coming from any version older than v8.2.6, please rebuild from this release.** v8.2.6 fixes the confidence-inflation bug in the dream engine and adds self-healing graph integrity (auto-`wire_links` + bidirectional backlinks). Older versions will keep running but cannot benefit from these fixes. For existing data, the optional `scripts/repair-confidence-inflation.mjs` script re-clamps inflated rejected edges/nodes — see [RELEASE_NOTES_v8.2.6.md](../RELEASE_NOTES_v8.2.6.md).
+
 ---
 
 ## Uninstall

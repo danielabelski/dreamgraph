@@ -806,7 +806,9 @@ export default function Graph3DCanvas({
         tooltip.style.top = `${clientY - rect.top}px`;
         tooltip.textContent =
           `${node.label || node.id}\n` +
-          `degree: ${node.degree}  health: ${node.health.toFixed(2)}  conf: ${node.confidence.toFixed(2)}`;
+          `degree: ${node.degree}` +
+          (node.type !== "tension" ? `  health: ${node.health.toFixed(2)}` : "") +
+          (node.type === "dream_node" ? `  conf: ${node.confidence.toFixed(2)}` : "");
         tooltip.style.display = "block";
       };
       const hideTooltip = (): void => {

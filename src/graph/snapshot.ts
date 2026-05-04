@@ -258,8 +258,13 @@ function buildSnapshot(raw: GraphRawSnapshot): GraphSnapshot {
   // ---- Materialize nodes with derived health ----
   const outNodes: ExplorerNode[] = [];
   for (const [id, acc] of nodes) {
-    // Health: 1.0 minus a soft tension penalty, floored at 0.1.
-    const health = Math.max(0.1, 1 - 0.2 * acc.tension_hits);
+    // Health: 1.0 minus tension penalty, minus orphan penalty (degree=0).
+    // Tension nodes are excluded from the orphan penalty — their "health"
+    // isn't meaningful (the UI shows `urgency` instead).
+    const tensionPenalty = 0.2 * acc.tension_hits;
+    const orphanPenalty =
+      acc.type !== "tension" && acc.degree === 0 ? 0.4 : 0;
+    const health = Math.max(0.1, 1 - tensionPenalty - orphanPenalty);
     outNodes.push({
       id,
       type: acc.type,

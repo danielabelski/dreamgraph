@@ -931,6 +931,26 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     }
   }
 
+  // v8.2.7 — graph-integrity self-healing. Scanner writes go through writeSeed
+  // (not executeEnrichSeedData) so the per-write backlink hook does not fire.
+  // Run a single symmetrization pass at the end so newly created entities have
+  // reciprocal links. Best-effort, fire-and-forget.
+  if (hasRealSeeds) {
+    try {
+      const { applyBidirectionalBacklinks } = await import("./graph-integrity.js");
+      const bl = await applyBidirectionalBacklinks();
+      if (bl.entities_needing_backlinks > 0) {
+        logger.info(
+          `scan_project: post-scan backlinks added reciprocals on ${bl.entities_needing_backlinks} entities`,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Post-scan backlink pass failed: ${msg}`);
+      logger.warn(`scan_project: backlink hook error: ${msg}`);
+    }
+  }
+
   const dreamSummary = dreamCycleResult
     ? ` Dream: ${dreamCycleResult.edges_created} edges, ${dreamCycleResult.nodes_created} nodes, ${dreamCycleResult.edges_promoted ?? 0} promoted.`
     : "";

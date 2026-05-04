@@ -34,6 +34,10 @@ import { dispatchEvent } from "./event-router.js";
 import { exportArchetypes } from "./federation.js";
 import { maybeAutoNarrate, generateDiffChapter } from "./narrator.js";
 import { logger } from "../utils/logger.js";
+import { getLlmReadinessStatus } from "./llm-readiness.js";
+import { getLlmProvider, getNormalizerLlmConfig } from "./llm.js";
+import type { LlmMessage } from "./llm.js";
+import type { TensionResolutionCandidate, TensionResolutionStrategy, TensionSignal } from "./types.js";
 import { withFileLock } from "../utils/mutex.js";
 import { DEFAULT_SCHEDULER_CONFIG } from "./types.js";
 import type {
@@ -455,12 +459,70 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
 
       // Phase 4 #8 — tension resolution lifecycle. Best-effort: never block
       // the dream cycle's success summary on resolver failures.
+      // v8.2.6 — when LLM is ready, build a proposer that asks the model for
+      // a strategy + rationale; falls back to the heuristic on any error.
       let resolverSummary = "";
       try {
-        const proposeResult = await engine.runTensionResolverCycle({ maxSamples: 5 });
+        const llmReady = getLlmReadinessStatus()?.state === "ready";
+        const proposer = llmReady
+          ? async (sig: TensionSignal) => {
+              try {
+                const llm = getLlmProvider();
+                const cfg = getNormalizerLlmConfig();
+                const messages: LlmMessage[] = [
+                  {
+                    role: "system",
+                    content:
+                      "You are the DreamGraph tension resolver. Pick the best strategy for closing a tension. " +
+                      "Respond ONLY with strict JSON: {\"strategy\":\"merge|mediator|split|reframe|wont_fix\",\"rationale\":\"...\",\"validation_window\":1-5}.",
+                  },
+                  {
+                    role: "user",
+                    content:
+                      `Tension type: ${sig.type}\n` +
+                      `Description: ${sig.description}\n` +
+                      `Entities: ${sig.entities.join(", ")}\n` +
+                      `Urgency: ${sig.urgency.toFixed(2)}`,
+                  },
+                ];
+                const resp = await llm.complete(messages, {
+                  model: cfg.model,
+                  temperature: cfg.temperature,
+                  maxTokens: 400,
+                  jsonMode: true,
+                });
+                const parsed = JSON.parse(resp.text) as {
+                  strategy?: string;
+                  rationale?: string;
+                  validation_window?: number;
+                };
+                const allowed: TensionResolutionStrategy[] = ["merge", "mediator", "split", "reframe", "wont_fix"];
+                if (!parsed.strategy || !allowed.includes(parsed.strategy as TensionResolutionStrategy)) {
+                  return null;
+                }
+                const candidate: Omit<TensionResolutionCandidate, "proposed_at"> = {
+                  strategy: parsed.strategy as TensionResolutionStrategy,
+                  rationale: typeof parsed.rationale === "string" && parsed.rationale.trim()
+                    ? parsed.rationale.trim()
+                    : "LLM proposal (no rationale provided)",
+                  validation_window: Math.min(5, Math.max(1, Math.floor(parsed.validation_window ?? 3))),
+                  source: "llm",
+                };
+                return candidate;
+              } catch (err) {
+                logger.warn(
+                  `dream_cycle: LLM tension proposer failed for ${sig.id} — falling back. ` +
+                  `Error: ${err instanceof Error ? err.message : err}`
+                );
+                return null;
+              }
+            }
+          : undefined;
+        const proposeResult = await engine.runTensionResolverCycle({ maxSamples: 5, proposer });
         const validateResult = await engine.validateResolutionCandidates();
         resolverSummary =
           `, resolver(proposed=${proposeResult.proposed}, ` +
+          `auto_applied=${proposeResult.auto_applied}, ` +
           `confirmed=${validateResult.confirmed}, ` +
           `wont_fix=${validateResult.accepted_wont_fix}, ` +
           `escalated=${validateResult.escalated})`;

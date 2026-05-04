@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v8.2.5 — Bedrock
+# DreamGraph v8.2.6 — Bedrock
 
-![Version](https://img.shields.io/badge/version-8.2.5-blue)
+![Version](https://img.shields.io/badge/version-8.2.6-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -120,6 +120,10 @@ npm --version
 git --version
 code --version
 ```
+
+## Upgrading from an earlier version
+
+If you are running any DreamGraph version prior to **v8.2.6**, please rebuild and reinstall from this release. v8.2.6 fixes the long-standing **confidence inflation bug** in the dream engine (deterministic strategies were re-deriving the same edges and pushing rejected items to `confidence = 1.0`) and adds **self-healing graph integrity** so the fact graph no longer accumulates orphans, dangling references, or asymmetric edges. Earlier versions will continue to run but cannot benefit from these fixes; rebuilding from v8.2.6 is required for full functionality. A migration script for existing data is provided in `scripts/repair-confidence-inflation.mjs` (see [RELEASE_NOTES_v8.2.6.md](RELEASE_NOTES_v8.2.6.md)).
 
 ## Install From Source
 

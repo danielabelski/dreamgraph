@@ -20,6 +20,7 @@ import { registerLivingDocsTools } from "./living-docs-exporter.js";
 import { registerRuntimeSensesTools } from "./runtime-senses.js";
 import { registerInitGraphTool } from "./init-graph.js";
 import { registerEnrichSeedDataTool } from "./enrich-seed-data.js";
+import { registerWireLinksTool } from "./wire-links.js";
 import { registerScanProjectTool } from "./scan-project.js";
 import { registerApiSurfaceTools } from "./api-surface.js";
 import { registerBootstrapInstanceTool } from "./bootstrap-instance.js";
@@ -41,9 +42,10 @@ export function registerTools(server: McpServer): void {
   registerRuntimeSensesTools(server);
   registerInitGraphTool(server);
   registerEnrichSeedDataTool(server);
+  registerWireLinksTool(server);
   registerScanProjectTool(server);
   registerApiSurfaceTools(server);
   registerBootstrapInstanceTool(server);
 
-  logger.info("Registered 32 tools");
+  logger.info("Registered 33 tools");
 }

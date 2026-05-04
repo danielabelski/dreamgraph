@@ -784,6 +784,34 @@ export function registerCognitiveTools(server: McpServer): void {
             logger.warn(`Post-cycle scheduler hook failed: ${e}`);
           }
 
+          // v8.2.7 — graph-integrity self-healing. Promoted entities are
+          // written to features/workflows/data_model with whatever links the
+          // dream produced (often none). Auto-wire orphans and symmetrize
+          // backlinks so each cycle leaves the fact graph cleaner than it
+          // found it. Best-effort, fire-and-forget.
+          const promotedEntities = normResult?.promoted_entities ?? 0;
+          if (promotedEntities > 0) {
+            try {
+              const { autoWireOrphans, applyBidirectionalBacklinks } = await import("../tools/graph-integrity.js");
+              const wire = await autoWireOrphans({ limit: 25 });
+              if (wire.ran) {
+                logger.info(
+                  `Post-cycle wire_links: ${wire.entities_updated} entities updated, ${wire.links_written} links written`,
+                );
+              } else if (wire.reason) {
+                logger.info(`Post-cycle wire_links skipped: ${wire.reason}`);
+              }
+              const bl = await applyBidirectionalBacklinks();
+              if (bl.entities_needing_backlinks > 0) {
+                logger.info(
+                  `Post-cycle backlinks: ${bl.entities_needing_backlinks} entities reciprocated`,
+                );
+              }
+            } catch (e) {
+              logger.warn(`Post-cycle integrity hook failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+
           return success<DreamCycleOutput>({
             cycle_number: engine.getCurrentDreamCycle(),
             state_transitions: transitions,
@@ -1201,6 +1229,20 @@ export function registerCognitiveTools(server: McpServer): void {
             .sort((a, b) => b.urgency - a.urgency)
             .slice(0, n);
 
+          // Tension type histogram (for triage UIs).
+          const tensionsByType: Record<string, number> = {};
+          for (const sig of tensions.signals) {
+            if (sig.resolved) continue;
+            tensionsByType[sig.type] = (tensionsByType[sig.type] ?? 0) + 1;
+          }
+
+          // Recurrent rejections: weak_connection signals seen ≥ 3 times —
+          // strong candidates for graph_enrichment plans.
+          const recurrentRejections = tensions.signals
+            .filter((s) => !s.resolved && s.type === "weak_connection" && s.occurrences >= 3)
+            .sort((a, b) => b.occurrences - a.occurrences)
+            .slice(0, 5);
+
           // Health assessment
           const totalDreams = edges.length + nodes.length;
           const totalValidated = validated.edges.length;
@@ -1232,6 +1274,8 @@ export function registerCognitiveTools(server: McpServer): void {
             strongest_hypotheses: strongestHypotheses,
             clusters,
             active_tensions: activeTensions,
+            tensions_by_type: tensionsByType,
+            recurrent_rejections: recurrentRejections,
             expiring_soon: expiringSoon,
             summary: {
               total_dreams: totalDreams,

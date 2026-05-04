@@ -141,6 +141,7 @@ All tensions: unresolved questions, inconsistencies, discovered gaps. Active cap
 | `resolution_candidate.proposed_at` | string | ISO timestamp of the proposer pass that created the candidate |
 | `resolution_candidate.validation_window` | number | Dream cycles remaining before the candidate is judged. Decremented by `validateResolutionCandidates` each cycle |
 | `resolution_candidate.source` | string | `heuristic` \| `llm` |
+| `resolution_candidate.proposed_action` | object? | v8.2.6. Concrete follow-up: an `enrich_seed_data` payload (graph-enrichment plans) or a `resolve_tension` call (wont_fix / source-change plans). Auto-executed when `DREAMGRAPH_AUTO_APPLY_RESOLUTION_PLANS=1` |
 
 ---
 

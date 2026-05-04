@@ -1,6 +1,6 @@
 # DreamGraph Tools Reference
 
-> Complete catalog of all 69 MCP tools (28 cognitive + 31 general + 10 discipline) and 26 MCP resources.
+> Complete catalog of all 70 MCP tools (28 cognitive + 32 general + 10 discipline) and 26 MCP resources.
 
 The DreamGraph Architect actively calls these tools during conversations to build, query, enrich, and maintain the knowledge graph. Any MCP-compatible client can also invoke them directly.
 
@@ -318,7 +318,7 @@ End an active lucid dream session — persist accepted edges and return to AWAKE
 
 ---
 
-## General Tools (31)
+## General Tools (32)
 
 Registered in [src/tools/register.ts](../src/tools/register.ts). These provide I/O, visualization, documentation, and operational knowledge capabilities.
 
@@ -553,6 +553,21 @@ This is a convenience orchestrator. All individual tools (`init_graph`, `enrich_
 **Returns:** Summary with counts for repos scanned, files discovered, UI files detected, technology detected, features/workflows/data_model inserted/updated/total, **auxiliary entities (test_suite/configuration/automation_script/mcp_tool) inserted/updated/total**, index entries rebuilt, LLM tokens used, and any warnings.
 
 **Phase 2.5 — auxiliary entity merge (v8.2):** After LLM enrichment and before index rebuild, `scan_project` classifies every scanned file into one of four auxiliary kinds (tests / config / scripts / MCP tools) and persists them to `data/auxiliary_entities.json` via `mergeAuxiliaryEntities`. The rebuilt `index.json` includes one row per auxiliary entry with `type` set to the kind. See [data-model.md](data-model.md#auxiliary-entities-auxiliary_entitiesjson) for schema.
+
+#### `wire_links`
+
+LLM-driven orphan resolver for fact-graph entities. Finds entities whose `links` array is empty (degree-0 “orphans”), builds a candidate pool from source-file overlap, name/description Jaccard, and tag overlap, and asks the dreamer model to pick semantically meaningful connections. Anti-hallucination validation rejects any link whose target is not in the candidate pool. Writes go through `enrich_seed_data` (merge mode) so all standard validation, indexing, and cache-invalidation pipelines apply.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `scope` | string[] | all four | Subset of `["feature", "workflow", "data_model", "capability"]` to scan. |
+| `limit` | number (1–500) | 50 | Maximum entities to attempt across all types in one call. |
+| `candidate_top_k` | number (5–80) | 30 | Top-K candidates per orphan passed to the LLM. |
+| `dry_run` | boolean | false | Report what would be written without persisting. |
+
+**Returns:** Per-type counts of orphans found, entities updated, and links written, plus aggregate LLM call/token usage and any notes (e.g., LLM errors, dry-run summaries).
+
+**Self-healing pairing:** As of v8.2.6, `dream_cycle` calls `wire_links` automatically after every cycle that promoted entities. `enrich_seed_data`, `scan_project`, and `init_graph` run a complementary bidirectional backlink pass so every `A → B` link gets its reciprocal `B → A`. See [cognitive-engine.md](cognitive-engine.md#self-healing-graph-integrity).
 
 ---
 

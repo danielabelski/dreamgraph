@@ -92,13 +92,14 @@ describe("Phase 4 #8 — tension resolution lifecycle", () => {
 
     const stats = await engine.getResolutionPipelineStats();
     expect(stats.pending_candidates).toBe(1);
-    // missing_link → merge per heuristic.
-    expect(stats.by_strategy.merge).toBe(1);
+    // v8.2.6 — intervention bridge sees phantom entities (not in data_model.json)
+    // and returns a `wont_fix` plan instead of the old keyword-only "merge" guess.
+    expect(stats.by_strategy.wont_fix).toBe(1);
 
     // The high-urgency one should have been picked.
     const tensions = await engine.loadTensions();
     const stamped = tensions.signals.find((s) => s.id === high.id);
-    expect(stamped?.resolution_candidate?.strategy).toBe("merge");
+    expect(stamped?.resolution_candidate?.strategy).toBe("wont_fix");
   });
 
   it("runTensionResolverCycle honours an injected proposer and skips already-stamped tensions", async () => {

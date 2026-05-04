@@ -92,8 +92,16 @@ export function Inspector({ selected, stats, onNavigate }: Props) {
       <p className="inspector-id">{selected.type} · {selected.id}</p>
       <dl className="kv">
         <dt>Degree</dt><dd>{selected.degree}</dd>
-        <dt>Health</dt><dd>{selected.health.toFixed(2)}</dd>
-        <dt>Confidence</dt><dd>{selected.confidence.toFixed(2)}</dd>
+        {selected.type !== "tension" ? (
+          <>
+            <dt>Health</dt><dd>{selected.health.toFixed(2)}</dd>
+          </>
+        ) : null}
+        {selected.type === "dream_node" ? (
+          <>
+            <dt>Confidence</dt><dd>{selected.confidence.toFixed(2)}</dd>
+          </>
+        ) : null}
       </dl>
       {loading ? <p className="inspector-empty">Loading…</p> : null}
       {error ? <p className="inspector-error">{error}</p> : null}
