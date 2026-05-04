@@ -82,6 +82,19 @@ function slugify(s: string): string {
     .replace(/(^-|-$)/g, "");
 }
 
+/**
+ * Escape a value so it can be safely embedded inside a single Markdown
+ * table cell. Order matters: backslashes must be escaped first, otherwise
+ * the substitution sequences for `|` and newlines would be re-escaped.
+ * Also collapses CR/LF to spaces because raw newlines break table rows.
+ */
+function escapeTableCell(input: unknown): string {
+  return String(input ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, " ");
+}
+
 /** Buffer to collect generated files before writing to disk */
 interface FileBuffer {
   path: string;
@@ -606,7 +619,7 @@ async function genUIRegistry(
       idx += "| ID | Name | Status | Superseded By | Reason |\n";
       idx += "|----|------|--------|---------------|--------|\n";
       for (const el of deprecated) {
-        idx += `| [${el.id}](${slugify(el.id)}.md) | ${el.name} | ${getUIElementStatus(el)} | ${el.superseded_by ?? "-"} | ${(el.deprecation_reason ?? "-").replace(/\\/g, "\\\\").replace(/\|/g, "\\|")} |\n`;
+        idx += `| [${el.id}](${slugify(el.id)}.md) | ${el.name} | ${getUIElementStatus(el)} | ${el.superseded_by ?? "-"} | ${escapeTableCell(el.deprecation_reason ?? "-")} |\n`;
       }
       idx += "\n";
     }
@@ -920,7 +933,7 @@ async function genTensions(
     const ents = Array.isArray(s.entities)
       ? (s.entities as string[]).slice(0, 3).join(", ")
       : "-";
-    const desc = String(s.description ?? "").replace(/\|/g, "\\|").slice(0, 120);
+    const desc = escapeTableCell(s.description).slice(0, 120);
     md += `| \`${s.id}\` | ${s.type ?? "-"} | ${Number(s.urgency ?? 0).toFixed(2)} | ${s.domain ?? "-"} | ${ents} | ${desc} |\n`;
   }
   md += "\n";
@@ -933,7 +946,7 @@ async function genTensions(
     md += "|---------|----------|--------|--------|-------------|-----------|\n";
     for (const s of withCandidate) {
       const c = s.resolution_candidate as Record<string, unknown>;
-      const rat = String(c.rationale ?? "").replace(/\|/g, "\\|").slice(0, 120);
+      const rat = escapeTableCell(c.rationale).slice(0, 120);
       md += `| \`${s.id}\` | ${c.strategy ?? "-"} | ${c.source ?? "-"} | ${c.validation_window ?? "-"} | ${c.proposed_at ?? "-"} | ${rat} |\n`;
     }
     md += "\n";
