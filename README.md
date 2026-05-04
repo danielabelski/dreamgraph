@@ -72,7 +72,7 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 - **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, and dream-cycle reasoning
 - **Datastore-as-Hub** — first-class `datastore` entities, live schema introspection (`scan_database`), and the `schema_grounding` dream strategy for multi-repo SaaS projects sharing a backend (set `DATABASE_URL`; inert otherwise)
 
-![DreamGraph Architect with the DreamGraph Explorer in VS Code](assets/3d-explorer-1.png)
+![DreamGraph Explorer in VS Code](assets/explorer-3d-screenshot-3.png)
 
 *DreamGraph Architect with the DreamGraph Explorer in VS Code*
 
