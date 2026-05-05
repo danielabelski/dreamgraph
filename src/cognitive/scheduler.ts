@@ -156,6 +156,53 @@ let hourWindowStart = Date.now();
 let lastRunTimestamp = 0;
 let lastActivityTimestamp = Date.now();
 
+// Schedules currently being executed (outside the file lock). Prevents the
+// next tick from re-claiming a schedule whose long-running action has not yet
+// finished writing back its results. Keyed by schedule.id.
+const inFlightSchedules = new Set<string>();
+
+// Separate mutex key used to serialise cognitive `executeAction` runs.
+// Held independently from the `schedules.json` file lock so that UI calls
+// (updateSchedule / getSchedules / deleteSchedule) are never blocked while
+// an LLM-bound action is in flight. See the lifecycle comment on `tick()`
+// for the full rationale.
+const SCHEDULER_EXEC_LOCK = "scheduler.execution";
+
+/**
+ * Run `executeAction` with a hard wall-clock timeout.
+ *
+ * A misbehaving LLM client or hung HTTP socket can leave a `dream_cycle`
+ * (or any other action) waiting forever. Without this guard, a single hang
+ * silently freezes the scheduler: the cognitive-execution mutex is never
+ * released, every following tick finds it locked, and the next manual
+ * `Run`/`Resume` button waits indefinitely too. The dashboard symptom is
+ * "schedule active, 0 runs, never advances" — exactly what triggered the
+ * bug report.
+ *
+ * On timeout we reject with a descriptive error so the surrounding
+ * try/catch records a failed execution and bumps `error_count`. The
+ * underlying action promise is left to settle on its own; we cannot truly
+ * cancel a Node Promise, but we no longer wait for it.
+ */
+async function executeActionWithTimeout(schedule: DreamSchedule): Promise<string> {
+  const timeoutMs = Math.max(1_000, config.execution_timeout_ms);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(
+        `executeAction timeout after ${timeoutMs}ms ` +
+        `(schedule="${schedule.name}", action=${schedule.action})`
+      ));
+    }, timeoutMs);
+    if (timer && typeof timer === "object" && "unref" in timer) timer.unref();
+  });
+  try {
+    return await Promise.race([executeAction(schedule), timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Schedule File I/O
 // ---------------------------------------------------------------------------
@@ -608,82 +655,179 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
 
 // ---------------------------------------------------------------------------
 // Tick Loop
+//
+// The scheduler must remain UI-responsive even while a long-running cognitive
+// action (dream_cycle, nightmare_cycle, metacognitive_analysis, …) is
+// executing. Many actions make LLM calls that take tens of seconds.
+//
+// Lock discipline:
+//   1. Phase 1 — short `schedules.json` lock to read the file, pick due
+//      schedules, mark them as "claimed" (advance last_run_at + run_count,
+//      add to in-flight set), and write the file back. The lock is released
+//      before any cognitive work starts.
+//   2. Phase 2 — `executeAction` runs without the file lock, serialised by
+//      a separate `scheduler.execution` mutex so that two cognitive actions
+//      do not race on shared engine state.
+//   3. Phase 3 — short `schedules.json` lock to write back the execution
+//      result (success/error, summary, error streak, history append).
+//
+// This means UI calls that only touch the JSON (`updateSchedule`,
+// `deleteSchedule`, `getSchedules`) acquire the file lock for milliseconds
+// even while a 30 s LLM call is in flight.
 // ---------------------------------------------------------------------------
 
+/** Snapshot of a schedule claimed by phase 1, used by phase 2/3. */
+interface ScheduleClaim {
+  scheduleId: string;
+  scheduleName: string;
+  action: ScheduleAction;
+  startTime: number;
+  /** Frozen copy used by executeAction so it sees stable parameters. */
+  schedule: DreamSchedule;
+}
+
 async function tick(): Promise<void> {
-  await withFileLock("schedules.json", async () => {
+  // -------- Phase 1: claim due schedules under the file lock --------
+  const claims = await withFileLock("schedules.json", async () => {
     const now = Date.now();
     const file = await loadScheduleFile();
+    const out: ScheduleClaim[] = [];
 
-    const dueSchedules = file.schedules.filter((s) => isDue(s, now));
-
-    for (const schedule of dueSchedules) {
+    for (const schedule of file.schedules) {
+      if (inFlightSchedules.has(schedule.id)) continue;
+      if (!isDue(schedule, now)) continue;
       if (!canRunSchedule(schedule)) continue;
 
-      const startTime = Date.now();
-      let resultSummary = "";
-      let success = true;
-      let errorMsg: string | undefined;
+      // Reserve the schedule: advance last_run_at so subsequent ticks see it
+      // as not-due, bump the in-flight set so even an interval shorter than
+      // the action duration cannot re-claim it. The actual run_count and
+      // execution record are written back in phase 3.
+      schedule.last_run_at = new Date(now).toISOString();
+      schedule.updated_at = schedule.last_run_at;
+      computeNextRun(schedule);
+      inFlightSchedules.add(schedule.id);
 
+      runsThisHour++;
+      lastRunTimestamp = now;
+
+      out.push({
+        scheduleId: schedule.id,
+        scheduleName: schedule.name,
+        action: schedule.action,
+        startTime: now,
+        schedule: { ...schedule },
+      });
+    }
+
+    file.metadata.last_tick = new Date().toISOString();
+    await saveScheduleFile(file);
+    return out;
+  });
+
+  if (claims.length === 0) return;
+
+  // -------- Phase 2 + 3: execute outside the file lock --------
+  for (const claim of claims) {
+    runClaimedSchedule(claim, "exec").catch((err) => {
+      logger.error(`Scheduler runClaimedSchedule unexpected failure: ${err}`);
+    });
+  }
+}
+
+/**
+ * Run a claimed schedule outside the `schedules.json` lock.
+ *
+ * Cognitive actions are serialised globally by SCHEDULER_EXEC_LOCK so they
+ * cannot trample shared engine state. Result write-back briefly re-acquires
+ * the file lock.
+ */
+async function runClaimedSchedule(
+  claim: ScheduleClaim,
+  idPrefix: "exec" | "exec_cycle"
+): Promise<void> {
+  let resultSummary = "";
+  let success = true;
+  let errorMsg: string | undefined;
+
+  try {
+    await withFileLock(SCHEDULER_EXEC_LOCK, async () => {
       try {
-        logger.info(`Scheduler executing: ${schedule.name} (${schedule.action})`);
-        resultSummary = await executeAction(schedule);
-        schedule.error_count = 0;
-        schedule.last_error = null;
+        logger.info(`Scheduler executing: ${claim.scheduleName} (${claim.action})`);
+        resultSummary = await executeActionWithTimeout(claim.schedule);
       } catch (err) {
         success = false;
         errorMsg = err instanceof Error ? err.message : String(err);
         resultSummary = `Error: ${errorMsg}`;
-        schedule.error_count++;
-        schedule.last_error = errorMsg;
-        logger.error(`Scheduler error for ${schedule.name}: ${errorMsg}`);
+        logger.error(`Scheduler error for ${claim.scheduleName}: ${errorMsg}`);
+      }
+    });
+  } finally {
+    // Always run phase 3, even if executeAction threw before completing.
+    try {
+      await writeBackExecution(claim, idPrefix, success, resultSummary, errorMsg);
+    } finally {
+      inFlightSchedules.delete(claim.scheduleId);
+    }
+  }
+}
 
-        // Pause on error streak
+async function writeBackExecution(
+  claim: ScheduleClaim,
+  idPrefix: "exec" | "exec_cycle",
+  success: boolean,
+  resultSummary: string,
+  errorMsg: string | undefined
+): Promise<void> {
+  await withFileLock("schedules.json", async () => {
+    const file = await loadScheduleFile();
+    const schedule = file.schedules.find((s) => s.id === claim.scheduleId);
+    const completedAt = new Date();
+    const duration = completedAt.getTime() - claim.startTime;
+
+    if (schedule) {
+      if (success) {
+        schedule.error_count = 0;
+        schedule.last_error = null;
+      } else {
+        schedule.error_count++;
+        schedule.last_error = errorMsg ?? "unknown error";
         if (schedule.error_count >= config.max_error_streak) {
           schedule.status = "error";
           schedule.enabled = false;
-          logger.warn(`Schedule "${schedule.name}" paused after ${schedule.error_count} consecutive errors`);
+          logger.warn(
+            `Schedule "${schedule.name}" paused after ${schedule.error_count} consecutive errors`
+          );
         }
       }
-
-      const duration = Date.now() - startTime;
-      const execution: ScheduleExecution = {
-        id: `exec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        schedule_id: schedule.id,
-        schedule_name: schedule.name,
-        action: schedule.action,
-        triggered_at: new Date(startTime).toISOString(),
-        completed_at: new Date().toISOString(),
-        duration_ms: duration,
-        success,
-        result_summary: resultSummary,
-        error: errorMsg,
-        ...(getActiveScope() && { instance_uuid: getActiveScope()!.uuid }),
-      };
-
-      // Update schedule metadata
-      schedule.last_run_at = new Date().toISOString();
       schedule.run_count++;
-      schedule.updated_at = new Date().toISOString();
+      schedule.updated_at = completedAt.toISOString();
       computeNextRun(schedule);
 
-      // Check max_runs exhaustion
       if (schedule.max_runs !== null && schedule.run_count >= schedule.max_runs) {
         schedule.status = "exhausted";
         schedule.enabled = false;
       }
-
-      file.executions.push(execution);
-      runsThisHour++;
-      lastRunTimestamp = Date.now();
     }
 
-    // Trim execution history
+    const execution: ScheduleExecution = {
+      id: `${idPrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      schedule_id: claim.scheduleId,
+      schedule_name: claim.scheduleName,
+      action: claim.action,
+      triggered_at: new Date(claim.startTime).toISOString(),
+      completed_at: completedAt.toISOString(),
+      duration_ms: duration,
+      success,
+      result_summary: resultSummary,
+      error: errorMsg,
+      ...(getActiveScope() && { instance_uuid: getActiveScope()!.uuid }),
+    };
+    file.executions.push(execution);
+
     if (file.executions.length > config.max_history) {
       file.executions = file.executions.slice(-config.max_history);
     }
 
-    file.metadata.last_tick = new Date().toISOString();
     await saveScheduleFile(file);
   });
 }
@@ -727,11 +871,16 @@ function computeNextRun(schedule: DreamSchedule): void {
  * Evaluates "after_cycles" schedules.
  */
 export async function notifyCycleComplete(cycleNumber: number): Promise<void> {
-  await withFileLock("schedules.json", async () => {
+  // Same lock discipline as `tick()`: claim cycle-triggered schedules under
+  // the file lock, then run them outside it. See the lifecycle comment on
+  // `tick()` for the rationale.
+  const claims = await withFileLock("schedules.json", async () => {
     const file = await loadScheduleFile();
-    let ran = false;
+    const out: ScheduleClaim[] = [];
+    const now = Date.now();
 
     for (const schedule of file.schedules) {
+      if (inFlightSchedules.has(schedule.id)) continue;
       if (!schedule.enabled || schedule.status !== "active") continue;
       if (schedule.trigger_type !== "after_cycles") continue;
       if (!schedule.cycle_interval) continue;
@@ -741,66 +890,33 @@ export async function notifyCycleComplete(cycleNumber: number): Promise<void> {
       if (cyclesSinceLast < schedule.cycle_interval) continue;
 
       schedule.last_cycle_checked = cycleNumber;
+      schedule.last_run_at = new Date(now).toISOString();
+      schedule.updated_at = schedule.last_run_at;
+      inFlightSchedules.add(schedule.id);
 
-      const startTime = Date.now();
-      let resultSummary = "";
-      let success = true;
-      let errorMsg: string | undefined;
-
-      try {
-        logger.info(`Scheduler (cycle-triggered): ${schedule.name} at cycle ${cycleNumber}`);
-        resultSummary = await executeAction(schedule);
-        schedule.error_count = 0;
-        schedule.last_error = null;
-      } catch (err) {
-        success = false;
-        errorMsg = err instanceof Error ? err.message : String(err);
-        resultSummary = `Error: ${errorMsg}`;
-        schedule.error_count++;
-        schedule.last_error = errorMsg;
-
-        if (schedule.error_count >= config.max_error_streak) {
-          schedule.status = "error";
-          schedule.enabled = false;
-        }
-      }
-
-      const execution: ScheduleExecution = {
-        id: `exec_cycle_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        schedule_id: schedule.id,
-        schedule_name: schedule.name,
-        action: schedule.action,
-        triggered_at: new Date(startTime).toISOString(),
-        completed_at: new Date().toISOString(),
-        duration_ms: Date.now() - startTime,
-        success,
-        result_summary: resultSummary,
-        error: errorMsg,
-        ...(getActiveScope() && { instance_uuid: getActiveScope()!.uuid }),
-      };
-
-      schedule.last_run_at = new Date().toISOString();
-      schedule.run_count++;
-      schedule.updated_at = new Date().toISOString();
-
-      if (schedule.max_runs !== null && schedule.run_count >= schedule.max_runs) {
-        schedule.status = "exhausted";
-        schedule.enabled = false;
-      }
-
-      file.executions.push(execution);
       runsThisHour++;
-      lastRunTimestamp = Date.now();
-      ran = true;
+      lastRunTimestamp = now;
+
+      out.push({
+        scheduleId: schedule.id,
+        scheduleName: schedule.name,
+        action: schedule.action,
+        startTime: now,
+        schedule: { ...schedule },
+      });
     }
 
-    if (ran) {
-      if (file.executions.length > config.max_history) {
-        file.executions = file.executions.slice(-config.max_history);
-      }
+    if (out.length > 0) {
       await saveScheduleFile(file);
     }
+    return out;
   });
+
+  for (const claim of claims) {
+    runClaimedSchedule(claim, "exec_cycle").catch((err) => {
+      logger.error(`Scheduler runClaimedSchedule (cycle) unexpected failure: ${err}`);
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -923,50 +1039,87 @@ export async function deleteSchedule(scheduleId: string): Promise<boolean> {
 }
 
 export async function runScheduleNow(scheduleId: string): Promise<ScheduleExecution> {
-  return withFileLock("schedules.json", async () => {
+  // Phase 1: snapshot the schedule under the file lock and stamp it as
+  // in-flight so a concurrent tick cannot also pick it up. Released before
+  // executeAction starts so UI calls remain responsive even if the action
+  // takes 30+ seconds (LLM round-trip).
+  const snapshot = await withFileLock("schedules.json", async () => {
     const file = await loadScheduleFile();
     const schedule = file.schedules.find((s) => s.id === scheduleId);
     if (!schedule) {
       throw new Error(`Schedule not found: ${scheduleId}`);
     }
+    if (inFlightSchedules.has(scheduleId)) {
+      throw new Error(`Schedule already running: ${schedule.name}`);
+    }
+    inFlightSchedules.add(scheduleId);
+    const claim: ScheduleClaim = {
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      action: schedule.action,
+      startTime: Date.now(),
+      schedule: { ...schedule },
+    };
+    return claim;
+  });
 
-    const startTime = Date.now();
-    let resultSummary = "";
-    let success = true;
-    let errorMsg: string | undefined;
+  // Phase 2: execute under the cognitive-execution mutex (no file lock).
+  let resultSummary = "";
+  let success = true;
+  let errorMsg: string | undefined;
 
-    try {
-      logger.info(`Scheduler (forced): ${schedule.name} (${schedule.action})`);
-      resultSummary = await executeAction(schedule);
-      schedule.error_count = 0;
-      schedule.last_error = null;
-    } catch (err) {
-      success = false;
-      errorMsg = err instanceof Error ? err.message : String(err);
-      resultSummary = `Error: ${errorMsg}`;
-      schedule.error_count++;
-      schedule.last_error = errorMsg;
+  try {
+    await withFileLock(SCHEDULER_EXEC_LOCK, async () => {
+      try {
+        logger.info(`Scheduler (forced): ${snapshot.scheduleName} (${snapshot.action})`);
+        resultSummary = await executeActionWithTimeout(snapshot.schedule);
+      } catch (err) {
+        success = false;
+        errorMsg = err instanceof Error ? err.message : String(err);
+        resultSummary = `Error: ${errorMsg}`;
+      }
+    });
+  } finally {
+    inFlightSchedules.delete(scheduleId);
+  }
+
+  // Phase 3: write the execution record back. We rebuild the execution
+  // object here (rather than relying on writeBackExecution) so we can return
+  // the manual-execution id with its `_manual_` infix, preserving the
+  // public surface of this function.
+  return withFileLock("schedules.json", async () => {
+    const file = await loadScheduleFile();
+    const schedule = file.schedules.find((s) => s.id === scheduleId);
+    const completedAt = new Date();
+    const duration = completedAt.getTime() - snapshot.startTime;
+
+    if (schedule) {
+      if (success) {
+        schedule.error_count = 0;
+        schedule.last_error = null;
+      } else {
+        schedule.error_count++;
+        schedule.last_error = errorMsg ?? "unknown error";
+      }
+      schedule.last_run_at = completedAt.toISOString();
+      schedule.run_count++;
+      schedule.updated_at = completedAt.toISOString();
+      computeNextRun(schedule);
     }
 
     const execution: ScheduleExecution = {
       id: `exec_manual_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      schedule_id: schedule.id,
-      schedule_name: schedule.name,
-      action: schedule.action,
-      triggered_at: new Date(startTime).toISOString(),
-      completed_at: new Date().toISOString(),
-      duration_ms: Date.now() - startTime,
+      schedule_id: snapshot.scheduleId,
+      schedule_name: snapshot.scheduleName,
+      action: snapshot.action,
+      triggered_at: new Date(snapshot.startTime).toISOString(),
+      completed_at: completedAt.toISOString(),
+      duration_ms: duration,
       success,
       result_summary: resultSummary,
       error: errorMsg,
       ...(getActiveScope() && { instance_uuid: getActiveScope()!.uuid }),
     };
-
-    schedule.last_run_at = new Date().toISOString();
-    schedule.run_count++;
-    schedule.updated_at = new Date().toISOString();
-    computeNextRun(schedule);
-
     file.executions.push(execution);
 
     if (file.executions.length > config.max_history) {
@@ -1039,6 +1192,16 @@ export function startScheduler(cfg?: Partial<SchedulerConfig>): void {
   if (tickTimer && typeof tickTimer === "object" && "unref" in tickTimer) {
     tickTimer.unref();
   }
+
+  // Fire an immediate tick on startup so overdue schedules pick up promptly
+  // after a daemon restart (otherwise they would idle for up to one full
+  // tick_interval_ms before evaluation). Queued, not awaited — startScheduler
+  // must remain synchronous from the caller's perspective.
+  setImmediate(() => {
+    tick().catch((err) => {
+      logger.error(`Scheduler initial tick error: ${err}`);
+    });
+  });
 
   const instanceTag = getActiveScope() ? ` [${getActiveScope()!.uuid.slice(0, 8)}]` : "";
   logger.info(

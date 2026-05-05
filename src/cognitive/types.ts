@@ -2151,6 +2151,13 @@ export interface SchedulerConfig {
   max_history: number;
   /** Max consecutive errors before a schedule is paused (default 3) */
   max_error_streak: number;
+  /**
+   * Hard ceiling on a single executeAction call (default 600_000 = 10 min).
+   * Prevents a hung LLM/network call from holding the cognitive-execution
+   * mutex forever and freezing the scheduler. On timeout the run is recorded
+   * as a failed execution and the action's error_count is incremented.
+   */
+  execution_timeout_ms: number;
 }
 
 export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
@@ -2163,6 +2170,7 @@ export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
   nightmare_cooldown_ms: Number(process.env.DG_SCHEDULER_NIGHTMARE_COOLDOWN) || 300_000,
   max_history: Number(process.env.DG_SCHEDULER_MAX_HISTORY) || 500,
   max_error_streak: Number(process.env.DG_SCHEDULER_MAX_ERROR_STREAK) || 3,
+  execution_timeout_ms: Number(process.env.DG_SCHEDULER_EXEC_TIMEOUT) || 600_000,
 };
 
 // ===========================================================================
