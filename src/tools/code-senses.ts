@@ -961,5 +961,425 @@ export function registerCodeSensesTools(server: McpServer): void {
     }
   );
 
-  logger.info("Registered 7 code-senses tools (list_directory, read_source_code, create_file, edit_file, delete_file, rename_file, edit_entity)");
+  // =========================================================================
+  // patch_file — Apply multiple find-and-replace edits to a single file atomically
+  // =========================================================================
+  server.tool(
+    "patch_file",
+    "Apply multiple find-and-replace edits to a single file in one atomic operation. " +
+      "Each edit is `{ old_text, new_text }` and is applied sequentially in the order given. " +
+      "If ANY edit fails (no match, ambiguous match, write error) the file is left unchanged. " +
+      "Strongly preferred over multiple `edit_file` calls when patching large markdown plans, " +
+      "design docs, or any file with ≥3 edits in the same pass — it cuts payload overhead " +
+      "(no repeated file context) and guarantees all-or-nothing semantics.",
+    {
+      filePath: z
+        .string()
+        .describe(
+          "File path relative to the repository root or an absolute path inside a configured repo."
+        ),
+      edits: z
+        .array(
+          z.object({
+            old_text: z
+              .string()
+              .describe(
+                "Exact text to find. Must match exactly one location at the moment this edit " +
+                  "is applied (i.e., after all earlier edits in this batch). Include 3-5 lines " +
+                  "of surrounding context to ensure uniqueness."
+              ),
+            new_text: z
+              .string()
+              .describe("Replacement text. Empty string deletes the match."),
+          })
+        )
+        .min(1)
+        .describe("Array of edits applied sequentially. All-or-nothing."),
+      repo: z.string().optional().describe(repoDesc),
+    },
+    async ({ filePath: reqPath, edits, repo }) => {
+      logger.debug(
+        `patch_file called: filePath="${reqPath}", edits=${edits.length}, repo="${repo ?? "(auto)"}"`
+      );
+
+      const result = await safeExecute<string>(
+        async (): Promise<ToolResponse<string>> => {
+          let safePath: string;
+
+          if (repo) {
+            const repoRootRaw = config.repos[repo];
+            if (!repoRootRaw) {
+              const available = Object.keys(config.repos).join(", ");
+              return error(
+                "INVALID_REPO",
+                `Repo "${repo}" not found. Available repos: ${available}`
+              );
+            }
+            const repoRoot = path.resolve(repoRootRaw);
+            const abs = path.resolve(repoRoot, reqPath);
+            if (!abs.toLowerCase().startsWith(repoRoot.toLowerCase())) {
+              return error("ACCESS_DENIED", `Path '${reqPath}' escapes repo "${repo}" root.`);
+            }
+            safePath = abs;
+          } else {
+            try {
+              safePath = resolveSafePath(reqPath);
+            } catch (err) {
+              return error("ACCESS_DENIED", err instanceof Error ? err.message : String(err));
+            }
+          }
+
+          let content: string;
+          try {
+            content = await fs.readFile(safePath, "utf-8");
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return error("READ_ERROR", `Cannot read file: ${msg}`);
+          }
+
+          const fileUsesCRLF = content.includes("\r\n");
+          let working = content.replace(/\r\n/g, "\n");
+          const startSize = content.length;
+          let totalLinesChanged = 0;
+
+          for (let i = 0; i < edits.length; i++) {
+            const { old_text, new_text } = edits[i];
+            const normOld = old_text.replace(/\r\n/g, "\n");
+            const normNew = new_text.replace(/\r\n/g, "\n");
+            const occurrences = working.split(normOld).length - 1;
+            if (occurrences === 0) {
+              return error(
+                "EDIT_NOT_FOUND",
+                `Edit #${i + 1}/${edits.length}: old_text not found in file (after ${i} prior edit(s) applied). ` +
+                  "No changes written. Check whitespace/indentation and remember that earlier edits in this batch may have altered surrounding context."
+              );
+            }
+            if (occurrences > 1) {
+              return error(
+                "EDIT_AMBIGUOUS",
+                `Edit #${i + 1}/${edits.length}: old_text matches ${occurrences} locations. ` +
+                  "No changes written. Add more context to make it unique."
+              );
+            }
+            working = working.replace(normOld, normNew);
+            totalLinesChanged += old_text.split("\n").length;
+          }
+
+          let finalContent = working;
+          if (fileUsesCRLF) {
+            finalContent = finalContent.replace(/\n/g, "\r\n");
+          }
+
+          try {
+            await fs.writeFile(safePath, finalContent, "utf-8");
+            return success(
+              `Patched ${safePath}: applied ${edits.length} edit(s), ${totalLinesChanged} line(s) replaced. ` +
+                `File size: ${startSize} → ${finalContent.length} bytes.`
+            );
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return error("WRITE_ERROR", `Error writing file: ${msg}`);
+          }
+        }
+      );
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  // =========================================================================
+  // append_to_file — Append (or prepend) content to an existing file without echoing it
+  // =========================================================================
+  server.tool(
+    "append_to_file",
+    "Append content to the end of an existing file (or prepend to the start). " +
+      "Use this instead of `edit_file` when adding a new section, a new entry, or a new " +
+      "block at the boundary of a file — it avoids the round-trip cost of echoing the " +
+      "anchor block as old_text.",
+    {
+      filePath: z
+        .string()
+        .describe("File path relative to the repository root or an absolute path."),
+      content: z.string().describe("Text to insert."),
+      position: z
+        .enum(["end", "start"])
+        .optional()
+        .default("end")
+        .describe("Where to insert: 'end' (default) appends, 'start' prepends."),
+      ensure_leading_newline: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe(
+          "When true (default) and appending to a file that does not end with a newline, " +
+            "insert a newline before `content`. When prepending, insert a trailing newline " +
+            "between `content` and the existing file body if missing."
+        ),
+      repo: z.string().optional().describe(repoDesc),
+    },
+    async ({ filePath: reqPath, content: addition, position, ensure_leading_newline, repo }) => {
+      logger.debug(
+        `append_to_file called: filePath="${reqPath}", position="${position}", repo="${repo ?? "(auto)"}"`
+      );
+
+      const result = await safeExecute<string>(
+        async (): Promise<ToolResponse<string>> => {
+          let safePath: string;
+
+          if (repo) {
+            const repoRootRaw = config.repos[repo];
+            if (!repoRootRaw) {
+              const available = Object.keys(config.repos).join(", ");
+              return error(
+                "INVALID_REPO",
+                `Repo "${repo}" not found. Available repos: ${available}`
+              );
+            }
+            const repoRoot = path.resolve(repoRootRaw);
+            const abs = path.resolve(repoRoot, reqPath);
+            if (!abs.toLowerCase().startsWith(repoRoot.toLowerCase())) {
+              return error("ACCESS_DENIED", `Path '${reqPath}' escapes repo "${repo}" root.`);
+            }
+            safePath = abs;
+          } else {
+            try {
+              safePath = resolveSafePath(reqPath);
+            } catch (err) {
+              return error("ACCESS_DENIED", err instanceof Error ? err.message : String(err));
+            }
+          }
+
+          let content: string;
+          try {
+            content = await fs.readFile(safePath, "utf-8");
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return error("READ_ERROR", `Cannot read file: ${msg}`);
+          }
+
+          const useCRLF = content.includes("\r\n");
+          const nl = useCRLF ? "\r\n" : "\n";
+          let normalizedAddition = addition.replace(/\r\n/g, "\n");
+          if (useCRLF) normalizedAddition = normalizedAddition.replace(/\n/g, "\r\n");
+
+          let newContent: string;
+          if (position === "start") {
+            const sep =
+              ensure_leading_newline && content.length > 0 && !normalizedAddition.endsWith(nl)
+                ? nl
+                : "";
+            newContent = normalizedAddition + sep + content;
+          } else {
+            const sep =
+              ensure_leading_newline && content.length > 0 && !content.endsWith(nl) ? nl : "";
+            newContent = content + sep + normalizedAddition;
+          }
+
+          try {
+            await fs.writeFile(safePath, newContent, "utf-8");
+            return success(
+              `Appended ${normalizedAddition.length} byte(s) to ${safePath} at position="${position}". ` +
+                `File size: ${content.length} → ${newContent.length} bytes.`
+            );
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return error("WRITE_ERROR", `Error writing file: ${msg}`);
+          }
+        }
+      );
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  // =========================================================================
+  // edit_markdown_section — Replace the body of a markdown section by heading
+  // =========================================================================
+  server.tool(
+    "edit_markdown_section",
+    "Replace the body of a markdown section identified by its heading. " +
+      "Locates a heading line (e.g. `## Introduction`) and replaces every line after it " +
+      "up to (but not including) the next heading at the same or higher level. The heading " +
+      "line itself is preserved unless `include_heading=true`. " +
+      "Strongly preferred over `edit_file` for rewriting whole sections of plans/docs — " +
+      "no need to echo the section's existing body as old_text.",
+    {
+      filePath: z
+        .string()
+        .describe("File path relative to the repository root or an absolute path."),
+      heading: z
+        .string()
+        .describe(
+          "Heading text to match (without leading `#` markers and without trailing whitespace). " +
+            "Match is exact and case-sensitive against the line after the `#` marker(s) and one space."
+        ),
+      level: z
+        .number()
+        .int()
+        .min(1)
+        .max(6)
+        .optional()
+        .describe(
+          "Heading level (1-6). When omitted, the first heading at any level whose text matches is used."
+        ),
+      new_body: z
+        .string()
+        .describe(
+          "New body for the section. Should NOT include the heading line unless include_heading=true. " +
+            "Leading/trailing newlines are normalized."
+        ),
+      include_heading: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "When true, the heading line itself is also replaced (so `new_body` must include the new heading). Default false."
+        ),
+      occurrence: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .default(1)
+        .describe(
+          "Which matching heading to target when multiple sections share the same heading. 1-based. Default 1 (first match)."
+        ),
+      repo: z.string().optional().describe(repoDesc),
+    },
+    async ({
+      filePath: reqPath,
+      heading,
+      level,
+      new_body,
+      include_heading,
+      occurrence,
+      repo,
+    }) => {
+      logger.debug(
+        `edit_markdown_section called: filePath="${reqPath}", heading="${heading}", level=${level ?? "any"}, occurrence=${occurrence}, repo="${repo ?? "(auto)"}"`
+      );
+
+      const result = await safeExecute<string>(
+        async (): Promise<ToolResponse<string>> => {
+          let safePath: string;
+
+          if (repo) {
+            const repoRootRaw = config.repos[repo];
+            if (!repoRootRaw) {
+              const available = Object.keys(config.repos).join(", ");
+              return error(
+                "INVALID_REPO",
+                `Repo "${repo}" not found. Available repos: ${available}`
+              );
+            }
+            const repoRoot = path.resolve(repoRootRaw);
+            const abs = path.resolve(repoRoot, reqPath);
+            if (!abs.toLowerCase().startsWith(repoRoot.toLowerCase())) {
+              return error("ACCESS_DENIED", `Path '${reqPath}' escapes repo "${repo}" root.`);
+            }
+            safePath = abs;
+          } else {
+            try {
+              safePath = resolveSafePath(reqPath);
+            } catch (err) {
+              return error("ACCESS_DENIED", err instanceof Error ? err.message : String(err));
+            }
+          }
+
+          let content: string;
+          try {
+            content = await fs.readFile(safePath, "utf-8");
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return error("READ_ERROR", `Cannot read file: ${msg}`);
+          }
+
+          const useCRLF = content.includes("\r\n");
+          const lines = content.replace(/\r\n/g, "\n").split("\n");
+
+          // Match heading lines: ^(#{1,6}) <text>$  (text trimmed for compare).
+          // If `level` is provided, match exactly that level; otherwise any 1-6.
+          let matchesSeen = 0;
+          let headingIdx = -1;
+          let headingLevel = -1;
+          for (let i = 0; i < lines.length; i++) {
+            const m = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[i]);
+            if (!m) continue;
+            const lvl = m[1].length;
+            const txt = m[2].trim();
+            if (level !== undefined && lvl !== level) continue;
+            if (txt !== heading) continue;
+            matchesSeen++;
+            if (matchesSeen === occurrence) {
+              headingIdx = i;
+              headingLevel = lvl;
+              break;
+            }
+          }
+
+          if (headingIdx === -1) {
+            return error(
+              "HEADING_NOT_FOUND",
+              `Heading "${heading}"${level ? ` at level ${level}` : ""} occurrence #${occurrence} ` +
+                `not found in ${reqPath}. Found ${matchesSeen} matching heading(s) total.`
+            );
+          }
+
+          // Find end: next heading with level <= headingLevel
+          let endIdx = lines.length; // exclusive
+          for (let i = headingIdx + 1; i < lines.length; i++) {
+            const m = /^(#{1,6})\s+\S/.exec(lines[i]);
+            if (m && m[1].length <= headingLevel) {
+              endIdx = i;
+              break;
+            }
+          }
+
+          const replaceStart = include_heading ? headingIdx : headingIdx + 1;
+          const before = lines.slice(0, replaceStart);
+          const after = lines.slice(endIdx);
+
+          // Normalize new_body: split into lines, strip a single leading blank if present,
+          // ensure exactly one trailing blank line before the next heading (unless EOF).
+          let bodyLines = new_body.replace(/\r\n/g, "\n").split("\n");
+          // Strip leading empty lines (caller may have written a blank line for readability)
+          while (bodyLines.length > 0 && bodyLines[0] === "") bodyLines.shift();
+          // Strip trailing empty lines, then add exactly one blank if there is content after
+          while (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === "") bodyLines.pop();
+          if (after.length > 0 && bodyLines.length > 0) {
+            bodyLines.push("");
+          }
+
+          const oldBodyLineCount = endIdx - replaceStart;
+          const newLines = [...before, ...bodyLines, ...after];
+          let newContent = newLines.join("\n");
+          if (useCRLF) newContent = newContent.replace(/\n/g, "\r\n");
+
+          try {
+            await fs.writeFile(safePath, newContent, "utf-8");
+            return success(
+              `Replaced section "${heading}" (level ${headingLevel}, occurrence ${occurrence}) in ${reqPath}: ` +
+                `${oldBodyLineCount} line(s) → ${bodyLines.length} line(s). ` +
+                `File size: ${content.length} → ${newContent.length} bytes.`
+            );
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return error("WRITE_ERROR", `Error writing file: ${msg}`);
+          }
+        }
+      );
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  logger.info(
+    "Registered 10 code-senses tools (list_directory, read_source_code, create_file, edit_file, delete_file, rename_file, edit_entity, patch_file, append_to_file, edit_markdown_section)"
+  );
 }

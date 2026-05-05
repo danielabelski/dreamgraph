@@ -460,6 +460,30 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
     requires_plan_entry: true,
     requires_audit_trail: true,
   },
+  {
+    tool_name: "patch_file",
+    tool_class: "file_operation",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "append_to_file",
+    tool_class: "file_operation",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "edit_markdown_section",
+    tool_class: "file_operation",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
 
   // =====================================================================
   // COGNITIVE TOOLS — DreamGraph internal only (11 tools)
