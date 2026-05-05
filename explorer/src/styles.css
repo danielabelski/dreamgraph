@@ -99,6 +99,52 @@ html, body, #root {
     radial-gradient(ellipse at 50% 50%, #11151b 0%, #06080b 100%);
   overflow: hidden;
 }
+/*
+ * Wrapper that hosts the active canvas (2D or 3D) plus persistent
+ * overlay controls (e.g. snapshot-refresh). Sits in the center grid
+ * column and forces the inner .canvas-wrap to fill it so the overlay
+ * can position relative to the visible canvas region.
+ */
+.canvas-host {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+.canvas-host > .canvas-wrap {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+/*
+ * Snapshot refresh overlay. Style mirrors the 3D camera glyph injected
+ * imperatively in Graph3DCanvas: 30x30 translucent square, monochrome
+ * stroke icon, low resting opacity that lifts on hover. Offset 50px
+ * from the right so it sits to the left of the camera glyph in 3D mode
+ * and stands alone in 2D mode.
+ */
+.overlay-refresh {
+  position: absolute;
+  top: 12px;
+  right: 50px;
+  z-index: 6;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #cdd9ee;
+  background: rgba(8, 12, 18, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 120ms ease;
+  padding: 0;
+}
+.overlay-refresh:hover { opacity: 0.9; }
+.overlay-refresh:focus-visible { opacity: 0.9; outline: 1px solid #7aa2ff; }
 .canvas-wrap::after {
   /* Subtle vignette on top of the canvas — gives the scene depth without
      fighting WebGL pixel content. pointer-events:none keeps it inert. */
@@ -368,6 +414,23 @@ html, body, #root {
   box-shadow: 0 0 6px rgba(93, 210, 196, 0.6);
 }
 .event-dock-title { flex: 1; font-weight: 500; }
+.event-dock-hidden {
+  color: var(--fg-dim);
+  font-weight: 400;
+  font-size: 10px;
+  margin-left: 6px;
+}
+.event-dock-cache-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  user-select: none;
+  padding: 0 6px;
+}
+.event-dock-cache-toggle input { margin: 0; cursor: pointer; }
 .event-dock-chevron { color: var(--fg-dim); }
 .event-dock-list {
   list-style: none;

@@ -6,7 +6,7 @@
  * at the top.
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { GraphEvent, GraphEventKind } from "./sse";
 
 interface Props {
@@ -38,8 +38,28 @@ const KIND_LABELS: Record<GraphEventKind, string> = {
   "audit.appended": "audit",
 };
 
+const SHOW_CACHE_KEY = "dg.explorer.eventDock.showCache";
+
 export function EventDock({ events, connected }: Props): JSX.Element {
   const [open, setOpen] = useState(true);
+  // Cache invalidation events are extremely chatty (they fire on every
+  // minor data write) and drown the more interesting cognitive events,
+  // so they are hidden by default. The checkbox in the header lets the
+  // operator surface them when debugging cache behaviour.
+  const [showCache, setShowCache] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(SHOW_CACHE_KEY) === "1";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SHOW_CACHE_KEY, showCache ? "1" : "0");
+  }, [showCache]);
+
+  const visibleEvents = useMemo(
+    () => (showCache ? events : events.filter((e) => e.kind !== "cache.invalidated")),
+    [events, showCache]
+  );
+  const hiddenCacheCount = events.length - visibleEvents.length;
 
   return (
     <div className={`event-dock${open ? " open" : " collapsed"}`}>
@@ -50,16 +70,31 @@ export function EventDock({ events, connected }: Props): JSX.Element {
       >
         <span className={`event-dock-led${connected ? " on" : " off"}`} />
         <span className="event-dock-title">
-          live events {events.length > 0 ? `(${events.length})` : ""}
+          live events {visibleEvents.length > 0 ? `(${visibleEvents.length})` : ""}
+          {!showCache && hiddenCacheCount > 0 ? (
+            <span className="event-dock-hidden"> · {hiddenCacheCount} cache hidden</span>
+          ) : null}
         </span>
+        <label
+          className="event-dock-cache-toggle"
+          title="Show high-volume cache.invalidated events"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={showCache}
+            onChange={(e) => setShowCache(e.target.checked)}
+          />
+          cache
+        </label>
         <span className="event-dock-chevron">{open ? "▾" : "▴"}</span>
       </button>
       {open ? (
         <ul className="event-dock-list">
-          {events.length === 0 ? (
+          {visibleEvents.length === 0 ? (
             <li className="event-dock-empty">no events yet — waiting for the engine…</li>
           ) : (
-            events.map((ev) => (
+            visibleEvents.map((ev) => (
               <li key={ev.seq} className="event-dock-item">
                 <span
                   className="event-dock-kind"

@@ -257,45 +257,76 @@ export function App() {
         aria-orientation="vertical"
       />
 
-      {snapshot ? (
-        prefs.renderMode === "3d" && !render3dError ? (
-          <Suspense
-            fallback={
-              <div className="canvas-wrap">
-                <div className="status">loading 3D renderer…</div>
-              </div>
-            }
-          >
-            <Graph3DCanvas
-              prefs={prefs}
+      <div className="canvas-host">
+        {snapshot ? (
+          prefs.renderMode === "3d" && !render3dError ? (
+            <Suspense
+              fallback={
+                <div className="canvas-wrap">
+                  <div className="status">loading 3D renderer…</div>
+                </div>
+              }
+            >
+              <Graph3DCanvas
+                prefs={prefs}
+                snapshot={snapshot}
+                selected={selected}
+                onSelect={setSelected}
+                liveEvents={liveEvents}
+                filters={filters}
+                onFatal={(msg) => {
+                  setRender3dError(msg);
+                  setRenderMode("2d");
+                }}
+              />
+            </Suspense>
+          ) : (
+            <GraphCanvas
               snapshot={snapshot}
-              selected={selected}
               onSelect={setSelected}
-              liveEvents={liveEvents}
               filters={filters}
-              onFatal={(msg) => {
-                setRender3dError(msg);
-                setRenderMode("2d");
-              }}
+              mode={mode}
+              selected={selected}
+              pulses={pulses}
             />
-          </Suspense>
+          )
         ) : (
-          <GraphCanvas
-            snapshot={snapshot}
-            onSelect={setSelected}
-            filters={filters}
-            mode={mode}
-            selected={selected}
-            pulses={pulses}
-          />
-        )
-      ) : (
-        <div className="canvas-wrap">
-          <div className="status">
-            {error || versionError ? "snapshot unavailable" : "loading snapshot…"}
+          <div className="canvas-wrap">
+            <div className="status">
+              {error || versionError ? "snapshot unavailable" : "loading snapshot…"}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+        {/*
+         * Snapshot refresh overlay. Mirrors the 3D camera button in
+         * Graph3DCanvas (top-right, translucent monochrome glyph, hover
+         * fade-up). VS Code webviews cannot be hard-refreshed by the
+         * user, so this gives an explicit re-fetch path. Offset to the
+         * left of the camera glyph so both can coexist in 3D mode.
+         */}
+        <button
+          type="button"
+          className="overlay-refresh"
+          onClick={refreshSnapshot}
+          title="Refresh snapshot"
+          aria-label="Refresh snapshot"
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M21 12a9 9 0 1 1-3.5-7.1" />
+            <polyline points="21 4 21 10 15 10" />
+          </svg>
+        </button>
+      </div>
 
       <div
         className={`resizer${dragging === "right" ? " dragging" : ""}`}
