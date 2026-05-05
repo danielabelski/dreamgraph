@@ -19,6 +19,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import { engine } from "./engine.js";
@@ -338,7 +339,7 @@ export async function checkTensionThresholds(): Promise<EventLogEntry | null> {
   recordAutoTrigger();
 
   const event: CognitiveEvent = {
-    id: `auto_tension_${Date.now()}`,
+    id: `auto_tension_${randomUUID()}`,
     source: "tension_threshold",
     severity: mostUrgent.urgency > 0.9 ? "critical" : "high",
     timestamp: new Date().toISOString(),

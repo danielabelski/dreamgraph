@@ -46,6 +46,26 @@ export type DreamStrategy =
   | "schema_grounding"
   | "all";
 
+/**
+ * Canonical list of every concrete dream strategy (excluding the omnibus
+ * "all" alias). Single source of truth — when adding a new strategy, append
+ * here so metacognition, scheduler, and adaptive selection see it.
+ */
+export const ALL_DREAM_STRATEGIES_NON_ALL: ReadonlyArray<Exclude<DreamStrategy, "all">> = [
+  "gap_detection",
+  "weak_reinforcement",
+  "cross_domain",
+  "missing_abstraction",
+  "symmetry_completion",
+  "tension_directed",
+  "reflective",
+  "causal_replay",
+  "pgo_wave",
+  "llm_dream",
+  "orphan_bridging",
+  "schema_grounding",
+] as const;
+
 /** Adversarial dream strategies (used in NIGHTMARE state) */
 export type AdversarialStrategy =
   | "privilege_escalation"
@@ -402,6 +422,8 @@ export interface ValidationResult {
   validated_at: string;
   /** Which normalization pass */
   normalization_cycle: number;
+  /** Strategy that originally generated the validated dream artifact (v8.3+). */
+  strategy?: DreamStrategy;
 }
 
 /** Candidate edges file structure */
@@ -458,6 +480,8 @@ export interface ValidatedEdge {
   normalization_cycle: number;
   /** ISO 8601 */
   validated_at: string;
+  /** Strategy that originally generated the underlying dream edge (v8.3+). */
+  strategy?: DreamStrategy;
 }
 
 /** Validated edges file structure */
@@ -670,6 +694,13 @@ export interface DreamHistoryEntry {
   tensions_decayed: number;
   /** Resolved tensions reactivated by contradictory evidence */
   tensions_reactivated?: number;
+  /**
+   * Per-substrategy edge counts when `strategy === "all"` (v8.3+).
+   * Lets metacognition attribute yield to individual strategies even when
+   * the cycle ran the omnibus "all" plan. Keys are `DreamStrategy` values
+   * (excluding "all"). Absent on legacy entries.
+   */
+  per_strategy_yields?: Record<string, number>;
 }
 
 export interface DreamHistoryFile {
@@ -1432,6 +1463,12 @@ export interface DreamArchetype {
   /** How many times this archetype has been validated across instances */
   times_validated: number;
   created_at: string;
+  /**
+   * Strategy that originally produced the validated edge this archetype
+   * abstracts (v8.3+). Carried across federation so importing instances can
+   * tell whether a pattern came from `llm_dream`, `pgo_wave`, etc.
+   */
+  strategy?: DreamStrategy;
 }
 
 /** Configuration for federated dream exchange */
@@ -1831,6 +1868,10 @@ export interface MetaLogEntry {
   id: string;
   timestamp: string;
   cycle_window: [number, number];
+  /** Number of dream sessions actually analyzed (post window-trim). */
+  window_size?: number;
+  /** Effective promotion config in force when the analysis ran (v8.3+). */
+  effective_config?: PromotionConfig;
   strategy_metrics: StrategyMetrics[];
   threshold_recommendations: ThresholdRecommendation[];
   domain_decay_profiles: DomainDecayProfile[];

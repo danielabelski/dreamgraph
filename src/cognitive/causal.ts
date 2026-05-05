@@ -15,6 +15,7 @@
  * READ-ONLY against the Fact Graph. Writes only to dream space.
  */
 
+import { randomUUID } from "node:crypto";
 import { engine } from "./engine.js";
 import { logger } from "../utils/logger.js";
 import type {
@@ -23,8 +24,6 @@ import type {
   CausalInsights,
   DreamEdge,
   DreamHistoryEntry,
-  TensionSignal,
-  ResolvedTension,
 } from "./types.js";
 import { DEFAULT_DECAY } from "./types.js";
 
@@ -35,6 +34,8 @@ import { DEFAULT_DECAY } from "./types.js";
 interface TensionEvent {
   entity: string;
   cycle: number;
+  /** Real ISO timestamp the underlying tension was first/last seen. */
+  timestamp_iso: string;
   urgency: number;
   type: string;
   domain: string;
@@ -42,8 +43,54 @@ interface TensionEvent {
 }
 
 /**
+ * Build an ascending `(timestamp_ms, cycle_number)` index from dream history
+ * so we can map any ISO timestamp back to the cycle in which it most likely
+ * occurred. Used by `cycleFromIso` below.
+ */
+function buildHistoryIndex(
+  sessions: DreamHistoryEntry[],
+): Array<{ ts: number; cycle: number }> {
+  const idx: Array<{ ts: number; cycle: number }> = [];
+  for (const s of sessions) {
+    const ts = Date.parse(s.timestamp);
+    if (Number.isFinite(ts)) idx.push({ ts, cycle: s.cycle_number });
+  }
+  idx.sort((a, b) => a.ts - b.ts);
+  return idx;
+}
+
+/**
+ * Map an ISO timestamp to the cycle number whose session timestamp is the
+ * nearest predecessor (or the earliest cycle if the timestamp is older than
+ * any recorded session). Falls back to `latestCycle` for malformed input.
+ */
+function cycleFromIso(
+  iso: string | undefined,
+  index: Array<{ ts: number; cycle: number }>,
+  latestCycle: number,
+): number {
+  if (!iso) return latestCycle;
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts) || index.length === 0) return latestCycle;
+  if (ts <= index[0].ts) return index[0].cycle;
+  if (ts >= index[index.length - 1].ts) return index[index.length - 1].cycle;
+  // Binary search for the largest entry with ts <= target
+  let lo = 0;
+  let hi = index.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (index[mid].ts <= ts) lo = mid;
+    else hi = mid - 1;
+  }
+  return index[lo].cycle;
+}
+
+/**
  * Extract a timeline of tension events from history + tension log.
  * Each event records: which entity was troubled, when, and how urgently.
+ *
+ * Cycles are derived from real ISO timestamps on the signals (not from the
+ * remaining-TTL counter, which is meaningless as an "age" indicator).
  */
 async function buildTensionTimeline(): Promise<TensionEvent[]> {
   const [tensionFile, history] = await Promise.all([
@@ -51,16 +98,22 @@ async function buildTensionTimeline(): Promise<TensionEvent[]> {
     engine.loadDreamHistory(),
   ]);
 
+  const index = buildHistoryIndex(history.sessions);
+  const latestCycle =
+    history.sessions.length > 0
+      ? history.sessions[history.sessions.length - 1].cycle_number
+      : 0;
+
   const events: TensionEvent[] = [];
 
-  // Active tensions
+  // Active tensions — use the signal's own first_seen timestamp.
   for (const signal of tensionFile.signals) {
+    const cycle = cycleFromIso(signal.first_seen, index, latestCycle);
     for (const entity of signal.entities) {
       events.push({
         entity,
-        cycle: history.sessions.length > 0
-          ? history.sessions[history.sessions.length - 1].cycle_number
-          : 0,
+        cycle,
+        timestamp_iso: signal.first_seen,
         urgency: signal.urgency,
         type: signal.type,
         domain: signal.domain,
@@ -69,14 +122,15 @@ async function buildTensionTimeline(): Promise<TensionEvent[]> {
     }
   }
 
-  // Resolved tensions (historical)
+  // Resolved tensions — use the original signal's first_seen timestamp,
+  // not its remaining-TTL counter.
   for (const resolved of tensionFile.resolved_tensions ?? []) {
+    const cycle = cycleFromIso(resolved.original.first_seen, index, latestCycle);
     for (const entity of resolved.original.entities) {
       events.push({
         entity,
-        cycle: resolved.original.ttl > 0
-          ? history.sessions.length - resolved.original.ttl
-          : 0,
+        cycle,
+        timestamp_iso: resolved.original.first_seen,
         urgency: resolved.original.urgency,
         type: resolved.original.type,
         domain: resolved.original.domain,
@@ -117,6 +171,8 @@ function discoverCausalLinks(
 
       let coOccurrences = 0;
       let totalLag = 0;
+      let firstObservedTs: number = Number.POSITIVE_INFINITY;
+      let lastObservedTs: number = Number.NEGATIVE_INFINITY;
 
       for (const cause of causeEvents) {
         for (const effect of effectEvents) {
@@ -124,6 +180,14 @@ function discoverCausalLinks(
           if (lag > 0 && lag <= maxLag) {
             coOccurrences++;
             totalLag += lag;
+            const causeTs = Date.parse(cause.timestamp_iso);
+            const effectTs = Date.parse(effect.timestamp_iso);
+            if (Number.isFinite(causeTs) && causeTs < firstObservedTs) {
+              firstObservedTs = causeTs;
+            }
+            if (Number.isFinite(effectTs) && effectTs > lastObservedTs) {
+              lastObservedTs = effectTs;
+            }
           }
         }
       }
@@ -140,14 +204,21 @@ function discoverCausalLinks(
 
       if (strength < 0.3) continue; // Filter weak correlations
 
+      const firstObservedIso = Number.isFinite(firstObservedTs)
+        ? new Date(firstObservedTs).toISOString()
+        : now;
+      const lastObservedIso = Number.isFinite(lastObservedTs)
+        ? new Date(lastObservedTs).toISOString()
+        : now;
+
       links.push({
         cause_entity: entities[i],
         effect_entity: entities[j],
         lag_cycles: Math.round(avgLag * 10) / 10,
         correlation_strength: strength,
         observed_count: coOccurrences,
-        first_observed: causeEvents[0]?.cycle.toString() ?? now,
-        last_observed: now,
+        first_observed: firstObservedIso,
+        last_observed: lastObservedIso,
         description: `Changes to "${entities[i]}" are followed by tensions in "${entities[j]}" within ~${Math.round(avgLag)} cycles (observed ${coOccurrences} times)`,
       });
     }
@@ -190,7 +261,7 @@ function buildCausalChains(links: CausalLink[], maxDepth: number = 4): CausalCha
           (acc, l) => acc * l.correlation_strength, 1
         );
         chains.push({
-          id: `causal_chain_${chains.length + 1}`,
+          id: `causal_chain_${randomUUID()}`,
           links: [...path],
           total_strength: Math.round(totalStrength * 100) / 100,
           root_cause: path[0].cause_entity,
@@ -298,7 +369,7 @@ export async function causalReplayDream(
   // For each strong causal link, generate a predictive dream edge
   for (const link of links.slice(0, max)) {
     edges.push({
-      id: `dream_causal_${Date.now()}_${edges.length}`,
+      id: `dream_causal_${randomUUID()}`,
       from: link.cause_entity,
       to: link.effect_entity,
       type: "hypothetical",
@@ -316,7 +387,11 @@ export async function causalReplayDream(
       },
       ttl: DEFAULT_DECAY.ttl + 2, // Causal edges get longer TTL
       decay_rate: DEFAULT_DECAY.decay_rate,
-      reinforcement_count: link.observed_count, // Pre-load from history
+      // Start at 0 like every other dream edge — historical co-occurrence
+      // count is preserved in `meta.observed_count` for transparency, but
+      // pre-seeding `reinforcement_count` would short-circuit the promotion
+      // threshold without any in-cycle reinforcement actually happening.
+      reinforcement_count: 0,
       last_reinforced_cycle: cycle,
       status: "candidate",
       activation_score: 0,

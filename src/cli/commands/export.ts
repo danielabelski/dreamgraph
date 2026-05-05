@@ -6,7 +6,8 @@
  */
 
 import { resolve } from "node:path";
-import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
+import { readFile, readdir, mkdir } from "node:fs/promises";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import {
   loadRegistry,
@@ -138,7 +139,7 @@ async function exportSnapshot(
     // skip
   }
 
-  await writeFile(outputPath, JSON.stringify(snapshot, null, 2), "utf-8");
+  await atomicWriteFile(outputPath, JSON.stringify(snapshot, null, 2));
   console.log(`✓ Snapshot exported to ${outputPath}`);
 }
 
@@ -177,7 +178,7 @@ async function exportDocs(
     }
   }
 
-  await writeFile(outputPath, JSON.stringify(docs, null, 2), "utf-8");
+  await atomicWriteFile(outputPath, JSON.stringify(docs, null, 2));
   console.log(`✓ Living docs exported to ${outputPath}`);
 }
 
@@ -214,6 +215,6 @@ async function exportArchetypes(
     }
   }
 
-  await writeFile(outputPath, JSON.stringify(result, null, 2), "utf-8");
+  await atomicWriteFile(outputPath, JSON.stringify(result, null, 2));
   console.log(`✓ Dream archetypes exported to ${outputPath}`);
 }

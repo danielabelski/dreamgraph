@@ -13,7 +13,7 @@
  * precedence (per-instance config > global env).
  */
 
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, unlinkSync, openSync, fdatasyncSync, closeSync } from "node:fs";
 import { dirname } from "node:path";
 import { logger } from "./logger.js";
 
@@ -339,7 +339,24 @@ export function writeEngineEnv(
     }
 
     lines.push("");
-    writeFileSync(envPath, lines.join("\n"), "utf-8");
+    // Atomic write: temp file + fdatasync + rename. Mirrors atomicWriteFile()
+    // for the sync path so a crash mid-write cannot truncate engine.env.
+    const tmp = envPath + ".tmp";
+    let fd: number | undefined;
+    try {
+      fd = openSync(tmp, "w");
+      writeFileSync(fd, lines.join("\n"), "utf-8");
+      fdatasyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      renameSync(tmp, envPath);
+    } catch (writeErr) {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch { /* ignore */ }
+      }
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+      throw writeErr;
+    }
     logger.info(`engine.env: persisted ${Object.keys(vars).length} keys to ${envPath}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

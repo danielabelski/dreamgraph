@@ -24,6 +24,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import { engine } from "./engine.js";
@@ -657,7 +658,7 @@ export async function generateWeeklyDigest(): Promise<WeeklyDigest | null> {
     `${totalTensionsCreated} new tension(s) created.`;
 
   const digest: WeeklyDigest = {
-    id: `digest_${Date.now()}`,
+    id: `digest_${randomUUID()}`,
     generated_at: new Date().toISOString(),
     cycle_range: cycleRange,
     summary,

@@ -1549,6 +1549,7 @@ async function handleConfigPost(
           apiKey: resolvedKey,
           temperature: getDreamerLlmConfig().temperature,
           maxTokens: getDreamerLlmConfig().maxTokens,
+          timeoutMs: getLlmConfig().timeoutMs,
         };
         initLlmProvider(newCfg);
         logger.info(`Dashboard: LLM provider config updated via web UI (provider=${newCfg.provider}, apiKey=${resolvedKey ? "set" : "NOT SET"})`);

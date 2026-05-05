@@ -62,6 +62,7 @@ import type {
   TensionConfig,
   DreamHistoryEntry,
   DreamHistoryFile,
+  PromotionConfig,
   BootstrapState,
   BootstrapExitReason,
   BootstrapStatus,
@@ -107,6 +108,13 @@ class CognitiveEngine {
   private lastNormalization: string | null = null;
   private decayConfig: DecayConfig = { ...DEFAULT_DECAY };
   private tensionConfig: TensionConfig = { ...DEFAULT_TENSION_CONFIG };
+
+  /**
+   * In-memory promotion-config overrides applied on top of the policy
+   * profile's `cognitive_tuning`. Set by metacognitive auto-tuning. Resets
+   * on restart by design — auto-tuning never persists to disk.
+   */
+  private promotionOverrides: Partial<PromotionConfig> = {};
 
   /**
    * Reinforcement memory — edge fingerprints survive expiry.
@@ -515,6 +523,50 @@ class CognitiveEngine {
   /** Get current tension config */
   getTensionConfig(): TensionConfig {
     return { ...this.tensionConfig };
+  }
+
+  /**
+   * Resolve the effective `PromotionConfig`: policy-profile tuning merged
+   * with any in-memory overrides set by metacognitive auto-tuning.
+   */
+  async getEffectivePromotionConfig(): Promise<PromotionConfig> {
+    const tuning = await getActiveCognitiveTuning();
+    const base: PromotionConfig = {
+      promotion_confidence: tuning.promotion_confidence,
+      promotion_plausibility: tuning.promotion_plausibility,
+      promotion_evidence: tuning.promotion_evidence,
+      promotion_evidence_count: tuning.promotion_evidence_count,
+      retention_plausibility: tuning.retention_plausibility,
+      max_contradiction: tuning.max_contradiction,
+    };
+    return { ...base, ...this.promotionOverrides };
+  }
+
+  /**
+   * Read the currently active overrides (shallow copy). Empty object means
+   * the engine is running with pure policy-profile tuning.
+   */
+  getPromotionOverrides(): Partial<PromotionConfig> {
+    return { ...this.promotionOverrides };
+  }
+
+  /**
+   * Apply a single in-memory override to the active promotion config.
+   * Used by metacognitive auto-tuning. Caller is expected to clamp to
+   * safe guard rails before calling.
+   */
+  setPromotionOverride<K extends keyof PromotionConfig>(
+    parameter: K,
+    value: PromotionConfig[K],
+  ): void {
+    this.promotionOverrides[parameter] = value;
+    logger.info(`Promotion override set: ${String(parameter)} = ${value}`);
+  }
+
+  /** Drop all in-memory promotion overrides. */
+  clearPromotionOverrides(): void {
+    this.promotionOverrides = {};
+    logger.info("Promotion overrides cleared — reverting to policy-profile tuning");
   }
 
   // -------------------------------------------------------------------------
@@ -2117,15 +2169,7 @@ class CognitiveEngine {
       last_normalization: this.lastNormalization,
       promotion_config: await (async () => {
         try {
-          const tuning = await getActiveCognitiveTuning();
-          return {
-            promotion_confidence: tuning.promotion_confidence,
-            promotion_plausibility: tuning.promotion_plausibility,
-            promotion_evidence: tuning.promotion_evidence,
-            promotion_evidence_count: tuning.promotion_evidence_count,
-            retention_plausibility: tuning.retention_plausibility,
-            max_contradiction: tuning.max_contradiction,
-          };
+          return await this.getEffectivePromotionConfig();
         } catch (err) {
           logger.debug(`getStatus: promotion config unavailable: ${err instanceof Error ? err.message : err}`);
           return DEFAULT_PROMOTION;

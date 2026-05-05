@@ -8,6 +8,7 @@
  */
 
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { createInstance } from "../../instance/index.js";
 import type { PolicyProfile, InstanceMode, InstanceTransport } from "../../instance/index.js";
 import type { ParsedArgs } from "../dg.js";
@@ -45,7 +46,7 @@ Options:
   const name =
     typeof flags.name === "string"
       ? flags.name
-      : `instance-${Date.now().toString(36)}`;
+      : `instance-${randomUUID().slice(0, 8)}`;
 
   const policy = typeof flags.policy === "string" ? flags.policy : "strict";
   if (!VALID_POLICIES.includes(policy as PolicyProfile)) {
@@ -75,6 +76,11 @@ Options:
   if (port !== undefined && (isNaN(port) || port < 1 || port > 65535)) {
     console.error(`Invalid port "${flags.port}". Must be 1–65535.`);
     process.exit(1);
+  }
+  if (port !== undefined && port < 1024) {
+    console.warn(
+      `Warning: port ${port} is in the privileged range (<1024) and may require elevated privileges to bind.`,
+    );
   }
 
   const host = typeof flags.host === "string" ? flags.host : undefined;

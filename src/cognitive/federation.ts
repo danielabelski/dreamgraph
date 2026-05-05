@@ -18,6 +18,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import { engine } from "./engine.js";
@@ -88,7 +89,7 @@ function abstractToArchetype(edge: ValidatedEdge): DreamArchetype | null {
   const toRole = abstractEntityName(edge.to);
 
   return {
-    id: `archetype_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `archetype_${randomUUID()}`,
     pattern_type: patternType,
     description: edge.description,
     entity_roles: [fromRole, toRole],
@@ -104,6 +105,7 @@ function abstractToArchetype(edge: ValidatedEdge): DreamArchetype | null {
     source_instance: getFederationConfig().instance_id,
     times_validated: 1,
     created_at: new Date().toISOString(),
+    strategy: edge.strategy,
   };
 }
 

@@ -754,6 +754,10 @@ export function registerCognitiveTools(server: McpServer): void {
             tensions_expired: tensionDecayResult.expired,
             tensions_decayed: tensionDecayResult.decayed,
             tensions_reactivated: tensionsReactivated,
+            per_strategy_yields:
+              strat === "all" && dreamResult.strategy_yields
+                ? { ...dreamResult.strategy_yields }
+                : undefined,
           };
           await engine.appendHistoryEntry(historyEntry);
 

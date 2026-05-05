@@ -43,6 +43,8 @@ export interface LlmConfig {
   apiKey: string;
   temperature: number;
   maxTokens: number;
+  /** Per-request abort timeout in milliseconds. Defaults to 120_000. */
+  timeoutMs: number;
 }
 
 export interface LlmMessage {
@@ -108,6 +110,7 @@ class OllamaProvider implements LlmProvider {
     private model: string,
     private defaultTemperature: number,
     private defaultMaxTokens: number,
+    private timeoutMs: number = 120_000,
   ) {}
 
   async isAvailable(): Promise<boolean> {
@@ -147,7 +150,7 @@ class OllamaProvider implements LlmProvider {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000), // 2 min timeout for large models
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {
@@ -213,6 +216,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
     private defaultTemperature: number,
     private defaultMaxTokens: number,
     name: string = "openai",
+    private timeoutMs: number = 120_000,
   ) {
     this.name = name;
   }
@@ -277,7 +281,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
           Authorization: `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify(buildBody(useStrictSchema)),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
 
     // First attempt: use strict schema if requested AND not known-unsupported.
@@ -347,6 +351,7 @@ class AnthropicProvider implements LlmProvider {
     private apiKey: string,
     private defaultTemperature: number,
     private defaultMaxTokens: number,
+    private timeoutMs: number = 120_000,
   ) {}
 
   async isAvailable(): Promise<boolean> {
@@ -397,7 +402,7 @@ class AnthropicProvider implements LlmProvider {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {
@@ -551,6 +556,8 @@ export function parseLlmConfig(): LlmConfig {
   // each component manages its own.
   const temperature = 0.7;
   const maxTokens = 2048;
+  const timeoutEnv = Number(process.env.DREAMGRAPH_LLM_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(timeoutEnv) && timeoutEnv > 0 ? timeoutEnv : 120_000;
 
   let model: string;
   let baseUrl: string;
@@ -592,7 +599,7 @@ export function parseLlmConfig(): LlmConfig {
       break;
   }
 
-  return { provider, model, baseUrl, apiKey, temperature, maxTokens };
+  return { provider, model, baseUrl, apiKey, temperature, maxTokens, timeoutMs };
 }
 
 // ---------------------------------------------------------------------------
@@ -702,22 +709,22 @@ export function initLlmProvider(cfg?: LlmConfig): LlmProvider {
 
   switch (c.provider) {
     case "ollama":
-      _provider = new OllamaProvider(c.baseUrl, c.model, c.temperature, c.maxTokens);
+      _provider = new OllamaProvider(c.baseUrl, c.model, c.temperature, c.maxTokens, c.timeoutMs);
       break;
     case "openai":
       if (!c.apiKey) {
         logger.warn("LLM: OpenAI provider configured but no API key set (DREAMGRAPH_LLM_API_KEY)");
       }
-      _provider = new OpenAiCompatibleProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens);
+      _provider = new OpenAiCompatibleProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens, "openai", c.timeoutMs);
       break;
     case "lmstudio":
-      _provider = new OpenAiCompatibleProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens, "lmstudio");
+      _provider = new OpenAiCompatibleProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens, "lmstudio", c.timeoutMs);
       break;
     case "anthropic":
       if (!c.apiKey) {
         logger.warn("LLM: Anthropic provider configured but no API key set (DREAMGRAPH_LLM_API_KEY)");
       }
-      _provider = new AnthropicProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens);
+      _provider = new AnthropicProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens, c.timeoutMs);
       break;
     case "sampling":
       _samplingProvider = new McpSamplingProvider();

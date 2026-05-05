@@ -24,6 +24,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import { loadJsonArray } from "../utils/cache.js";
@@ -161,7 +162,7 @@ async function buildSecuritySnapshot(): Promise<Map<string, SecurityEntity>> {
 let threatIdSeq = 0;
 function threatId(): string {
   threatIdSeq++;
-  return `threat_${Date.now()}_${threatIdSeq}`;
+  return `threat_${randomUUID()}`;
 }
 
 /**

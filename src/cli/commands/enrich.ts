@@ -13,6 +13,11 @@ import {
 } from "../utils/daemon.js";
 import { mcpCallTool } from "../utils/mcp-call.js";
 
+/** Deep project scans can be expensive on large repos; allow ~10 minutes. */
+const SCAN_TIMEOUT_MS = 600_000;
+/** Enrichment passes hit the LLM serially per-entity; allow ~5 minutes. */
+const ENRICH_TIMEOUT_MS = 300_000;
+
 export async function cmdEnrich(
   positional: string[],
   flags: ParsedArgs["flags"],
@@ -76,7 +81,7 @@ Options:
     }
 
     try {
-      const scanResult = await mcpCallTool(meta.port, "scan_project", scanArgs, 600_000);
+      const scanResult = await mcpCallTool(meta.port, "scan_project", scanArgs, SCAN_TIMEOUT_MS);
       const text = scanResult.content?.[0]?.text ?? "{}";
       const parsed = JSON.parse(text);
       results.scan = parsed?.data ?? parsed;
@@ -103,7 +108,7 @@ Options:
     }
 
     try {
-      const enrichResult = await mcpCallTool(meta.port, "enrich_seed_data", {}, 300_000);
+      const enrichResult = await mcpCallTool(meta.port, "enrich_seed_data", {}, ENRICH_TIMEOUT_MS);
       const text = enrichResult.content?.[0]?.text ?? "{}";
       const parsed = JSON.parse(text);
       results.enrich = parsed?.data ?? parsed;

@@ -791,6 +791,7 @@ function dreamEdgeToValidated(dreamEdge: DreamEdge): ValidatedEdge {
     dream_cycle: dreamEdge.dream_cycle,
     normalization_cycle: 0, // Bypassed normalization — direct human acceptance
     validated_at: new Date().toISOString(),
+    strategy: dreamEdge.strategy,
   };
 }
 
@@ -815,7 +816,7 @@ function signalToValidated(signal: LucidSignal, hypothesis: LucidHypothesis): Va
     evidence_summary: `Human-accepted signal: ${signal.evidence}. Authority: human+system.`,
     evidence_count: 1,
     reinforcement_count: 0,
-    dream_cycle: 0,
+    dream_cycle: engine.getCurrentDreamCycle(),
     normalization_cycle: 0,
     validated_at: new Date().toISOString(),
   };

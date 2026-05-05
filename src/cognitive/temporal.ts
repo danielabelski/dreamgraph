@@ -26,11 +26,45 @@ import type {
   TemporalPrediction,
   SeasonalPattern,
   TemporalInsights,
-  TensionDomain,
   DreamHistoryEntry,
-  TensionSignal,
   ResolvedTension,
 } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// History indexing — map ISO timestamps back to cycle numbers
+// ---------------------------------------------------------------------------
+
+function buildHistoryIndex(
+  sessions: DreamHistoryEntry[],
+): Array<{ ts: number; cycle: number }> {
+  const idx: Array<{ ts: number; cycle: number }> = [];
+  for (const s of sessions) {
+    const ts = Date.parse(s.timestamp);
+    if (Number.isFinite(ts)) idx.push({ ts, cycle: s.cycle_number });
+  }
+  idx.sort((a, b) => a.ts - b.ts);
+  return idx;
+}
+
+function cycleFromIso(
+  iso: string | undefined,
+  index: Array<{ ts: number; cycle: number }>,
+  latestCycle: number,
+): number {
+  if (!iso) return latestCycle;
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts) || index.length === 0) return latestCycle;
+  if (ts <= index[0].ts) return index[0].cycle;
+  if (ts >= index[index.length - 1].ts) return index[index.length - 1].cycle;
+  let lo = 0;
+  let hi = index.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (index[mid].ts <= ts) lo = mid;
+    else hi = mid - 1;
+  }
+  return index[lo].cycle;
+}
 
 // ---------------------------------------------------------------------------
 // Trajectory Analysis
@@ -38,7 +72,12 @@ import type {
 
 /**
  * Build urgency-over-time trajectories for all known tensions.
- * Combines active and resolved tensions.
+ *
+ * Each trajectory has at most two anchored data points: when the tension was
+ * first seen and when it was last seen (or resolved). We deliberately do
+ * **not** fabricate intermediate points by extrapolating from `ttl` —
+ * those synthesized curves were monotonic by construction and broke every
+ * downstream peak/seasonality detector.
  */
 async function buildTrajectories(): Promise<TensionTrajectory[]> {
   const [tensionFile, history] = await Promise.all([
@@ -46,30 +85,31 @@ async function buildTrajectories(): Promise<TensionTrajectory[]> {
     engine.loadDreamHistory(),
   ]);
 
-  const trajectories: TensionTrajectory[] = [];
-
-  // Active tensions: simulate their urgency decay backwards
-  for (const signal of tensionFile.signals) {
-    if (signal.resolved) continue;
-
-    const points: Array<{ cycle: number; urgency: number }> = [];
-    const currentCycle = history.sessions.length > 0
+  const index = buildHistoryIndex(history.sessions);
+  const latestCycle =
+    history.sessions.length > 0
       ? history.sessions[history.sessions.length - 1].cycle_number
       : 0;
 
-    // Reconstruct approximate trajectory from TTL and occurrences
-    const ageEstimate = 30 - (signal.ttl ?? 30); // cycles of life
-    const peakUrgency = signal.urgency + (ageEstimate * 0.02); // reverse decay
+  const trajectories: TensionTrajectory[] = [];
 
-    for (let i = 0; i <= ageEstimate; i++) {
-      const cycleNum = currentCycle - ageEstimate + i;
-      const urgencyAtPoint = Math.min(
-        peakUrgency - ((ageEstimate - i) * 0.02),
-        1.0
-      );
+  // Active tensions: anchor at (first_seen_cycle, urgency) and
+  // (last_seen_cycle, urgency). If only one anchor is available the
+  // trajectory degenerates to a single point.
+  for (const signal of tensionFile.signals) {
+    if (signal.resolved) continue;
+
+    const firstCycle = cycleFromIso(signal.first_seen, index, latestCycle);
+    const lastCycle = cycleFromIso(signal.last_seen, index, latestCycle);
+    const points: Array<{ cycle: number; urgency: number }> = [];
+    points.push({
+      cycle: firstCycle,
+      urgency: Math.round(signal.urgency * 100) / 100,
+    });
+    if (lastCycle !== firstCycle) {
       points.push({
-        cycle: Math.max(cycleNum, 0),
-        urgency: Math.round(Math.max(urgencyAtPoint, 0) * 100) / 100,
+        cycle: lastCycle,
+        urgency: Math.round(signal.urgency * 100) / 100,
       });
     }
 
@@ -79,32 +119,29 @@ async function buildTrajectories(): Promise<TensionTrajectory[]> {
       tension_id: signal.id,
       domain: signal.domain,
       urgency_over_time: points,
-      peak_urgency: Math.round(peakUrgency * 100) / 100,
+      peak_urgency: Math.round(signal.urgency * 100) / 100,
       pattern,
     });
   }
 
-  // Resolved tensions: reconstruct from archive
+  // Resolved tensions: anchor at (first_seen_cycle, peak_urgency) and
+  // (resolved_at_cycle, 0).
   for (const resolved of tensionFile.resolved_tensions ?? []) {
     const original = resolved.original;
-    const points: Array<{ cycle: number; urgency: number }> = [];
+    const firstCycle = cycleFromIso(original.first_seen, index, latestCycle);
+    const resolutionCycle = cycleFromIso(resolved.resolved_at, index, latestCycle);
 
-    // Simple two-point trajectory: peak → resolution
-    points.push({
-      cycle: 0,
-      urgency: original.urgency,
-    });
-    points.push({
-      cycle: original.occurrences,
-      urgency: 0,
-    });
+    const points: Array<{ cycle: number; urgency: number }> = [
+      { cycle: firstCycle, urgency: Math.round(original.urgency * 100) / 100 },
+      { cycle: resolutionCycle, urgency: 0 },
+    ];
 
     trajectories.push({
       tension_id: original.id,
       domain: original.domain,
       urgency_over_time: points,
       peak_urgency: original.urgency,
-      resolution_cycle: original.occurrences,
+      resolution_cycle: resolutionCycle,
       pattern: "resolved",
     });
   }
@@ -193,14 +230,18 @@ async function predictFutureTensions(
   }
 
   // If a domain has many resolved tensions, entities in that domain
-  // are likely to develop new tensions (pattern recurrence)
+  // are likely to develop new tensions (pattern recurrence).
   for (const [domain, resolved] of resolvedByDomain) {
     if (resolved.length < 3) continue; // Need enough history
 
-    const activeInDomain = tensionFile.signals.filter(
-      (s) => s.domain === domain && !s.resolved
-    );
-    if (activeInDomain.length > 0) continue; // Already tracked
+    // Skip per-entity prediction only when that *entity* already has an
+    // active tension in this domain — the prediction would be noise.
+    const activelyTrackedEntities = new Set<string>();
+    for (const sig of tensionFile.signals) {
+      if (sig.domain === domain && !sig.resolved) {
+        for (const e of sig.entities) activelyTrackedEntities.add(e);
+      }
+    }
 
     // Predict recurrence for entities that had resolved tensions
     const entityFrequency = new Map<string, number>();
@@ -212,6 +253,7 @@ async function predictFutureTensions(
 
     for (const [entity, freq] of entityFrequency) {
       if (freq < 2) continue;
+      if (activelyTrackedEntities.has(entity)) continue;
       predictions.push({
         entity_id: entity,
         predicted_tension_type: "weak_connection",
@@ -231,73 +273,18 @@ async function predictFutureTensions(
 
 /**
  * Detect seasonal patterns: domains that have cyclical tension activity.
+ *
+ * NOTE: this is a placeholder. Honest seasonality detection needs
+ * per-cycle, per-domain tension counts that the dream-history schema does
+ * not yet record. The previous implementation tried to derive those counts
+ * from per-tension trajectories, but every trajectory was a synthesised
+ * monotonic curve — peak detection was structurally impossible. Returns an
+ * empty list until `DreamHistoryEntry` carries domain-level signal counts.
  */
 async function detectSeasonalPatterns(
-  trajectories: TensionTrajectory[]
+  _trajectories: TensionTrajectory[],
 ): Promise<SeasonalPattern[]> {
-  const history = await engine.loadDreamHistory();
-  const patterns: SeasonalPattern[] = [];
-
-  // Group tensions-created per domain per cycle
-  const domainActivity = new Map<string, Map<number, number>>();
-
-  for (const entry of history.sessions) {
-    // We don't have per-domain tension counts in history, so estimate
-    // from trajectory data: count how many tensions per domain existed at each cycle
-    for (const traj of trajectories) {
-      const domain = traj.domain;
-      if (!domainActivity.has(domain)) {
-        domainActivity.set(domain, new Map());
-      }
-      const activity = domainActivity.get(domain)!;
-      for (const point of traj.urgency_over_time) {
-        if (point.urgency > 0.1) {
-          const existing = activity.get(point.cycle) ?? 0;
-          activity.set(point.cycle, existing + 1);
-        }
-      }
-    }
-  }
-
-  // Look for periodic peaks
-  for (const [domain, activity] of domainActivity) {
-    const points = [...activity.entries()].sort((a, b) => a[0] - b[0]);
-    if (points.length < 5) continue;
-
-    // Find peaks (local maxima)
-    const peaks: number[] = [];
-    for (let i = 1; i < points.length - 1; i++) {
-      if (points[i][1] > points[i - 1][1] && points[i][1] > points[i + 1][1]) {
-        peaks.push(points[i][0]);
-      }
-    }
-
-    if (peaks.length < 2) continue;
-
-    // Calculate average period between peaks
-    const periods: number[] = [];
-    for (let i = 1; i < peaks.length; i++) {
-      periods.push(peaks[i] - peaks[i - 1]);
-    }
-    const avgPeriod = Math.round(
-      periods.reduce((a, b) => a + b, 0) / periods.length
-    );
-
-    if (avgPeriod < 3 || avgPeriod > 100) continue; // Filter noise
-
-    const currentCycle = history.sessions.length > 0
-      ? history.sessions[history.sessions.length - 1].cycle_number
-      : 0;
-
-    patterns.push({
-      domain,
-      period_cycles: avgPeriod,
-      description: `Domain "${domain}" shows cyclical tension activity with ~${avgPeriod}-cycle period (${peaks.length} peaks detected)`,
-      next_expected_peak: peaks[peaks.length - 1] + avgPeriod,
-    });
-  }
-
-  return patterns;
+  return [];
 }
 
 // ---------------------------------------------------------------------------

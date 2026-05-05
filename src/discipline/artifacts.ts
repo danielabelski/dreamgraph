@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getActiveSession, attachDeltaTable, attachPlan, attachVerificationReport } from "./session.js";
+import { getActiveSession, attachDeltaTable, attachPlan, attachVerificationReport, recordToolCall } from "./session.js";
 import { logger } from "../utils/logger.js";
 import type {
   DeltaTable,
@@ -373,12 +373,7 @@ export async function approvePlan(planIndex?: number): Promise<{
   plan.approved_at = new Date().toISOString();
   plan.approved_by = "human";
 
-  // Re-persist via attachPlan (which re-saves session)
-  // We already mutated in place, just need to persist
-  const { attachPlan: _attach } = await import("./session.js");
-  // Session is already mutated — just need to trigger persistence
-  // Simplest: call completeSession/loadSession? No — just re-import and call persist
-  // Actually the session reference is shared, so we can call any session write op
+  // Session was mutated in place; recording a tool call persists it.
   await recordToolCall(
     "discipline_approve_plan",
     { plan_index: idx },
@@ -388,9 +383,6 @@ export async function approvePlan(planIndex?: number): Promise<{
 
   return { success: true, message: `Plan approved: ${plan.description}` };
 }
-
-// Private import for recording
-import { recordToolCall } from "./session.js";
 
 // ===========================================================================
 // 4.5  Verification Report Generator

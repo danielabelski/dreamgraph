@@ -444,6 +444,10 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
         tension_signals_resolved: tensionsResolved,
         tensions_expired: tensionDecay.expired,
         tensions_decayed: tensionDecay.decayed,
+        per_strategy_yields:
+          strategy === "all" && dreamResult.strategy_yields
+            ? { ...dreamResult.strategy_yields }
+            : undefined,
       };
       await engine.appendHistoryEntry(entry);
 

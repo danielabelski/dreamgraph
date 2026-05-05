@@ -53,7 +53,7 @@ const ANALYSIS_PHASES: DisciplinePhase[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * Complete classification of all 53 MCP tools.
+ * Complete classification of all 73 MCP tools (72 server + 1 local extension equivalent).
  */
 export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
   // =====================================================================
@@ -264,6 +264,30 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
     requires_plan_entry: false,
     requires_audit_trail: true,
   },
+  {
+    tool_name: "query_self_metrics",
+    tool_class: "truth",
+    protection_level: "public",
+    allowed_phases: TRUTH_PHASES,
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "graph_rag_retrieve",
+    tool_class: "truth",
+    protection_level: "public",
+    allowed_phases: TRUTH_PHASES,
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "get_cognitive_preamble",
+    tool_class: "truth",
+    protection_level: "public",
+    allowed_phases: ALL_PHASES,
+    requires_plan_entry: false,
+    requires_audit_trail: false,
+  },
 
   // =====================================================================
   // ANALYSIS TOOLS — Computation, no side effects (4 tools)
@@ -297,6 +321,22 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
     tool_class: "analysis",
     protection_level: "public",
     allowed_phases: ["audit", "verify"],
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "scan_project",
+    tool_class: "analysis",
+    protection_level: "public",
+    allowed_phases: ["ingest", "audit"],
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "scan_database",
+    tool_class: "analysis",
+    protection_level: "public",
+    allowed_phases: ["ingest", "audit"],
     requires_plan_entry: false,
     requires_audit_trail: true,
   },
@@ -352,12 +392,68 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
     requires_plan_entry: true,
     requires_audit_trail: true,
   },
+  {
+    tool_name: "init_graph",
+    tool_class: "write",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "wire_links",
+    tool_class: "write",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "modify_api_surface",
+    tool_class: "write",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
 
   // =====================================================================
-  // FILE OPERATION TOOLS — Target project writes (1 tool)
+  // FILE OPERATION TOOLS — Target project writes (5 tools)
   // =====================================================================
   {
     tool_name: "create_file",
+    tool_class: "file_operation",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "edit_file",
+    tool_class: "file_operation",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "delete_file",
+    tool_class: "file_operation",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "rename_file",
+    tool_class: "file_operation",
+    protection_level: "target-write",
+    allowed_phases: ["execute"],
+    requires_plan_entry: true,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "edit_entity",
     tool_class: "file_operation",
     protection_level: "target-write",
     allowed_phases: ["execute"],
@@ -456,6 +552,38 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
     requires_plan_entry: false,
     requires_audit_trail: true,
   },
+  {
+    tool_name: "bootstrap_instance",
+    tool_class: "cognitive",
+    protection_level: "internal-only",
+    allowed_phases: [],
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "lucid_dream",
+    tool_class: "cognitive",
+    protection_level: "internal-only",
+    allowed_phases: [],
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "lucid_action",
+    tool_class: "cognitive",
+    protection_level: "internal-only",
+    allowed_phases: [],
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "wake_from_lucid",
+    tool_class: "cognitive",
+    protection_level: "internal-only",
+    allowed_phases: [],
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
 
   // =====================================================================
   // VERIFICATION / DISCIPLINE TOOLS — Session lifecycle & enforcement (9 tools)
@@ -532,6 +660,14 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
     allowed_phases: ALL_PHASES,
     requires_plan_entry: false,
     requires_audit_trail: true,
+  },
+  {
+    tool_name: "discipline_record_tool_call",
+    tool_class: "verification",
+    protection_level: "public",
+    allowed_phases: ALL_PHASES,
+    requires_plan_entry: false,
+    requires_audit_trail: false,
   },
 ];
 

@@ -6,7 +6,8 @@
  */
 
 import { resolve } from "node:path";
-import { readFile, writeFile, readdir, copyFile } from "node:fs/promises";
+import { readFile, readdir, copyFile } from "node:fs/promises";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import {
   loadRegistry,
@@ -113,10 +114,9 @@ The new instance records its parent in the forked_from field.
   // 3. Update forked_from in the new instance.json
   const forkInstancePath = resolve(dir, forkInstance.uuid, "instance.json");
   const updatedInstance = { ...forkInstance, forked_from: sourceInstance.uuid };
-  await writeFile(
+  await atomicWriteFile(
     forkInstancePath,
     JSON.stringify(updatedInstance, null, 2),
-    "utf-8",
   );
 
   console.log(`

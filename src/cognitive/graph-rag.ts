@@ -176,10 +176,8 @@ async function loadKnowledgeGraph(): Promise<KnowledgeGraph> {
   // Load validated edges
   let validatedEdges: ValidatedEdge[] = [];
   try {
-    const vPath = dataPath("validated_edges.json");
-    if (existsSync(vPath)) {
-      const raw = await readFile(vPath, "utf-8");
-      const file = JSON.parse(raw) as ValidatedEdgesFile;
+    if (existsSync(dataPath("validated_edges.json"))) {
+      const file = await loadJsonData<ValidatedEdgesFile>("validated_edges.json");
       validatedEdges = file.edges ?? [];
     }
   } catch { /* empty */ }
@@ -187,10 +185,8 @@ async function loadKnowledgeGraph(): Promise<KnowledgeGraph> {
   // Load tensions
   let tensions: TensionSignal[] = [];
   try {
-    const tPath = dataPath("tension_log.json");
-    if (existsSync(tPath)) {
-      const raw = await readFile(tPath, "utf-8");
-      const file = JSON.parse(raw) as TensionFile;
+    if (existsSync(dataPath("tension_log.json"))) {
+      const file = await loadJsonData<TensionFile>("tension_log.json");
       tensions = (file.signals ?? []).filter((t) => !t.resolved);
     }
   } catch { /* empty */ }
@@ -198,10 +194,8 @@ async function loadKnowledgeGraph(): Promise<KnowledgeGraph> {
   // Load story chapters
   let storyChapters: StoryChapter[] = [];
   try {
-    const sPath = dataPath("system_story.json");
-    if (existsSync(sPath)) {
-      const raw = await readFile(sPath, "utf-8");
-      const file = JSON.parse(raw) as SystemStoryFile;
+    if (existsSync(dataPath("system_story.json"))) {
+      const file = await loadJsonData<SystemStoryFile>("system_story.json");
       storyChapters = file.chapters ?? [];
     }
   } catch { /* empty */ }

@@ -7,7 +7,8 @@
  */
 
 import { resolve } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
 import {
   loadRegistry,
   findInstance,
@@ -81,7 +82,7 @@ Options:
   const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
   const instance = JSON.parse(stripped) as DreamGraphInstance;
   instance.project_root = projectRoot;
-  await writeFile(instanceJsonPath, JSON.stringify(instance, null, 2), "utf-8");
+  await atomicWriteFile(instanceJsonPath, JSON.stringify(instance, null, 2));
 
   // Update mcp.json repos if --repo flag provided
   if (typeof flags.repo === "string") {
@@ -92,7 +93,7 @@ Options:
       const [name, path] = flags.repo.split("=");
       if (name && path) {
         mcpConfig.repos[name] = resolve(path);
-        await writeFile(mcpJsonPath, JSON.stringify(mcpConfig, null, 2), "utf-8");
+        await atomicWriteFile(mcpJsonPath, JSON.stringify(mcpConfig, null, 2));
       }
     } catch {
       // mcp.json may not exist
@@ -152,7 +153,7 @@ Options:
   const instance = JSON.parse(stripped) as DreamGraphInstance;
   const oldProject = instance.project_root;
   instance.project_root = null;
-  await writeFile(instanceJsonPath, JSON.stringify(instance, null, 2), "utf-8");
+  await atomicWriteFile(instanceJsonPath, JSON.stringify(instance, null, 2));
 
   // Update registry entry
   await updateInstanceEntry(entry.uuid, { project_root: null }, masterDir);

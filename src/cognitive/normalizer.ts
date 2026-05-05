@@ -34,7 +34,8 @@
  *   validated edges) OR the bootstrap window elapses (20 cycles or 24h).
  * - Relaxed gate: confidence ≥ 0.50, evidence ≥ 0.30, evidence_count ≥ 1.
  * - exit_reason ("size" | "window" | "manual") is recorded on every exit.
- * - Live tuning floors come from `getActiveCognitiveTuning()`; the runtime
+ * - Live tuning floors come from `engine.getEffectivePromotionConfig()`; the
+ *   runtime
  *   values shown above are defaults — do not treat them as constants.
  *
  * NORMALIZING state is REQUIRED. Engine enforces this.
@@ -57,7 +58,6 @@ import type {
 import { countEvidence, computeConfidence, DEFAULT_PROMOTION, type PromotionConfig } from "./types.js";
 import { isLlmAvailable, getLlmProvider, getNormalizerLlmConfig } from "./llm.js";
 import type { LlmMessage } from "./llm.js";
-import { getActiveCognitiveTuning } from "../instance/index.js";
 
 // ---------------------------------------------------------------------------
 // Event-loop yielding (ADR-052)
@@ -460,6 +460,7 @@ function validateEdge(
     reason,
     validated_at: new Date().toISOString(),
     normalization_cycle: cycle,
+    strategy: edge.strategy,
   };
 }
 
@@ -854,6 +855,7 @@ function promoteToValidatedEdge(
     dream_cycle: edge.dream_cycle,
     normalization_cycle: result.normalization_cycle,
     validated_at: result.validated_at,
+    strategy: edge.strategy,
   };
 }
 
@@ -902,16 +904,8 @@ export async function normalize(
 ): Promise<NormalizationResult> {
   engine.assertState("normalizing", "normalize");
 
-  // Resolve promotion config from active policy profile
-  const tuning = await getActiveCognitiveTuning();
-  const strictPromo: PromotionConfig = {
-    promotion_confidence: tuning.promotion_confidence,
-    promotion_plausibility: tuning.promotion_plausibility,
-    promotion_evidence: tuning.promotion_evidence,
-    promotion_evidence_count: tuning.promotion_evidence_count,
-    retention_plausibility: tuning.retention_plausibility,
-    max_contradiction: tuning.max_contradiction,
-  };
+  // Resolve promotion config from engine (policy tuning + live overrides)
+  const strictPromo = await engine.getEffectivePromotionConfig();
 
   // ADR-096: cold-start bootstrap relaxation.
   // On a fresh instance the strict gate is unreachable because entity-
