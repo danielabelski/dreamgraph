@@ -1712,7 +1712,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       await this.postMessage({ type: 'addMessage', message: notice, actions: [], roleMeta: this._roleMetaFor(notice), contextFooter: undefined });
 
       // Trigger next pass
-      const continuationPrompt = result.nextPrompt ?? buildContinuationPrompt(selectedAction?.label);
+      const continuationPrompt = result.nextPrompt ?? buildContinuationPrompt(selectedAction);
       await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools);
     } else {
       // Stopped — persist task state so the next turn can resume from a known position.

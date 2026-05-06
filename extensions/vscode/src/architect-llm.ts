@@ -14,6 +14,11 @@ import {
   translateRawToOpenAIResponses,
   usesOpenAIResponsesApi,
 } from "./openai-responses-adapter";
+import {
+  applySharedRequestCompaction,
+  compactSystemPrompt,
+  minifyToolDefinitions,
+} from "./request-compaction";
 
 export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio";
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -289,22 +294,24 @@ export class ArchitectLlm implements vscode.Disposable {
     tools?: ToolDefinition[],
     stream?: boolean,
   ): Record<string, unknown> {
+    const compactedSystem = system ? compactSystemPrompt(system) : undefined;
+    const compactedTools = tools ? minifyToolDefinitions(tools) : undefined;
     const body: Record<string, unknown> = {
       model: config.model,
       max_tokens: this._getAnthropicMaxTokens(config.model),
       messages,
     };
 
-    if (system) {
-      body.system = system;
+    if (compactedSystem) {
+      body.system = compactedSystem;
     }
 
     if (stream) {
       body.stream = true;
     }
 
-    if (tools && tools.length > 0) {
-      body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
+    if (compactedTools && compactedTools.length > 0) {
+      body.tools = compactedTools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
     }
 
     if (config.model.startsWith("claude-opus-4-7")) {
@@ -393,15 +400,35 @@ export class ArchitectLlm implements vscode.Disposable {
     this._ensureConfigured();
     const config = this._config!;
     const start = Date.now();
+    const compactedRequest = applySharedRequestCompaction({
+      messages,
+      rawMessages,
+      tools,
+      provider: config.provider,
+    });
 
     switch (config.provider) {
       case "anthropic":
-        return this._callAnthropicWithTools(config, messages, tools, start, rawMessages, signal);
+        return this._callAnthropicWithTools(
+          config,
+          compactedRequest.messages,
+          compactedRequest.tools ?? [],
+          start,
+          compactedRequest.rawMessages,
+          signal,
+        );
       case "openai":
       case "lmstudio":
-        return this._callOpenAIWithTools(config, messages, tools, start, rawMessages, signal);
+        return this._callOpenAIWithTools(
+          config,
+          compactedRequest.messages,
+          compactedRequest.tools ?? [],
+          start,
+          compactedRequest.rawMessages,
+          signal,
+        );
       case "ollama": {
-        const resp = await this._callOllama(config, messages, start, signal);
+        const resp = await this._callOllama(config, compactedRequest.messages, start, signal);
         return { ...resp, toolCalls: [], stopReason: "end_turn" };
       }
       default:

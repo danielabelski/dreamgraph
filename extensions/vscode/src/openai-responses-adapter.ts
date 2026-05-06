@@ -1,4 +1,11 @@
 import type { ArchitectMessage, ToolDefinition, ToolUseRequest } from "./architect-llm";
+import {
+  compactAssistantText,
+  compactMessagesForProvider,
+  compactRawMessagesForProvider,
+  compactToolResultContent,
+  minifyToolDefinitions,
+} from "./request-compaction";
 
 export type OpenAIResponsesReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type OpenAIResponsesTextVerbosity = "low" | "medium" | "high";
@@ -30,18 +37,24 @@ export function buildOpenAIResponsesRequest(
   messages: ArchitectMessage[],
   options: OpenAIResponsesOptions,
 ): Record<string, unknown> {
+  const compactedMessages = compactMessagesForProvider(messages, "openai");
+  const compactedRawMessages = options.rawMessages
+    ? compactRawMessagesForProvider(options.rawMessages, "openai")
+    : undefined;
+  const compactedTools = options.tools ? minifyToolDefinitions(options.tools) : undefined;
+
   const body: Record<string, unknown> = {
     model: options.model,
     max_output_tokens: 16384,
-    input: options.rawMessages
-      ? translateRawToOpenAIResponses(options.rawMessages)
-      : messages.map((m) => ({ role: m.role, content: toOpenAIResponsesContent(m.content) })),
+    input: compactedRawMessages
+      ? translateRawToOpenAIResponses(compactedRawMessages)
+      : compactedMessages.map((m) => ({ role: m.role, content: toOpenAIResponsesContent(m.content) })),
     reasoning: { effort: options.reasoningEffort },
     text: { verbosity: options.textVerbosity },
   };
 
-  if (options.tools?.length) {
-    body.tools = options.tools.map((t) => ({
+  if (compactedTools?.length) {
+    body.tools = compactedTools.map((t) => ({
       type: "function",
       name: t.name,
       description: t.description,
@@ -111,7 +124,7 @@ export function translateRawToOpenAIResponses(raw: unknown[]): unknown[] {
         .filter((b) => b.type === "text" && typeof b.text === "string")
         .map((b) => b.text as string);
       if (textParts.length > 0) {
-        out.push({ role: "assistant", content: textParts.join("") });
+        out.push({ role: "assistant", content: compactAssistantText(textParts.join("")) });
       }
 
       for (const block of blocks) {
@@ -167,7 +180,7 @@ export function translateRawToOpenAIResponses(raw: unknown[]): unknown[] {
         out.push({
           type: "function_call_output",
           call_id: tr.tool_use_id,
-          output: typeof tr.content === "string" ? tr.content : JSON.stringify(tr.content ?? ""),
+          output: compactToolResultContent(tr.content),
         });
       }
     }
@@ -272,6 +285,7 @@ export function extractOpenAIResponsesToolCalls(data: OpenAIResponsesData): Tool
 
   return toolCalls;
 }
+
 
 function toInputImageBlock(block: Record<string, unknown>): ResponsesContentBlock | undefined {
   const source = isRecord(block.source) ? block.source : undefined;

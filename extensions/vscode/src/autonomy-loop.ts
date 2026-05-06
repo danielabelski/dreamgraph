@@ -56,10 +56,13 @@ export function inferPassOutcomeSignal(content: string): PassOutcomeSignal {
   };
 }
 
-export function buildContinuationPrompt(actionLabel?: string): string {
-  return actionLabel
-    ? `Continue with the recommended next step: ${actionLabel}. Keep the visible autonomy counters up to date and stop if the original goal is sufficiently reached or progress stalls.`
-    : 'Continue with your strongest in-scope recommended next step. Keep the visible autonomy counters up to date and stop if the original goal is sufficiently reached or progress stalls.';
+export function buildContinuationPrompt(selectedAction?: RecommendedAction): string {
+  if (!selectedAction) {
+    return 'Continue with your strongest in-scope recommended next step. Keep the visible autonomy counters up to date and stop if the original goal is sufficiently reached or progress stalls.';
+  }
+
+  const toolHint = selectedAction.tool ? ` (${selectedAction.tool})` : '';
+  return `Continue with the recommended next step: ${selectedAction.label}${toolHint}. Keep the visible autonomy counters up to date and stop if the original goal is sufficiently reached or progress stalls.`;
 }
 
 export function analyzePass(state: AutonomyState, input: PassAnalysisInput): PassAnalysisResult {
@@ -91,7 +94,7 @@ export function analyzePass(state: AutonomyState, input: PassAnalysisInput): Pas
     actionSet,
     selectedActionId,
     decision,
-    nextPrompt: decision.shouldContinue ? buildContinuationPrompt(selectedAction?.label) : undefined,
+    nextPrompt: decision.shouldContinue ? buildContinuationPrompt(selectedAction) : undefined,
   };
 }
 
