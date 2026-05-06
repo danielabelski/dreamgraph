@@ -34,6 +34,7 @@
  *   get_remediation_plan        — Intervention: concrete fix plans
  *   graph_rag_retrieve          — Graph RAG: knowledge context retrieval
  *   get_cognitive_preamble      — Graph RAG: compact system preamble
+ *   shortest_path               — Graph paths: shortest connection between two entities
  *   lucid_dream                 — Lucid: start interactive exploration
  *   lucid_action                — Lucid: interact with findings
  *   wake_from_lucid             — Lucid: end session
@@ -56,6 +57,8 @@ import { runMetacognitiveAnalysis, getMetaLog } from "./metacognition.js";
 import { dispatchEvent, checkTensionThresholds, getEventLog } from "./event-router.js";
 import { generateRemediationPlans } from "./intervention.js";
 import { graphRagRetrieve, getCognitivePreamble } from "./graph-rag.js";
+import { findShortestPath } from "./graph-paths.js";
+import type { ShortestPathResult } from "./graph-paths.js";
 import { startLucidDream, handleLucidAction, wakeFromLucid, getLucidLog } from "./lucid.js";
 import { updateInstanceCounters } from "../instance/index.js";
 import {
@@ -2442,5 +2445,83 @@ export function registerCognitiveTools(server: McpServer): void {
     }
   );
 
-  logger.info("Registered 17 cognitive tools + 6 scheduler tools + 5 knowledge backbone tools");
+  // =========================================================================
+  // shortest_path — Find the shortest connection between two entities
+  // =========================================================================
+  server.tool(
+    "shortest_path",
+    "Find the shortest path between two entities in the knowledge graph. " +
+      "Traverses validated edges (and optionally speculative dream edges) using BFS " +
+      "by default, or Dijkstra weighted by (1 - confidence) when weighted=true. " +
+      "Accepts entity IDs OR exact names (case-insensitive) for from/to. " +
+      "Useful for impact analysis, dependency tracing, and answering \"how is X connected to Y?\" " +
+      "questions without dumping the whole graph into context.",
+    {
+      from: z
+        .string()
+        .describe("Source entity id or exact name (case-insensitive). Example: 'cognitive_engine' or 'Cognitive Engine'."),
+      to: z
+        .string()
+        .describe("Target entity id or exact name (case-insensitive). Example: 'src_api_routes' or 'API Routes'."),
+      max_hops: z
+        .number()
+        .int()
+        .min(1)
+        .max(12)
+        .optional()
+        .describe("Maximum hops to explore (default 6, hard cap 12)."),
+      edge_relations: z
+        .array(z.string())
+        .optional()
+        .describe("Restrict traversal to edges whose relation is in this list (case-insensitive). Empty = no filter."),
+      edge_types: z
+        .array(z.string())
+        .optional()
+        .describe("Restrict traversal to edges whose type is in this list (e.g. 'feature', 'workflow', 'data_model')."),
+      weighted: z
+        .boolean()
+        .optional()
+        .describe("When true, use Dijkstra with cost = (1 - confidence) so high-confidence edges are preferred. Default false (unweighted BFS)."),
+      include_dreams: z
+        .boolean()
+        .optional()
+        .describe("When true, also traverse speculative dream edges. Default false (validated edges only)."),
+      undirected: z
+        .boolean()
+        .optional()
+        .describe("Treat edges as undirected. Default true — most graph queries don't care about declared edge direction."),
+    },
+    async ({ from, to, max_hops, edge_relations, edge_types, weighted, include_dreams, undirected }) => {
+      logger.info(
+        `shortest_path tool called: from="${from}" to="${to}" max_hops=${max_hops ?? 6} weighted=${weighted ?? false} include_dreams=${include_dreams ?? false}`
+      );
+
+      const result = await safeExecute<ShortestPathResult>(
+        async (): Promise<ToolResponse<ShortestPathResult>> => {
+          const path = await findShortestPath({
+            from,
+            to,
+            max_hops,
+            edge_relations,
+            edge_types,
+            weighted,
+            include_dreams,
+            undirected,
+          });
+          return success(path);
+        }
+      );
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  logger.info("Registered 17 cognitive tools + 6 scheduler tools + 6 knowledge backbone tools");
 }

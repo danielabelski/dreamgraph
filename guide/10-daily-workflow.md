@@ -41,6 +41,12 @@ The Architect answers from the graph instead of grep-then-guess. You orient in s
 
 The graph knows about workflows, validations, and UI elements that reference the field. The Architect lists them with file paths.
 
+### When you need to know how two things are connected
+
+> *"What's the shortest path between the cognitive engine and the API routes?"*
+
+The Architect calls `shortest_path` and returns the chain of entities and the relations between them — no need to read source files or eyeball the Explorer. Add `weighted=true` to prefer high-confidence edges, or `include_dreams=true` to include speculative connections the engine has noticed but not yet promoted.
+
 ### When you make an architectural choice
 
 > *"Record an ADR: we're moving payment retries from synchronous to a job queue because PSP latency spikes were timing out checkouts. Tag it `payments`, link it to the checkout-workflow."*

@@ -25,6 +25,7 @@ export const TOOL_GROUPS = {
   core_read: [
     'query_resource',
     'graph_rag_retrieve',
+    'shortest_path',
     'query_api_surface',
     'read_source_code',
     'list_directory',

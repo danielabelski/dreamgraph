@@ -293,6 +293,52 @@ Return a ready-to-inject LLM preamble summarizing the system's current cognitive
 |-----------|------|----------|---------|-------------|
 | `maxTokens` | number | no | 2000 | Token budget for the preamble |
 
+#### `shortest_path`
+
+Find the shortest connection between two entities in the knowledge graph. Useful for impact analysis ("what does X reach?"), dependency tracing ("how is feature A wired to data model B?"), and answering connectivity questions without dumping the full graph into context.
+
+Defaults to **unweighted BFS** over `validated_edges.json` only. Treats edges as undirected (most graph queries don't care about declared edge direction). Set `weighted=true` to switch to Dijkstra with edge cost = `1 - confidence`, so high-confidence edges are preferred over weak chains. Set `include_dreams=true` to also traverse speculative dream edges from `dream_graph.json`.
+
+Accepts either entity `id` or exact `name` (case-insensitive) for `from` / `to`. The resolved `from_id` / `to_id` are returned in the result.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `from` | string | yes | — | Source entity id or exact name (case-insensitive) |
+| `to` | string | yes | — | Target entity id or exact name (case-insensitive) |
+| `max_hops` | number | no | 6 | Maximum hops to explore (1–12) |
+| `edge_relations` | string[] | no | — | Restrict traversal to these relation names (case-insensitive) |
+| `edge_types` | string[] | no | — | Restrict traversal to these edge types (`feature`, `workflow`, `data_model`) |
+| `weighted` | boolean | no | false | Use Dijkstra weighted by `1 - confidence` instead of BFS |
+| `include_dreams` | boolean | no | false | Also traverse speculative dream edges (not just validated) |
+| `undirected` | boolean | no | true | Treat edges as undirected |
+
+**Example response shape**
+
+```json
+{
+  "found": true,
+  "from_id": "cognitive_engine",
+  "to_id": "src_api_routes",
+  "hops": 3,
+  "total_cost": 3,
+  "path": [
+    { "entity_id": "cognitive_engine", "name": "Cognitive Engine", "kind": "feature" },
+    { "entity_id": "mcp_server", "name": "MCP Server", "kind": "feature" },
+    { "entity_id": "explorer_routes", "name": "Explorer Routes", "kind": "workflow" },
+    { "entity_id": "src_api_routes", "name": "API Routes", "kind": "feature" }
+  ],
+  "edges": [
+    { "from": "cognitive_engine", "to": "mcp_server", "relation": "registers_on", "type": "feature", "confidence": 0.92, "source": "validated", "reversed": false },
+    { "from": "mcp_server", "to": "explorer_routes", "relation": "exposes", "type": "workflow", "confidence": 0.81, "source": "validated", "reversed": false },
+    { "from": "explorer_routes", "to": "src_api_routes", "relation": "calls", "type": "feature", "confidence": 0.76, "source": "validated", "reversed": false }
+  ],
+  "message": "Found path of 3 hop(s) from \"Cognitive Engine\" to \"API Routes\" using BFS over 124 edge(s).",
+  "stats": { "entities_loaded": 87, "edges_considered": 142, "edges_after_filter": 124, "nodes_visited": 18, "algorithm": "bfs" }
+}
+```
+
+When no path exists within `max_hops`, `found` is `false`, `hops` is `-1`, and `message` explains the search scope (validated-only vs validated+dream, edge count, hop limit).
+
 #### `lucid_dream`
 
 Start a lucid dream session: propose a hypothesis and receive scoped exploration findings for interactive co-creation.

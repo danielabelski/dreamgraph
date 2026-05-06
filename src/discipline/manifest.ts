@@ -288,6 +288,14 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
     requires_plan_entry: false,
     requires_audit_trail: false,
   },
+  {
+    tool_name: "shortest_path",
+    tool_class: "truth",
+    protection_level: "public",
+    allowed_phases: TRUTH_PHASES,
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
 
   // =====================================================================
   // ANALYSIS TOOLS — Computation, no side effects (4 tools)
