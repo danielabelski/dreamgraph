@@ -18,6 +18,10 @@ import { logger } from "../utils/logger.js";
 import { recordFileRead, recordToolCall } from "../utils/metrics.js";
 import type { ToolResponse } from "../types/index.js";
 
+const MAX_READ_SOURCE_CODE_CHARS = 10000;
+const READ_SOURCE_CODE_PREVIEW_HEAD_CHARS = 4500;
+const READ_SOURCE_CODE_PREVIEW_TAIL_CHARS = 4500;
+
 // ---------------------------------------------------------------------------
 // Entity extraction — find named entities (function, class, etc.) by name
 // ---------------------------------------------------------------------------
@@ -147,6 +151,31 @@ function findEntityEnd(lines: string[], startIdx: number, kind: EntityLocation["
 
   // Fallback: return a reasonable range
   return Math.min(startIdx + 80, lines.length - 1);
+}
+
+function buildReadSourceCodeNotice(totalChars: number, displayedChars: number): string {
+  return [
+    "",
+    `// [DreamGraph note] Output clipped to ${displayedChars.toLocaleString()} of ${totalChars.toLocaleString()} chars to avoid transport truncation.`,
+    "// Re-run read_source_code with entity=..., smaller startLine/endLine ranges, or use multiple bounded reads.",
+  ].join("\n");
+}
+
+function clipReadSourceCodeOutput(content: string): string {
+  if (content.length <= MAX_READ_SOURCE_CODE_CHARS) {
+    return content;
+  }
+
+  const head = content.slice(0, READ_SOURCE_CODE_PREVIEW_HEAD_CHARS);
+  const tail = content.slice(-READ_SOURCE_CODE_PREVIEW_TAIL_CHARS);
+  const omittedChars = content.length - (head.length + tail.length);
+  const omissionMarker = [
+    "",
+    `// … ${omittedChars.toLocaleString()} chars omitted …`,
+  ].join("\n");
+
+  const clipped = `${head}${omissionMarker}\n${tail}`;
+  return `${clipped}${buildReadSourceCodeNotice(content.length, clipped.length)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,8 +488,9 @@ export function registerCodeSensesTools(server: McpServer): void {
             const lang = langMap[ext] ?? ext;
 
             const formatted = `\`\`\`${lang}\n// ${filePath}${lineInfo}\n${content}\n\`\`\``;
+            const clipped = clipReadSourceCodeOutput(formatted);
             recordFileRead(filePath);
-            return success(formatted);
+            return success(clipped);
           } catch (err: unknown) {
             const msg =
               err instanceof Error ? err.message : String(err);
