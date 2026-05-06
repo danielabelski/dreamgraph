@@ -15,6 +15,7 @@ import { loadJsonData } from "../utils/cache.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 import type { ToolResponse } from "../types/index.js";
+import { formatJsonToolOutput } from "../utils/tool-output.js";
 
 /** Map resource URIs to their data files.
  *
@@ -200,7 +201,7 @@ export function registerQueryResourceTool(server: McpServer): void {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(result, null, 2),
+            text: formatJsonToolOutput(result),
           },
         ],
       };

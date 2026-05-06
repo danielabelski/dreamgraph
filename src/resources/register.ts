@@ -21,6 +21,7 @@ import type {
   Datastore,
 } from "../types/index.js";
 import { getMetricsSnapshot } from "../utils/metrics.js";
+import { formatJsonToolOutput } from "../utils/tool-output.js";
 
 export function registerResources(server: McpServer): void {
   // -----------------------------------------------------------------------
@@ -42,7 +43,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -68,7 +69,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -94,7 +95,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -120,7 +121,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -146,7 +147,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -179,6 +180,7 @@ export function registerResources(server: McpServer): void {
         server: {
           name: config.server.name,
           version: config.server.version,
+          description: "DreamGraph MCP server runtime capability summary.",
         },
         repositories: {
           configured: repos,
@@ -224,17 +226,33 @@ export function registerResources(server: McpServer): void {
           },
         },
         resources: [
-          "system://overview", "system://features", "system://workflows",
-          "system://data-model", "system://datastores",
-          "system://capabilities", "system://index",
-          "dream://graph", "dream://candidates", "dream://validated",
-          "dream://status", "dream://tensions", "dream://history",
-          "dream://adrs", "dream://ui-registry", "dream://threats",
-          "dream://archetypes", "dream://metacognition", "dream://events",
-          "dream://story", "dream://schedules", "dream://schedule-history",
-          "dream://context", "dream://lucid",
-          "discipline://manifest",
-          "ops://api-surface", "ops://metrics",
+          { uri: "system://overview", name: "System Overview", description: "High-level overview of repositories, technologies, and purpose." },
+          { uri: "system://features", name: "System Features", description: "All known features with metadata and status." },
+          { uri: "system://workflows", name: "System Workflows", description: "Operational workflows and step sequences." },
+          { uri: "system://data-model", name: "System Data Model", description: "Structured data model entities and relationships." },
+          { uri: "system://datastores", name: "System Datastores", description: "Registered backend datastores and scan status." },
+          { uri: "system://capabilities", name: "System Capabilities", description: "Dynamic runtime capability summary for server, repositories, tools, and resources." },
+          { uri: "system://index", name: "System Index", description: "Canonical entity/resource index for lookup." },
+          { uri: "dream://graph", name: "Dream Graph", description: "Current cognitive graph snapshot." },
+          { uri: "dream://candidates", name: "Dream Candidates", description: "Candidate dream insights awaiting validation." },
+          { uri: "dream://validated", name: "Validated Insights", description: "Validated graph insights and relationships." },
+          { uri: "dream://status", name: "Cognitive Status", description: "Current cognitive engine health and activity summary." },
+          { uri: "dream://tensions", name: "Dream Tensions", description: "Active architectural or conceptual tensions." },
+          { uri: "dream://history", name: "Dream History", description: "Historical dream cycles and outputs." },
+          { uri: "dream://adrs", name: "Architecture Decisions", description: "Recorded architectural decision records." },
+          { uri: "dream://ui-registry", name: "UI Registry", description: "Registered UI elements and composition metadata." },
+          { uri: "dream://threats", name: "Threat Model", description: "Threat and mitigation knowledge." },
+          { uri: "dream://archetypes", name: "Dream Archetypes", description: "Exported/imported dream archetype definitions." },
+          { uri: "dream://metacognition", name: "Metacognition", description: "Metacognitive analysis and self-observation artifacts." },
+          { uri: "dream://events", name: "Cognitive Events", description: "Recent dispatched cognitive events." },
+          { uri: "dream://story", name: "System Story", description: "Narrative system history and storyline context." },
+          { uri: "dream://schedules", name: "Dream Schedules", description: "Configured dream schedules." },
+          { uri: "dream://schedule-history", name: "Schedule History", description: "Execution history of scheduled dream runs." },
+          { uri: "dream://context", name: "Cognitive Context", description: "Assembled cognitive preamble/context resources." },
+          { uri: "dream://lucid", name: "Lucid Dream State", description: "Lucid dreaming session state and controls." },
+          { uri: "discipline://manifest", name: "Discipline Manifest", description: "Execution-discipline manifest and phase guidance." },
+          { uri: "ops://api-surface", name: "API Surface", description: "Extracted operational API surface inventory." },
+          { uri: "ops://metrics", name: "Operational Metrics", description: "Runtime metrics snapshot for server operations." }
         ],
         cognitive_engine: {
           states: ["AWAKE", "REM", "NORMALIZING", "NIGHTMARE"],
@@ -264,7 +282,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(capabilities, null, 2),
+            text: formatJsonToolOutput(capabilities),
           },
         ],
       };
@@ -290,7 +308,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -318,7 +336,7 @@ export function registerResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(snapshot, null, 2),
+            text: formatJsonToolOutput(snapshot),
           },
         ],
       };

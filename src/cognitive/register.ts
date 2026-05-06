@@ -74,6 +74,7 @@ import {
 } from "./scheduler.js";
 import { logger } from "../utils/logger.js";
 import { success, error, safeExecute } from "../utils/errors.js";
+import { formatJsonToolOutput } from "../utils/tool-output.js";
 import type {
   DreamCycleOutput,
   NormalizeDreamsOutput,
@@ -125,7 +126,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -149,7 +150,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -173,7 +174,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -197,7 +198,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -221,7 +222,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -245,7 +246,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -269,7 +270,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -293,7 +294,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -317,7 +318,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -341,7 +342,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -369,7 +370,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -393,7 +394,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -417,7 +418,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -445,7 +446,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -469,7 +470,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -500,7 +501,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };
@@ -524,7 +525,7 @@ export function registerCognitiveResources(server: McpServer): void {
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(data, null, 2),
+            text: formatJsonToolOutput(data),
           },
         ],
       };

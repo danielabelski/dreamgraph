@@ -16,6 +16,7 @@ import { dataPath } from "../utils/paths.js";
 import { engine } from "../cognitive/engine.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
+import { formatJsonToolOutput } from "../utils/tool-output.js";
 import type {
   Feature,
   Workflow,
@@ -630,7 +631,7 @@ export function registerVisualArchitectTools(server: McpServer): void {
       });
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text" as const, text: formatJsonToolOutput(result) }],
       };
     }
   );
