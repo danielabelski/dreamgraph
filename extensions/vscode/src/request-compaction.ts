@@ -225,37 +225,13 @@ export function compactAssistantText(text: string, level: 0 | 1 | 2 | 3 = 1): st
   return truncateWithEllipsis(normalized, maxChars);
 }
 
-export function compactToolResultContent(content: unknown, level: 0 | 1 | 2 | 3 = 1): string {
-  const raw = normalizeWhitespace(typeof content === "string" ? content : safeJsonStringify(content));
-  const maxChars = budgetCharsForLevel(TOOL_RESULT_MAX_CHARS, TOOL_RESULT_BUDGET_FRACTION, level);
-
-  // Level 0 (within budget) is a quality-preserving pass: if the (already
-  // per-tool-truncated) content fits under the soft cap, return it verbatim.
-  // Summarizing here destroys file contents, code snippets, and any structured
-  // raw output that downstream reasoning depends on.
-  if (level === 0 && raw.length <= maxChars) {
-    return raw;
-  }
-
-  const structured = summarizeStructuredValue(content, 0, level);
-  const rawPreviewChars = Math.min(
-    TOOL_RESULT_RAW_PREVIEW_CHARS,
-    budgetCharsForLevel(TOOL_RESULT_RAW_PREVIEW_CHARS, TOOL_RESULT_BUDGET_FRACTION, level),
-  );
-
-  const parts: string[] = [];
-  if (structured.summary.length > 0) {
-    parts.push(`Tool result summary:\n${structured.summary.join("\n")}`);
-  }
-  if (structured.entities.length > 0) {
-    parts.push(`Key entities:\n${structured.entities.map((item) => `- ${item}`).join("\n")}`);
-  }
-  if (raw.length > 0) {
-    parts.push(`Truncated raw:\n${truncateWithEllipsis(raw, rawPreviewChars)}`);
-  }
-
-  const joined = parts.join("\n\n");
-  return truncateWithEllipsis(joined || truncateWithEllipsis(raw, maxChars), maxChars);
+export function compactToolResultContent(content: unknown, _level: 0 | 1 | 2 | 3 = 1): string {
+  // Per the never-fail philosophy: tool results are sacred. Never summarize
+  // them regardless of compaction level — the LLM must see exactly what the
+  // tool returned. Compaction may still tighten system prompts, assistant
+  // text, and older history (handled elsewhere), but a fresh tool_result is
+  // the ground truth the model is reasoning over and is passed through verbatim.
+  return normalizeWhitespace(typeof content === "string" ? content : safeJsonStringify(content));
 }
 
 function minifyToolSchema(schema: unknown): unknown {

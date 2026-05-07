@@ -776,7 +776,11 @@ export class ArchitectLlm implements vscode.Disposable {
       return this._callOpenAIResponsesWithTools(config, messages, tools, start, rawMessages, signal);
     }
 
-    const openaiTools = tools.map((t) => ({
+    // Trim tool descriptions / strip schema metadata to keep the `tools`
+    // section out of the budget hot path. Mirrors the Anthropic and
+    // OpenAI Responses paths (both already call `minifyToolDefinitions`).
+    const compactedTools = minifyToolDefinitions(tools);
+    const openaiTools = compactedTools.map((t) => ({
       type: "function" as const,
       function: { name: t.name, description: t.description, parameters: t.inputSchema },
     }));

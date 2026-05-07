@@ -404,6 +404,15 @@ export interface ReasoningPacket {
   contextText: string;
   safetyWarnings: string[];
   instrumentation?: ContextInstrumentation;
+  /**
+   * Phase 2 of NEVER_FAIL_BUDGET_DEBT_PLAN — read-only pressure label.
+   * Sourced exclusively from `BudgetCoordinator.getContextPressureLabel()`
+   * (Plan §4.0 hard rule). The Architect may use this advisory hint to
+   * prefer narrower tool calls; the system self-regulates regardless.
+   * Gated by `dreamgraph.architect.pressureSignalEnabled` (default true).
+   * Absent when no coordinator was supplied to `buildReasoningPacket`.
+   */
+  contextPressure?: 'low' | 'normal' | 'high';
 }
 
 export interface ContextEnvironmentMetrics {

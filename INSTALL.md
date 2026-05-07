@@ -1,4 +1,4 @@
-# Installing DreamGraph v8.2.1 "Bedrock"
+# Installing DreamGraph v8.3.0 "Bedrock"
 
 One-command install from source. Builds the MCP server, deploys the `dg` CLI globally, and installs the VS Code extension with DreamGraph Explorer.
 
@@ -38,7 +38,7 @@ bash scripts/install.sh
 That's it. After install, open a **new terminal** and run:
 
 ```bash
-dg --version          # DreamGraph CLI v8.2.1 (Bedrock)
+dg --version          # DreamGraph CLI v8.3.0 (Bedrock)
 dg --help             # Show all commands
 ```
 

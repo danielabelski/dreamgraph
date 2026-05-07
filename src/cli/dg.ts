@@ -43,7 +43,7 @@ import { cmdSchedule } from "./commands/schedule.js";
 
 function printUsage(): void {
   console.log(`
-DreamGraph CLI — Instance Management (v8.2.5 Bedrock)
+DreamGraph CLI — Instance Management (v8.3.0 Bedrock)
 
 Usage:
   dg <command> [options]
@@ -78,7 +78,7 @@ Run 'dg <command> --help' for command-specific options.
 }
 
 function printVersion(): void {
-  console.log("DreamGraph CLI v8.2.5 (Bedrock)");
+  console.log("DreamGraph CLI v8.3.0 (Bedrock)");
 }
 
 /* ------------------------------------------------------------------ */

@@ -30,6 +30,9 @@ export const TOOL_GROUPS = {
     'read_source_code',
     'list_directory',
     'read_local_file',
+    'search_source_code',
+    'list_markdown_chapters',
+    'read_markdown_chapter',
   ],
 
   /** File writes — only when intent is clearly mutating. */
@@ -41,6 +44,10 @@ export const TOOL_GROUPS = {
     'write_file',
     'modify_entity',
     'run_command',
+    'append_to_file',
+    'patch_file',
+    'edit_markdown_section',
+    'patch_markdown_chapter',
   ],
 
   /** Graph mutations — knowledge-graph editing. */
@@ -152,9 +159,9 @@ export type ToolGroupKey = keyof typeof TOOL_GROUPS;
 /*  Hard caps                                                         */
 /* ------------------------------------------------------------------ */
 
-export const MAX_TOOLS_DEFAULT = 8;
-export const MAX_TOOLS_MUTATION = 14;
-export const MAX_TOOLS_AUTONOMY = 20;
+export const MAX_TOOLS_DEFAULT = 12;
+export const MAX_TOOLS_MUTATION = 18;
+export const MAX_TOOLS_AUTONOMY = 24;
 
 /* ------------------------------------------------------------------ */
 /*  Intent → group selection                                          */

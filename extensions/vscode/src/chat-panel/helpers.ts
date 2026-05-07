@@ -66,13 +66,6 @@ export function stringifyToolResult(result: unknown): string {
   }
 }
 
-export function truncateToolResult(content: string, limit: number): string {
-  if (content.length <= limit) {
-    return content;
-  }
-  return `${content.slice(0, limit)}\n\n[Tool result truncated to ${limit} chars]`;
-}
-
 export function deriveVerdict(content: string, trace: ToolTraceEntry[]): VerdictBanner {
   const normalized = content.toLowerCase();
   const failedCount = trace.filter((t) => t.status === 'failed').length;
@@ -260,26 +253,14 @@ export function applyRenderLimits(
   };
 }
 
-// ---------- Per-tool limit/timeout tables ----------
+// ---------- Tool result handling ----------
 
-/** Per-tool result truncation limits (chars). Tools not listed use _default. */
-export const TOOL_RESULT_LIMITS: Record<string, number> = {
-  read_source_code: 12_000,
-  read_local_file: 12_000,
-  read_markdown_chapter: 12_000,
-  list_markdown_chapters: 8_000,
-  query_api_surface: 10_000,
-  run_command: 8_000,
-  edit_entity: 6_000,
-  edit_file: 6_000,
-  patch_file: 6_000,
-  edit_markdown_section: 6_000,
-  patch_markdown_chapter: 6_000,
-  append_to_file: 4_000,
-  modify_entity: 6_000,
-  write_file: 4_000,
-  _default: 4_000,
-};
+// Phase 4 of NEVER_FAIL_BUDGET_DEBT_PLAN — the legacy `truncateToolResult`
+// hard char cap and `dreamgraph.architect.maxToolResultChars` setting were
+// removed. Tool-result trimming now lives in `tool-result-compression.ts`
+// where it is driven by the per-turn `BudgetCoordinator`.
+
+// ---------- Per-tool timeout table ----------
 
 /** Per-tool MCP-call timeouts (ms). Tools not listed use _default. */
 export const TOOL_TIMEOUT_MS: Record<string, number> = {
@@ -297,12 +278,9 @@ export const TOOL_TIMEOUT_MS: Record<string, number> = {
   append_to_file: 15_000,
   read_source_code: 30_000,
   read_local_file: 30_000,
+  search_source_code: 45_000,
   _default: 60_000,
 };
-
-export function toolResultLimit(toolName: string): number {
-  return TOOL_RESULT_LIMITS[toolName] ?? TOOL_RESULT_LIMITS._default;
-}
 
 export function toolTimeoutMs(toolName: string): number {
   return TOOL_TIMEOUT_MS[toolName] ?? TOOL_TIMEOUT_MS._default;

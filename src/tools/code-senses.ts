@@ -18,9 +18,9 @@ import { logger } from "../utils/logger.js";
 import { recordFileRead, recordToolCall } from "../utils/metrics.js";
 import type { ToolResponse } from "../types/index.js";
 
-const MAX_READ_SOURCE_CODE_CHARS = 10000;
-const READ_SOURCE_CODE_PREVIEW_HEAD_CHARS = 4500;
-const READ_SOURCE_CODE_PREVIEW_TAIL_CHARS = 4500;
+const MAX_READ_SOURCE_CODE_CHARS = 24000;
+const READ_SOURCE_CODE_PREVIEW_HEAD_CHARS = 12000;
+const READ_SOURCE_CODE_PREVIEW_TAIL_CHARS = 8000;
 
 // ---------------------------------------------------------------------------
 // Entity extraction — find named entities (function, class, etc.) by name
@@ -60,6 +60,17 @@ function findEntity(source: string, entityName: string): EntityLocation | null {
     { regex: new RegExp(`^\\s*(?:export\\s+)?(?:const\\s+)?enum\\s+${escaped}[\\s{]`, "i"), kind: "enum" },
     // const/let/var name = (arrow function, object, etc.)
     { regex: new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\s*[=:]`, "i"), kind: "const" },
+    // Class methods: optional modifiers, optional generics, then `name(` or `name<...>(`.
+    // Indented since methods live inside a class body. Excludes plain function calls
+    // by requiring leading indentation and trailing `(` after optional generics.
+    {
+      regex: new RegExp(
+        `^\\s+(?:public\\s+|private\\s+|protected\\s+|static\\s+|readonly\\s+|async\\s+|override\\s+|abstract\\s+|get\\s+|set\\s+)*` +
+          `${escaped}\\s*(?:<[^>]*>)?\\s*\\(`,
+        "i",
+      ),
+      kind: "function",
+    },
   ];
 
   for (let i = 0; i < lines.length; i++) {
@@ -105,6 +116,86 @@ function findEntity(source: string, entityName: string): EntityLocation | null {
 /** Escape special regex characters in entity names. */
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Enumerate child member names + line spans inside a class body.
+ *
+ * Used by the oversized-entity safeguard in `read_source_code`: when an
+ * entity payload exceeds the soft transport threshold, the response
+ * carries a children outline so the caller can pivot to a focused
+ * sub-entity read instead of relying on a possibly-clipped full body.
+ *
+ * Heuristic, no AST:
+ *  - Walk lines between the class's opening `{` and its matching `}`.
+ *  - Track brace depth; only consider lines at the immediate body depth (1).
+ *  - Match `[modifiers] name(` or `[modifiers] name<...>(` for methods,
+ *    excluding control-flow keywords (`if`, `for`, `while`, `switch`,
+ *    `return`, `throw`, `await`, `new`).
+ */
+function findClassChildren(
+  lines: string[],
+  classStartLine: number,
+  classEndLine: number,
+): Array<{ name: string; kind: "method"; startLine: number; endLine: number }> {
+  const children: Array<{ name: string; kind: "method"; startLine: number; endLine: number }> = [];
+  // Convert to 0-based slice bounds
+  const start = Math.max(0, classStartLine - 1);
+  const end = Math.min(lines.length, classEndLine);
+
+  // Locate first opening brace of the class body
+  let bodyOpenIdx = -1;
+  for (let i = start; i < end; i += 1) {
+    if (lines[i].includes("{")) {
+      bodyOpenIdx = i;
+      break;
+    }
+  }
+  if (bodyOpenIdx === -1) return children;
+
+  const reserved = new Set([
+    "if", "for", "while", "switch", "return", "throw", "await",
+    "new", "do", "else", "try", "catch", "finally", "case", "typeof",
+    "function", "class", "constructor", "import", "export",
+  ]);
+  const methodPattern =
+    /^\s*(?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|async\s+|override\s+|abstract\s+|get\s+|set\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/;
+
+  // Walk from body open, tracking brace depth. depth=1 = direct member level.
+  let depth = 0;
+  let i = bodyOpenIdx;
+  // Count the opening brace on bodyOpenIdx but advance to next line for member scanning
+  for (const ch of lines[i]) {
+    if (ch === "{") depth += 1;
+    else if (ch === "}") depth -= 1;
+  }
+
+  for (i = bodyOpenIdx + 1; i < end; i += 1) {
+    const line = lines[i];
+    if (depth === 1) {
+      const match = line.match(methodPattern);
+      if (match) {
+        const name = match[1];
+        if (!reserved.has(name)) {
+          // Constructor is a real member; keep it. Find end via brace counting from this line.
+          const memberEnd = findEntityEnd(lines, i, "function");
+          children.push({
+            name,
+            kind: "method",
+            startLine: i + 1,
+            endLine: memberEnd + 1,
+          });
+        }
+      }
+    }
+    for (const ch of line) {
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+    }
+    if (depth <= 0) break;
+  }
+
+  return children;
 }
 
 /**
@@ -347,12 +438,12 @@ export function registerCodeSensesTools(server: McpServer): void {
   // =========================================================================
   server.tool(
     "read_source_code",
-    "Read source code from a file. Supports three modes:\n" +
-      "1. **Entity mode** (preferred): pass `entity` to read a specific function, class, interface, type, or enum by name.\n" +
-      "2. **Line range mode**: pass `startLine`/`endLine` to read a specific line range.\n" +
-      "3. **Full file mode** (fallback): omit both to read the entire file.\n\n" +
-      "**Always prefer entity mode** when you know the name of what you need — it returns only the relevant code, " +
-      "keeping context compact. Use full file mode only for small config/data files.",
+    "Read source code from a file. **Entity mode is the primary path** in DreamGraph; " +
+      "line-range and full-file are fallbacks.\n" +
+      "1. **Entity mode** (always prefer): pass `entity` to read a specific function, class, interface, type, enum, or class method by name. Returned verbatim.\n" +
+      "2. **Line range mode** (fallback): pass `startLine`/`endLine` when no named entity fits. Returned verbatim.\n" +
+      "3. **Full file mode** (last resort): omit both. May be clipped with a head/tail preview for very large files.\n\n" +
+      "If you don't know the exact entity name, use `query_api_surface` first, or `search_source_code` as a fallback discovery aid, then re-run in entity mode.",
     {
       filePath: z
         .string()
@@ -398,8 +489,8 @@ export function registerCodeSensesTools(server: McpServer): void {
         "read_source_code called: filePath=\"" + filePath + "\", repo=\"" + repoLabel + "\"" + entityTag + lineTag
       );
 
-      const result = await safeExecute<string>(
-        async (): Promise<ToolResponse<string>> => {
+      const result = await safeExecute<unknown>(
+        async (): Promise<ToolResponse<unknown>> => {
           let safePath: string;
 
           if (repo) {
@@ -437,8 +528,13 @@ export function registerCodeSensesTools(server: McpServer): void {
 
           try {
             const fullContent = await fs.readFile(safePath, "utf-8");
+            const fullLines = fullContent.split("\n");
             let content: string;
             let lineInfo = "";
+            // For oversized-entity safeguard: when the entity payload exceeds
+            // the soft transport threshold we attach a children outline so the
+            // caller can pivot to a focused sub-entity read.
+            let entityLoc: EntityLocation | null = null;
 
             // Entity mode — find the named entity and return only its source
             if (entity) {
@@ -447,19 +543,22 @@ export function registerCodeSensesTools(server: McpServer): void {
                 return error(
                   "ENTITY_NOT_FOUND",
                   `Entity "${entity}" not found in ${filePath}. ` +
-                    "Check the name spelling or use list_directory + full file read to explore."
+                    "Entity mode is the primary read path — the right move is to discover the " +
+                    "actual symbol name and re-run in entity mode. Try `query_api_surface` first, " +
+                    "or `search_source_code` with the name as the query as a fallback. " +
+                    "Supported: exported functions, classes, interfaces, types, enums, top-level " +
+                    "const/let/var declarations, and class methods."
                 );
               }
-              const lines = fullContent.split("\n");
-              content = lines.slice(loc.startLine - 1, loc.endLine).join("\n");
+              entityLoc = loc;
+              content = fullLines.slice(loc.startLine - 1, loc.endLine).join("\n");
               lineInfo = ` (${loc.kind} "${entity}", lines ${loc.startLine}–${loc.endLine})`;
             }
             // Line range mode
             else if (startLine !== undefined) {
-              const lines = fullContent.split("\n");
               const start = startLine - 1; // 0-indexed
-              const end = endLine !== undefined ? endLine : lines.length;
-              content = lines.slice(start, end).join("\n");
+              const end = endLine !== undefined ? endLine : fullLines.length;
+              content = fullLines.slice(start, end).join("\n");
               lineInfo = ` (lines ${startLine}–${endLine ?? "EOF"})`;
             }
             // Full file mode
@@ -488,8 +587,46 @@ export function registerCodeSensesTools(server: McpServer): void {
             const lang = langMap[ext] ?? ext;
 
             const formatted = `\`\`\`${lang}\n// ${filePath}${lineInfo}\n${content}\n\`\`\``;
-            const clipped = clipReadSourceCodeOutput(formatted);
+            // Only clip in full-file mode. Entity / startLine-endLine reads are
+            // already bounded by caller intent; clipping them produces head+tail
+            // previews that drop the middle of the requested entity and break
+            // architect workflows (e.g. agent asks for one function and gets
+            // the function header + closing brace with the body omitted).
+            const isBoundedRead = Boolean(entity) || startLine !== undefined;
             recordFileRead(filePath);
+
+            // Oversized-entity safeguard: if the entity payload is large enough
+            // that the model channel might clip it, return a structured envelope
+            // with a children outline so the caller can re-call into a smaller
+            // sub-entity. The full content is still included; under-cap callers
+            // get it intact, over-cap callers can pivot from the outline.
+            const SOFT_OVERSIZE_THRESHOLD = MAX_READ_SOURCE_CODE_CHARS;
+            if (entityLoc && formatted.length > SOFT_OVERSIZE_THRESHOLD) {
+              const lineCount = entityLoc.endLine - entityLoc.startLine + 1;
+              const children =
+                entityLoc.kind === "class"
+                  ? findClassChildren(fullLines, entityLoc.startLine, entityLoc.endLine)
+                  : [];
+              return success({
+                content: formatted,
+                oversized: {
+                  chars: formatted.length,
+                  lineCount,
+                  threshold: SOFT_OVERSIZE_THRESHOLD,
+                  children,
+                  hint:
+                    children.length > 0
+                      ? `Entity exceeds ${SOFT_OVERSIZE_THRESHOLD.toLocaleString()} chars. ` +
+                        `If the response was clipped by the transport, re-call read_source_code with one of the listed children as 'entity' for a focused read.`
+                      : `Entity exceeds ${SOFT_OVERSIZE_THRESHOLD.toLocaleString()} chars. ` +
+                        `If the response was clipped by the transport, re-call read_source_code with a tighter startLine/endLine range within ${entityLoc.startLine}–${entityLoc.endLine}.`,
+                },
+              });
+            }
+
+            const clipped = isBoundedRead
+              ? formatted
+              : clipReadSourceCodeOutput(formatted);
             return success(clipped);
           } catch (err: unknown) {
             const msg =
@@ -1410,6 +1547,212 @@ export function registerCodeSensesTools(server: McpServer): void {
   );
 
   // =========================================================================
+  // search_source_code — Repo-wide literal/regex search across files
+  // =========================================================================
+  server.tool(
+    "search_source_code",
+    "Search across files in a configured repository for a literal string or regex. " +
+      "**This is a discovery fallback** when entity-aware lookups (`query_api_surface`, " +
+      "`read_source_code` with `entity`) cannot resolve the symbol you need. Returns matching " +
+      "file paths with line numbers and a snippet of each hit. Once you have a likely symbol " +
+      "name from the results, switch back to `read_source_code` in entity mode for the actual read.",
+    {
+      query: z
+        .string()
+        .min(1)
+        .describe(
+          "The text to search for. Treated as a literal substring unless `isRegex` is true. " +
+            "Regex flavor: JavaScript RegExp (case-insensitive)."
+        ),
+      repo: z
+        .string()
+        .optional()
+        .describe(repoDesc),
+      pathPrefix: z
+        .string()
+        .optional()
+        .describe(
+          "Optional repo-relative directory to limit the search (e.g. 'src/server'). " +
+            "Defaults to the entire repo."
+        ),
+      includeExtensions: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Optional list of file extensions (without dot) to include, e.g. ['ts','tsx','js']. " +
+            "Defaults to a sensible code+config set."
+        ),
+      isRegex: z
+        .boolean()
+        .optional()
+        .describe("Treat `query` as a JavaScript regular expression. Default false."),
+      maxResults: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe("Maximum number of matches to return. Default 100."),
+      contextLines: z
+        .number()
+        .int()
+        .min(0)
+        .max(5)
+        .optional()
+        .describe("Number of context lines to include before and after each match. Default 1."),
+    },
+    async ({ query, repo, pathPrefix, includeExtensions, isRegex, maxResults, contextLines }) => {
+      const limit = maxResults ?? 100;
+      const ctx = contextLines ?? 1;
+      logger.debug(
+        `search_source_code called: query="${query}", repo="${repo ?? "(auto)"}", pathPrefix="${pathPrefix ?? ""}", isRegex=${isRegex ?? false}`
+      );
+
+      const result = await safeExecute<unknown>(async (): Promise<ToolResponse<unknown>> => {
+        // Resolve repo root
+        let repoRoot: string;
+        if (repo) {
+          const r = config.repos[repo];
+          if (!r) {
+            const available = Object.keys(config.repos).join(", ");
+            return error("INVALID_REPO", `Repo "${repo}" not found. Available repos: ${available}`);
+          }
+          repoRoot = path.resolve(r);
+        } else {
+          const all = Object.values(config.repos);
+          if (all.length === 0) return error("NO_REPO", "No repos configured.");
+          repoRoot = path.resolve(all[0]);
+        }
+
+        // Build search root
+        let searchRoot = repoRoot;
+        if (pathPrefix) {
+          const candidate = path.resolve(repoRoot, pathPrefix);
+          if (!candidate.toLowerCase().startsWith(repoRoot.toLowerCase())) {
+            return error("ACCESS_DENIED", `pathPrefix '${pathPrefix}' escapes repo root.`);
+          }
+          searchRoot = candidate;
+        }
+
+        // Compile matcher
+        let matcher: (line: string) => boolean;
+        let regex: RegExp | null = null;
+        if (isRegex) {
+          try {
+            regex = new RegExp(query, "i");
+          } catch (err) {
+            return error(
+              "INVALID_REGEX",
+              `Invalid regex: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+          matcher = (line) => regex!.test(line);
+        } else {
+          const lowered = query.toLowerCase();
+          matcher = (line) => line.toLowerCase().includes(lowered);
+        }
+
+        // File filter
+        const defaultExts = [
+          "ts", "tsx", "js", "jsx", "mjs", "cjs",
+          "json", "md", "yml", "yaml", "html", "css", "scss",
+          "sql", "sh", "ps1", "env", "toml",
+        ];
+        const exts = (includeExtensions ?? defaultExts).map((e) =>
+          e.startsWith(".") ? e.slice(1).toLowerCase() : e.toLowerCase()
+        );
+        const skipDirs = new Set([
+          "node_modules", ".git", "dist", "build", "out", ".next",
+          ".turbo", ".cache", "coverage", ".vscode-test",
+        ]);
+
+        interface Match {
+          filePath: string;
+          line: number;
+          preview: string;
+        }
+        const matches: Match[] = [];
+        let filesScanned = 0;
+        let truncated = false;
+
+        async function walk(dir: string): Promise<void> {
+          if (matches.length >= limit) {
+            truncated = true;
+            return;
+          }
+          let entries: import("node:fs").Dirent[];
+          try {
+            entries = await fs.readdir(dir, { withFileTypes: true });
+          } catch {
+            return;
+          }
+          for (const entry of entries) {
+            if (matches.length >= limit) {
+              truncated = true;
+              return;
+            }
+            if (entry.isDirectory()) {
+              if (skipDirs.has(entry.name) || entry.name.startsWith(".")) continue;
+              await walk(path.join(dir, entry.name));
+              continue;
+            }
+            if (!entry.isFile()) continue;
+            const ext = path.extname(entry.name).slice(1).toLowerCase();
+            if (!exts.includes(ext)) continue;
+            const full = path.join(dir, entry.name);
+            let text: string;
+            try {
+              text = await fs.readFile(full, "utf-8");
+            } catch {
+              continue;
+            }
+            filesScanned += 1;
+            const lines = text.split("\n");
+            for (let i = 0; i < lines.length; i += 1) {
+              if (matches.length >= limit) {
+                truncated = true;
+                return;
+              }
+              if (!matcher(lines[i])) continue;
+              const start = Math.max(0, i - ctx);
+              const end = Math.min(lines.length, i + ctx + 1);
+              const snippetLines: string[] = [];
+              for (let j = start; j < end; j += 1) {
+                const marker = j === i ? ">" : " ";
+                snippetLines.push(`${marker} ${j + 1}: ${lines[j]}`);
+              }
+              const rel = path.relative(repoRoot, full).replace(/\\/g, "/");
+              matches.push({
+                filePath: rel,
+                line: i + 1,
+                preview: snippetLines.join("\n"),
+              });
+            }
+          }
+        }
+
+        await walk(searchRoot);
+
+        return success({
+          query,
+          isRegex: Boolean(isRegex),
+          repoRoot,
+          searchRoot,
+          filesScanned,
+          matchCount: matches.length,
+          truncated,
+          maxResults: limit,
+          matches,
+        });
+      });
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  // =========================================================================
   // Markdown chapter helpers — shared by list / read / patch
   // =========================================================================
 
@@ -1729,6 +2072,6 @@ export function registerCodeSensesTools(server: McpServer): void {
   );
 
   logger.info(
-    "Registered 13 code-senses tools (list_directory, read_source_code, create_file, edit_file, delete_file, rename_file, edit_entity, patch_file, append_to_file, edit_markdown_section, list_markdown_chapters, read_markdown_chapter, patch_markdown_chapter)"
+    "Registered 14 code-senses tools (list_directory, read_source_code, create_file, edit_file, delete_file, rename_file, edit_entity, patch_file, append_to_file, edit_markdown_section, search_source_code, list_markdown_chapters, read_markdown_chapter, patch_markdown_chapter)"
   );
 }

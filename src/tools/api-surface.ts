@@ -165,6 +165,123 @@ async function saveSurface(data: ApiSurface): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Freshness diagnostics — used by query_api_surface NOT_FOUND to tell the
+// caller whether the index is stale (i.e. real source has changed since the
+// last extract). The aim is to eliminate the "wasted try" pattern: on a miss,
+// the caller learns immediately whether to refresh the surface or to fall
+// back to entity-mode read_source_code.
+// ---------------------------------------------------------------------------
+
+interface FreshnessReport {
+  surface_extracted_at: string | null;
+  source_files_newer: number;
+  files_scanned: number;
+  scan_capped: boolean;
+  stale: boolean;
+  sample_stale_files: string[];
+}
+
+/**
+ * Best-effort freshness check.
+ *
+ *  - Computes the most recent `extracted_at` across all surface modules.
+ *  - Walks the configured repo root once, counting source files whose
+ *    mtime is newer than that timestamp.
+ *  - Caps the scan at `maxFiles` entries to keep the call cheap on large
+ *    monorepos. If the cap is hit, `scan_capped` is set so the caller can
+ *    interpret the count as a lower bound.
+ *  - Skips standard noise dirs (node_modules, dist, .git, etc.) via the
+ *    existing `SKIP_DIRS` set.
+ */
+async function computeApiSurfaceFreshness(
+  surface: ApiSurface,
+  repoRoot: string,
+  maxFiles = 1500,
+  sampleLimit = 5,
+): Promise<FreshnessReport> {
+  // Find newest extracted_at across modules; fall back to surface-level value.
+  let newest = 0;
+  let newestIso: string | null = null;
+  for (const mod of surface.modules) {
+    const ts = mod.provenance?.extracted_at;
+    if (!ts) continue;
+    const t = new Date(ts).getTime();
+    if (Number.isFinite(t) && t > newest) {
+      newest = t;
+      newestIso = ts;
+    }
+  }
+  if (!newest && surface.extracted_at) {
+    const t = new Date(surface.extracted_at).getTime();
+    if (Number.isFinite(t)) {
+      newest = t;
+      newestIso = surface.extracted_at;
+    }
+  }
+
+  let filesScanned = 0;
+  let newer = 0;
+  let scanCapped = false;
+  const sample: string[] = [];
+
+  async function walk(dir: string): Promise<void> {
+    if (filesScanned >= maxFiles) {
+      scanCapped = true;
+      return;
+    }
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (filesScanned >= maxFiles) {
+        scanCapped = true;
+        return;
+      }
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        await walk(path.join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!CODE_EXTENSIONS.has(ext)) continue;
+      const full = path.join(dir, entry.name);
+      filesScanned += 1;
+      if (newest === 0) continue;
+      try {
+        const stat = await fs.stat(full);
+        if (stat.mtimeMs > newest) {
+          newer += 1;
+          if (sample.length < sampleLimit) {
+            sample.push(path.relative(repoRoot, full).replace(/\\/g, "/"));
+          }
+        }
+      } catch {
+        /* ignore stat failures */
+      }
+    }
+  }
+
+  try {
+    await walk(repoRoot);
+  } catch {
+    /* best-effort */
+  }
+
+  return {
+    surface_extracted_at: newestIso,
+    source_files_newer: newer,
+    files_scanned: filesScanned,
+    scan_capped: scanCapped,
+    stale: newer > 0,
+    sample_stale_files: sample,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Source snippet extraction (for include_source queries)
 // ---------------------------------------------------------------------------
 
@@ -1586,11 +1703,39 @@ export function registerApiSurfaceTools(server: McpServer): void {
           ? ` Similar symbols: ${suggestions.join(", ")}`
           : "";
 
-        recordSymbolLookup(symbol_name, false);
+        // Freshness probe: tell the caller whether the index is stale so they
+        // know whether to refresh or to fall back to entity-mode read_source_code.
+        let freshnessStr = "";
+        try {
+          const repoRoot = surface.repo_root && surface.repo_root.length > 0
+            ? path.resolve(surface.repo_root)
+            : Object.values(config.repos)[0]
+              ? path.resolve(Object.values(config.repos)[0])
+              : null;
+          if (repoRoot) {
+            const fr = await computeApiSurfaceFreshness(surface, repoRoot);
+            if (fr.stale) {
+              const countStr = fr.scan_capped
+                ? `at least ${fr.source_files_newer}`
+                : `${fr.source_files_newer}`;
+              const sample = fr.sample_stale_files.length > 0
+                ? ` (e.g. ${fr.sample_stale_files.slice(0, 3).join(", ")})`
+                : "";
+              const ts = fr.surface_extracted_at ?? "unknown";
+              freshnessStr =
+                ` Index freshness: ${countStr} source file(s) modified since last extraction (extracted_at: ${ts})${sample}.` +
+                ` Run extract_api_surface (incremental=true) to refresh, or fall back to read_source_code with entity mode.`;
+            } else if (fr.surface_extracted_at) {
+              freshnessStr = ` Index freshness: up to date (extracted_at: ${fr.surface_extracted_at}). Symbol likely doesn't exist; use search_source_code to confirm or pivot to entity-mode read_source_code.`;
+            }
+          }
+        } catch {
+          /* freshness probe is best-effort */
+        }
 
         return error(
           "NOT_FOUND",
-          `Symbol '${symbol_name}' not found in API surface.${suggestStr}`
+          `Symbol '${symbol_name}' not found in API surface.${suggestStr}${freshnessStr}`
         );
       });
 

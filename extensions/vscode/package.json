@@ -245,6 +245,31 @@
           "default": 16000,
           "description": "Maximum token budget for Architect context assembly."
         },
+        "dreamgraph.architect.expectedTokensPerTurn": {
+          "type": "number",
+          "default": 16000,
+          "description": "BudgetCoordinator soft target: tokens the pipeline aims for per turn (Plan §5)."
+        },
+        "dreamgraph.architect.transportCeilingTokens": {
+          "type": "number",
+          "default": 180000,
+          "description": "BudgetCoordinator transport safety ceiling — never breached. Model context window minus reply headroom."
+        },
+        "dreamgraph.architect.debtCarryFraction": {
+          "type": "number",
+          "default": 1.0,
+          "description": "Fraction of overspend that rolls into next turn's debt (0 = forget, 1 = full carry)."
+        },
+        "dreamgraph.architect.pressureSignalEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the reasoning packet exposes context_pressure (low|normal|high) to the Architect as a read-only advisory signal."
+        },
+        "dreamgraph.architect.budgetPillEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Phase 5 (debug): show a per-turn budget pill in the chat header with debt, last-turn actual tokens, pressure label, and component breakdown. Off by default."
+        },
         "dreamgraph.architect.maxRequestChars": {
           "type": "number",
           "default": 320000,

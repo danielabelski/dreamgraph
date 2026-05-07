@@ -946,6 +946,36 @@ export function getStyles(): string {
       font-size: 0.85em;
     }
 
+    /* ── Phase 5 budget pill (debug, opt-in via dreamgraph.architect.budgetPillEnabled) ── */
+    #budget-pill {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 10px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editorWidget-background, transparent);
+      font-size: 0.78em;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-variant-numeric: tabular-nums;
+      opacity: 0.85;
+    }
+    .budget-pill-pressure {
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .budget-pill-pressure-low { color: var(--vscode-charts-green, #89d185); }
+    .budget-pill-pressure-normal { color: var(--vscode-charts-blue, #4fc1ff); }
+    .budget-pill-pressure-high { color: var(--vscode-charts-red, #f14c4c); }
+    .budget-pill-components {
+      opacity: 0.7;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     /* ── Recommended actions ── */
     .recommended-actions {
       display: flex;

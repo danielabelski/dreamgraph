@@ -46,6 +46,12 @@ import { extractStructuredPassEnvelope } from './autonomy-structured.js';
 import { getAutonomyMode, getAutonomyPassBudget, parseAutonomyRequest } from './reporting.js';
 import * as helpers from './chat-panel/helpers.js';
 import {
+  BudgetCoordinator,
+  estimateTokensFromString,
+  type BudgetSnapshot,
+} from './budget-coordinator.js';
+import { compressToolResult } from './tool-result-compression.js';
+import {
   type ImplicitEntityDetectionResult,
   type VerdictBanner,
   type ToolTraceEntry,
@@ -217,7 +223,27 @@ type ExtensionToWebviewMessage =
   | { type: 'toolTrace'; calls: ToolTraceEntry[] }
   | { type: 'verdict'; verdict: VerdictBanner }
   | { type: 'autonomyStatus'; status: AutonomyStatusMessage }
-  | { type: 'recommendedActions'; messageId: string; actions: RecommendedActionMessage[]; doAllEligible: boolean };
+  | { type: 'recommendedActions'; messageId: string; actions: RecommendedActionMessage[]; doAllEligible: boolean }
+  | { type: 'budgetStatus'; status: BudgetStatusMessage };
+
+interface BudgetStatusMessage {
+  /** Plan §5 — turn number this status reflects. */
+  turn: number;
+  /** Snapshot debt after the turn, in tokens. */
+  debtTokens: number;
+  /** Total actual tokens consumed this turn. */
+  lastActualTokens: number;
+  /** Soft target (`expectedTokensPerTurn`) at the time of the turn. */
+  expectedTokens: number;
+  /** Pressure label as the coordinator reported it at finalize. */
+  pressureLabel: 'low' | 'normal' | 'high';
+  /** Per-component actuals for the turn (smallest-first ordering left to UI). */
+  components: Record<string, number>;
+  /** Coordinator-applied delta (overspend +, underspend −) used for debt math. */
+  delta: number;
+  /** Active model id at finalize. */
+  modelId: string;
+}
 
 interface AutonomyStatusMessage {
   mode: string;
@@ -297,6 +323,19 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   private _webviewBundleUri: string | null = null;
   private _lastToolTrace: ToolTraceEntry[] = [];
   /**
+   * Phase 2 of the never-fail budget plan (plans/NEVER_FAIL_BUDGET_DEBT_PLAN.md).
+   * Snapshot is hydrated from `ChatMemory.loadBudgetState` on restore and
+   * persisted via `saveBudgetState` after each `_finalizeCurrentBudgetTurn`.
+   * The §9 reload invariant requires byte-for-byte round-trip — `BudgetSnapshot`
+   * is plain JSON.
+   */
+  private _lastBudgetSnapshot: BudgetSnapshot | null = null;
+  private _budgetTurnCounter = 0;
+  /** The coordinator instantiated for the current turn, if any. */
+  private _currentBudgetCoordinator: BudgetCoordinator | null = null;
+  /** Set after restoreMessages hydrates persisted budget state, so we don't re-load mid-session. */
+  private _budgetStateHydrated = false;
+  /**
    * Tool names that the most recent assistant turn explicitly mentioned in its
    * "Suggested Actions" / next-step text. Carried into the next user turn so
    * brief follow-ups ("yes", "do it") still expose the right tools to the
@@ -348,10 +387,6 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     '.webp': 'image/webp',
     '.gif': 'image/gif',
   };
-
-  private static _toolResultLimit(toolName: string): number {
-    return helpers.toolResultLimit(toolName);
-  }
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -604,7 +639,14 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   if (!trimmed && this.attachments.length === 0) return;
 
   const provider = this.architectLlm?.provider ?? 'anthropic';
-  const envelope = this.contextBuilder ? await this.contextBuilder.buildEnvelope(trimmed, 'chat') : null;
+  // Phase 3 — instantiate per-turn BudgetCoordinator before building the
+  // envelope so `buildEnvelope` can adapt deep-insights / environment trim
+  // to the coordinator's pressure label (Plan §4.4).
+  this._budgetTurnCounter += 1;
+  this._currentBudgetCoordinator = this._createBudgetCoordinatorForTurn();
+  const envelope = this.contextBuilder
+    ? await this.contextBuilder.buildEnvelope(trimmed, 'chat', this._currentBudgetCoordinator)
+    : null;
   const liveAnchor = envelope?.activeFile?.selection?.anchor ?? envelope?.activeFile?.cursorAnchor;
   const userMessage: ChatMessage = {
     id: this._createMessageId(),
@@ -668,6 +710,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   const task = inferTask(envelope.intentMode ?? 'ask_dreamgraph', undefined, trimmed);
+  // Phase 1+3 — coordinator was created earlier (before buildEnvelope) so the
+  // context tier could read pressure. Reuse it here for the tool-result layer.
   const contextResult = await this._buildPromptContext(task, envelope, trimmed, 'chat');
 
   await this._logContextToOutput(envelope, contextResult.reasoningPacket);
@@ -812,6 +856,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       await this.postMessage({ type: 'error', error: message });
     }
   } finally {
+    this._finalizeCurrentBudgetTurn();
     this.resetStreamState();
   }
 }
@@ -827,9 +872,13 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   if (task === 'patch') {
+    const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+    const pressureSignalEnabled = cfg.get<boolean>('pressureSignalEnabled') ?? true;
     const reasoningPacket = await this.contextBuilder.buildReasoningPacket(envelope, {
       prompt: promptText,
       commandSource,
+      coordinator: this._currentBudgetCoordinator ?? undefined,
+      pressureSignalEnabled,
     });
     return {
       assembledContext: this.contextBuilder.renderReasoningPacket(reasoningPacket).text,
@@ -1509,6 +1558,25 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
     this.messages.splice(0, this.messages.length, ...scoped.map((message) => ({ ...message, instanceId: message.instanceId ?? this.currentInstanceId })));
     this._hoverActionStateByMessage.clear();
+
+    // Phase 2 — hydrate persisted budget state for this instance.
+    try {
+      const budgetState = await this.memory.loadBudgetState(this.currentInstanceId);
+      if (budgetState) {
+        this._lastBudgetSnapshot = budgetState.snapshot;
+        this._budgetTurnCounter = budgetState.turnCounter;
+      } else {
+        this._lastBudgetSnapshot = null;
+        this._budgetTurnCounter = 0;
+      }
+      this._budgetStateHydrated = true;
+    } catch (err) {
+      console.warn('[budget] hydrate failed', err);
+      this._lastBudgetSnapshot = null;
+      this._budgetTurnCounter = 0;
+      this._budgetStateHydrated = true;
+    }
+
     await this.postState();
   }
 
@@ -1758,7 +1826,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
     try {
       // Build continuation message
-      const envelope = this.contextBuilder ? await this.contextBuilder.buildEnvelope(prompt) : null;
+      const envelope = this.contextBuilder
+        ? await this.contextBuilder.buildEnvelope(prompt, undefined, this._currentBudgetCoordinator ?? undefined)
+        : null;
       const liveAnchor = envelope?.activeFile?.selection?.anchor ?? envelope?.activeFile?.cursorAnchor;
       const userMessage: ChatMessage = {
         id: this._createMessageId(),
@@ -2018,7 +2088,27 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           const result = isLocalTool(toolCall.name)
             ? await executeLocalTool(toolCall.name, toolCall.input ?? {})
             : await this._callMcpToolWithLazyConnect(toolCall.name, toolCall.input ?? {});
-          const normalized = this._truncateToolResult(toolCall.name, this._stringifyToolResult(result));
+          const rawString = this._stringifyToolResult(result);
+          // Phase 4 — pressure-aware multi-tier compression. The coordinator
+          // owns the policy via getPressure()/getRemainingTargetTokens() and
+          // recordCompression() is invoked from inside compressToolResult.
+          // When no coordinator exists for the turn (defensive: shouldn't
+          // happen post-Phase 3) the payload is passed through verbatim.
+          let normalized: string;
+          if (this._currentBudgetCoordinator) {
+            const compression = compressToolResult(
+              rawString,
+              this._currentBudgetCoordinator,
+              toolCall.name,
+            );
+            normalized = compression.content;
+            this._currentBudgetCoordinator.recordComponentActual(
+              `tool:${toolCall.name}`,
+              estimateTokensFromString(normalized),
+            );
+          } else {
+            normalized = rawString;
+          }
           toolResultBlocks.push({
             type: 'tool_result',
             tool_use_id: toolCall.id,
@@ -2296,8 +2386,88 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     return helpers.stringifyToolResult(result);
   }
 
-  private _truncateToolResult(toolName: string, content: string): string {
-    return helpers.truncateToolResult(content, ChatPanel._toolResultLimit(toolName));
+  // ---------------------------- BudgetCoordinator (Phase 1) ----------------------------
+
+  /**
+   * Plan \u00a73.2 / \u00a75 settings:
+   *   - `expectedTokensPerTurn`     soft target (default 16k)
+   *   - `transportCeilingTokens`    safety invariant (default 180k)
+   *   - `debtCarryFraction`         debt rollover fraction (default 1.0)
+   *
+   * Phase 1 is in-memory only. The snapshot is rolled forward on
+   * `this._lastBudgetSnapshot`; persistence into chat session state is Phase 2.
+   */
+  private _createBudgetCoordinatorForTurn(): BudgetCoordinator {
+    const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+    const expected = cfg.get<number>('expectedTokensPerTurn');
+    const ceiling = cfg.get<number>('transportCeilingTokens');
+    const carry = cfg.get<number>('debtCarryFraction');
+    const modelId = this.architectLlm?.currentConfig?.model ?? this.architectLlm?.provider ?? 'unknown';
+    return new BudgetCoordinator(this._lastBudgetSnapshot, {
+      expectedTokensPerTurn: typeof expected === 'number' && expected > 0 ? expected : 16_000,
+      transportCeilingTokens: typeof ceiling === 'number' && ceiling > 0 ? ceiling : 180_000,
+      debtCarryFraction: typeof carry === 'number' && carry >= 0 ? carry : 1.0,
+      turnNumber: this._budgetTurnCounter,
+      modelId,
+    });
+  }
+
+  private _finalizeCurrentBudgetTurn(): void {
+    const coord = this._currentBudgetCoordinator;
+    if (!coord) return;
+    this._currentBudgetCoordinator = null;
+    try {
+      const snapshot = coord.finalizeTurn();
+      this._lastBudgetSnapshot = snapshot;
+      // Phase 2 — persist per-instance so the snapshot survives webview reload
+      // and extension-host recreation (Plan §9 reload invariant).
+      if (this.memory) {
+        void this.memory
+          .saveBudgetState(this.currentInstanceId, snapshot, this._budgetTurnCounter)
+          .catch((err) => console.warn('[budget] persist failed', err));
+      }
+      // Dev-console diagnostic only — Phase 1 has no user-facing surface yet.
+      const lastEntry = snapshot.history[snapshot.history.length - 1];
+      const components = lastEntry?.components ?? {};
+      console.log(
+        `[budget] turn=${this._budgetTurnCounter} actual=${snapshot.lastActualTokens} ` +
+        `delta=${lastEntry?.delta ?? 0} debt=${snapshot.debtTokens} ` +
+        `pressure=${coord.getContextPressureLabel()} components=${JSON.stringify(components)}`,
+      );
+
+      // Phase 5 — opt-in budget pill (`dreamgraph.architect.budgetPillEnabled`).
+      // Posted as a fire-and-forget message; the webview ignores it when the
+      // pill DOM is hidden, so cost when off is a single boolean check.
+      try {
+        const pillEnabled = vscode.workspace
+          .getConfiguration('dreamgraph.architect')
+          .get<boolean>('budgetPillEnabled', false);
+        if (pillEnabled) {
+          void this.postMessage({
+            type: 'budgetStatus',
+            status: {
+              turn: this._budgetTurnCounter,
+              debtTokens: snapshot.debtTokens,
+              lastActualTokens: snapshot.lastActualTokens,
+              expectedTokens: snapshot.expectedTokens,
+              pressureLabel: coord.getContextPressureLabel(),
+              components,
+              delta: lastEntry?.delta ?? 0,
+              modelId: snapshot.modelId,
+            },
+          });
+        }
+      } catch {
+        // UI broadcast must never break finalize.
+      }
+    } catch (err) {
+      console.warn('[budget] finalize failed', err);
+    }
+  }
+
+  /** Read-only accessor for context-builder/reasoning-packet wiring. */
+  public getCurrentBudgetCoordinator(): BudgetCoordinator | null {
+    return this._currentBudgetCoordinator;
   }
 
   private _summarizeToolArgs(input: unknown): string {
@@ -2392,6 +2562,13 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     <span id="autonomy-mode-label"></span>
     <span id="autonomy-counter"></span>
     <button id="autonomy-reset-btn" class="icon-btn" title="Reset autonomy" aria-label="Reset autonomy" style="display:none">✕</button>
+  </div>
+
+  <div id="budget-pill" style="display:none" title="DreamGraph budget (debug)">
+    <span id="budget-pill-pressure" class="budget-pill-pressure"></span>
+    <span id="budget-pill-tokens"></span>
+    <span id="budget-pill-debt"></span>
+    <span id="budget-pill-components" class="budget-pill-components"></span>
   </div>
 
   <div id="messages"></div>
@@ -3252,6 +3429,31 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             label.className = 'autonomy-mode autonomy-mode-' + s.mode;
             counter.textContent = s.countingActive ? s.summary : '';
             resetBtn.style.display = s.mode !== 'cautious' || s.countingActive ? 'inline-flex' : 'none';
+          }
+          break;
+        }
+        case 'budgetStatus': {
+          // Phase 5 — opt-in debug pill. The host only posts this message
+          // when dreamgraph.architect.budgetPillEnabled === true, so we
+          // simply render whatever arrives.
+          const pill = document.getElementById('budget-pill');
+          const pressureEl = document.getElementById('budget-pill-pressure');
+          const tokensEl = document.getElementById('budget-pill-tokens');
+          const debtEl = document.getElementById('budget-pill-debt');
+          const componentsEl = document.getElementById('budget-pill-components');
+          if (pill && pressureEl && tokensEl && debtEl && componentsEl) {
+            const s = msg.status;
+            pill.style.display = 'flex';
+            pressureEl.textContent = s.pressureLabel;
+            pressureEl.className = 'budget-pill-pressure budget-pill-pressure-' + s.pressureLabel;
+            tokensEl.textContent = s.lastActualTokens + '/' + s.expectedTokens + ' tok';
+            debtEl.textContent = (s.debtTokens >= 0 ? 'debt ' : 'credit ') + Math.abs(s.debtTokens);
+            const parts = Object.entries(s.components || {})
+              .sort(function(a, b) { return Number(b[1]) - Number(a[1]); })
+              .slice(0, 4)
+              .map(function(entry) { return entry[0] + '=' + entry[1]; });
+            componentsEl.textContent = parts.length > 0 ? '· ' + parts.join(' ') : '';
+            pill.title = 'turn ' + s.turn + ' · model ' + s.modelId + ' · delta ' + s.delta;
           }
           break;
         }

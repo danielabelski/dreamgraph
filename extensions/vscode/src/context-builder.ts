@@ -82,6 +82,21 @@ function summarizeSelection(startLine: number, endLine: number): string {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Phase 3 — BudgetCoordinator reader contract                       */
+/* ------------------------------------------------------------------ */
+
+// Re-exported from a vscode-free module so unit tests can import the
+// policy helper without pulling in `vscode`.
+export {
+  shouldFetchDeepInsight,
+  type BudgetCoordinatorReader,
+} from "./budget-coordinator-reader.js";
+import {
+  shouldFetchDeepInsight,
+  type BudgetCoordinatorReader,
+} from "./budget-coordinator-reader.js";
+
+/* ------------------------------------------------------------------ */
 /*  Context Builder                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -134,6 +149,25 @@ export class ContextBuilder {
     async buildEnvelope(
     prompt?: string,
     commandSource?: string,
+    /**
+     * Phase 3 of NEVER_FAIL_BUDGET_DEBT_PLAN — optional turn-scoped coordinator.
+     * When supplied, `buildEnvelope` adapts deep-insights and environment fetches
+     * to the coordinator's pressure label (the coordinator owns all pressure
+     * decisions; this site only reads `getContextPressureLabel()`).
+     *
+     * Trim policy (Plan §3.1 — deep insights first, then environment):
+     *  - 'low'    → full fidelity (no trim)
+     *  - 'normal' → full fidelity (no trim — reserved for future tier-2 trims)
+     *  - 'high'   → drop optional deep-insights tiers (temporal, cognitive_status,
+     *               and feature/workflow when only optionally needed) and reduce
+     *               the environment block to the runtime/package-manager header
+     *               (no per-scope entries).
+     *
+     * ADR-097: the curated graph-evidence slice is NEVER trimmed here. Deep-insights
+     * are advisory MCP fetches layered on top of the graph slice; trimming them
+     * leaves the ADR-097 reserve intact.
+     */
+    coordinator?: BudgetCoordinatorReader,
   ): Promise<EditorContextEnvelope> {
     const editor = vscode.window.activeTextEditor;
     const workspaceRoot =
@@ -165,10 +199,17 @@ export class ContextBuilder {
     const environmentSnapshot = workspaceRoot
       ? await this._getCachedEnvironmentSnapshot(workspaceRoot, environmentModule)
       : null;
-    const environmentEntries = environmentModule.selectEnvironmentContextForFile(
+    const fullEnvironmentEntries = environmentModule.selectEnvironmentContextForFile(
       environmentSnapshot,
       editor ? vscode.workspace.asRelativePath(editor.document.uri) : null,
     );
+    // Phase 3 — environment trim (Plan §3.1 tier 4). Under 'high' pressure we
+    // drop the per-scope entries and keep only the runtime/package-manager
+    // header so the LLM still knows the toolchain. Lower pressure: full set.
+    const pressureLabel =
+      coordinator?.getContextPressureLabel?.() ?? 'low';
+    const environmentEntries =
+      pressureLabel === 'high' ? [] : fullEnvironmentEntries;
 
     const envelope: EditorContextEnvelope = {
       workspaceRoot,
@@ -232,10 +273,21 @@ export class ContextBuilder {
       this._environmentMetrics = null;
     }
 
+    // Phase 3 — report environment tier actuals to the coordinator (read-only;
+    // the coordinator never blocks).
+    if (coordinator?.recordComponentActual) {
+      try {
+        const envTokens = this._environmentMetrics?.tokenEstimate ?? 0;
+        coordinator.recordComponentActual('context:env', envTokens);
+      } catch {
+        // Reporting must never break envelope assembly.
+      }
+    }
+
     // Phase 2: resolve graph context (evidence-driven)
     const plan = await this.createContextPlan(envelope, prompt, commandSource);
     if (plan.requiredEvidence.length > 0 || plan.optionalEvidence.length > 0) {
-      envelope.graphContext = await this.resolveGraphContext(envelope, plan);
+      envelope.graphContext = await this.resolveGraphContext(envelope, plan, coordinator);
     }
 
     // Phase 3: one-pass anchor promotion — now that graphContext is available,
@@ -754,8 +806,9 @@ export class ContextBuilder {
   async resolveGraphContext(
     envelope: EditorContextEnvelope,
     plan: import("./types.js").ContextPlan,
+    coordinator?: BudgetCoordinatorReader,
   ): Promise<EditorContextEnvelope["graphContext"]> {
-    return this._resolveGraphContext(envelope, plan);
+    return this._resolveGraphContext(envelope, plan, coordinator);
   }
 
   /**
@@ -888,6 +941,21 @@ export class ContextBuilder {
       prompt?: string;
       commandSource?: string;
       additionalSections?: Map<string, string>;
+      /**
+       * Phase 1 of NEVER_FAIL_BUDGET_DEBT_PLAN — optional turn-scoped coordinator.
+       * When supplied, the context tier reports its actual graph and evidence
+       * token consumption so component history is populated end-to-end.
+       * The coordinator owns all pressure decisions; this site MUST NOT read
+       * remaining budget back to alter behaviour in Phase 1.
+       */
+      coordinator?: {
+        recordComponentActual(component: string, actualTokens: number): void;
+        getContextPressureLabel?(): 'low' | 'normal' | 'high';
+        getRemainingTargetTokens?(): number;
+        flagGraphSliceEmergencyTrim?(): void;
+      };
+      /** Phase 2 — when false, suppress `contextPressure` on the packet. */
+      pressureSignalEnabled?: boolean;
     },
   ): Promise<import("./types.js").ReasoningPacket> {
     const plan = await this.createContextPlan(
@@ -895,7 +963,7 @@ export class ContextBuilder {
       options?.prompt,
       options?.commandSource,
     );
-    const graphContext = envelope.graphContext ?? await this.resolveGraphContext(envelope, plan);
+    const graphContext = envelope.graphContext ?? await this.resolveGraphContext(envelope, plan, options?.coordinator);
     const hydratedEnvelope: EditorContextEnvelope = {
       ...envelope,
       graphContext,
@@ -914,11 +982,33 @@ export class ContextBuilder {
     const reservedGraph = plan.budgetPolicy.reserveGraphTokens;
     const usableBudget = Math.max(200, budget - reserved);
 
+    // Plan §4.4 / ADR-097 — emergency-trim trigger. The graph slice is
+    // normally hard-reserved, but when the coordinator says (a) pressure is
+    // 'high' and (b) the remaining adaptive target cannot even cover the
+    // reserved slice, we drop the reserve for this turn rather than blow
+    // the soft target. The breach is flagged so the audit trail records it.
+    let effectiveReservedGraph = reservedGraph;
+    if (
+      reservedGraph > 0 &&
+      options?.coordinator?.getContextPressureLabel?.() === 'high' &&
+      typeof options.coordinator.getRemainingTargetTokens === 'function'
+    ) {
+      try {
+        const remaining = options.coordinator.getRemainingTargetTokens();
+        if (Number.isFinite(remaining) && remaining < reservedGraph) {
+          effectiveReservedGraph = 0;
+          options.coordinator.flagGraphSliceEmergencyTrim?.();
+        }
+      } catch {
+        // Reading remaining must never break context assembly.
+      }
+    }
+
     const { included, omitted, used, usedGraph } = this._applyBudget(
       evidence,
       usableBudget,
       undefined,
-      reservedGraph,
+      effectiveReservedGraph,
     );
     const instrumentationResult = await import("./context-builder.instrumentation.js").then((m) =>
       m.buildContextInstrumentation(
@@ -942,6 +1032,30 @@ export class ContextBuilder {
     }
     const contextText = evidenceParts.join('\n\n');
 
+    // Phase 1 NEVER_FAIL_BUDGET_DEBT_PLAN — report context tier component
+    // actuals to the optional turn-scoped coordinator. Read-only path; no
+    // back-pressure is applied here.
+    if (options?.coordinator) {
+      try {
+        options.coordinator.recordComponentActual('context:graph', usedGraph);
+        options.coordinator.recordComponentActual('context:evidence', Math.max(0, used - usedGraph));
+      } catch {
+        // Reporting must never break context assembly.
+      }
+    }
+
+    // Phase 2 — read-only pressure label sourced from the coordinator only
+    // (Plan §4.0). Gated by pressureSignalEnabled (default on).
+    let contextPressure: 'low' | 'normal' | 'high' | undefined;
+    const signalEnabled = options?.pressureSignalEnabled !== false;
+    if (signalEnabled && options?.coordinator?.getContextPressureLabel) {
+      try {
+        contextPressure = options.coordinator.getContextPressureLabel();
+      } catch {
+        contextPressure = undefined;
+      }
+    }
+
     return {
       task: {
         intentMode: plan.intentMode,
@@ -964,10 +1078,9 @@ export class ContextBuilder {
       contextText,
       safetyWarnings,
       instrumentation: instrumentationResult.instrumentation,
+      contextPressure,
     };
-  }
-
-    async assembleContextBlock(
+  }    async assembleContextBlock(
   envelope: EditorContextEnvelope,
   fileContent: string | null,
   additionalSections: Map<string, string>,
@@ -1263,6 +1376,7 @@ export class ContextBuilder {
     private async _resolveGraphContext(
     envelope: EditorContextEnvelope,
     plan: import("./types.js").ContextPlan,
+    coordinator?: BudgetCoordinatorReader,
   ): Promise<EditorContextEnvelope["graphContext"]> {
     const graphCtx: NonNullable<EditorContextEnvelope["graphContext"]> = {
       relatedFeatures: [],
@@ -1407,23 +1521,36 @@ export class ContextBuilder {
     const deepFetches: Array<Promise<unknown>> = [];
     const deepKinds: import("./types.js").ContextEvidenceKind[] = [];
 
-    if (needs.has("causal")) {
+    // Phase 3 — pressure-driven deep-insights trim (Plan §3.1 tier 1).
+    // Under 'high' pressure we drop optional deep-insights tiers but keep
+    // anything in `requiredEvidence`. The ADR-097 graph slice is unaffected
+    // (it's curated graph evidence above; this only skips optional MCP fetches).
+    const deepPressure =
+      coordinator?.getContextPressureLabel?.() ?? 'low';
+    const requiredKinds = new Set(plan.requiredEvidence);
+    const allow = (k: import("./types.js").ContextEvidenceKind) =>
+      shouldFetchDeepInsight(k, requiredKinds, deepPressure);
+
+    if (needs.has("causal") && allow("causal")) {
       deepFetches.push(fetchCausalInsights(this._cache, this._mcpClient));
       deepKinds.push("causal");
     }
-    if (needs.has("temporal")) {
+    if (needs.has("temporal") && allow("temporal")) {
       deepFetches.push(fetchTemporalInsights(this._cache, this._mcpClient));
       deepKinds.push("temporal");
     }
-    if (needs.has("data_model")) {
+    if (needs.has("data_model") && allow("data_model")) {
       deepFetches.push(fetchDataModelEntities(envelope, this._mcpClient));
       deepKinds.push("data_model");
     }
-    if (needs.has("cognitive_status")) {
+    if (needs.has("cognitive_status") && allow("cognitive_status")) {
       deepFetches.push(fetchCognitiveStatus(this._cache, this._mcpClient));
       deepKinds.push("cognitive_status");
     }
-    if (needs.has("feature") || needs.has("workflow")) {
+    if (
+      (needs.has("feature") || needs.has("workflow")) &&
+      (allow("feature") || allow("workflow"))
+    ) {
       deepFetches.push(fetchDreamInsights(this._cache, this._mcpClient));
       deepKinds.push("feature");
     }
@@ -1444,6 +1571,25 @@ export class ContextBuilder {
         graphCtx.dreamInsights = result.value as NonNullable<EditorContextEnvelope["graphContext"]>["dreamInsights"];
       }
     });
+
+    // Phase 3 — report deep-insights tier actuals (chars/4 over fetched JSON)
+    // to the coordinator. Read-only; aggregated under `context:deep`.
+    if (coordinator?.recordComponentActual) {
+      try {
+        let deepChars = 0;
+        for (const r of settled) {
+          if (r.status !== 'fulfilled' || r.value == null) continue;
+          try {
+            deepChars += JSON.stringify(r.value).length;
+          } catch {
+            // non-serializable values (cycles) — skip without throwing
+          }
+        }
+        coordinator.recordComponentActual('context:deep', Math.ceil(deepChars / 4));
+      } catch {
+        // Reporting must never break context resolution.
+      }
+    }
 
     return graphCtx;
   }
