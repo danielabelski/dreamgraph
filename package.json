@@ -1,6 +1,6 @@
 {
   "name": "dreamgraph",
-  "version": "8.2.6",
+  "version": "8.3.0",
   "description": "Graph-first cognitive daemon with MCP tools, CLI, dashboard, Explorer, and VS Code integration",
   "homepage": "https://dreamgraph.nofs.ai/",
   "repository": {

@@ -1,0 +1,220 @@
+1: /**
+2:  * Local Extension Tools — executed directly in the VS Code extension host.
+3:  *
+4:  * These tools do NOT require an MCP daemon connection. They use VS Code APIs
+5:  * and Node child_process directly for maximum speed and reliability.
+6:  *
+7:  * Tools:
+8:  *   run_command   — Shell execution with stdout/stderr capture + OutputChannel
+9:  *   modify_entity — Entity-level code editing via VS Code symbol provider
+10:  *   write_file    — Create or overwrite a file in the workspace
+11:  *   read_local_file — Read a local file (full or line range)
+12:  *
+13:  * Also exports registerRunnerCommands() for manual palette access to run_command.
+14:  */
+15: 
+16: import * as vscode from 'vscode';
+17: import * as cp from 'node:child_process';
+18: import * as path from 'node:path';
+19: import * as fs from 'node:fs/promises';
+20: 
+21: /* ------------------------------------------------------------------ */
+22: /*  Tool definitions (same shape as MCP ToolDefinition)               */
+23: /* ------------------------------------------------------------------ */
+24: 
+25: export const LOCAL_TOOL_DEFINITIONS = [
+26:   {
+27:     name: 'run_command',
+28:     description:
+29:       '[Support tool — execution] Execute a shell command to build, test, or verify ' +
+30:       'changes. Use after code modifications to run build tools (npm run build, tsc), ' +
+31:       'test runners (vitest, jest), linters (eslint). No MCP equivalent exists for this. ' +
+32:       'Returns exit code and keyword-filtered relevant output.',
+33:     inputSchema: {
+34:       type: 'object' as const,
+35:       properties: {
+36:         command: {
+37:           type: 'string',
+38:           description: 'Shell command to execute (e.g. "npm run build", "tsc --noEmit").',
+39:         },
+40:         cwd: {
+41:           type: 'string',
+42:           description: 'Working directory, relative to workspace root. Defaults to workspace root.',
+43:         },
+44:         timeoutMs: {
+45:           type: 'number',
+46:           description: 'Timeout in ms (default 60 000, max 300 000).',
+47:         },
+48:       },
+49:       required: ['command'],
+50:     },
+51:   },
+52:   {
+53:     name: 'modify_entity',
+54:     description:
+55:       '[Support tool — edit fallback] Replace a code entity in a file. Use as FALLBACK ' +
+56:       'when MCP edit_entity fails. Prefer edit_entity (MCP) first — it validates against ' +
+57:       'the knowledge graph. This tool uses VS Code symbol provider to locate entities ' +
+58:       'precisely and is resilient to whitespace differences.',
+59:     inputSchema: {
+60:       type: 'object' as const,
+61:       properties: {
+62:         filePath: {
+63:           type: 'string',
+64:           description: 'Absolute or workspace-relative path to the file.',
+65:         },
+66:         entity: {
+67:           type: 'string',
+68:           description: 'Name of the entity to replace.',
+69:         },
+70:         parentEntity: {
+71:           type: 'string',
+72:           description: 'Parent class/interface name for members. Omit for top-level entities.',
+73:         },
+74:         newContent: {
+75:           type: 'string',
+76:           description: 'Complete replacement code for the entity.',
+77:         },
+78:       },
+79:       required: ['filePath', 'entity', 'newContent'],
+80:     },
+81:   },
+82:   {
+83:     name: 'write_file',
+84:     description:
+85:       '[Support tool — file creation] Create or overwrite a file. After creating a file, ' +
+86:       'ALWAYS call enrich_seed_data (MCP) to register the new module/feature in the ' +
+87:       'knowledge graph. Parent directories are created automatically. ' +
+88:       'IMPORTANT: content must be under 300 KB. For large files (plans, docs), write in ' +
+89:       'sections: create the file with the first section, then append remaining sections ' +
+90:       'using subsequent write_file calls. Do NOT generate the entire large file inline ' +
+91:       'in a single tool call — this causes output token exhaustion and silent hangs.',
+92:     inputSchema: {
+93:       type: 'object' as const,
+94:       properties: {
+95:         filePath: {
+96:           type: 'string',
+97:           description: 'Absolute or workspace-relative path.',
+98:         },
+99:         content: {
+100:           type: 'string',
+101:           description: 'Full file content to write.',
+102:         },
+103:       },
+104:       required: ['filePath', 'content'],
+105:     },
+106:   },
+107:   {
+108:     name: 'read_local_file',
+109:     description:
+110:       '[Support tool — read fallback] Read a local file. Use only when MCP daemon is ' +
+111:       'unavailable or for quick verification after edits. Prefer query_resource and ' +
+112:       'read_source_code (MCP entity mode) for normal operations. ' +
+113:       'Optionally specify startLine/endLine for a range (1-based, inclusive).',
+114:     inputSchema: {
+115:       type: 'object' as const,
+116:       properties: {
+117:         filePath: {
+118:           type: 'string',
+119:           description: 'Absolute or workspace-relative path.',
+120:         },
+121:         startLine: {
+122:           type: 'number',
+123:           description: '1-based start line (inclusive). Omit to read entire file.',
+124:         },
+125:         endLine: {
+126:           type: 'number',
+127:           description: '1-based end line (inclusive).',
+128:         },
+129:       },
+130:       required: ['filePath'],
+131:     },
+132:   },
+133: ] as const;
+134: 
+135: const LOCAL_TOOL_NAMES: Set<string> = new Set(LOCAL_TOOL_DEFINITIONS.map((t) => t.name));
+136: 
+137: export function isLocalTool(name: string): boolean {
+138:   return LOCAL_TOOL_NAMES.has(name);
+139: }
+140: 
+141: /* ------------------------------------------------------------------ */
+142: /*  Helpers                                                           */
+143: /* ------------------------------------------------------------------ */
+144: 
+145: const MAX_OUTPUT = 50_000;
+146: 
+147: function resolvePath(p: string): string {
+148:   if (path.isAbsolute(p)) return p;
+149:   const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+150:   return ws ? path.resolve(ws, p) : p;
+151: }
+152: 
+153: function ok(data: unknown): string {
+154:   return JSON.stringify({ success: true, data }, null, 2);
+155: }
+156: 
+157: function fail(error: string): string {
+158:   return JSON.stringify({ success: false, error }, null, 2);
+159: }
+160: 
+161: /* ------------------------------------------------------------------ */
+162: /*  Per-file Mutex — prevents concurrent edits to the same file       */
+163: /* ------------------------------------------------------------------ */
+164: 
+165: /**
+166:  * Simple async mutex keyed by file path. When Anthropic models fire
+167:  * multiple modify_entity / write_file calls targeting the same file
+168:  * simultaneously, the mutex serialises them so only one edit is
+169:  * in-flight per file at a time. Different files can still be edited
+170:  * concurrently without blocking.
+171:  */
+172: const fileLocks = new Map<string, Promise<void>>();
+173: 
+174: async function withFileLock<T>(absPath: string, fn: () => Promise<T>): Promise<T> {
+175:   const key = absPath.toLowerCase(); // normalise on Windows
+176:   const prev = fileLocks.get(key) ?? Promise.resolve();
+177:   let release!: () => void;
+178:   const next = new Promise<void>((r) => { release = r; });
+179:   fileLocks.set(key, next);
+180:   try {
+181:     await prev; // wait for previous edit on this file to finish
+182:     return await fn();
+183:   } finally {
+184:     release();
+185:     // GC: remove the entry only if we're still the tail
+186:     if (fileLocks.get(key) === next) fileLocks.delete(key);
+187:   }
+188: }
+189: 
+190: /* ------------------------------------------------------------------ */
+191: /*  Large-entity safety — detect risky whole-class replacements       */
+192: /* ------------------------------------------------------------------ */
+193: 
+194: /** Rough count of top-level members inside a class/interface body. */
+195: function countMembers(text: string): number {
+196:   // Heuristic: count lines that start a method, property, or constructor
+197:   const memberPattern = /^\s+(public|private|protected|static|readonly|abstract|async|get |set |constructor\b|\w+\s*\()/gm;
+198:   const matches = text.match(memberPattern);
+199:   return matches?.length ?? 0;
+200: }
+201: 
+202: /**
+203:  * Maximum number of members a class/interface can have for a whole-entity
+204:  * replacement without explicit confirmation. Beyond this threshold the
+205:  * tool rejects the edit and asks the model to target individual members
+206:  * using parentEntity instead.
+207:  */
+208: const LARGE_ENTITY_MEMBER_THRESHOLD = 15;
+209: 
+210: /* ------------------------------------------------------------------ */
+211: /*  OutputChannel + keyword extraction (from Copilot-style runner)    */
+212: /* ------------------------------------------------------------------ */
+213: 
+214: const OUTPUT_NAME = 'DreamGraph • Run';
+215: let _output: vscode.OutputChannel | undefined;
+216: 
+217: function getOutput(): vscode.OutputChannel {
+218:   if (!_output) _output = vscode.window.createOutputChannel(OUTPUT_NAME, { log: true });
+219:   return _output;
+220: }

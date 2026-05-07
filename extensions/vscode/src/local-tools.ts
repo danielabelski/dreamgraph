@@ -756,12 +756,24 @@ export async function executeLocalTool(
   name: string,
   input: Record<string, unknown>,
 ): Promise<string> {
-  switch (name) {
-    case 'run_command':      return handleRunCommand(input);
-    case 'modify_entity':    return handleModifyEntity(input);
-    case 'write_file':       return handleWriteFile(input);
-    case 'read_local_file':  return handleReadFile(input);
-    default:                 return fail(`Unknown local tool: ${name}`);
+  const args = input ?? {};
+
+  try {
+    if (name === 'modify_entity') {
+      return handleModifyEntity(args as Record<string, unknown>);
+    }
+
+    if (name === 'write_file') {
+      return handleWriteFile(args as Record<string, unknown>);
+    }
+
+    if (name === 'read_local_file') {
+      return handleReadFile(args as Record<string, unknown>);
+    }
+
+    return fail(`Unknown local tool: ${name}`);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
   }
 }
 

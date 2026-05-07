@@ -230,16 +230,71 @@ export function getCardRendererScript(): string {
           ('goal_status' in obj || 'recommended_next_steps' in obj || 'progress_status' in obj);
       }
 
+      // Normalize loose / drifted envelope shapes that LLMs emit into the canonical
+      // shape that isEnvelopeShape + renderEnvelope expect. Returns the same object
+      // (mutated/replaced) when normalization succeeds, otherwise returns the input.
+      // Common drifts handled:
+      //   - summary is an object with { discovered, changed, current_state,
+      //     recommended_next_step } instead of a plain string.
+      //   - recommended_next_step (singular) used instead of recommended_next_steps.
+      //   - Top-level wrapped under { autonomy, summary } where summary holds the
+      //     payload (Conscientious/Eager auto-pass envelope drift).
+      function normalizeLooseEnvelope(obj) {
+        if (!obj || typeof obj !== 'object') return obj;
+        // Unwrap { autonomy, summary } where summary is the actual envelope-ish payload.
+        if (typeof obj.summary === 'object' && obj.summary !== null && !Array.isArray(obj.summary)) {
+          var inner = obj.summary;
+          var parts = [];
+          function pushList(label, key) {
+            var v = inner[key];
+            if (Array.isArray(v) && v.length) parts.push(label + ': ' + v.join(' | '));
+          }
+          pushList('Discovered', 'discovered');
+          pushList('Changed', 'changed');
+          pushList('Current state', 'current_state');
+          if (typeof inner.summary === 'string' && inner.summary.trim()) parts.unshift(inner.summary.trim());
+          var summaryStr = parts.join('\\n\\n');
+          var nextSteps = obj.recommended_next_steps || inner.recommended_next_steps;
+          if (!Array.isArray(nextSteps)) {
+            var single = obj.recommended_next_step || inner.recommended_next_step;
+            if (typeof single === 'string' && single.trim()) {
+              nextSteps = [{ id: 'next', label: single.trim() }];
+            } else if (single && typeof single === 'object') {
+              nextSteps = [single];
+            }
+          }
+          var normalized = {
+            summary: summaryStr || (typeof inner.summary === 'string' ? inner.summary : ''),
+            goal_status: obj.goal_status || inner.goal_status,
+            progress_status: obj.progress_status || inner.progress_status,
+            uncertainty: obj.uncertainty || inner.uncertainty,
+            recommended_next_steps: Array.isArray(nextSteps) ? nextSteps : []
+          };
+          if (typeof normalized.summary === 'string' && normalized.summary) return normalized;
+        }
+        // Singular -> plural fix at top level.
+        if (typeof obj.summary === 'string' && !obj.recommended_next_steps && obj.recommended_next_step) {
+          var s = obj.recommended_next_step;
+          var arr = typeof s === 'string'
+            ? [{ id: 'next', label: s }]
+            : (s && typeof s === 'object' ? [s] : []);
+          return Object.assign({}, obj, { recommended_next_steps: arr });
+        }
+        return obj;
+      }
+
       function tryParseEnvelope(src) {
         var raw = String(src || '').trim();
         if (!raw) return null;
         try {
           var direct = JSON.parse(raw);
-          if (isEnvelopeShape(direct)) return direct;
+          var nDirect = normalizeLooseEnvelope(direct);
+          if (isEnvelopeShape(nDirect)) return nDirect;
         } catch (_e) { /* fall through */ }
         try {
           var repaired = JSON.parse(repairJsonish(raw));
-          if (isEnvelopeShape(repaired)) return repaired;
+          var nRepaired = normalizeLooseEnvelope(repaired);
+          if (isEnvelopeShape(nRepaired)) return nRepaired;
         } catch (_e2) { /* give up */ }
         return null;
       }

@@ -1,6 +1,6 @@
 # DreamGraph Tools Reference
 
-> Complete catalog of all 70 MCP tools (28 cognitive + 32 general + 10 discipline) and 26 MCP resources.
+> Complete catalog of all 73 MCP tools (28 cognitive + 35 general + 10 discipline) and 26 MCP resources.
 
 The DreamGraph Architect actively calls these tools during conversations to build, query, enrich, and maintain the knowledge graph. Any MCP-compatible client can also invoke them directly.
 
@@ -364,7 +364,7 @@ End an active lucid dream session — persist accepted edges and return to AWAKE
 
 ---
 
-## General Tools (32)
+## General Tools (35)
 
 Registered in [src/tools/register.ts](../src/tools/register.ts). These provide I/O, visualization, documentation, and operational knowledge capabilities.
 
@@ -428,6 +428,38 @@ Move or rename a file. Auto-creates destination parent directories.
 |-----------|------|----------|-------------|
 | `oldPath` | string | yes | Current file path |
 | `newPath` | string | yes | New file path |
+| `repo` | string | no | Repo name |
+
+#### `list_markdown_chapters`
+
+List the heading outline of a markdown file with depth, line range, and full heading path. Cheap discovery tool — call before `read_markdown_chapter` / `patch_markdown_chapter`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `filePath` | string | yes | Path to the markdown file |
+| `repo` | string | no | Repo name |
+| `maxDepth` | number | no | Limit results to headings at this depth or shallower (1–6) |
+
+#### `read_markdown_chapter`
+
+Read an exact markdown chapter (heading + body up to next heading at the same or shallower depth) by heading path. Avoids truncation-prone text-anchor matching. Code-fence aware.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `filePath` | string | yes | Path to the markdown file |
+| `headingPath` | string \| string[] | yes | Heading path string (`"Section > Subsection"`) or array of segments |
+| `repo` | string | no | Repo name |
+
+#### `patch_markdown_chapter`
+
+Patch a markdown chapter structurally by heading path. Operations: `insert-after-heading`, `replace-chapter`, `append-within-chapter`. Code-fence aware.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `filePath` | string | yes | Path to the markdown file |
+| `headingPath` | string \| string[] | yes | Heading path identifying the target chapter |
+| `operation` | enum | yes | `insert-after-heading` \| `replace-chapter` \| `append-within-chapter` |
+| `content` | string | yes | Markdown content to insert / append / replace with |
 | `repo` | string | no | Repo name |
 
 ---

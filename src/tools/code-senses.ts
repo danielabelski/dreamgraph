@@ -1409,7 +1409,326 @@ export function registerCodeSensesTools(server: McpServer): void {
     }
   );
 
+  // =========================================================================
+  // Markdown chapter helpers — shared by list / read / patch
+  // =========================================================================
+
+  interface MdHeadingNode {
+    depth: number;
+    title: string;
+    /** 1-based line number of the heading itself. */
+    startLine: number;
+    /** 1-based inclusive line number of the last line in the chapter (heading + body). */
+    endLine: number;
+    /** 1-based line number of the first body line after the heading. */
+    contentStartLine: number;
+    /** Slash-joined path of titles from the document root (e.g. "Section/Subsection"). */
+    headingPath: string;
+  }
+
+  function normalizeMdTitle(value: string): string {
+    return value.trim().replace(/\s+/g, " ").toLowerCase();
+  }
+
+  function parseMdHeadingPath(input: string | string[]): string[] {
+    if (Array.isArray(input)) {
+      return input.map((p) => String(p ?? "").trim()).filter((p) => p.length > 0);
+    }
+    const trimmed = String(input ?? "").trim();
+    if (!trimmed) return [];
+    if (trimmed.includes(">")) {
+      return trimmed.split(">").map((p) => p.trim()).filter((p) => p.length > 0);
+    }
+    if (trimmed.includes("/")) {
+      return trimmed.split("/").map((p) => p.trim()).filter((p) => p.length > 0);
+    }
+    return [trimmed];
+  }
+
+  function collectMdHeadings(lines: string[]): MdHeadingNode[] {
+    const headings: MdHeadingNode[] = [];
+    const headingPattern = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+    // Track fenced code blocks so headings inside ```...``` are skipped.
+    let inFence = false;
+    let fenceMarker = "";
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const fenceMatch = line.match(/^(\s*)(```+|~~~+)/);
+      if (fenceMatch) {
+        const marker = fenceMatch[2];
+        if (!inFence) {
+          inFence = true;
+          fenceMarker = marker[0]; // ` or ~
+        } else if (marker[0] === fenceMarker) {
+          inFence = false;
+          fenceMarker = "";
+        }
+        continue;
+      }
+      if (inFence) continue;
+      const match = line.match(headingPattern);
+      if (!match) continue;
+      headings.push({
+        depth: match[1].length,
+        title: match[2].trim(),
+        startLine: index + 1,
+        endLine: lines.length,
+        contentStartLine: index + 2,
+        headingPath: "",
+      });
+    }
+    // Compute endLine and headingPath via a stack walk.
+    const stack: MdHeadingNode[] = [];
+    for (let i = 0; i < headings.length; i += 1) {
+      const current = headings[i];
+      while (stack.length > 0 && stack[stack.length - 1].depth >= current.depth) {
+        stack.pop();
+      }
+      const ancestors = stack.map((h) => h.title);
+      current.headingPath = [...ancestors, current.title].join("/");
+      for (let j = i + 1; j < headings.length; j += 1) {
+        if (headings[j].depth <= current.depth) {
+          current.endLine = headings[j].startLine - 1;
+          break;
+        }
+      }
+      stack.push(current);
+    }
+    return headings;
+  }
+
+  function findMdChapter(lines: string[], headingPathInput: string | string[]): MdHeadingNode | null {
+    const pathParts = parseMdHeadingPath(headingPathInput);
+    if (pathParts.length === 0) return null;
+    const headings = collectMdHeadings(lines);
+    const normalized = pathParts.map(normalizeMdTitle);
+    const target = normalized[normalized.length - 1];
+
+    for (let i = 0; i < headings.length; i += 1) {
+      const candidate = headings[i];
+      if (normalizeMdTitle(candidate.title) !== target) continue;
+
+      // Walk up ancestor chain by depth.
+      let cursor = i;
+      let expectedDepth = candidate.depth;
+      let matches = true;
+      for (let pIdx = normalized.length - 1; pIdx >= 0; pIdx -= 1) {
+        const expected = normalized[pIdx];
+        let found = false;
+        for (; cursor >= 0; cursor -= 1) {
+          const h = headings[cursor];
+          if (h.depth > expectedDepth) continue;
+          if (h.depth < expectedDepth) expectedDepth = h.depth;
+          if (h.depth === expectedDepth && normalizeMdTitle(h.title) === expected) {
+            found = true;
+            expectedDepth -= 1;
+            cursor -= 1;
+            break;
+          }
+        }
+        if (!found) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return candidate;
+    }
+    return null;
+  }
+
+  async function readMdFile(
+    reqPath: string,
+    repo: string | undefined,
+  ): Promise<
+    | { ok: true; safePath: string; content: string; lines: string[]; useCRLF: boolean }
+    | { ok: false; response: ToolResponse<string> }
+  > {
+    let safePath: string;
+    if (repo) {
+      const repoRootRaw = config.repos[repo];
+      if (!repoRootRaw) {
+        const available = Object.keys(config.repos).join(", ");
+        return { ok: false, response: error("INVALID_REPO", `Repo "${repo}" not found. Available repos: ${available}`) };
+      }
+      const repoRoot = path.resolve(repoRootRaw);
+      const abs = path.resolve(repoRoot, reqPath);
+      if (!abs.toLowerCase().startsWith(repoRoot.toLowerCase())) {
+        return { ok: false, response: error("ACCESS_DENIED", `Path '${reqPath}' escapes repo "${repo}" root.`) };
+      }
+      safePath = abs;
+    } else {
+      try {
+        safePath = resolveSafePath(reqPath);
+      } catch (err) {
+        return { ok: false, response: error("ACCESS_DENIED", err instanceof Error ? err.message : String(err)) };
+      }
+    }
+    let content: string;
+    try {
+      content = await fs.readFile(safePath, "utf-8");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, response: error("READ_ERROR", `Cannot read file: ${msg}`) };
+    }
+    const useCRLF = content.includes("\r\n");
+    const lines = content.replace(/\r\n/g, "\n").split("\n");
+    return { ok: true, safePath, content, lines, useCRLF };
+  }
+
+  // =========================================================================
+  // list_markdown_chapters — Cheap headings index for a markdown file
+  // =========================================================================
+  server.tool(
+    "list_markdown_chapters",
+    "Return the heading outline of a markdown file as a flat list. Each entry includes " +
+      "depth (1-6), title, line number, and a slash-joined headingPath identifying it " +
+      "uniquely (e.g. `Section/Subsection`). Use this before `read_markdown_chapter` " +
+      "or `patch_markdown_chapter` to discover the right chapter without a full file read.",
+    {
+      filePath: z.string().describe("File path relative to the repository root or an absolute path."),
+      repo: z.string().optional().describe(repoDesc),
+    },
+    async ({ filePath, repo }) => {
+      logger.debug(`list_markdown_chapters called: filePath="${filePath}", repo="${repo ?? "(auto)"}"`);
+      const result = await safeExecute<unknown>(async (): Promise<ToolResponse<unknown>> => {
+        const read = await readMdFile(filePath, repo);
+        if (!read.ok) return read.response as ToolResponse<unknown>;
+        const headings = collectMdHeadings(read.lines).map((h) => ({
+          depth: h.depth,
+          title: h.title,
+          line: h.startLine,
+          endLine: h.endLine,
+          headingPath: h.headingPath,
+        }));
+        return success({
+          filePath: read.safePath,
+          chapterCount: headings.length,
+          chapters: headings,
+        });
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // =========================================================================
+  // read_markdown_chapter — Read one chapter by heading path
+  // =========================================================================
+  server.tool(
+    "read_markdown_chapter",
+    "Read a single markdown chapter (heading + body, up to but not including the next " +
+      "sibling/parent heading) by its heading path. The headingPath can be a string array, " +
+      "a `>`/`/`-separated path, or a single heading title. Strongly preferred over " +
+      "`read_source_code` for browsing long markdown docs — returns only the relevant chapter.",
+    {
+      filePath: z.string().describe("File path relative to the repository root or an absolute path."),
+      headingPath: z.union([z.string(), z.array(z.string())]).describe(
+        "Heading to locate. May be a string array of ancestor titles ending at the target, " +
+          "or a `>` / `/` separated string, or a single heading title (matches the last segment).",
+      ),
+      repo: z.string().optional().describe(repoDesc),
+    },
+    async ({ filePath, headingPath, repo }) => {
+      logger.debug(`read_markdown_chapter called: filePath="${filePath}", headingPath=${JSON.stringify(headingPath)}, repo="${repo ?? "(auto)"}"`);
+      const result = await safeExecute<unknown>(async (): Promise<ToolResponse<unknown>> => {
+        const read = await readMdFile(filePath, repo);
+        if (!read.ok) return read.response as ToolResponse<unknown>;
+        const chapter = findMdChapter(read.lines, headingPath);
+        if (!chapter) {
+          const parts = parseMdHeadingPath(headingPath);
+          return error(
+            "HEADING_NOT_FOUND",
+            `Markdown heading path not found in "${filePath}": ${parts.join(" > ")}`,
+          );
+        }
+        const chapterLines = read.lines.slice(chapter.startLine - 1, chapter.endLine);
+        try {
+          recordFileRead?.(read.safePath);
+        } catch {
+          /* metrics best-effort */
+        }
+        return success({
+          filePath: read.safePath,
+          headingPath: chapter.headingPath,
+          depth: chapter.depth,
+          startLine: chapter.startLine,
+          endLine: chapter.endLine,
+          lineCount: chapterLines.length,
+          content: chapterLines.join("\n"),
+        });
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // =========================================================================
+  // patch_markdown_chapter — Insert/replace/append within a chapter
+  // =========================================================================
+  server.tool(
+    "patch_markdown_chapter",
+    "Mutate a markdown chapter in place. Three operations: " +
+      "`insert-after-heading` (add content immediately under the heading line), " +
+      "`replace-chapter` (replace heading + body entirely), " +
+      "`append-within-chapter` (add content at the end of the chapter, before the next heading). " +
+      "Strongly preferred over `edit_file` for chapter-scoped edits — no need to echo " +
+      "existing body text. For body-only replacement, use `edit_markdown_section` instead.",
+    {
+      filePath: z.string().describe("File path relative to the repository root or an absolute path."),
+      headingPath: z.union([z.string(), z.array(z.string())]).describe(
+        "Heading to locate. Same semantics as `read_markdown_chapter`.",
+      ),
+      operation: z.enum(["insert-after-heading", "replace-chapter", "append-within-chapter"]).describe(
+        "Mutation mode. `replace-chapter` replaces the heading line itself plus the entire body.",
+      ),
+      content: z.string().describe(
+        "New content. For `replace-chapter` this should include the heading line. " +
+          "For the other operations, body text only.",
+      ),
+      repo: z.string().optional().describe(repoDesc),
+    },
+    async ({ filePath, headingPath, operation, content, repo }) => {
+      logger.debug(`patch_markdown_chapter called: filePath="${filePath}", headingPath=${JSON.stringify(headingPath)}, operation="${operation}", repo="${repo ?? "(auto)"}"`);
+      const result = await safeExecute<string>(async (): Promise<ToolResponse<string>> => {
+        const read = await readMdFile(filePath, repo);
+        if (!read.ok) return read.response as ToolResponse<string>;
+        const chapter = findMdChapter(read.lines, headingPath);
+        if (!chapter) {
+          const parts = parseMdHeadingPath(headingPath);
+          return error(
+            "HEADING_NOT_FOUND",
+            `Markdown heading path not found in "${filePath}": ${parts.join(" > ")}`,
+          );
+        }
+        const nextLines = [...read.lines];
+        if (operation === "insert-after-heading") {
+          const insertAt = chapter.contentStartLine - 1;
+          const insertion = content.length > 0 ? content.split(/\r?\n/) : [""];
+          nextLines.splice(insertAt, 0, ...insertion);
+        } else if (operation === "replace-chapter") {
+          const replacement = content.split(/\r?\n/);
+          nextLines.splice(chapter.startLine - 1, chapter.endLine - chapter.startLine + 1, ...replacement);
+        } else if (operation === "append-within-chapter") {
+          const appendAt = chapter.endLine;
+          const insertion = content.length > 0 ? content.split(/\r?\n/) : [""];
+          nextLines.splice(appendAt, 0, ...insertion);
+        }
+        let newContent = nextLines.join("\n");
+        if (read.useCRLF) newContent = newContent.replace(/\n/g, "\r\n");
+        try {
+          await fs.writeFile(read.safePath, newContent, "utf-8");
+          return success(
+            `Patched markdown chapter "${chapter.headingPath}" (op=${operation}) in ${filePath}: ` +
+              `${read.content.length} → ${newContent.length} bytes.`,
+          );
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return error("WRITE_ERROR", `Error writing file: ${msg}`);
+        }
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   logger.info(
-    "Registered 10 code-senses tools (list_directory, read_source_code, create_file, edit_file, delete_file, rename_file, edit_entity, patch_file, append_to_file, edit_markdown_section)"
+    "Registered 13 code-senses tools (list_directory, read_source_code, create_file, edit_file, delete_file, rename_file, edit_entity, patch_file, append_to_file, edit_markdown_section, list_markdown_chapters, read_markdown_chapter, patch_markdown_chapter)"
   );
 }

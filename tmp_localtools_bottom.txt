@@ -1,0 +1,75 @@
+716: /*  read_local_file                                                   */
+717: /* ------------------------------------------------------------------ */
+718: 
+719: async function handleReadFile(input: Record<string, unknown>): Promise<string> {
+720:   const filePath = String(input.filePath ?? '');
+721:   if (!filePath) return fail('filePath is required');
+722: 
+723:   const absPath = resolvePath(filePath);
+724:   const uri = vscode.Uri.file(absPath);
+725: 
+726:   try {
+727:     const bytes = await vscode.workspace.fs.readFile(uri);
+728:     const text = Buffer.from(bytes).toString('utf-8');
+729:     const lines = text.split('\n');
+730: 
+731:     const start = input.startLine ? Math.max(1, Number(input.startLine)) : 1;
+732:     const end = input.endLine ? Math.min(lines.length, Number(input.endLine)) : lines.length;
+733:     const slice = lines.slice(start - 1, end);
+734: 
+735:     let result = slice.join('\n');
+736:     if (result.length > MAX_OUTPUT) {
+737:       result = result.slice(0, MAX_OUTPUT) + `\n…[truncated, ${result.length} chars]`;
+738:     }
+739: 
+740:     return ok({
+741:       filePath: absPath,
+742:       totalLines: lines.length,
+743:       range: `${start}-${end}`,
+744:       content: result,
+745:     });
+746:   } catch (err) {
+747:     return fail(`read_local_file failed: ${err instanceof Error ? err.message : String(err)}`);
+748:   }
+749: }
+750: 
+751: /* ------------------------------------------------------------------ */
+752: /*  Dispatcher                                                        */
+753: /* ------------------------------------------------------------------ */
+754: 
+755: export async function executeLocalTool(
+756:   name: string,
+757:   input: Record<string, unknown>,
+758: ): Promise<string> {
+759:   switch (name) {
+760:     case 'run_command':      return handleRunCommand(input);
+761:     case 'modify_entity':    return handleModifyEntity(input);
+762:     case 'write_file':       return handleWriteFile(input);
+763:     case 'read_local_file':  return handleReadFile(input);
+764:     default:                 return fail(`Unknown local tool: ${name}`);
+765:   }
+766: }
+767: 
+768: /* ------------------------------------------------------------------ */
+769: /*  Manual palette commands (dreamgraph.runCommand, dreamgraph.runBuild) */
+770: /* ------------------------------------------------------------------ */
+771: 
+772: export function registerRunnerCommands(ctx: vscode.ExtensionContext): void {
+773:   // dreamgraph.runCommand — prompt for arbitrary shell command
+774:   ctx.subscriptions.push(
+775:     vscode.commands.registerCommand('dreamgraph.runCommand', async () => {
+776:       const command = await vscode.window.showInputBox({
+777:         prompt: 'Shell command to run in workspace',
+778:         placeHolder: 'e.g. npm run build',
+779:       });
+780:       if (!command) return;
+781:       const result = await handleRunCommand({ command });
+782:       const parsed = JSON.parse(result);
+783:       if (parsed.exitCode === 0) {
+784:         void vscode.window.showInformationMessage(`✓ Command finished (exit 0)`);
+785:       } else {
+786:         void vscode.window.showWarningMessage(`Command exited with code ${parsed.exitCode}`);
+787:       }
+788:       getOutput().show(true);
+789:     }),
+790:   );

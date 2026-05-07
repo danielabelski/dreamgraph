@@ -2895,7 +2895,86 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       if (envelope && typeof window.renderEnvelope === 'function') {
         streamingMarkdownEl.innerHTML = window.renderEnvelope(envelope);
       } else {
-        let html = renderMarkdown(normalizedContent);
+        // Hide an unclosed trailing structured-envelope block while it streams.
+        // The contract emits the envelope as a fenced code block at the end of
+        // the message. While the closing fence has not yet arrived, markdown-it
+        // would render the partial JSON as a raw code block — flashing braces
+        // and field names at the user before the final card replaces it.
+        // Substitute a "Building structured response…" placeholder until either
+        // the fence closes (normalizeEnvelopeFence + the fence plugin then
+        // render the card) or streaming ends and the final addMessage takes over.
+        // NOTE: this code is inside a JS template literal in getHtml() — single
+        // backslashes are stripped at evaluation, so doubled backslashes are
+        // required to reach the runtime regex/string.
+        const FENCE = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+        let display = normalizedContent;
+        const fenceOpen = display.lastIndexOf(FENCE);
+        let hidPartial = false;
+        if (fenceOpen >= 0) {
+          const afterFence = display.slice(fenceOpen + 3);
+          // Closing fence is on its own line. If we don't find one after the
+          // most recent opening fence, the block is unclosed.
+          const closeRe = new RegExp('\\n[ \\t]*' + FENCE + '[ \\t]*$');
+          const hasClose = closeRe.test('\\n' + afterFence);
+          if (!hasClose) {
+            const firstLineEnd = afterFence.indexOf('\\n');
+            const lang = (firstLineEnd >= 0 ? afterFence.slice(0, firstLineEnd) : afterFence).trim().toLowerCase();
+            const body = firstLineEnd >= 0 ? afterFence.slice(firstLineEnd + 1) : '';
+            const looksJson = lang === '' || lang === 'json' || lang === 'jsonc';
+            const bodyTrimmed = body.replace(/^\\s+/, '');
+            const looksEnvelope = bodyTrimmed.charAt(0) === '{' && (
+              bodyTrimmed.indexOf('"summary"') >= 0 ||
+              bodyTrimmed.indexOf('"goal_status"') >= 0 ||
+              bodyTrimmed.indexOf('"recommended_next_steps"') >= 0
+            );
+            if (looksJson && looksEnvelope) {
+              display = display.slice(0, fenceOpen).replace(/\\s+$/, '') +
+                '\\n\\n_Building structured response…_\\n';
+              hidPartial = true;
+            }
+          }
+        }
+        if (!hidPartial) {
+          // Bare top-level JSON envelope (no fence). Same idea: if we see an
+          // unbalanced "{" with "summary" inside near the tail, hide it.
+          const summaryIdx = display.search(/\\{\\s*[\\s\\S]*?"summary"\\s*:/);
+          if (summaryIdx >= 0) {
+            let depth = 0, inStr = false, esc = false, quote = '', balanced = false;
+            // Walk back to the enclosing '{' at depth 0.
+            let braceStart = -1, dBack = 0, sBack = false, eBack = false, qBack = '';
+            for (let j = summaryIdx; j >= 0; j--) {
+              const ch = display[j];
+              if (sBack) {
+                if (eBack) { eBack = false; continue; }
+                if (ch === '\\\\') { eBack = true; continue; }
+                if (ch === qBack) sBack = false;
+                continue;
+              }
+              if (ch === '"' || ch === "'") { sBack = true; qBack = ch; continue; }
+              if (ch === '}') dBack++;
+              else if (ch === '{') { if (dBack === 0) { braceStart = j; break; } dBack--; }
+            }
+            if (braceStart >= 0) {
+              for (let i = braceStart; i < display.length; i++) {
+                const ch = display[i];
+                if (inStr) {
+                  if (esc) { esc = false; continue; }
+                  if (ch === '\\\\') { esc = true; continue; }
+                  if (ch === quote) inStr = false;
+                  continue;
+                }
+                if (ch === '"' || ch === "'") { inStr = true; quote = ch; continue; }
+                if (ch === '{') depth++;
+                else if (ch === '}') { depth--; if (depth === 0) { balanced = true; break; } }
+              }
+              if (!balanced) {
+                display = display.slice(0, braceStart).replace(/\\s+$/, '') +
+                  '\\n\\n_Building structured response…_\\n';
+              }
+            }
+          }
+        }
+        let html = renderMarkdown(display);
         if (typeof window.linkifyEntities === 'function') {
           html = window.linkifyEntities(html) || html;
         }

@@ -3,7 +3,6 @@ import {
   compactAssistantText,
   compactMessagesForProvider,
   compactRawMessagesForProvider,
-  compactToolResultContent,
   minifyToolDefinitions,
 } from "./request-compaction";
 
@@ -180,7 +179,12 @@ export function translateRawToOpenAIResponses(raw: unknown[]): unknown[] {
         out.push({
           type: "function_call_output",
           call_id: tr.tool_use_id,
-          output: compactToolResultContent(tr.content),
+          // Tool-result content has already been compacted upstream by
+          // applySharedRequestCompaction at the budget-chosen level. Re-running
+          // compactToolResultContent here at the default level 1 would
+          // double-compact and destroy file contents that fit cleanly under the
+          // 16k soft budget. Pass through verbatim; stringify only if needed.
+          output: typeof tr.content === "string" ? tr.content : JSON.stringify(tr.content),
         });
       }
     }

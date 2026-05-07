@@ -152,6 +152,65 @@ export function findBalancedObject(text: string, startIdx: number): string | nul
 }
 
 /**
+ * Normalize loose / drifted envelope shapes that LLMs sometimes emit into the
+ * canonical shape that `isEnvelopeShape` accepts. Mirrors the
+ * `normalizeLooseEnvelope` helper in webview/card-renderer.ts.
+ *
+ * Drifts handled:
+ *  - `summary` is an object with arrays { discovered, changed, current_state,
+ *    recommended_next_step } instead of a plain string.
+ *  - `recommended_next_step` (singular) used at top level instead of plural.
+ *  - Top-level wrapped under `{ autonomy, summary }` where `summary` carries
+ *    the actual payload (Conscientious / Eager auto-pass envelope drift).
+ */
+export function normalizeLooseEnvelope(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const obj = value as Record<string, unknown>;
+
+  if (obj.summary && typeof obj.summary === 'object' && !Array.isArray(obj.summary)) {
+    const inner = obj.summary as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof inner.summary === 'string' && inner.summary.trim()) parts.push(inner.summary.trim());
+    const pushList = (label: string, key: string) => {
+      const v = inner[key];
+      if (Array.isArray(v) && v.length) parts.push(`${label}: ${v.join(' | ')}`);
+    };
+    pushList('Discovered', 'discovered');
+    pushList('Changed', 'changed');
+    pushList('Current state', 'current_state');
+
+    let nextSteps = (obj.recommended_next_steps ?? inner.recommended_next_steps) as unknown;
+    if (!Array.isArray(nextSteps)) {
+      const single = (obj.recommended_next_step ?? inner.recommended_next_step) as unknown;
+      if (typeof single === 'string' && single.trim()) {
+        nextSteps = [{ id: 'next', label: single.trim() }];
+      } else if (single && typeof single === 'object') {
+        nextSteps = [single];
+      }
+    }
+
+    const summaryStr = parts.join('\n\n');
+    const normalized: Record<string, unknown> = {
+      summary: summaryStr || (typeof inner.summary === 'string' ? inner.summary : ''),
+      goal_status: obj.goal_status ?? inner.goal_status,
+      progress_status: obj.progress_status ?? inner.progress_status,
+      uncertainty: obj.uncertainty ?? inner.uncertainty,
+      recommended_next_steps: Array.isArray(nextSteps) ? nextSteps : [],
+    };
+    if (typeof normalized.summary === 'string' && normalized.summary.length > 0) return normalized;
+  }
+
+  if (typeof obj.summary === 'string' && !obj.recommended_next_steps && obj.recommended_next_step) {
+    const s = obj.recommended_next_step;
+    const arr = typeof s === 'string'
+      ? [{ id: 'next', label: s }]
+      : (s && typeof s === 'object' ? [s] : []);
+    return { ...obj, recommended_next_steps: arr };
+  }
+  return value;
+}
+
+/**
  * Try strict JSON.parse, then a single lenient pass via repairJsonish.
  * Returns a typed envelope only if the parsed object looks like a continuation
  * envelope. This intentionally rejects unrelated JSON objects so we don't
@@ -161,11 +220,11 @@ export function tryParseEnvelope(raw: string): StructuredActionEnvelope | null {
   const trimmed = String(raw ?? '').trim();
   if (!trimmed) return null;
   try {
-    const direct = JSON.parse(trimmed);
+    const direct = normalizeLooseEnvelope(JSON.parse(trimmed));
     if (isEnvelopeShape(direct)) return direct;
   } catch { /* fall through */ }
   try {
-    const repaired = JSON.parse(repairJsonish(trimmed));
+    const repaired = normalizeLooseEnvelope(JSON.parse(repairJsonish(trimmed)));
     if (isEnvelopeShape(repaired)) return repaired;
   } catch { /* give up */ }
   return null;

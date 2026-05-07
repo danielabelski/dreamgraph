@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v8.2.6 — Bedrock
+# DreamGraph v8.3.0 — Bedrock
 
-![Version](https://img.shields.io/badge/version-8.2.6-blue)
+![Version](https://img.shields.io/badge/version-8.3.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)

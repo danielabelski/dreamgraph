@@ -1,6 +1,6 @@
 import type { ArchitectMessage, ToolDefinition } from "./architect-llm";
 
-const TOOL_RESULT_MAX_CHARS = 1800;
+const TOOL_RESULT_MAX_CHARS = 12_000;
 const TOOL_RESULT_STRUCTURED_ITEMS = 5;
 const TOOL_RESULT_RAW_PREVIEW_CHARS = 240;
 const SYSTEM_PROMPT_MAX_CHARS = 5000;
@@ -226,13 +226,22 @@ export function compactAssistantText(text: string, level: 0 | 1 | 2 | 3 = 1): st
 }
 
 export function compactToolResultContent(content: unknown, level: 0 | 1 | 2 | 3 = 1): string {
-  const structured = summarizeStructuredValue(content, 0, level);
   const raw = normalizeWhitespace(typeof content === "string" ? content : safeJsonStringify(content));
+  const maxChars = budgetCharsForLevel(TOOL_RESULT_MAX_CHARS, TOOL_RESULT_BUDGET_FRACTION, level);
+
+  // Level 0 (within budget) is a quality-preserving pass: if the (already
+  // per-tool-truncated) content fits under the soft cap, return it verbatim.
+  // Summarizing here destroys file contents, code snippets, and any structured
+  // raw output that downstream reasoning depends on.
+  if (level === 0 && raw.length <= maxChars) {
+    return raw;
+  }
+
+  const structured = summarizeStructuredValue(content, 0, level);
   const rawPreviewChars = Math.min(
     TOOL_RESULT_RAW_PREVIEW_CHARS,
     budgetCharsForLevel(TOOL_RESULT_RAW_PREVIEW_CHARS, TOOL_RESULT_BUDGET_FRACTION, level),
   );
-  const maxChars = budgetCharsForLevel(TOOL_RESULT_MAX_CHARS, TOOL_RESULT_BUDGET_FRACTION, level);
 
   const parts: string[] = [];
   if (structured.summary.length > 0) {
@@ -452,7 +461,10 @@ function budgetCharsForLevel(baseChars: number, fraction: number, level: 0 | 1 |
 }
 
 function normalizeWhitespace(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  // NOTE: Do NOT collapse internal runs of spaces/tabs — that destroys source
+  // code indentation when this helper is applied to tool results carrying file
+  // contents. We only normalize line endings and excessive blank lines.
+  return text.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function truncateWithEllipsis(text: string, limit: number): string {
