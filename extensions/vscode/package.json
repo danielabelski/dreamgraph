@@ -267,8 +267,8 @@
         },
         "dreamgraph.architect.budgetPillEnabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Phase 5 (debug): show a per-turn budget pill in the chat header with debt, last-turn actual tokens, pressure label, and component breakdown. Off by default."
+          "default": true,
+          "description": "Show a per-turn budget pill in the chat header with debt, last-turn actual tokens, pressure label, and component breakdown."
         },
         "dreamgraph.architect.maxRequestChars": {
           "type": "number",

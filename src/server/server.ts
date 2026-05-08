@@ -22,6 +22,7 @@ import { startScheduler, stopScheduler } from "../cognitive/scheduler.js";
 import { startLlmReadinessWatcher, stopLlmReadinessWatcher } from "../cognitive/llm-readiness.js";
 import { wireBootstrapOnReady } from "../cognitive/bootstrap-driver.js";
 import { recordToolCall } from "../instance/index.js";
+import { recordToolCall as recordToolMetric } from "../utils/metrics.js";
 import { logger } from "../utils/logger.js";
 
 function buildInstructions(): string {
@@ -87,13 +88,29 @@ export function createServer(): McpServer {
   (server as any).tool = (...args: unknown[]) => {
     const lastIdx = args.length - 1;
     const originalHandler = args[lastIdx];
+    const toolName = typeof args[0] === "string" ? args[0] : "unknown";
     if (typeof originalHandler === "function") {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       args[lastIdx] = async (...handlerArgs: any[]) => {
         // Fire-and-forget — don't block the tool response on counter I/O
         recordToolCall().catch(() => {});
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return (originalHandler as any)(...handlerArgs);
+        const startedAt = Date.now();
+        let failed = false;
+        let errorMsg: string | undefined;
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return await (originalHandler as any)(...handlerArgs);
+        } catch (err) {
+          failed = true;
+          errorMsg = err instanceof Error ? err.message : String(err);
+          throw err;
+        } finally {
+          try {
+            recordToolMetric(toolName, Date.now() - startedAt, failed, errorMsg);
+          } catch {
+            // never let metrics break tool execution
+          }
+        }
       };
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

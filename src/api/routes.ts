@@ -37,6 +37,7 @@ import {
   isInstanceMode,
   getToolCallCount,
 } from "../instance/index.js";
+import { recordRestRequest } from "../utils/metrics.js";
 import { logger } from "../utils/logger.js";
 
 import type {
@@ -1106,38 +1107,67 @@ export async function handleApiRoute(
   if (!pathname.startsWith("/api/")) return false;
 
   const method = req.method ?? "GET";
+  const startedAt = Date.now();
+  // Record the M1 REST observability sample after the response completes.
+  // Wrap once here so every branch below is covered by a single recorder.
+  const recordOnce = (routeName: string) => {
+    let recorded = false;
+    const finalize = () => {
+      if (recorded) return;
+      recorded = true;
+      const failed = (res.statusCode ?? 0) >= 400;
+      try {
+        recordRestRequest(
+          routeName,
+          Date.now() - startedAt,
+          failed,
+          failed ? `HTTP ${res.statusCode}` : undefined,
+        );
+      } catch {
+        // never let metrics break the response
+      }
+    };
+    res.once("finish", finalize);
+    res.once("close", finalize);
+  };
 
   // GET /api/instance
   if (method === "GET" && pathname === "/api/instance") {
+    recordOnce(`GET /api/instance`);
     await handleGetInstance(req, res);
     return true;
   }
 
   // POST /api/graph-context
   if (method === "POST" && pathname === "/api/graph-context") {
+    recordOnce(`POST /api/graph-context`);
     await handlePostGraphContext(req, res);
     return true;
   }
 
   // POST /api/validate
   if (method === "POST" && pathname === "/api/validate") {
+    recordOnce(`POST /api/validate`);
     await handlePostValidate(req, res);
     return true;
   }
 
   // GET /api/orchestrate/capabilities
   if (method === "GET" && pathname === "/api/orchestrate/capabilities") {
+    recordOnce(`GET /api/orchestrate/capabilities`);
     handleGetOrchestrateCapabilities(req, res);
     return true;
   }
 
   // POST /api/orchestrate
   if (method === "POST" && pathname === "/api/orchestrate") {
+    recordOnce(`POST /api/orchestrate`);
     handlePostOrchestrate(req, res);
     return true;
   }
 
   // Unknown /api/* route
+  recordOnce(`${method} ${pathname}`);
   jsonError(res, 404, "not_found", `Unknown API route: ${method} ${pathname}`);
   return true;
 }

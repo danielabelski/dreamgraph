@@ -224,7 +224,17 @@ type ExtensionToWebviewMessage =
   | { type: 'verdict'; verdict: VerdictBanner }
   | { type: 'autonomyStatus'; status: AutonomyStatusMessage }
   | { type: 'recommendedActions'; messageId: string; actions: RecommendedActionMessage[]; doAllEligible: boolean }
+  | { type: 'summaryCard'; messageId: string; envelope: SummaryEnvelopeMessage }
   | { type: 'budgetStatus'; status: BudgetStatusMessage };
+
+interface SummaryEnvelopeMessage {
+  summary: string;
+  goal_status?: 'complete' | 'partial' | 'blocked';
+  progress_status?: 'advancing' | 'slowing' | 'stalled';
+  uncertainty?: 'low' | 'medium' | 'high';
+  recommended_next_steps: Array<{ id: string; label: string; rationale?: string }>;
+  doAllEligible: boolean;
+}
 
 interface BudgetStatusMessage {
   /** Plan §5 — turn number this status reflects. */
@@ -828,6 +838,14 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       await this.postMessage({ type: 'verdict', verdict: this._lastVerdict });
     }
     await this.postMessage({ type: 'toolTrace', calls: this._lastToolTrace });
+    // Always broadcast a SUMMARY card (pills + Suggested Actions chips) for
+    // every assistant turn — autonomy on or off. Built from the structured
+    // JSON envelope when present, or synthesized from prose headings/bullets
+    // when not. The webview renders this as a separate card under the bubble
+    // using window.renderEnvelope, so prose markdown is preserved.
+    if (assistantMessage.id) {
+      this._broadcastSummaryCard(cleaned, assistantMessage.id);
+    }
     if (this._autonomyEnabled && assistantMessage.id) {
       // Pass cleaned (with envelope intact) so the parser can extract goal_status etc.
       await this._handleAutonomyPassComplete(
@@ -1922,6 +1940,10 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         contextFooter: this._contextFooterFor(assistantMessage),
       });
 
+      if (assistantMessage.id) {
+        this._broadcastSummaryCard(redactedFullContent, assistantMessage.id);
+      }
+
       // Recursively analyze the new pass
       this._autonomyContinuing = false;
       await this._handleAutonomyPassComplete(redactedFullContent, assistantMessage.id ?? '', llmMessages, tools);
@@ -1936,6 +1958,45 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     } finally {
       this._autonomyContinuing = false;
       this.resetStreamState();
+    }
+  }
+
+  /**
+   * Build a SUMMARY card payload (pills + Suggested-Actions chips) for the
+   * webview from any assistant content. Always emitted — autonomy on or off.
+   * The host-side prose extractor synthesizes status + nextSteps when the
+   * model didn't emit a JSON envelope, so the card always has data to render.
+   */
+  private _broadcastSummaryCard(content: string, messageId: string): void {
+    try {
+      const env = extractStructuredPassEnvelope(content);
+      // Skip when there is genuinely nothing to show (no summary AND no
+      // status differentiation AND no actions). Avoids drawing an empty
+      // pill row on plain conversational replies.
+      const hasSignal = !!env.summary
+        || env.nextSteps.length > 0
+        || (env.goalStatus && env.goalStatus !== 'partial')
+        || (env.progressStatus && env.progressStatus !== 'advancing')
+        || (env.uncertainty && env.uncertainty !== 'low');
+      if (!hasSignal) return;
+      const steps = env.nextSteps;
+      // Persist for chip-click resolution — _executeRecommendedAction uses this.
+      this._lastRecommendedActions = steps;
+      const eligibleCount = steps.filter((s) => s.eligible && s.withinScope).length;
+      void this.postMessage({
+        type: 'summaryCard',
+        messageId,
+        envelope: {
+          summary: env.summary ?? '',
+          goal_status: env.goalStatus,
+          progress_status: env.progressStatus,
+          uncertainty: env.uncertainty,
+          recommended_next_steps: steps.map((s) => ({ id: s.id, label: s.label, rationale: s.rationale })),
+          doAllEligible: eligibleCount > 1,
+        },
+      });
+    } catch (err) {
+      console.warn('[summaryCard] broadcast failed', err);
     }
   }
 
@@ -2435,13 +2496,13 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         `pressure=${coord.getContextPressureLabel()} components=${JSON.stringify(components)}`,
       );
 
-      // Phase 5 — opt-in budget pill (`dreamgraph.architect.budgetPillEnabled`).
+      // Per-turn budget pill (`dreamgraph.architect.budgetPillEnabled`, default on).
       // Posted as a fire-and-forget message; the webview ignores it when the
       // pill DOM is hidden, so cost when off is a single boolean check.
       try {
         const pillEnabled = vscode.workspace
           .getConfiguration('dreamgraph.architect')
-          .get<boolean>('budgetPillEnabled', false);
+          .get<boolean>('budgetPillEnabled', true);
         if (pillEnabled) {
           void this.postMessage({
             type: 'budgetStatus',
@@ -3482,6 +3543,70 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             targetBubble.appendChild(wrapper);
             messagesEl.scrollTop = messagesEl.scrollHeight;
           }
+          break;
+        }
+        case 'summaryCard': {
+          // Render the SUMMARY pill card (goal/progress/uncertainty pills +
+          // Suggested-Actions chips + Do all) underneath the assistant bubble.
+          // Built by the host on every turn from the structured envelope or
+          // a prose-derived fallback, so this fires regardless of whether
+          // the model emitted a JSON envelope.
+          const targetBubble = messagesEl.querySelector('.message[data-message-id="' + msg.messageId + '"]');
+          if (!targetBubble || typeof window.renderEnvelope !== 'function') break;
+          // Replace any prior card for this message — turns can be regenerated.
+          const existing = targetBubble.querySelector('.dg-envelope-card-host');
+          if (existing) existing.remove();
+          const env = msg.envelope || {};
+          const steps = Array.isArray(env.recommended_next_steps) ? env.recommended_next_steps : [];
+          const host = document.createElement('div');
+          host.className = 'dg-envelope-card-host';
+          host.innerHTML = window.renderEnvelope({
+            summary: env.summary || '',
+            goal_status: env.goal_status,
+            progress_status: env.progress_status,
+            uncertainty: env.uncertainty,
+            recommended_next_steps: steps,
+          });
+          // Annotate chips with action ids/labels so the existing
+          // .dg-envelope-action click handler resolves them correctly.
+          const labels = steps.map((s) => (s && typeof s.label === 'string' ? s.label : '')).filter(Boolean);
+          host.querySelectorAll('.dg-envelope-action').forEach((btn, i) => {
+            const step = steps[i] || {};
+            if (step.id) btn.setAttribute('data-action-id', String(step.id));
+            if (step.label) btn.setAttribute('data-action-label', String(step.label));
+          });
+          const doAllBtn = host.querySelector('.dg-envelope-do-all');
+          if (doAllBtn) {
+            if (env.doAllEligible && labels.length > 1) {
+              doAllBtn.setAttribute('data-action-labels', JSON.stringify(labels));
+            } else {
+              doAllBtn.remove();
+            }
+          }
+          // Wire chip clicks (same protocol as the inline envelope card).
+          host.querySelectorAll('.dg-envelope-action:not([data-wired])').forEach((btn) => {
+            btn.setAttribute('data-wired', '1');
+            btn.addEventListener('click', () => {
+              const actionId = btn.getAttribute('data-action-id') || '';
+              const label = btn.getAttribute('data-action-label') || '';
+              if (actionId || label) {
+                vscode.postMessage({ type: 'selectRecommendedAction', actionId, label });
+              }
+            });
+          });
+          host.querySelectorAll('.dg-envelope-do-all:not([data-wired])').forEach((btn) => {
+            btn.setAttribute('data-wired', '1');
+            btn.addEventListener('click', () => {
+              let labelsOut = [];
+              try {
+                const parsed = JSON.parse(btn.getAttribute('data-action-labels') || '[]');
+                if (Array.isArray(parsed)) labelsOut = parsed.map((l) => String(l || '')).filter(Boolean);
+              } catch (_e) { /* ignore */ }
+              vscode.postMessage({ type: 'doAllRecommendedActions', labels: labelsOut });
+            });
+          });
+          targetBubble.appendChild(host);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
           break;
         }
       }

@@ -771,6 +771,10 @@ export async function executeLocalTool(
       return handleReadFile(args as Record<string, unknown>);
     }
 
+    if (name === 'run_command') {
+      return handleRunCommand(args as Record<string, unknown>);
+    }
+
     return fail(`Unknown local tool: ${name}`);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));

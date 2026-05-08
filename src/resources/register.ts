@@ -20,8 +20,8 @@ import type {
   ResourceIndex,
   Datastore,
 } from "../types/index.js";
-import { getMetricsSnapshot } from "../utils/metrics.js";
 import { formatJsonToolOutput } from "../utils/tool-output.js";
+import { getRuntimeMetricsSnapshotV1 } from "../observability/runtime-metrics.js";
 
 export function registerResources(server: McpServer): void {
   // -----------------------------------------------------------------------
@@ -252,7 +252,8 @@ export function registerResources(server: McpServer): void {
           { uri: "dream://lucid", name: "Lucid Dream State", description: "Lucid dreaming session state and controls." },
           { uri: "discipline://manifest", name: "Discipline Manifest", description: "Execution-discipline manifest and phase guidance." },
           { uri: "ops://api-surface", name: "API Surface", description: "Extracted operational API surface inventory." },
-          { uri: "ops://metrics", name: "Operational Metrics", description: "Runtime metrics snapshot for server operations." }
+          { uri: "ops://metrics", name: "Operational Metrics", description: "Runtime metrics snapshot for server operations." },
+          { uri: "system://metrics", name: "System Metrics", description: "Canonical runtime observability snapshot for M1 metrics surfaces." }
         ],
         cognitive_engine: {
           states: ["AWAKE", "REM", "NORMALIZING", "NIGHTMARE"],
@@ -316,32 +317,45 @@ export function registerResources(server: McpServer): void {
   );
 
   // -----------------------------------------------------------------------
-  // ops://metrics — Runtime instrumentation snapshot
+  // ops://metrics and system://metrics — Canonical runtime observability snapshot
   // -----------------------------------------------------------------------
+  const metricsHandler = async (uri: URL) => {
+    logger.debug(`Resource requested: ${uri.href}`);
+    const snapshot = await getRuntimeMetricsSnapshotV1();
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: formatJsonToolOutput(snapshot),
+        },
+      ],
+    };
+  };
+
   server.resource(
     "runtime-metrics",
     "ops://metrics",
     {
       description:
-        "Live runtime instrumentation snapshot: tool call counts, failure rates, " +
-        "symbol lookup misses, file-read hotspots, dream strategy performance. " +
+        "Live runtime instrumentation snapshot: canonical M1 observability schema for server operations. " +
         "Resets on server restart.",
       mimeType: "application/json",
     },
-    async (uri) => {
-      logger.debug(`Resource requested: ${uri.href}`);
-      const snapshot = getMetricsSnapshot();
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "application/json",
-            text: formatJsonToolOutput(snapshot),
-          },
-        ],
-      };
-    }
+    metricsHandler
   );
 
-  logger.info("Registered 7 resources (including ops://metrics)");
+  server.resource(
+    "system-metrics",
+    "system://metrics",
+    {
+      description:
+        "Canonical runtime observability snapshot for M1 metrics surfaces. " +
+        "Backed by the same in-memory metrics store as ops://metrics and /metrics.",
+      mimeType: "application/json",
+    },
+    metricsHandler
+  );
+
+  logger.info("Registered 8 resources (including ops://metrics and system://metrics)");
 }

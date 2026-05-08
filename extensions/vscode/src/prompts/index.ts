@@ -236,8 +236,15 @@ export function assemblePrompt(
   const autonomyBlock = getAutonomyInstructionBlock(autonomyState);
   if (autonomyBlock) {
     parts.push(autonomyBlock);
-    parts.push(getStructuredResponseContractBlock());
   }
+
+  // Structured continuation envelope is requested on every turn, regardless
+  // of autonomy mode. The webview's SUMMARY card (renderEnvelope) renders
+  // the goal/progress/uncertainty pills and the Suggested-Actions chips
+  // from this envelope; without it the user sees only raw prose with no
+  // continuation buttons. Autonomy decides whether to *act* on the envelope,
+  // not whether the envelope exists.
+  parts.push(getStructuredResponseContractBlock());
 
   // Provider-specific discipline — Anthropic models (Claude) tend to execute
   // many tool calls without pausing, which corrupts code on large tasks.

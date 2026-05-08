@@ -25,6 +25,7 @@ import { resolveInstanceAtStartup, updateInstanceCounters } from "./instance/ind
 import { engine } from "./cognitive/engine.js";
 import { initLlmProvider } from "./cognitive/llm.js";
 import { logger } from "./utils/logger.js";
+import { getRuntimeMetricsSnapshotV1 } from "./observability/runtime-metrics.js";
 
 /* ------------------------------------------------------------------ */
 /*  CLI argument parsing                                              */
@@ -200,6 +201,33 @@ async function startHTTP(port: number): Promise<void> {
       // GET or DELETE without a valid session
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Invalid or missing session" }));
+      return;
+    }
+
+    // ---- /metrics — canonical runtime observability snapshot ------------
+    if (req.method === "GET" && url.pathname === "/metrics") {
+      const enabled =
+        process.env.DREAMGRAPH_ENABLE_RUNTIME_METRICS === "1" ||
+        process.env.DREAMGRAPH_ENABLE_RUNTIME_METRICS === "true" ||
+        process.env.DREAMGRAPH_METRICS_ENABLED === "1" ||
+        process.env.DREAMGRAPH_METRICS_ENABLED === "true";
+      if (!enabled) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Runtime metrics endpoint is disabled. Set DREAMGRAPH_METRICS_ENABLED=true (or DREAMGRAPH_ENABLE_RUNTIME_METRICS=true) to enable /metrics." }));
+        return;
+      }
+
+      const hostHeader = req.headers.host ?? "";
+      const isLocalHost = hostHeader.startsWith("localhost") || hostHeader.startsWith("127.0.0.1") || hostHeader.startsWith("[::1]");
+      if (!isLocalHost) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Runtime metrics endpoint is restricted to local/private access in M1." }));
+        return;
+      }
+
+      const snapshot = await getRuntimeMetricsSnapshotV1();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(snapshot));
       return;
     }
 

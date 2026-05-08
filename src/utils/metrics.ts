@@ -59,6 +59,8 @@ export interface MetricsSnapshot {
   uptime_s: number;
   /** Per-tool call metrics */
   tools: Record<string, ToolCallRecord>;
+  /** Per-REST-route call metrics (M1 observability) */
+  rest: Record<string, ToolCallRecord>;
   /** Symbol/API lookup metrics */
   symbol_lookups: SymbolLookupMetrics;
   /** File read hotspot tracking */
@@ -79,6 +81,8 @@ export interface MetricsSnapshot {
 const startedAt = new Date();
 
 const toolMetrics: Record<string, ToolCallRecord> = {};
+
+const restMetrics: Record<string, ToolCallRecord> = {};
 
 const symbolLookups: SymbolLookupMetrics = {
   attempts: 0,
@@ -121,6 +125,35 @@ export function recordToolCall(
     };
   }
   const m = toolMetrics[toolName];
+  m.calls++;
+  m.total_ms += durationMs;
+  m.last_called = new Date().toISOString();
+  if (failed) {
+    m.failures++;
+    m.last_error = errorMsg ?? "unknown";
+  }
+}
+
+/**
+ * Record a REST API request (success or failure). M1 observability surface.
+ * `name` should be a stable route identifier such as `GET /api/instance`.
+ */
+export function recordRestRequest(
+  name: string,
+  durationMs: number,
+  failed: boolean,
+  errorMsg?: string,
+): void {
+  if (!restMetrics[name]) {
+    restMetrics[name] = {
+      calls: 0,
+      failures: 0,
+      total_ms: 0,
+      last_called: null,
+      last_error: null,
+    };
+  }
+  const m = restMetrics[name];
   m.calls++;
   m.total_ms += durationMs;
   m.last_called = new Date().toISOString();
@@ -184,6 +217,7 @@ export function getMetricsSnapshot(): MetricsSnapshot {
     started_at: startedAt.toISOString(),
     uptime_s: Math.round((now.getTime() - startedAt.getTime()) / 1000),
     tools: { ...toolMetrics },
+    rest: { ...restMetrics },
     symbol_lookups: { ...symbolLookups },
     file_reads: {
       total_reads: fileReads.total_reads,

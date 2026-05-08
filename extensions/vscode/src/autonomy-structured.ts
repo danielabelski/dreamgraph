@@ -63,21 +63,60 @@ function extractRecommendedActions(content: string): RecommendedAction[] {
   const lines = content.split(/\r?\n/);
   const collected: RecommendedAction[] = [];
   let inSection = false;
+  let sectionLevel = 0;
   let priority = 1;
+  // Indent (in spaces; tab=2) of the first top-level bullet seen in the section.
+  // Subsequent bullets must match this indent — deeper bullets are sub-detail
+  // (e.g. "verify /metrics" under "Smoke test the new metrics surfaces") and
+  // must NOT become their own action chips.
+  let topBulletIndent: number | null = null;
+
+  // Accept any heading level (#, ##, ###, ####). LLMs frequently emit ###
+  // for sub-sections inside a SUMMARY card. Also accept singular "step",
+  // "Recommended Next Step(s)", "Next Recommended Slice", or a plain
+  // "Recommended next steps:" prose lead-in.
+  const sectionRe = /^(#{1,6})\s+(?:next recommended slice|recommended next steps?|next steps?|suggested next steps?)\b/i;
+  const proseRe = /^(?:recommended next steps?|next steps?):/i;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (/^##\s+next recommended slice/i.test(trimmed) || /^##\s+recommended next steps?/i.test(trimmed) || /^recommended next steps?:/i.test(trimmed)) {
+    const sectionMatch = trimmed.match(sectionRe);
+    if (sectionMatch) {
       inSection = true;
+      sectionLevel = sectionMatch[1].length;
       continue;
     }
-    if (inSection && /^##\s+/.test(trimmed)) {
-      break;
+    if (proseRe.test(trimmed) && !inSection) {
+      inSection = true;
+      sectionLevel = 6; // any subsequent heading ends the section
+      continue;
+    }
+    // Section ends at the next heading of the same or shallower depth.
+    if (inSection) {
+      const h = trimmed.match(/^(#{1,6})\s+/);
+      if (h && h[1].length <= sectionLevel) {
+        break;
+      }
     }
     const bulletMatch = trimmed.match(/^[-*]\s+(.+)/) ?? trimmed.match(/^\d+[.)]\s+(.+)/);
     if (inSection && bulletMatch) {
-      const label = bulletMatch[1].trim();
+      // Compute indent of this bullet (tabs count as 2 spaces).
+      const leading = line.match(/^[ \t]*/)?.[0] ?? '';
+      const indent = leading.replace(/\t/g, '  ').length;
+      if (topBulletIndent === null) {
+        topBulletIndent = indent;
+      } else if (indent > topBulletIndent) {
+        // Sub-bullet — supporting detail, not its own action.
+        continue;
+      }
+      // Strip surrounding bold markers so chip labels stay clean.
+      const label = bulletMatch[1].trim().replace(/^\*\*(.+?)\*\*$/, '$1').trim();
       if (!label) continue;
+      // Skip sub-bullets that are obviously continuation detail (very short
+      // code-only fragments like `npm run build`). Heuristic: must contain
+      // at least one whitespace-separated word outside backticks.
+      const stripped = label.replace(/`[^`]*`/g, '').trim();
+      if (!stripped) continue;
       collected.push(toAction(label, priority++));
       continue;
     }
@@ -87,7 +126,9 @@ function extractRecommendedActions(content: string): RecommendedAction[] {
     return collected;
   }
 
-  const single = content.match(/next recommended slice:\s*([^\n]+)/i) ?? content.match(/next recommended step:\s*([^\n]+)/i);
+  const single = content.match(/next recommended slice:\s*([^\n]+)/i)
+    ?? content.match(/next recommended step:\s*([^\n]+)/i)
+    ?? content.match(/recommended next step:\s*([^\n]+)/i);
   if (single?.[1]) {
     return [toAction(single[1].trim(), 1)];
   }
