@@ -30,7 +30,10 @@ export type GraphEventKind =
   | "candidate.added"
   | "candidate.promoted"
   | "candidate.rejected"
-  | "audit.appended";
+  | "audit.appended"
+  | "schedule.executed"
+  | "schedule.timed_out"
+  | "schedule.paused";
 
 export interface GraphEvent {
   /** Monotonic per-process sequence number, starting at 1. */

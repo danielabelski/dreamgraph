@@ -216,4 +216,25 @@ describe("handleEventsStream (SSE)", () => {
     });
     expect(typeof parsed.ts).toBe("string");
   });
+
+  it("streams new schedule lifecycle kinds through SSE", () => {
+    const req = makeReq();
+    handleEventsStream(req as unknown as IncomingMessage, captured.res);
+    graphEventBus.emit("schedule.executed", {
+      affected_ids: ["sched-1"],
+      payload: { schedule_id: "sched-1", success: true },
+    });
+    graphEventBus.emit("schedule.timed_out", {
+      affected_ids: ["sched-1"],
+      payload: { schedule_id: "sched-1", error: "executeAction timeout after 1000ms" },
+    });
+    graphEventBus.emit("schedule.paused", {
+      affected_ids: ["sched-1"],
+      payload: { schedule_id: "sched-1", reason: "error_streak" },
+    });
+    const out = body(captured);
+    expect(out).toMatch(/event: schedule\.executed/);
+    expect(out).toMatch(/event: schedule\.timed_out/);
+    expect(out).toMatch(/event: schedule\.paused/);
+  });
 });

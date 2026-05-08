@@ -22,10 +22,13 @@ M2 rule: an event kind is stable only after its producer exists, payload shape i
 | `candidate.promoted` | yes | `src/cognitive/engine.ts:1073`, `src/cognitive/engine.ts:2328` | envelope with affected endpoint ids; payload `{ from, to, confidence }` for system promotion or `{ from, to, confidence, actor: "user" }` for user promotion | `{ from: string, to: string, confidence: number, actor?: "system" | "user" }`; align both producers before promotion | experimental |
 | `candidate.rejected` | yes | `src/cognitive/engine.ts:2362` | envelope with `affected_ids: [dream_id]`; payload `{ dream_id, dream_type }` | same plus optional `actor?: "user" | "system"`, `reason?: string`; stabilize after producer/SSE tests | experimental |
 | `audit.appended` | yes | `src/explorer/audit.ts:70` | envelope with `affected_ids` from audit row; payload `{ mutation_id, intent, actor, ok, dry_run, reason, before_hash, after_hash, etag }` | same; stabilize only if plugin consumers need mutation audit events | experimental |
+| `schedule.executed` | yes | `src/cognitive/scheduler.ts` write-back path | envelope with `affected_ids: [schedule_id]`; payload `{ schedule_id, schedule_name, action, execution_id, success, duration_ms, status, error }` | same; keep additive only until scheduler producer/SSE coverage is mature | experimental |
+| `schedule.timed_out` | yes | `src/cognitive/scheduler.ts` timeout failure branch | envelope with `affected_ids: [schedule_id]`; payload `{ schedule_id, schedule_name, action, error }` | same; stabilize only after timeout-path regression coverage | experimental |
+| `schedule.paused` | yes | `src/cognitive/scheduler.ts` error-streak auto-pause branch | envelope with `affected_ids: [schedule_id]`; payload `{ schedule_id, schedule_name, action, reason: "error_streak", error_count }` | same; stabilize only after scheduler outcome/SSE tests | experimental |
 
 ## Planned / not currently SDK event kinds
 
-The roadmap mentions additional lifecycle names such as `schedule.executed`, `schedule.timed_out`, `schedule.paused`, `dream.cycle.started`, `dream.cycle.failed`, `nightmare.cycle.completed`, `archetype.imported`, `archetype.exported`, `narrative.chapter.appended`, and `webhook.dead_letter`.
+The roadmap mentions additional lifecycle names such as `dream.cycle.started`, `dream.cycle.failed`, `nightmare.cycle.completed`, `archetype.imported`, `archetype.exported`, `narrative.chapter.appended`, and `webhook.dead_letter`.
 
 These are **not** currently part of `GraphEventKind`, `StableEventKind`, or `ExperimentalEventKind`. They should remain absent until a producer, payload, and test plan exist. Add them as experimental first unless the full stable checklist below is complete.
 

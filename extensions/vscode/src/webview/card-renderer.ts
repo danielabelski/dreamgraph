@@ -226,25 +226,33 @@ export function getCardRendererScript(): string {
       }
 
       function isEnvelopeShape(obj) {
-        return obj && typeof obj === 'object' && typeof obj.summary === 'string' &&
-          ('goal_status' in obj || 'recommended_next_steps' in obj || 'progress_status' in obj);
+        if (!obj || typeof obj !== 'object') return false;
+        // Canonical envelopes have a string summary; drifted (gpt-5.5 et al.)
+        // envelopes may omit summary entirely. normalizeLooseEnvelope() will
+        // synthesize a string summary before this gate is reached, so accept
+        // anything with envelope-marker keys.
+        var hasEnvelopeKeys = ('goal_status' in obj) || ('recommended_next_steps' in obj) || ('progress_status' in obj);
+        return hasEnvelopeKeys && (typeof obj.summary === 'string' || hasEnvelopeKeys);
       }
 
       // Normalize loose / drifted envelope shapes that LLMs emit into the canonical
-      // shape that isEnvelopeShape + renderEnvelope expect. Returns the same object
-      // (mutated/replaced) when normalization succeeds, otherwise returns the input.
-      // Common drifts handled:
-      //   - summary is an object with { discovered, changed, current_state,
-      //     recommended_next_step } instead of a plain string.
-      //   - recommended_next_step (singular) used instead of recommended_next_steps.
-      //   - Top-level wrapped under { autonomy, summary } where summary holds the
-      //     payload (Conscientious/Eager auto-pass envelope drift).
+      // shape that isEnvelopeShape + renderEnvelope expect.
+      // SYNC: keep in lockstep with src/envelope-utils.ts normalizeLooseEnvelope.
+      // Drifts handled:
+      //   A) summary is a nested object { discovered, changed, current_state, ... }
+      //   B) singular recommended_next_step -> plural array
+      //   C) progress_status / uncertainty as nested objects (gpt-5.5)
+      //   D) goal_status outside the {complete|partial|blocked} enum
+      //   E) recommended_next_steps[*].actions sub-arrays -> folded into rationale
       function normalizeLooseEnvelope(obj) {
         if (!obj || typeof obj !== 'object') return obj;
-        // Unwrap { autonomy, summary } where summary is the actual envelope-ish payload.
-        if (typeof obj.summary === 'object' && obj.summary !== null && !Array.isArray(obj.summary)) {
-          var inner = obj.summary;
+        var out = Object.assign({}, obj);
+
+        // ── Drift A: nested-summary wrapper ─────────────────────────────────
+        if (typeof out.summary === 'object' && out.summary !== null && !Array.isArray(out.summary)) {
+          var inner = out.summary;
           var parts = [];
+          if (typeof inner.summary === 'string' && inner.summary.trim()) parts.push(inner.summary.trim());
           function pushList(label, key) {
             var v = inner[key];
             if (Array.isArray(v) && v.length) parts.push(label + ': ' + v.join(' | '));
@@ -252,35 +260,79 @@ export function getCardRendererScript(): string {
           pushList('Discovered', 'discovered');
           pushList('Changed', 'changed');
           pushList('Current state', 'current_state');
-          if (typeof inner.summary === 'string' && inner.summary.trim()) parts.unshift(inner.summary.trim());
-          var summaryStr = parts.join('\\n\\n');
-          var nextSteps = obj.recommended_next_steps || inner.recommended_next_steps;
+          var nextSteps = out.recommended_next_steps || inner.recommended_next_steps;
           if (!Array.isArray(nextSteps)) {
-            var single = obj.recommended_next_step || inner.recommended_next_step;
-            if (typeof single === 'string' && single.trim()) {
-              nextSteps = [{ id: 'next', label: single.trim() }];
-            } else if (single && typeof single === 'object') {
-              nextSteps = [single];
-            }
+            var single = out.recommended_next_step || inner.recommended_next_step;
+            if (typeof single === 'string' && single.trim()) nextSteps = [{ id: 'next', label: single.trim() }];
+            else if (single && typeof single === 'object') nextSteps = [single];
           }
-          var normalized = {
-            summary: summaryStr || (typeof inner.summary === 'string' ? inner.summary : ''),
-            goal_status: obj.goal_status || inner.goal_status,
-            progress_status: obj.progress_status || inner.progress_status,
-            uncertainty: obj.uncertainty || inner.uncertainty,
-            recommended_next_steps: Array.isArray(nextSteps) ? nextSteps : []
-          };
-          if (typeof normalized.summary === 'string' && normalized.summary) return normalized;
+          out.summary = parts.join('\\n\\n') || (typeof inner.summary === 'string' ? inner.summary : '');
+          out.goal_status = out.goal_status || inner.goal_status;
+          out.progress_status = out.progress_status || inner.progress_status;
+          out.uncertainty = out.uncertainty || inner.uncertainty;
+          out.recommended_next_steps = Array.isArray(nextSteps) ? nextSteps : [];
         }
-        // Singular -> plural fix at top level.
-        if (typeof obj.summary === 'string' && !obj.recommended_next_steps && obj.recommended_next_step) {
-          var s = obj.recommended_next_step;
-          var arr = typeof s === 'string'
+
+        // ── Drift B: singular -> plural at top level ────────────────────────
+        if (typeof out.summary === 'string' && !out.recommended_next_steps && out.recommended_next_step) {
+          var s = out.recommended_next_step;
+          out.recommended_next_steps = typeof s === 'string'
             ? [{ id: 'next', label: s }]
             : (s && typeof s === 'object' ? [s] : []);
-          return Object.assign({}, obj, { recommended_next_steps: arr });
         }
-        return obj;
+
+        // ── Drift C: nested progress_status / uncertainty (gpt-5.5) ─────────
+        var progressNarrative = '';
+        if (out.progress_status && typeof out.progress_status === 'object' && !Array.isArray(out.progress_status)) {
+          var ps = out.progress_status;
+          var completed = Array.isArray(ps.completed_this_run) ? ps.completed_this_run : [];
+          var remaining = Array.isArray(ps.remaining_work) ? ps.remaining_work : [];
+          var changed = Array.isArray(ps.changed_artifacts_this_run) ? ps.changed_artifacts_this_run : [];
+          var sb = [];
+          if (completed.length) sb.push('Completed this run: ' + completed.map(String).join(' | '));
+          if (changed.length) sb.push('Changed: ' + changed.map(String).join(' | '));
+          if (remaining.length) sb.push('Remaining: ' + remaining.map(String).join(' | '));
+          progressNarrative = sb.join('\\n\\n');
+          out.progress_status = (completed.length === 0 && changed.length === 0 && remaining.length > 0)
+            ? 'stalled' : 'advancing';
+        }
+        if (out.uncertainty && typeof out.uncertainty === 'object' && !Array.isArray(out.uncertainty)) {
+          var lvl = typeof out.uncertainty.level === 'string' ? out.uncertainty.level.toLowerCase() : '';
+          out.uncertainty = (lvl === 'low' || lvl === 'medium' || lvl === 'high') ? lvl : 'low';
+        }
+
+        // ── Drift D: goal_status synonyms ───────────────────────────────────
+        if (typeof out.goal_status === 'string') {
+          var g = out.goal_status.toLowerCase();
+          if (g !== 'complete' && g !== 'partial' && g !== 'blocked') {
+            out.goal_status = (g === 'done' || g === 'finished' || g === 'success') ? 'complete'
+              : (g === 'incomplete' || g === 'in_progress' || g === 'in-progress') ? 'partial'
+              : (g === 'failed' || g === 'error') ? 'blocked'
+              : 'partial';
+          }
+        }
+
+        // ── Drift E: recommended_next_steps[*].actions sub-arrays ───────────
+        if (Array.isArray(out.recommended_next_steps)) {
+          out.recommended_next_steps = out.recommended_next_steps.map(function (step) {
+            if (!step || typeof step !== 'object') return step;
+            var sCopy = Object.assign({}, step);
+            if (Array.isArray(sCopy.actions) && sCopy.actions.length) {
+              var joined = sCopy.actions.map(String).join(' → ');
+              sCopy.rationale = (typeof sCopy.rationale === 'string' && sCopy.rationale.trim())
+                ? (sCopy.rationale + ' (' + joined + ')')
+                : joined;
+              delete sCopy.actions;
+            }
+            return sCopy;
+          });
+        }
+
+        // ── Synthesize summary if missing so isEnvelopeShape() accepts it ───
+        if (typeof out.summary !== 'string' || !out.summary.trim()) {
+          out.summary = progressNarrative || '';
+        }
+        return out;
       }
 
       function tryParseEnvelope(src) {

@@ -212,3 +212,34 @@ describe("cognitive producers — MCP behavior unchanged", () => {
     expect(captured.some((e) => e.kind === "tension.created")).toBe(true);
   });
 });
+
+describe("scheduler lifecycle kinds — bus emissions", () => {
+  it("allows schedule lifecycle event kinds on the bus", async () => {
+    const events: GraphEvent[] = [];
+    const unsub = graphEventBus.subscribe((ev) => events.push(ev));
+    try {
+      graphEventBus.emit("schedule.executed", {
+        affected_ids: ["sched-test"],
+        payload: { schedule_id: "sched-test", success: true, execution_id: "exec_123" },
+      });
+      graphEventBus.emit("schedule.timed_out", {
+        affected_ids: ["sched-test"],
+        payload: { schedule_id: "sched-test", error: "executeAction timeout after 1000ms" },
+      });
+      graphEventBus.emit("schedule.paused", {
+        affected_ids: ["sched-test"],
+        payload: { schedule_id: "sched-test", reason: "error_streak", error_count: 3 },
+      });
+    } finally {
+      unsub();
+    }
+
+    expect(events.map((e) => e.kind)).toEqual([
+      "schedule.executed",
+      "schedule.timed_out",
+      "schedule.paused",
+    ]);
+    expect(events[0].affected_ids).toEqual(["sched-test"]);
+    expect(events[0].payload).toMatchObject({ execution_id: "exec_123" });
+  });
+});

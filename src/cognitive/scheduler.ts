@@ -33,6 +33,7 @@ import { runMetacognitiveAnalysis } from "./metacognition.js";
 import { dispatchEvent } from "./event-router.js";
 import { exportArchetypes } from "./federation.js";
 import { maybeAutoNarrate, generateDiffChapter } from "./narrator.js";
+import { graphEventBus } from "../graph/events.js";
 import { logger } from "../utils/logger.js";
 import { getLlmReadinessStatus } from "./llm-readiness.js";
 import { getLlmProvider, getNormalizerLlmConfig } from "./llm.js";
@@ -783,6 +784,7 @@ async function writeBackExecution(
     const schedule = file.schedules.find((s) => s.id === claim.scheduleId);
     const completedAt = new Date();
     const duration = completedAt.getTime() - claim.startTime;
+    const executionId = `${idPrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
     if (schedule) {
       if (success) {
@@ -791,9 +793,30 @@ async function writeBackExecution(
       } else {
         schedule.error_count++;
         schedule.last_error = errorMsg ?? "unknown error";
+        if (errorMsg?.includes("executeAction timeout after")) {
+          graphEventBus.emit("schedule.timed_out", {
+            affected_ids: [schedule.id],
+            payload: {
+              schedule_id: schedule.id,
+              schedule_name: schedule.name,
+              action: schedule.action,
+              error: errorMsg,
+            },
+          });
+        }
         if (schedule.error_count >= config.max_error_streak) {
           schedule.status = "error";
           schedule.enabled = false;
+          graphEventBus.emit("schedule.paused", {
+            affected_ids: [schedule.id],
+            payload: {
+              schedule_id: schedule.id,
+              schedule_name: schedule.name,
+              action: schedule.action,
+              reason: "error_streak",
+              error_count: schedule.error_count,
+            },
+          });
           logger.warn(
             `Schedule "${schedule.name}" paused after ${schedule.error_count} consecutive errors`
           );
@@ -807,10 +830,24 @@ async function writeBackExecution(
         schedule.status = "exhausted";
         schedule.enabled = false;
       }
+
+      graphEventBus.emit("schedule.executed", {
+        affected_ids: [schedule.id],
+        payload: {
+          schedule_id: schedule.id,
+          schedule_name: schedule.name,
+          action: schedule.action,
+          execution_id: executionId,
+          success,
+          duration_ms: duration,
+          status: schedule.status,
+          error: errorMsg ?? null,
+        },
+      });
     }
 
     const execution: ScheduleExecution = {
-      id: `${idPrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: executionId,
       schedule_id: claim.scheduleId,
       schedule_name: claim.scheduleName,
       action: claim.action,

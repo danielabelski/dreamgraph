@@ -25,8 +25,14 @@ import type { StructuredActionEnvelope } from './autonomy-contract.js';
 export function isEnvelopeShape(value: unknown): value is StructuredActionEnvelope {
   if (!value || typeof value !== 'object') return false;
   const obj = value as Record<string, unknown>;
-  if (typeof obj.summary !== 'string') return false;
-  return 'goal_status' in obj || 'recommended_next_steps' in obj || 'progress_status' in obj;
+  // Canonical: summary is a string. Drifted (gpt-5.5 et al.) envelopes may
+  // omit summary entirely while still emitting goal_status / progress_status
+  // / recommended_next_steps. Accept either: shape coercion in
+  // normalizeLooseEnvelope() will synthesize a summary when one is missing
+  // before this gate is reached.
+  const hasStringSummary = typeof obj.summary === 'string';
+  const hasEnvelopeKeys = 'goal_status' in obj || 'recommended_next_steps' in obj || 'progress_status' in obj;
+  return hasEnvelopeKeys && (hasStringSummary || hasEnvelopeKeys);
 }
 
 /**
@@ -165,8 +171,9 @@ export function findBalancedObject(text: string, startIdx: number): string | nul
  */
 export function normalizeLooseEnvelope(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
-  const obj = value as Record<string, unknown>;
+  const obj = { ...(value as Record<string, unknown>) };
 
+  // ── Drift A: nested-summary wrapper (Conscientious / Eager auto-pass) ─────
   if (obj.summary && typeof obj.summary === 'object' && !Array.isArray(obj.summary)) {
     const inner = obj.summary as Record<string, unknown>;
     const parts: string[] = [];
@@ -190,24 +197,94 @@ export function normalizeLooseEnvelope(value: unknown): unknown {
     }
 
     const summaryStr = parts.join('\n\n');
-    const normalized: Record<string, unknown> = {
-      summary: summaryStr || (typeof inner.summary === 'string' ? inner.summary : ''),
-      goal_status: obj.goal_status ?? inner.goal_status,
-      progress_status: obj.progress_status ?? inner.progress_status,
-      uncertainty: obj.uncertainty ?? inner.uncertainty,
-      recommended_next_steps: Array.isArray(nextSteps) ? nextSteps : [],
-    };
-    if (typeof normalized.summary === 'string' && normalized.summary.length > 0) return normalized;
+    obj.summary = summaryStr || (typeof inner.summary === 'string' ? inner.summary : '');
+    obj.goal_status = (obj.goal_status ?? inner.goal_status) as Record<string, unknown>['goal_status'];
+    obj.progress_status = (obj.progress_status ?? inner.progress_status) as Record<string, unknown>['progress_status'];
+    obj.uncertainty = (obj.uncertainty ?? inner.uncertainty) as Record<string, unknown>['uncertainty'];
+    obj.recommended_next_steps = (Array.isArray(nextSteps) ? nextSteps : []) as Record<string, unknown>['recommended_next_steps'];
   }
 
+  // ── Drift B: singular -> plural recommended_next_step at top level ────────
   if (typeof obj.summary === 'string' && !obj.recommended_next_steps && obj.recommended_next_step) {
     const s = obj.recommended_next_step;
-    const arr = typeof s === 'string'
+    obj.recommended_next_steps = (typeof s === 'string'
       ? [{ id: 'next', label: s }]
-      : (s && typeof s === 'object' ? [s] : []);
-    return { ...obj, recommended_next_steps: arr };
+      : (s && typeof s === 'object' ? [s] : [])) as Record<string, unknown>['recommended_next_steps'];
   }
-  return value;
+
+  // ── Drift C: gpt-5.5 nested-object fields (progress_status / uncertainty) ─
+  // The model writes a structured "report" inside progress_status with
+  // completed_this_run / changed_artifacts_this_run / remaining_work arrays,
+  // and uncertainty as { level, details }. Coerce both back to the canonical
+  // string enums so autonomy can read them, and synthesize a summary from
+  // the report when summary is missing.
+  let progressNarrative: string | undefined;
+  if (obj.progress_status && typeof obj.progress_status === 'object' && !Array.isArray(obj.progress_status)) {
+    const ps = obj.progress_status as Record<string, unknown>;
+    const completed = Array.isArray(ps.completed_this_run) ? (ps.completed_this_run as unknown[]) : [];
+    const remaining = Array.isArray(ps.remaining_work) ? (ps.remaining_work as unknown[]) : [];
+    const changed = Array.isArray(ps.changed_artifacts_this_run) ? (ps.changed_artifacts_this_run as unknown[]) : [];
+    const sb: string[] = [];
+    if (completed.length) sb.push(`Completed this run: ${completed.map(String).join(' | ')}`);
+    if (changed.length) sb.push(`Changed: ${changed.map(String).join(' | ')}`);
+    if (remaining.length) sb.push(`Remaining: ${remaining.map(String).join(' | ')}`);
+    progressNarrative = sb.join('\n\n');
+    // Stalled iff nothing was completed/changed but work remains. Otherwise advancing.
+    obj.progress_status = (completed.length === 0 && changed.length === 0 && remaining.length > 0
+      ? 'stalled'
+      : 'advancing') as Record<string, unknown>['progress_status'];
+  }
+  if (obj.uncertainty && typeof obj.uncertainty === 'object' && !Array.isArray(obj.uncertainty)) {
+    const u = obj.uncertainty as Record<string, unknown>;
+    const lvl = typeof u.level === 'string' ? u.level.toLowerCase() : '';
+    obj.uncertainty = ((lvl === 'low' || lvl === 'medium' || lvl === 'high')
+      ? lvl
+      : 'low') as Record<string, unknown>['uncertainty'];
+  }
+
+  // ── Drift D: goal_status outside the {complete|partial|blocked} enum ─────
+  if (typeof obj.goal_status === 'string') {
+    const g = obj.goal_status.toLowerCase();
+    if (g !== 'complete' && g !== 'partial' && g !== 'blocked') {
+      // Map common synonyms; unknown values fall back to 'partial' (safe
+      // non-terminal default — better than dropping the envelope entirely).
+      obj.goal_status = (g === 'done' || g === 'finished' || g === 'success' ? 'complete'
+        : g === 'incomplete' || g === 'in_progress' || g === 'in-progress' ? 'partial'
+        : g === 'failed' || g === 'error' ? 'blocked'
+        : 'partial') as Record<string, unknown>['goal_status'];
+    }
+  }
+
+  // ── Drift E: recommended_next_steps[*].actions (sub-action arrays) ────────
+  // gpt-5.5 sometimes nests an `actions: string[]` array inside each step.
+  // Fold those into rationale so the chip label stays clean and no detail is lost.
+  if (Array.isArray(obj.recommended_next_steps)) {
+    obj.recommended_next_steps = (obj.recommended_next_steps as unknown[]).map((step) => {
+      if (!step || typeof step !== 'object') return step;
+      const s = { ...(step as Record<string, unknown>) };
+      if (Array.isArray(s.actions) && s.actions.length) {
+        const joined = (s.actions as unknown[]).map(String).join(' → ');
+        s.rationale = typeof s.rationale === 'string' && s.rationale.trim()
+          ? `${s.rationale} (${joined})`
+          : joined;
+        delete s.actions;
+      }
+      return s;
+    }) as Record<string, unknown>['recommended_next_steps'];
+  }
+
+  // ── Synthesize summary if still missing, so isEnvelopeShape accepts it ───
+  if (typeof obj.summary !== 'string' || obj.summary.trim().length === 0) {
+    if (progressNarrative) {
+      obj.summary = progressNarrative;
+    } else {
+      // Last resort: empty string so isEnvelopeShape() passes and the renderer
+      // can show the next-steps chips even without a narrative.
+      obj.summary = '';
+    }
+  }
+
+  return obj;
 }
 
 /**
