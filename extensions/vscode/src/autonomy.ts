@@ -8,6 +8,11 @@ export interface AutonomyState {
   remainingAutoPasses: number;
   completedAutoPasses: number;
   totalAuthorizedPasses?: number;
+  /** Number of consecutive passes that produced no real work
+   * (no tool calls, no file edits, no envelope summary text). Used to
+   * break out of pathological counter-spam loops where the model keeps
+   * "continuing" without ever doing anything. */
+  consecutiveEmptyPasses?: number;
 }
 
 export interface PassOutcomeSignal {
@@ -19,6 +24,10 @@ export interface PassOutcomeSignal {
   progressStatus: ProgressStatus;
   nextStepIsNearTrivial?: boolean;
   nextStepIsDefining?: boolean;
+  /** True when the pass produced no tool calls, no file edits, no
+   * envelope summary, and no recommended actions — i.e. the model
+   * "reported" only autonomy counters. */
+  isEmptyPass?: boolean;
 }
 
 export interface RecommendedAction {
@@ -148,6 +157,12 @@ export function shouldContinueAfterPass(
   }
   if (signal.hasBlockingFailure) {
     return { shouldContinue: false, reason: 'Stopped: blocking failure encountered.', selectionMode: 'none' };
+  }
+  // Counter-spam guard: two passes in a row that produced no tool calls,
+  // no file edits, and no real report — force user confirmation rather
+  // than burning more pass budget on a model that is silently failing.
+  if ((state.consecutiveEmptyPasses ?? 0) >= 2) {
+    return { shouldContinue: false, reason: 'Paused: two empty passes in a row — select an action or type "resume" to continue.', selectionMode: 'user' };
   }
   if (!signal.hasClearNextStep) {
     // Pause for user selection rather than hard-stopping. The webview will show

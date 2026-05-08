@@ -51,6 +51,7 @@ import {
   type BudgetSnapshot,
 } from './budget-coordinator.js';
 import { compressToolResult } from './tool-result-compression.js';
+import { RESPONSES_RAW_ITEMS_KEY } from './openai-responses-adapter.js';
 import {
   type ImplicitEntityDetectionResult,
   type VerdictBanner,
@@ -332,6 +333,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   /** Cached URI to bundled webview runtime for Slice 3 Option C migration. */
   private _webviewBundleUri: string | null = null;
   private _lastToolTrace: ToolTraceEntry[] = [];
+  /** Set when the report-required guard has already forced a final report
+   * turn for the current run, so we don't loop forever asking for reports. */
+  private _reportForcedThisRun = false;
   /**
    * Phase 2 of the never-fail budget plan (plans/NEVER_FAIL_BUDGET_DEBT_PLAN.md).
    * Snapshot is hydrated from `ChatMemory.loadBudgetState` on restore and
@@ -676,6 +680,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
   this._lastToolTrace = [];
   this._lastVerdict = null;
+  this._reportForcedThisRun = false;
   await this.postState();
   await this.postMessage({ type: 'toolTrace', calls: [] });
   this._autonomyEnabled = getAutonomyMode() !== 'cautious' || (getAutonomyPassBudget() ?? 0) > 0;
@@ -1755,8 +1760,23 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const actions: RecommendedAction[] = envelope.nextSteps;
     this._lastRecommendedActions = actions;
 
+    // Tool / file-edit accounting drives the empty-pass detector. Without
+    // these, a pass that only printed "Autonomy counters: ..." with no real
+    // work counts the same as a pass that edited 12 files.
+    const toolCallCount = this._lastToolTrace.length;
+    const fileEditCount = this._lastToolTrace.reduce(
+      (sum, t) => sum + (t.filesAffected?.length ?? 0),
+      0,
+    );
+
     // Run pass analysis to get continuation decision
-    const result = analyzePass(this._autonomyState, { content, actions, envelope });
+    const result = analyzePass(this._autonomyState, {
+      content,
+      actions,
+      envelope,
+      toolCallCount,
+      fileEditCount,
+    });
 
     // Note: action chips are rendered inline by the SUMMARY envelope card
     // (see card-renderer.ts renderEnvelope). No separate broadcast needed —
@@ -1764,7 +1784,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
     if (result.decision.shouldContinue && !this.abortController?.signal.aborted) {
       // Advance state and continue
-      this._autonomyState = advanceAutonomyStateIfContinued(this._autonomyState, result.decision);
+      this._autonomyState = advanceAutonomyStateIfContinued(this._autonomyState, result.decision, result.signal);
       this._broadcastAutonomyStatus();
 
       // Safety: cap autonomous continuation
@@ -1801,7 +1821,41 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       const continuationPrompt = result.nextPrompt ?? buildContinuationPrompt(selectedAction);
       await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools);
     } else {
+      // ──────────────────────────────────────────────────────────────────
+      // Report-required guard: never let the Architect sign off silently.
+      // If the loop is about to stop AND the model did real work this pass
+      // (≥1 tool call OR ≥1 file edit) but produced no envelope summary,
+      // force exactly one extra "report-only" turn before stopping.
+      // This prevents the gpt-5.5 failure mode where the model emits
+      // counter chatter, runs a few reads, and then disappears with no
+      // visible report of what it changed or what's left.
+      // ──────────────────────────────────────────────────────────────────
+      const hasReport = !!envelope.summary && envelope.summary.trim().length > 0;
+      const didRealWork = toolCallCount > 0 || fileEditCount > 0;
+      const alreadyForcedReport = this._reportForcedThisRun === true;
+      if (!hasReport && didRealWork && !alreadyForcedReport && !this.abortController?.signal.aborted) {
+        this._reportForcedThisRun = true;
+        const reportPrompt = [
+          'STOP. You are about to end the session without a report.',
+          'Emit ONLY the SUMMARY/structured-envelope report now: a one-paragraph plain-text summary of what you actually did this run, what changed, what is incomplete, and any blockers — followed by the standard json envelope fenced block (`goal_status`, `progress_status`, `uncertainty`, optional `recommended_next_steps`).',
+          'Do NOT issue any tool calls in this turn. Reporting is mandatory before sign-off.',
+        ].join(' ');
+        const notice: ChatMessage = {
+          id: this._createMessageId(),
+          role: 'system',
+          content: '⚠️ Architect attempted to sign off without a report — requesting a final report turn.',
+          timestamp: new Date().toISOString(),
+          instanceId: this.currentInstanceId,
+        };
+        this.messages.push(notice);
+        await this.persistMessages();
+        await this.postMessage({ type: 'addMessage', message: notice, actions: [], roleMeta: this._roleMetaFor(notice), contextFooter: undefined });
+        await this._runAutonomyContinuationPass(reportPrompt, llmMessages, tools);
+        return;
+      }
+
       // Stopped — persist task state so the next turn can resume from a known position.
+      this._reportForcedThisRun = false;
       this._lastStopContext = {
         summary: envelope.summary,
         nextSteps: result.actionSet.actions.slice(0, 3).map((a) => ({ label: a.label, rationale: a.rationale })),
@@ -2138,7 +2192,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           input: toolCall.input,
         });
       }
-      rawMessages.push({ role: 'assistant', content: assistantBlocks });
+      // For OpenAI Responses API turns, attach the verbatim output[] items
+      // (including encrypted `reasoning` items) so the next turn can replay
+      // them. This is REQUIRED by gpt-5.5/o-series stateless mode — without
+      // reasoning replay the model re-plans every tool round-trip and
+      // degenerates into counter-spam ("Iterations: 1..34") with no real
+      // edits ever being committed.
+      const assistantMsg: Record<string, unknown> = { role: 'assistant', content: assistantBlocks };
+      if (Array.isArray(response.providerRawAssistant) && response.providerRawAssistant.length > 0) {
+        assistantMsg[RESPONSES_RAW_ITEMS_KEY] = response.providerRawAssistant;
+      }
+      rawMessages.push(assistantMsg);
 
       const toolResultBlocks: Array<{ type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }> = [];
       for (const toolCall of response.toolCalls) {

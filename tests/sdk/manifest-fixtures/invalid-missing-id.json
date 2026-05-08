@@ -1,0 +1,11 @@
+{
+  "version": "0.1.0",
+  "displayName": "Missing ID Plugin",
+  "engine": {
+    "dreamgraph": ">=8.3.0"
+  },
+  "main": "./dist/index.js",
+  "intent": "This fixture must fail because id is required.",
+  "expectedEffects": ["emit_tool"],
+  "capabilities": ["tools:register"]
+}

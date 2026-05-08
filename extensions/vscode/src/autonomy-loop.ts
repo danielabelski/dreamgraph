@@ -16,6 +16,11 @@ export interface PassAnalysisInput {
   /** Structured envelope parsed from the LLM response. When present its fields
    * are authoritative over prose-regex-derived equivalents. */
   envelope?: StructuredPassEnvelope;
+  /** Number of tool calls the model issued during this pass. Used by the
+   * empty-pass detector to break out of counter-spam loops. */
+  toolCallCount?: number;
+  /** Number of files actually edited/created during this pass. */
+  fileEditCount?: number;
 }
 
 export interface PassAnalysisResult {
@@ -69,6 +74,12 @@ export function analyzePass(state: AutonomyState, input: PassAnalysisInput): Pas
   const proseSignal = inferPassOutcomeSignal(input.content);
   const hasActions = (input.actions?.length ?? 0) > 0;
   const env = input.envelope;
+  const toolCalls = input.toolCallCount ?? 0;
+  const fileEdits = input.fileEditCount ?? 0;
+  const summaryHasContent = !!env?.summary && env.summary.trim().length > 0;
+  // "Empty pass": no real work and no real report. Pure counter-spam.
+  const isEmptyPass = toolCalls === 0 && fileEdits === 0 && !hasActions && !summaryHasContent
+    && (input.content?.trim().length ?? 0) < 200;
 
   // Structured envelope fields are authoritative over prose-regex equivalents.
   // Prose is the fallback when no structured block was emitted.
@@ -80,13 +91,23 @@ export function analyzePass(state: AutonomyState, input: PassAnalysisInput): Pas
     goalSufficientlyReached: (env?.goalStatus === 'complete') || proseSignal.goalSufficientlyReached,
     progressStatus: env?.progressStatus ?? proseSignal.progressStatus,
     uncertainty: env?.uncertainty ?? proseSignal.uncertainty,
-    // When structured data is present, blocking failure is ONLY signalled by
-    // goal_status:"blocked" — not by the noisy prose regex.
-    hasBlockingFailure: env ? (env.goalStatus === 'blocked') : proseSignal.hasBlockingFailure,
+    // "blocked" from a structured envelope is a turn-local signal, not a
+    // terminal one — only treat it as a hard stop when progress is also
+    // stalled. Otherwise the loop dies the first time the model self-reports
+    // a transient block while still advancing toward the goal.
+    hasBlockingFailure: env
+      ? (env.goalStatus === 'blocked' && env.progressStatus === 'stalled')
+      : proseSignal.hasBlockingFailure,
+    isEmptyPass,
   };
 
+  // Track consecutive empty passes on a copy of the state so the caller
+  // can persist it. shouldContinueAfterPass uses this to short-circuit.
+  const nextEmptyCount = isEmptyPass ? (state.consecutiveEmptyPasses ?? 0) + 1 : 0;
+  const stateForDecision: AutonomyState = { ...state, consecutiveEmptyPasses: nextEmptyCount };
+
   const actionSet = rankRecommendedActions(input.actions ?? []);
-  const decision = shouldContinueAfterPass(state, signal, actionSet);
+  const decision = shouldContinueAfterPass(stateForDecision, signal, actionSet);
   const selectedActionId = decision.selectionMode === 'self' ? actionSet.topActionId : undefined;
   const selectedAction = actionSet.actions.find((a) => a.id === selectedActionId);
   return {
@@ -98,6 +119,13 @@ export function analyzePass(state: AutonomyState, input: PassAnalysisInput): Pas
   };
 }
 
-export function advanceAutonomyStateIfContinued(state: AutonomyState, decision: ContinuationDecision): AutonomyState {
-  return decision.shouldContinue ? decrementPassBudget(state) : state;
+export function advanceAutonomyStateIfContinued(state: AutonomyState, decision: ContinuationDecision, signal?: PassOutcomeSignal): AutonomyState {
+  const next = decision.shouldContinue ? decrementPassBudget(state) : state;
+  if (signal) {
+    return {
+      ...next,
+      consecutiveEmptyPasses: signal.isEmptyPass ? (state.consecutiveEmptyPasses ?? 0) + 1 : 0,
+    };
+  }
+  return next;
 }

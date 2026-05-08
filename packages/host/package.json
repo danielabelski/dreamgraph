@@ -1,0 +1,21 @@
+{
+  "name": "@dreamgraph/host",
+  "version": "0.0.0",
+  "description": "DreamGraph plugin host contracts and administrative helpers",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  }
+}

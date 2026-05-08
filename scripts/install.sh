@@ -203,6 +203,22 @@ NPM_VERSION=$(npm --version 2>/dev/null || true)
 [[ -z "$NPM_VERSION" ]] && fail "npm is required but not found."
 ok "npm $NPM_VERSION"
 
+# Detect WSL using a Windows npm (a common broken setup that fails deep inside
+# native postinstall scripts with cryptic UNC-path errors). node is Linux but
+# npm resolves to /mnt/c/... or a *.cmd/.exe shim -> abort early.
+if grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null; then
+    NPM_PATH=$(command -v npm 2>/dev/null || true)
+    NODE_PATH=$(command -v node 2>/dev/null || true)
+    if [[ "$NPM_PATH" == /mnt/* ]] || [[ "$NPM_PATH" == *.cmd ]] || [[ "$NPM_PATH" == *.exe ]]; then
+        fail "Detected Windows npm ($NPM_PATH) inside WSL while node is Linux ($NODE_PATH).
+  Windows npm cannot run install scripts from /home/... (UNC path under \\\\wsl.localhost).
+  Install a Linux npm in WSL, e.g.:
+    sudo apt install -y nodejs npm
+  or use nvm: https://github.com/nvm-sh/nvm
+  Then re-run this script."
+    fi
+fi
+
 PACKAGE_JSON="$SOURCE_DIR/package.json"
 [[ ! -f "$PACKAGE_JSON" ]] && fail "No package.json at $SOURCE_DIR. Is this the DreamGraph repo?"
 

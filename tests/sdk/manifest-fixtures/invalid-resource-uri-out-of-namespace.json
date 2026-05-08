@@ -1,0 +1,17 @@
+{
+  "id": "example.plugin",
+  "version": "0.1.0",
+  "displayName": "Invalid Resource Namespace Plugin",
+  "engine": {
+    "dreamgraph": ">=8.3.0"
+  },
+  "main": "./dist/index.js",
+  "intent": "This fixture must fail because resources must use plugin:// namespaces.",
+  "expectedEffects": ["emit_resource"],
+  "capabilities": ["resources:register"],
+  "resources": [
+    {
+      "uriNamespace": "dreamgraph://example.plugin/"
+    }
+  ]
+}

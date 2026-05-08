@@ -1,0 +1,24 @@
+{
+  "id": "example.plugin",
+  "version": "0.1.0",
+  "displayName": "Example Plugin",
+  "description": "Minimal valid manifest fixture for SDK schema validation.",
+  "engine": {
+    "dreamgraph": ">=8.3.0"
+  },
+  "main": "./dist/index.js",
+  "intent": "Validate the minimum plugin manifest contract.",
+  "expectedEffects": ["emit_tool"],
+  "forbiddenEffects": ["write_internal_graph"],
+  "capabilities": ["tools:register"],
+  "tools": [
+    {
+      "name": "example.plugin.echo"
+    }
+  ],
+  "resources": [
+    {
+      "uriNamespace": "plugin://example.plugin/"
+    }
+  ]
+}

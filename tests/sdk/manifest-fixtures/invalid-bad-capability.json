@@ -1,0 +1,12 @@
+{
+  "id": "example.plugin",
+  "version": "0.1.0",
+  "displayName": "Invalid Capability Plugin",
+  "engine": {
+    "dreamgraph": ">=8.3.0"
+  },
+  "main": "./dist/index.js",
+  "intent": "This fixture must fail because capability vocabulary is closed.",
+  "expectedEffects": ["emit_tool"],
+  "capabilities": ["tools:execute"]
+}

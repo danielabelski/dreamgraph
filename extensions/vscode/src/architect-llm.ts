@@ -8,6 +8,7 @@
 import * as vscode from "vscode";
 import {
   buildOpenAIResponsesRequest,
+  extractOpenAIResponsesRawItems,
   extractOpenAIResponsesText,
   extractOpenAIResponsesToolCalls,
   toOpenAIResponsesContent,
@@ -64,6 +65,11 @@ export interface ToolUseRequest {
 export interface ArchitectToolResponse extends ArchitectResponse {
   toolCalls: ToolUseRequest[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop" | string;
+  /** Provider-specific verbatim assistant turn items.
+   * For OpenAI Responses API (gpt-5.5/o-series) this is the full `output[]`
+   * array including `reasoning` items. The chat panel persists these so the
+   * next turn can replay them and preserve stateless reasoning context. */
+  providerRawAssistant?: unknown[];
 }
 
 export interface ToolDefinition {
@@ -756,6 +762,8 @@ export class ArchitectLlm implements vscode.Disposable {
       completionTokens: data.usage?.output_tokens ?? 0,
       durationMs: Date.now() - start,
       toolCalls,
+      // Verbatim output[] items (incl. reasoning) for stateless replay.
+      providerRawAssistant: extractOpenAIResponsesRawItems(data),
       stopReason: toolCalls.length > 0
         ? "tool_use"
         : data.incomplete_details?.reason === "max_output_tokens"

@@ -50,6 +50,17 @@ export function buildOpenAIResponsesRequest(
       : compactedMessages.map((m) => ({ role: m.role, content: toOpenAIResponsesContent(m.content) })),
     reasoning: { effort: options.reasoningEffort },
     text: { verbosity: options.textVerbosity },
+    // Stateless multi-turn tool loops on gpt-5.5/o-series require these:
+    //   * store=false: opt out of server-side state retention (we replay).
+    //   * include reasoning.encrypted_content: the only way to get the
+    //     opaque reasoning blob needed to echo prior `reasoning` items back
+    //     on the next turn so the model doesn't re-plan from scratch.
+    //   * parallel_tool_calls=false: reasoning models occasionally emit
+    //     malformed parallel calls when iterating over many small tools;
+    //     serial calls eliminate that failure mode.
+    store: false,
+    include: ["reasoning.encrypted_content"],
+    parallel_tool_calls: false,
   };
 
   if (compactedTools?.length) {
@@ -95,11 +106,35 @@ export function toOpenAIResponsesContent(content: ArchitectMessageContent): unkn
   return blocks;
 }
 
+/** Marker key used by chat-panel to store the verbatim Responses output[]
+ * items for an assistant turn (including `reasoning` items). When present,
+ * `translateRawToOpenAIResponses` emits these items 1:1 instead of trying to
+ * synthesize them from Anthropic-shaped blocks — preserving the encrypted
+ * reasoning blob across the next turn. */
+export const RESPONSES_RAW_ITEMS_KEY = "__responsesItems" as const;
+
+export function extractOpenAIResponsesRawItems(data: OpenAIResponsesData): unknown[] {
+  return Array.isArray(data.output) ? data.output : [];
+}
+
 export function translateRawToOpenAIResponses(raw: unknown[]): unknown[] {
   const out: unknown[] = [];
 
   for (const msg of raw) {
     if (!isRecord(msg)) {
+      continue;
+    }
+
+    // Fast path: a previously captured Responses-API assistant turn. Emit its
+    // output[] items verbatim so reasoning replay keeps gpt-5.5 stateful
+    // across tool round-trips without server-side `previous_response_id`.
+    const stored = msg[RESPONSES_RAW_ITEMS_KEY];
+    if (msg.role === "assistant" && Array.isArray(stored)) {
+      for (const item of stored) {
+        if (isRecord(item)) {
+          out.push(item);
+        }
+      }
       continue;
     }
 
