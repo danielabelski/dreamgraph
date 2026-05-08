@@ -33,7 +33,11 @@ export type GraphEventKind =
   | "audit.appended"
   | "schedule.executed"
   | "schedule.timed_out"
-  | "schedule.paused";
+  | "schedule.paused"
+  | "nightmare.cycle.completed"
+  | "archetype.imported"
+  | "archetype.exported"
+  | "narrative.chapter.appended";
 
 export interface GraphEvent {
   /** Monotonic per-process sequence number, starting at 1. */

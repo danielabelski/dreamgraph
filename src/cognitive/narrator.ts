@@ -29,6 +29,7 @@ import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import { engine } from "./engine.js";
 import { logger } from "../utils/logger.js";
+import { graphEventBus } from "../graph/events.js";
 import { dataPath } from "../utils/paths.js";
 import { DEFAULT_NARRATIVE_CONFIG } from "./types.js";
 import type {
@@ -573,6 +574,15 @@ export async function appendToStory(chapter: StoryChapter): Promise<SystemStoryF
   logger.info(
     `Story updated: chapter ${chapter.chapter_number} — "${chapter.title}"`
   );
+  graphEventBus.emit("narrative.chapter.appended", {
+    affected_ids: [],
+    payload: {
+      chapter_number: chapter.chapter_number,
+      title: chapter.title,
+      cycle_range: chapter.cycle_range,
+      generated_at: chapter.generated_at,
+    },
+  });
   return story;
 }
 

@@ -25,15 +25,23 @@ M2 rule: an event kind is stable only after its producer exists, payload shape i
 | `schedule.executed` | yes | `src/cognitive/scheduler.ts` write-back path | envelope with `affected_ids: [schedule_id]`; payload `{ schedule_id, schedule_name, action, execution_id, success, duration_ms, status, error }` | same; keep additive only until scheduler producer/SSE coverage is mature | experimental |
 | `schedule.timed_out` | yes | `src/cognitive/scheduler.ts` timeout failure branch | envelope with `affected_ids: [schedule_id]`; payload `{ schedule_id, schedule_name, action, error }` | same; stabilize only after timeout-path regression coverage | experimental |
 | `schedule.paused` | yes | `src/cognitive/scheduler.ts` error-streak auto-pause branch | envelope with `affected_ids: [schedule_id]`; payload `{ schedule_id, schedule_name, action, reason: "error_streak", error_count }` | same; stabilize only after scheduler outcome/SSE tests | experimental |
+| `nightmare.cycle.completed` | yes | `src/cognitive/adversarial.ts` `nightmare(...)` completion path | envelope with `affected_ids` from attack-surface entities; payload `{ cycle_number, strategy, threats_found, attack_surfaces, summary, duration_ms }` | same; stabilize after producer/SSE coverage and payload review | experimental |
+| `archetype.imported` | yes | `src/cognitive/federation.ts` `importArchetypes(...)` | envelope with `affected_ids` from incoming archetype ids; payload `{ archetypes_imported, archetypes_skipped, tensions_created, source_instance, timestamp }` | same; stabilize after producer/SSE coverage and import contract review | experimental |
+| `archetype.exported` | yes | `src/cognitive/federation.ts` `exportArchetypes()` | envelope with `affected_ids` from exported archetype ids; payload `{ archetypes_exported, file_path, instance_id, timestamp }` | same; stabilize after producer/SSE coverage and export contract review | experimental |
+| `narrative.chapter.appended` | yes | `src/cognitive/narrator.ts` `appendToStory(...)` | envelope with `affected_ids: []`; payload `{ chapter_number, title, cycle_range, generated_at }` | same; stabilize after producer/SSE coverage and narrative payload review | experimental |
 
-## Planned / not currently SDK event kinds
+## Deferred / post-M2 event kinds
 
-The roadmap mentions additional lifecycle names such as `dream.cycle.started`, `dream.cycle.failed`, `nightmare.cycle.completed`, `archetype.imported`, `archetype.exported`, `narrative.chapter.appended`, and `webhook.dead_letter`.
+The roadmap still mentions additional lifecycle names such as `dream.cycle.started`, `dream.cycle.failed`, and `webhook.dead_letter`.
 
-These are **not** currently part of `GraphEventKind`, `StableEventKind`, or `ExperimentalEventKind`. They should remain absent until a producer, payload, and test plan exist. Add them as experimental first unless the full stable checklist below is complete.
+These remain **not** currently part of `GraphEventKind`, `StableEventKind`, or `ExperimentalEventKind`.
+
+- `dream.cycle.started` and `dream.cycle.failed` are deferred beyond M2 because the current daemon does not yet expose a single canonical dream-cycle lifecycle funnel that would make those events unambiguous and stable.
+- `webhook.dead_letter` is deferred to M5/Webhooks because the dead-letter producer does not exist until outbound delivery, retries, and dead-letter persistence ship.
+
+For M2 purposes, these are explicit **post-M2** kinds rather than in-scope planned rows.
 
 ## Promotion checklist
-
 Before moving any experimental kind to stable:
 
 1. Identify every producer in source.
@@ -44,3 +52,18 @@ Before moving any experimental kind to stable:
 6. Update `docs/sdk/events-reference.md` and SDK exports in the same change.
 
 No event is promoted by declaration alone.
+
+## Stable row → test coverage crosswalk
+
+| Stable event kind | Test file | Assertion coverage |
+| --- | --- | --- |
+| `snapshot.changed` | `tests/explorer-events.test.ts` | GraphEventBus monotonic/replay tests emit `snapshot.changed`; SSE tests assert live and replay delivery of `snapshot.changed`. |
+| `cache.invalidated` | `tests/explorer-events.test.ts` | GraphEventBus monotonic/replay tests emit `cache.invalidated`; SSE snapshot test confirms delivery when no `Last-Event-ID` is present. |
+
+## Post-M2 backlog items
+
+The following roadmap kinds remain explicit post-M2 backlog and do not block M2 closure:
+
+- `dream.cycle.started`
+- `dream.cycle.failed`
+- `webhook.dead_letter`

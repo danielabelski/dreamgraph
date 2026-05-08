@@ -23,6 +23,7 @@ import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import { engine } from "./engine.js";
 import { logger } from "../utils/logger.js";
+import { graphEventBus } from "../graph/events.js";
 import { dataPath } from "../utils/paths.js";
 import type {
   DreamArchetype,
@@ -211,11 +212,22 @@ export async function exportArchetypes(): Promise<ExportArchetypesOutput> {
 
   logger.info(`Exported ${unique.length} archetypes from ${validated.edges.length} validated edges`);
 
+  const timestamp = new Date().toISOString();
+  graphEventBus.emit("archetype.exported", {
+    affected_ids: unique.map((a) => a.id),
+    payload: {
+      archetypes_exported: unique.length,
+      file_path: archetypesPath(),
+      instance_id: config.instance_id,
+      timestamp,
+    },
+  });
+
   return {
     archetypes_exported: unique.length,
     file_path: archetypesPath(),
     instance_id: config.instance_id,
-    timestamp: new Date().toISOString(),
+    timestamp,
   };
 }
 
@@ -289,19 +301,31 @@ export async function importArchetypes(
   }
 
   existing.metadata.total_archetypes = existing.archetypes.length;
-  existing.metadata.exported_at = new Date().toISOString();
+  const timestamp = new Date().toISOString();
+  existing.metadata.exported_at = timestamp;
   await saveArchetypes(existing);
 
   logger.info(
     `Imported ${imported} archetypes (${skipped} duplicates reinforced, ${tensionsCreated} tensions created)`
   );
 
+  graphEventBus.emit("archetype.imported", {
+    affected_ids: incoming.archetypes.map((a) => a.id),
+    payload: {
+      archetypes_imported: imported,
+      archetypes_skipped: skipped,
+      tensions_created: tensionsCreated,
+      source_instance: incoming.metadata.source_instance,
+      timestamp,
+    },
+  });
+
   return {
     archetypes_imported: imported,
     archetypes_skipped: skipped,
     tensions_created: tensionsCreated,
     source_instance: incoming.metadata.source_instance,
-    timestamp: new Date().toISOString(),
+    timestamp,
   };
 }
 

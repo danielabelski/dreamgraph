@@ -3167,8 +3167,22 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       const messages = state.messages || [];
       const entry = messages.find((m) => m.message?.id === messageId);
       if (!entry) return;
-      bubble.remove();
-      addMessage(entry.message, entry.actions, entry.roleMeta, entry.contextFooter, entry.uiState || { toolTrace: [], verdict: null });
+      // IN-PLACE replacement. The previous implementation called
+      // bubble.remove() then addMessage(...) which appends to the END of
+      // #messages. That moved the bubble to the bottom of the conversation
+      // every time an action-state update arrived, creating the symptom
+      // "the SUMMARY card / chips suddenly disappear from where they were".
+      // It also fired the addMessage forced-scroll-to-bottom, which is why
+      // scrolling back manually appeared to bring the card back: the card was
+      // never gone, just moved.
+      const newBubble = createMessageNode(
+        entry.message,
+        entry.actions,
+        entry.roleMeta,
+        entry.contextFooter,
+        entry.uiState || { toolTrace: [], verdict: null },
+      );
+      bubble.replaceWith(newBubble);
     }
 
     function startStreaming() {

@@ -232,9 +232,29 @@ describe("handleEventsStream (SSE)", () => {
       affected_ids: ["sched-1"],
       payload: { schedule_id: "sched-1", reason: "error_streak" },
     });
+    graphEventBus.emit("nightmare.cycle.completed", {
+      affected_ids: ["entity-a"],
+      payload: { cycle_number: 9, strategy: "all_threats" },
+    });
+    graphEventBus.emit("archetype.imported", {
+      affected_ids: ["arch-1"],
+      payload: { archetypes_imported: 1, source_instance: "remote-a" },
+    });
+    graphEventBus.emit("archetype.exported", {
+      affected_ids: ["arch-2"],
+      payload: { archetypes_exported: 2, instance_id: "local-a" },
+    });
+    graphEventBus.emit("narrative.chapter.appended", {
+      affected_ids: [],
+      payload: { chapter_number: 3, title: "Cycle diff" },
+    });
     const out = body(captured);
     expect(out).toMatch(/event: schedule\.executed/);
     expect(out).toMatch(/event: schedule\.timed_out/);
     expect(out).toMatch(/event: schedule\.paused/);
+    expect(out).toMatch(/event: nightmare\.cycle\.completed/);
+    expect(out).toMatch(/event: archetype\.imported/);
+    expect(out).toMatch(/event: archetype\.exported/);
+    expect(out).toMatch(/event: narrative\.chapter\.appended/);
   });
 });

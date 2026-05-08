@@ -23,7 +23,6 @@ All graph events are delivered as a common envelope:
 - `cache.invalidated`
 
 ## Experimental event kinds
-
 - `dream.cycle.completed`
 - `tension.created`
 - `tension.resolved`
@@ -34,6 +33,10 @@ All graph events are delivered as a common envelope:
 - `schedule.executed`
 - `schedule.timed_out`
 - `schedule.paused`
+- `nightmare.cycle.completed`
+- `archetype.imported`
+- `archetype.exported`
+- `narrative.chapter.appended`
 
 ## Schedule lifecycle events
 
@@ -78,3 +81,52 @@ Payload fields currently emitted:
 ## Compatibility
 
 Experimental kinds may change. Stable kinds must remain additive/compatible.
+
+## Additional experimental lifecycle events
+
+### `nightmare.cycle.completed`
+
+Emitted when a NIGHTMARE adversarial cycle completes.
+
+Payload fields currently emitted:
+
+- `cycle_number: number`
+- `strategy: string`
+- `threats_found: number`
+- `attack_surfaces: number`
+- `summary: { critical: number; high: number; medium: number; low: number }`
+- `duration_ms: number`
+
+### `archetype.exported`
+
+Emitted when validated edges are exported into the federated archetype exchange file.
+
+Payload fields currently emitted:
+
+- `archetypes_exported: number`
+- `file_path: string`
+- `instance_id: string`
+- `timestamp: string`
+
+### `archetype.imported`
+
+Emitted when archetypes are imported from another DreamGraph instance.
+
+Payload fields currently emitted:
+
+- `archetypes_imported: number`
+- `archetypes_skipped: number`
+- `tensions_created: number`
+- `source_instance: string`
+- `timestamp: string`
+
+### `narrative.chapter.appended`
+
+Emitted after a story chapter is appended to the persistent system narrative.
+
+Payload fields currently emitted:
+
+- `chapter_number: number`
+- `title: string`
+- `cycle_range: [number, number]`
+- `generated_at: string`

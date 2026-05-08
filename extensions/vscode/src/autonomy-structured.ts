@@ -61,22 +61,21 @@ function extractSummary(content: string): string | undefined {
 
 function extractRecommendedActions(content: string): RecommendedAction[] {
   const lines = content.split(/\r?\n/);
-  const collected: RecommendedAction[] = [];
+  // First pass: collect every bullet inside the "Recommended Next Step(s)"
+  // section along with its indent. We then decide AFTER the scan which
+  // indent depth represents the actual action chips — necessary because
+  // models sometimes wrap the real list under a header-bullet like
+  // "- Strongest safe next action:" with the actions as numbered children.
+  type Bullet = { indent: number; label: string };
+  const found: Bullet[] = [];
   let inSection = false;
   let sectionLevel = 0;
-  let priority = 1;
-  // Indent (in spaces; tab=2) of the first top-level bullet seen in the section.
-  // Subsequent bullets must match this indent — deeper bullets are sub-detail
-  // (e.g. "verify /metrics" under "Smoke test the new metrics surfaces") and
-  // must NOT become their own action chips.
-  let topBulletIndent: number | null = null;
 
-  // Accept any heading level (#, ##, ###, ####). LLMs frequently emit ###
-  // for sub-sections inside a SUMMARY card. Also accept singular "step",
-  // "Recommended Next Step(s)", "Next Recommended Slice", or a plain
-  // "Recommended next steps:" prose lead-in.
-  const sectionRe = /^(#{1,6})\s+(?:next recommended slice|recommended next steps?|next steps?|suggested next steps?)\b/i;
-  const proseRe = /^(?:recommended next steps?|next steps?):/i;
+  // Accept any heading level (#, ##, ###, ####). Singular "step",
+  // "Recommended Next Step(s)", "Next Recommended Slice", "Strongest safe
+  // next action", or a plain "Recommended next steps:" prose lead-in.
+  const sectionRe = /^(#{1,6})\s+(?:next recommended slice|recommended next steps?|next steps?|suggested next steps?|strongest safe next actions?)\b/i;
+  const proseRe = /^(?:recommended next steps?|next steps?|strongest safe next actions?):/i;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -88,52 +87,57 @@ function extractRecommendedActions(content: string): RecommendedAction[] {
     }
     if (proseRe.test(trimmed) && !inSection) {
       inSection = true;
-      sectionLevel = 6; // any subsequent heading ends the section
+      sectionLevel = 6;
       continue;
     }
-    // Section ends at the next heading of the same or shallower depth.
     if (inSection) {
       const h = trimmed.match(/^(#{1,6})\s+/);
-      if (h && h[1].length <= sectionLevel) {
-        break;
-      }
+      if (h && h[1].length <= sectionLevel) break;
     }
     const bulletMatch = trimmed.match(/^[-*]\s+(.+)/) ?? trimmed.match(/^\d+[.)]\s+(.+)/);
     if (inSection && bulletMatch) {
-      // Compute indent of this bullet (tabs count as 2 spaces).
       const leading = line.match(/^[ \t]*/)?.[0] ?? '';
       const indent = leading.replace(/\t/g, '  ').length;
-      if (topBulletIndent === null) {
-        topBulletIndent = indent;
-      } else if (indent > topBulletIndent) {
-        // Sub-bullet — supporting detail, not its own action.
-        continue;
-      }
-      // Strip surrounding bold markers so chip labels stay clean.
       const label = bulletMatch[1].trim().replace(/^\*\*(.+?)\*\*$/, '$1').trim();
       if (!label) continue;
-      // Skip sub-bullets that are obviously continuation detail (very short
-      // code-only fragments like `npm run build`). Heuristic: must contain
-      // at least one whitespace-separated word outside backticks.
       const stripped = label.replace(/`[^`]*`/g, '').trim();
       if (!stripped) continue;
-      collected.push(toAction(label, priority++));
-      continue;
+      found.push({ indent, label });
     }
   }
 
-  if (collected.length > 0) {
-    return collected;
+  if (found.length === 0) {
+    const single = content.match(/next recommended slice:\s*([^\n]+)/i)
+      ?? content.match(/next recommended step:\s*([^\n]+)/i)
+      ?? content.match(/recommended next step:\s*([^\n]+)/i);
+    if (single?.[1]) return [toAction(single[1].trim(), 1)];
+    return [];
   }
 
-  const single = content.match(/next recommended slice:\s*([^\n]+)/i)
-    ?? content.match(/next recommended step:\s*([^\n]+)/i)
-    ?? content.match(/recommended next step:\s*([^\n]+)/i);
-  if (single?.[1]) {
-    return [toAction(single[1].trim(), 1)];
+  // Pick the action-bullet depth.
+  // Default: the shallowest indent we saw. But if that depth contains exactly
+  // one bullet AND that bullet's text reads like a header (ends with ":" or
+  // is a known wrapper phrase), then descend to the NEXT shallower depth
+  // — those are the real actions.
+  const minIndent = Math.min(...found.map((b) => b.indent));
+  const topLevel = found.filter((b) => b.indent === minIndent);
+  const isHeaderBullet = (label: string) =>
+    label.endsWith(':') || /^strongest safe next actions?\s*:?$/i.test(label);
+
+  let actionsAtIndent: number;
+  if (topLevel.length === 1 && isHeaderBullet(topLevel[0].label)) {
+    const deeper = found
+      .filter((b) => b.indent > minIndent)
+      .map((b) => b.indent);
+    actionsAtIndent = deeper.length > 0 ? Math.min(...deeper) : minIndent;
+  } else {
+    actionsAtIndent = minIndent;
   }
 
-  return [];
+  let priority = 1;
+  return found
+    .filter((b) => b.indent === actionsAtIndent && !isHeaderBullet(b.label))
+    .map((b) => toAction(b.label, priority++));
 }
 
 function toAction(label: string, priority: number): RecommendedAction {

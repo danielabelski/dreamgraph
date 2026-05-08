@@ -31,6 +31,7 @@ import { loadJsonArray } from "../utils/cache.js";
 import { dataPath } from "../utils/paths.js";
 import { engine } from "./engine.js";
 import { logger } from "../utils/logger.js";
+import { graphEventBus } from "../graph/events.js";
 import type { Feature, Workflow, DataModelEntity } from "../types/index.js";
 import type {
   ThreatEdge,
@@ -544,6 +545,18 @@ export async function nightmare(
     `NIGHTMARE cycle complete: ${allThreats.length} threats ` +
     `(${summary.critical}C/${summary.high}H/${summary.medium}M/${summary.low}L) in ${duration_ms}ms`
   );
+
+  graphEventBus.emit("nightmare.cycle.completed", {
+    affected_ids: attack_surfaces.map((surface) => surface.entity),
+    payload: {
+      cycle_number: cycle,
+      strategy,
+      threats_found: allThreats.length,
+      attack_surfaces: attack_surfaces.length,
+      summary,
+      duration_ms,
+    },
+  });
 
   return {
     cycle_number: cycle,
