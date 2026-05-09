@@ -1,0 +1,110 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>DreamGraph Plugin Developer Documentation</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">DreamGraph Plugin Developer Documentation</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#dreamgraph-plugin-developer-documentation"
+id="toc-dreamgraph-plugin-developer-documentation">DreamGraph Plugin
+Developer Documentation</a>
+<ul>
+<li><a href="#plugin-developer-guide"
+id="toc-plugin-developer-guide">Plugin Developer Guide</a></li>
+<li><a href="#plugin-reference-manual"
+id="toc-plugin-reference-manual">Plugin Reference Manual</a></li>
+<li><a href="#pdf" id="toc-pdf">PDF</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="dreamgraph-plugin-developer-documentation">DreamGraph Plugin
+Developer Documentation</h1>
+<p>Engine baseline: <strong>v9.0.0 "Lattice"</strong>.</p>
+<h2 id="plugin-developer-guide">Plugin Developer Guide</h2>
+<p>Task-oriented walkthroughs for building, installing, and operating
+plugins.</p>
+<ul>
+<li><a href="plugin-developer-guide/00-index.html">00 Index</a></li>
+<li><a href="plugin-developer-guide/01-introduction.html">01
+Introduction</a></li>
+<li><a href="plugin-developer-guide/02-quickstart.html">02 Quickstart
+â€” Hello Events</a></li>
+<li><a href="plugin-developer-guide/03-anatomy.html">03 Anatomy of a
+plugin</a></li>
+<li><a
+href="plugin-developer-guide/04-manifest-and-capabilities.html">04
+Manifest and capabilities</a></li>
+<li><a href="plugin-developer-guide/05-plugin-context.html">05 The
+PluginContext</a></li>
+<li><a href="plugin-developer-guide/06-seams-tools-resources.html">06
+Seams: tools and resources</a></li>
+<li><a href="plugin-developer-guide/07-seams-events.html">07 Seams:
+events</a></li>
+<li><a href="plugin-developer-guide/08-seams-closure.html">08 Closure
+seams: UI, policies, archetypes, fences</a></li>
+<li><a href="plugin-developer-guide/09-trust-and-security.html">09 Trust
+and security model</a></li>
+<li><a
+href="plugin-developer-guide/10-lifecycle-and-installation.html">10
+Installation and lifecycle</a></li>
+<li><a
+href="plugin-developer-guide/11-telemetry-debugging-testing.html">11
+Telemetry, debugging, testing</a></li>
+<li><a href="plugin-developer-guide/12-best-practices.html">12 Best
+practices and pitfalls</a></li>
+</ul>
+<h2 id="plugin-reference-manual">Plugin Reference Manual</h2>
+<p>Strict, normative tables. Source of truth for every constraint.</p>
+<ul>
+<li><a href="plugin-reference/00-index.html">00 Index</a></li>
+<li><a href="plugin-reference/01-manifest-schema.html">01 Manifest
+schema</a></li>
+<li><a href="plugin-reference/02-capabilities.html">02
+Capabilities</a></li>
+<li><a href="plugin-reference/03-effects.html">03 Effects</a></li>
+<li><a href="plugin-reference/04-reject-reasons.html">04 Reject
+reasons</a></li>
+<li><a href="plugin-reference/05-context-api.html">05 PluginContext
+API</a></li>
+<li><a href="plugin-reference/06-events.html">06 Events</a></li>
+<li><a href="plugin-reference/07-cli.html">07 <code>dg plugin</code>
+CLI</a></li>
+<li><a href="plugin-reference/08-host-config.html">08 Host
+configuration</a></li>
+<li><a href="plugin-reference/09-telemetry-events.html">09 Telemetry
+events</a></li>
+</ul>
+<h2 id="pdf">PDF</h2>
+<p>A single-volume PDF combining both books is available at
+<code>pdf/dreamgraph-plugin-developer-manual.pdf</code> after running
+<code>scripts/build-plugin-docs.ps1</code>.</p>
+</body>
+</html>

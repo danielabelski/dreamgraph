@@ -293,6 +293,44 @@ if (Test-Path $DistTarget) {
 Copy-Item -Recurse -Force $SourceDist $DistTarget
 Write-Ok "dist/ copied"
 
+# Workspace packages (@dreamgraph/sdk, @dreamgraph/host) cannot be resolved
+# from the registry; pack them into the bin vendor dir and rewrite the deps
+# to file: references so `npm install --omit=dev` can complete offline.
+$VendorDir = Join-Path $BinDir "vendor"
+if (Test-Path $VendorDir) {
+    Remove-Item -Recurse -Force $VendorDir
+}
+New-Item -ItemType Directory -Path $VendorDir -Force | Out-Null
+
+$workspaceTarballs = [ordered]@{}
+$workspacePackages = @("@dreamgraph/sdk", "@dreamgraph/host")
+foreach ($wsName in $workspacePackages) {
+    Write-Host "  Packing $wsName..." -ForegroundColor Cyan
+    $packResult = Invoke-LoggedCommand -FilePath "npm" -Arguments @(
+        "pack",
+        "--workspace", $wsName,
+        "--pack-destination", $VendorDir,
+        "--loglevel=warn"
+    ) -WorkingDirectory $SourceDir -Quiet
+    if ($packResult.ExitCode -ne 0) {
+        Fail-Install "npm pack $wsName failed (exit code $($packResult.ExitCode))"
+    }
+    # The tarball name is "<scope>-<name>-<version>.tgz" (scope dash-folded).
+    $tarballLine = @($packResult.Output) | Where-Object { $_ -is [string] -and $_ -match "\.tgz$" } | Select-Object -Last 1
+    if (-not $tarballLine) {
+        # Fallback: scan vendor dir for the most recent tarball matching the pkg name.
+        $expected = ($wsName -replace "@", "" -replace "/", "-") + "-*.tgz"
+        $tarballLine = (Get-ChildItem -Path $VendorDir -Filter $expected | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
+    } else {
+        $tarballLine = (Split-Path -Leaf ($tarballLine.ToString().Trim()))
+    }
+    if (-not $tarballLine) {
+        Fail-Install "Could not determine tarball name for $wsName"
+    }
+    $workspaceTarballs[$wsName] = "file:./vendor/$tarballLine"
+    Write-Ok "Packed $wsName -> vendor/$tarballLine"
+}
+
 $binPkg = [ordered]@{
     name         = "dreamgraph-global"
     version      = $version
@@ -300,7 +338,16 @@ $binPkg = [ordered]@{
     dependencies = [ordered]@{}
 }
 foreach ($dep in $pkg.dependencies.PSObject.Properties) {
-    $binPkg.dependencies[$dep.Name] = $dep.Value
+    if ($workspaceTarballs.Contains($dep.Name)) {
+        $binPkg.dependencies[$dep.Name] = $workspaceTarballs[$dep.Name]
+    } else {
+        $binPkg.dependencies[$dep.Name] = $dep.Value
+    }
+}
+foreach ($wsName in $workspacePackages) {
+    if (-not $binPkg.dependencies.Contains($wsName)) {
+        $binPkg.dependencies[$wsName] = $workspaceTarballs[$wsName]
+    }
 }
 if ($pkg.devDependencies -and $pkg.devDependencies.PSObject.Properties.Name -contains "@modelcontextprotocol/sdk") {
     $binPkg.dependencies["@modelcontextprotocol/sdk"] = $pkg.devDependencies."@modelcontextprotocol/sdk"
@@ -314,6 +361,11 @@ Write-Host "  Installing dependencies..." -ForegroundColor Cyan
 $nodeModulesDir = Join-Path $BinDir "node_modules"
 if (Test-Path $nodeModulesDir) {
     Remove-Item -Recurse -Force $nodeModulesDir
+}
+# Also ensure no stale lockfile is reused — file: deps must be resolved fresh.
+$binLockFile = Join-Path $BinDir "package-lock.json"
+if (Test-Path $binLockFile) {
+    Remove-Item -Force $binLockFile
 }
 $result = Invoke-LoggedCommand -FilePath "npm" -Arguments @("install", "--omit=dev", "--loglevel=warn") -WorkingDirectory $BinDir
 if ($result.ExitCode -ne 0) {

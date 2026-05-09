@@ -26,6 +26,14 @@
       "types": "./dist/events/experimental.d.ts",
       "import": "./dist/events/experimental.js"
     },
+    "./telemetry": {
+      "types": "./dist/telemetry.d.ts",
+      "import": "./dist/telemetry.js"
+    },
+    "./reject-reasons": {
+      "types": "./dist/reject-reasons.d.ts",
+      "import": "./dist/reject-reasons.js"
+    },
     "./seams/tools": {
       "types": "./dist/seams/tools.d.ts",
       "import": "./dist/seams/tools.js"

@@ -37,7 +37,19 @@ export type GraphEventKind =
   | "nightmare.cycle.completed"
   | "archetype.imported"
   | "archetype.exported"
-  | "narrative.chapter.appended";
+  | "narrative.chapter.appended"
+  // Plugin host telemetry — see @dreamgraph/sdk PluginTelemetryEventKinds.
+  | "plugin.loaded"
+  | "plugin.unloaded"
+  | "plugin.errored"
+  | "plugin.handler.started"
+  | "plugin.handler.completed"
+  | "plugin.output.accepted"
+  | "plugin.output.rejected"
+  // M5 — Webhook outbound delivery telemetry.
+  | "webhook.delivered"
+  | "webhook.failed"
+  | "webhook.dead_letter";
 
 export interface GraphEvent {
   /** Monotonic per-process sequence number, starting at 1. */

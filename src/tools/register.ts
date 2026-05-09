@@ -24,6 +24,8 @@ import { registerWireLinksTool } from "./wire-links.js";
 import { registerScanProjectTool } from "./scan-project.js";
 import { registerApiSurfaceTools } from "./api-surface.js";
 import { registerBootstrapInstanceTool } from "./bootstrap-instance.js";
+import { registerPluginOpsTools } from "./plugin-ops.js";
+import { registerWebhookTools } from "./webhooks.js";
 import { logger } from "../utils/logger.js";
 
 export function registerTools(server: McpServer): void {
@@ -46,6 +48,8 @@ export function registerTools(server: McpServer): void {
   registerScanProjectTool(server);
   registerApiSurfaceTools(server);
   registerBootstrapInstanceTool(server);
+  registerPluginOpsTools(server);
+  registerWebhookTools(server);
 
-  logger.info("Registered 33 tools");
+  logger.info("Registered 42 tools");
 }

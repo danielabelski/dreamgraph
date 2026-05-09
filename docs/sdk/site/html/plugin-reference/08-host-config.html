@@ -1,0 +1,154 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>08-host-config</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#host-configuration-normative"
+id="toc-host-configuration-normative">Host configuration (normative)</a>
+<ul>
+<li><a href="#environment-variables"
+id="toc-environment-variables">Environment variables</a></li>
+<li><a href="#instancejson"
+id="toc-instancejson"><code>instance.json</code></a></li>
+<li><a href="#discovery-roots-recap"
+id="toc-discovery-roots-recap">Discovery roots (recap)</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="host-configuration-normative">Host configuration
+(normative)</h1>
+<p><a href="00-index.html">← Index</a></p>
+<h2 id="environment-variables">Environment variables</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DG_ALLOW_INPROCESS_PLUGINS</code></td>
+<td><code>false</code></td>
+<td>Master kill switch for in-process plugin execution. While
+<code>false</code>, no plugin loads even if
+<code>trusted: true</code>.</td>
+</tr>
+<tr>
+<td><code>DG_EVENT_LOOP_LAG_MS</code></td>
+<td><code>250</code></td>
+<td>Watchdog threshold (milliseconds). Stalls above this while a plugin
+handler is on the call stack are reported as
+<code>event_loop_stall</code>.</td>
+</tr>
+<tr>
+<td><code>DG_PLUGIN_HANDLER_TIMEOUT_MS</code></td>
+<td><code>5000</code></td>
+<td>Per-handler wall-clock budget. Exceeded handlers emit
+<code>handler_timeout</code> and quarantine the plugin.</td>
+</tr>
+<tr>
+<td><code>DG_PLUGIN_LLM_BUDGET_PCT</code></td>
+<td><code>10</code></td>
+<td>(post-M4) Percentage of host LLM budget reserved for plugins as a
+slice.</td>
+</tr>
+<tr>
+<td><code>WEBHOOK_FAST_BACKOFF</code></td>
+<td>unset</td>
+<td>When set, replaces the spec backoff schedule with
+<code>1s/2s/4s/8s/16s</code> for live testing.</td>
+</tr>
+</tbody>
+</table>
+<p>The Plugin System block in all three engine.env templates
+(<code>default</code>, <code>ollama</code>, <code>lmstudio</code>) lists
+<code>DG_ALLOW_INPROCESS_PLUGINS</code> with the safety wording:</p>
+<pre class="dotenv"><code># --- Plugin System ---
+# DG_ALLOW_INPROCESS_PLUGINS=true   # Enable in-process plugins (potentially unsafe, use with trusted code only)</code></pre>
+<h2 id="instancejson"><code>instance.json</code></h2>
+<pre class="jsonc"><code>{
+  &quot;uuid&quot;: &quot;...&quot;,
+  &quot;experimental_plugins&quot;: false,
+  &quot;plugins&quot;: [
+    { &quot;path&quot;: &quot;plugins/examples.hello-events&quot;, &quot;trusted&quot;: true },
+    { &quot;path&quot;: &quot;plugins/acme.changelog&quot;,        &quot;trusted&quot;: false }
+  ]
+}</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>experimental_plugins</code></td>
+<td>boolean (default <code>false</code>)</td>
+<td>Required for any plugin holding
+<code>events:read:experimental</code>.</td>
+</tr>
+<tr>
+<td><code>plugins[].path</code></td>
+<td>string</td>
+<td>Absolute or instance-relative path to the plugin folder.</td>
+</tr>
+<tr>
+<td><code>plugins[].trusted</code></td>
+<td>boolean (default <code>false</code>)</td>
+<td>Per-plugin trust opt-in. Combined AND with
+<code>DG_ALLOW_INPROCESS_PLUGINS</code>.</td>
+</tr>
+<tr>
+<td><code>plugins[].llm_budget</code></td>
+<td>number (post-M4)</td>
+<td>Override the per-plugin LLM sub-quota.</td>
+</tr>
+</tbody>
+</table>
+<p>The host MUST de-duplicate <code>plugins[]</code> entries by
+<code>path</code> on write to prevent the duplicate-entry pathology that
+affected pre-8.3.0 engines after multiple <code>dg plugin trust</code>
+invocations.</p>
+<h2 id="discovery-roots-recap">Discovery roots (recap)</h2>
+<p>The host scans exactly two locations:</p>
+<ol type="1">
+<li><code>&lt;instance&gt;/plugins/*/plugin.json</code> (folder-style
+auto-discovery).</li>
+<li><code>instance.json:plugins[].path</code> (explicit
+registration).</li>
+</ol>
+<p>There is no <code>node_modules</code> scan. There is no
+auto-discovery from outside the instance directory.</p>
+</body>
+</html>

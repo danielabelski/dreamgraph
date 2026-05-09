@@ -1,0 +1,84 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>00-index</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#dreamgraph-plugin-reference-manual"
+id="toc-dreamgraph-plugin-reference-manual">DreamGraph Plugin Reference
+Manual</a>
+<ul>
+<li><a href="#sections" id="toc-sections">Sections</a></li>
+<li><a href="#conventions" id="toc-conventions">Conventions</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="dreamgraph-plugin-reference-manual">DreamGraph Plugin Reference
+Manual</h1>
+<p><strong>Audience:</strong> Plugin authors and host implementors
+needing strict, normative tables. <strong>Engine baseline:</strong>
+v9.0.0 "Lattice". <strong>Companion:</strong> see the <a
+href="../plugin-developer-guide/00-index.html">Plugin Developer
+Guide</a> for task-oriented walkthroughs.</p>
+<p>This reference is the source of truth. Where the guide and the
+reference disagree, the reference wins. Where the reference and the SDK
+source disagree, the SDK source wins (and a doc bug should be
+filed).</p>
+<h2 id="sections">Sections</h2>
+<ol type="1">
+<li><a href="01-manifest-schema.html">Manifest schema</a> — every field,
+every constraint.</li>
+<li><a href="02-capabilities.html">Capabilities</a> — the locked
+vocabulary.</li>
+<li><a href="03-effects.html">Effects</a> — observable cognitive
+effects.</li>
+<li><a href="04-reject-reasons.html">Reject reasons</a> — every
+<code>plugin.output.rejected.reason</code>.</li>
+<li><a href="05-context-api.html">PluginContext API</a> — TypeScript
+surface.</li>
+<li><a href="06-events.html">Events</a> — stable kinds, experimental
+kinds, payload schemas.</li>
+<li><a href="07-cli.html">CLI</a> — <code>dg plugin</code>
+subcommands.</li>
+<li><a href="08-host-config.html">Host configuration</a> — env vars and
+<code>instance.json</code>.</li>
+<li><a href="09-telemetry-events.html">Telemetry events</a> — the
+<code>plugin.*</code> stream.</li>
+</ol>
+<h2 id="conventions">Conventions</h2>
+<ul>
+<li><strong>MUST / MUST NOT / SHOULD</strong> are used in the RFC 2119
+sense.</li>
+<li>Tables are exhaustive unless explicitly marked
+"non-exhaustive".</li>
+<li>Source-code references link to the canonical file at the repo
+root.</li>
+</ul>
+</body>
+</html>

@@ -191,7 +191,7 @@ async function handleList(port: number, json: boolean): Promise<void> {
 
 async function handleAdd(
   port: number,
-  flags: Record<string, string | true>,
+  flags: Record<string, string | string[] | true>,
   json: boolean,
 ): Promise<void> {
   const name = typeof flags.name === "string" ? flags.name : undefined;

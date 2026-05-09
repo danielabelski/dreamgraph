@@ -26,6 +26,7 @@ import { engine } from "./cognitive/engine.js";
 import { initLlmProvider } from "./cognitive/llm.js";
 import { logger } from "./utils/logger.js";
 import { getRuntimeMetricsSnapshotV1 } from "./observability/runtime-metrics.js";
+import { bootstrapPlugins } from "./plugins/manager.js";
 
 /* ------------------------------------------------------------------ */
 /*  CLI argument parsing                                              */
@@ -308,6 +309,18 @@ resolveInstanceAtStartup()
     const cycles = engine.getCurrentDreamCycle();
     if (cycles > 0) {
       await updateInstanceCounters({ total_dream_cycles: cycles });
+    }
+
+    // M3 — Discover and load plugins. Bootstrap is idempotent and safely
+    // no-ops in legacy mode (no active scope).
+    try {
+      const result = await bootstrapPlugins();
+      if (!result.ran && result.reason && result.reason !== "no-active-scope") {
+        logger.debug(`Plugin bootstrap skipped: ${result.reason}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(`Plugin bootstrap failed: ${msg}`);
     }
 
     // Start transport

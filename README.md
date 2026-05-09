@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v8.3.0 — Bedrock
+# DreamGraph v9.0.0 — Lattice
 
-![Version](https://img.shields.io/badge/version-8.3.0-blue)
+![Version](https://img.shields.io/badge/version-9.0.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -45,6 +45,8 @@ The guide walks you through installation, your first instance, LLM setup, bootst
 
 The auto-generated technical reference (every tool, every parameter, every schema) lives in [`docs/`](docs/README.md) and is best read *after* the guide.
 
+**Building plugins?** The full **Plugin Developer Guide & Reference Manual** lives in [`docs/sdk/`](docs/sdk/) (Markdown source). A multi-file HTML site and a single-file PDF are produced by [`scripts/build-plugin-docs.ps1`](scripts/build-plugin-docs.ps1) into `docs/sdk/site/`. Start with [`docs/sdk/plugin-developer-guide/00-index.md`](docs/sdk/plugin-developer-guide/00-index.md) for the guide and [`docs/sdk/plugin-reference/00-index.md`](docs/sdk/plugin-reference/00-index.md) for the strict reference. A working reference plugin lives at [`examples/hello-events/`](examples/hello-events/).
+
 ## Sponsor DreamGraph
 
 DreamGraph is built and maintained by a solo developer on aging hardware. If this tool saves your architecture team time — debugging a multi-repo system, onboarding a new engineer, or just keeping a SaaS backend's data model honest — please consider sponsoring.
@@ -71,6 +73,7 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 - **VS Code extension** — chat, dashboard, Explorer (interactive 2D/3D graph + curated mutations), changed-files view, daemon connection, and local support tools
 - **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, and dream-cycle reasoning
 - **Datastore-as-Hub** — first-class `datastore` entities, live schema introspection (`scan_database`), and the `schema_grounding` dream strategy for multi-repo SaaS projects sharing a backend (set `DATABASE_URL`; inert otherwise)
+- **Plugin host & SDK (v9.0.0 — stable seams M0–M6)** — in-process plugin runtime (`@dreamgraph/sdk` + `@dreamgraph/host`) with manifest discovery from `<instance>/plugins/<id>/plugin.json`, capability/effect gate registry, telemetry bridge, trust banner, and `dg plugin` CLI (`list`, `inspect`, `register`, `enable`, `disable`, `trust`, `reload`, `unload`). Hot reload/disable plus enriched `system://plugins` (activation, subscriptions, contributed tools/resources). Plugin-contributed MCP tools and resources via `ctx.tools.register` / `ctx.resources.register`, gated by `tools:register` / `resources:register` capabilities and naming/namespace prefix rules. M5 ships outbound webhooks as a *core* subsystem (`dg webhook` CLI; HMAC-signed delivery; persistent dead-letter; replay). M6 adds the UI/closure seams (archetypes, policies, markdown fences, UI hooks). Opt-in via `DG_ALLOW_INPROCESS_PLUGINS=true` plus per-plugin `trusted: true` in `instance.json`. See `examples/hello-events/` for a reference plugin and [`docs/sdk/`](docs/sdk/) for the developer guide and reference manual.
 
 ![DreamGraph Explorer in VS Code](assets/explorer-3d-screenshot-3.png)
 
@@ -271,6 +274,8 @@ dg start my-project --http
 dg start my-project --foreground
 dg status my-project
 dg scan my-project
+dg plugin list my-project
+dg plugin inspect my-project <plugin-id>
 ```
 
 ## Architecture at a Glance
@@ -302,10 +307,18 @@ src/
   db/
   discipline/
   instance/
+  plugins/
   resources/
   server/
   tools/
   utils/
+
+packages/
+  sdk/    # @dreamgraph/sdk — public plugin contracts (manifest, telemetry, reject reasons)
+  host/   # @dreamgraph/host — in-process plugin loader, gate registry, watchdog
+
+examples/
+  hello-events/  # M3 reference plugin
 
 extensions/
   vscode/

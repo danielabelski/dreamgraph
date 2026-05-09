@@ -1,0 +1,87 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>00-index</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#dreamgraph-plugin-developer-guide"
+id="toc-dreamgraph-plugin-developer-guide">DreamGraph Plugin Developer
+Guide</a>
+<ul>
+<li><a href="#table-of-contents" id="toc-table-of-contents">Table of
+contents</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="dreamgraph-plugin-developer-guide">DreamGraph Plugin Developer
+Guide</h1>
+<p><strong>Audience:</strong> Engineers writing third-party plugins
+against <code>@dreamgraph/sdk</code>. <strong>Engine baseline:</strong>
+v9.0.0 "Lattice" (M0–M6 implemented; M5 webhooks shipped; M4 schedule
+actions deferred). <strong>Companion:</strong> see the <a
+href="../plugin-reference/00-index.html">Plugin Reference Manual</a> for
+strict, normative tables.</p>
+<p>This guide is task-oriented. It walks you from "what is a plugin"
+through a working example, then explains every seam, the trust model,
+lifecycle, telemetry, testing, and the practices DreamGraph expects.</p>
+<h2 id="table-of-contents">Table of contents</h2>
+<ol type="1">
+<li><a href="01-introduction.html">Introduction</a> — what a plugin is
+and is not.</li>
+<li><a href="02-quickstart.html">Quickstart: Hello Events</a> —
+five-minute end-to-end install.</li>
+<li><a href="03-anatomy.html">Anatomy of a plugin</a> — files,
+packaging, ESM rules.</li>
+<li><a href="04-manifest-and-capabilities.html">Manifest and
+capabilities</a> — <code>plugin.json</code>, intent, effects.</li>
+<li><a href="05-plugin-context.html">The PluginContext</a> — what
+<code>ctx</code> exposes (and what it deliberately does not).</li>
+<li><a href="06-seams-tools-resources.html">Seams: tools and
+resources</a> — the MCP-facing surface.</li>
+<li><a href="07-seams-events.html">Seams: events</a> — subscribe, emit,
+stable vs experimental.</li>
+<li><a href="08-seams-closure.html">Seams: UI, policies, archetypes,
+markdown fences</a> — the M6 closure surface.</li>
+<li><a href="09-trust-and-security.html">Trust and security model</a> —
+in-process today, worker isolation tomorrow.</li>
+<li><a href="10-lifecycle-and-installation.html">Installation and
+lifecycle</a> — discovery, trust, restart, hot-disable.</li>
+<li><a href="11-telemetry-debugging-testing.html">Telemetry, debugging,
+testing</a> — <code>plugin.*</code> events and the test harness.</li>
+<li><a href="12-best-practices.html">Best practices and pitfalls</a> —
+naming, naming, naming. And quotas.</li>
+</ol>
+<blockquote>
+<p><strong>Building this guide locally as HTML/PDF:</strong> run
+<code>scripts/build-plugin-docs.ps1</code>. Outputs land under
+<code>docs/sdk/site/html/</code> and
+<code>docs/sdk/site/pdf/</code>.</p>
+</blockquote>
+</body>
+</html>

@@ -1,0 +1,201 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>03-effects</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#effects-normative" id="toc-effects-normative">Effects
+(normative)</a>
+<ul>
+<li><a href="#always-forbidden-effects"
+id="toc-always-forbidden-effects">Always-forbidden effects</a></li>
+<li><a href="#effect-to-seam-matrix"
+id="toc-effect-to-seam-matrix">Effect-to-seam matrix</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="effects-normative">Effects (normative)</h1>
+<p><a href="00-index.html">← Index</a> · Source: <a
+href="../../../packages/sdk/src/manifest.ts">packages/sdk/src/manifest.ts</a>
+<code>PluginEffectSchema</code></p>
+<p>An <strong>effect</strong> describes an observable cognitive impact a
+plugin claims it will have (<code>expectedEffects</code>) or guarantees
+it will not have (<code>forbiddenEffects</code>). The host enforces both
+at every host-mediated effect call:</p>
+<ul>
+<li>An effect not in <code>expectedEffects</code> →
+<code>plugin.output.rejected{ effect_undeclared }</code>.</li>
+<li>An effect in <code>forbiddenEffects</code> →
+<code>plugin.output.rejected{ effect_forbidden }</code>, even if the
+matching capability would otherwise allow it.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Effect</th>
+<th>Meaning</th>
+<th>Required capability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_events</code></td>
+<td>Subscribe to the bus (any kind).</td>
+<td><code>events:read</code> (or <code>:experimental</code>)</td>
+</tr>
+<tr>
+<td><code>read_internal_graph</code></td>
+<td>Read internal-tier files (graph, validated edges, tensions).</td>
+<td>(host-mediated, no plugin write API)</td>
+</tr>
+<tr>
+<td><code>read_external_state</code></td>
+<td>Read external-tier files (features, archetypes, ADRs, UI
+registry).</td>
+<td>(host-mediated)</td>
+</tr>
+<tr>
+<td><code>write_internal_graph</code></td>
+<td>Mutate the graph (promote candidates, edit edges).</td>
+<td><strong>always forbidden</strong></td>
+</tr>
+<tr>
+<td><code>modify_tensions</code></td>
+<td>Create or resolve tensions.</td>
+<td><strong>always forbidden</strong></td>
+</tr>
+<tr>
+<td><code>emit_resource</code></td>
+<td>Register or update an MCP resource.</td>
+<td><code>resources:register</code></td>
+</tr>
+<tr>
+<td><code>emit_tool</code></td>
+<td>Register an MCP tool.</td>
+<td><code>tools:register</code></td>
+</tr>
+<tr>
+<td><code>emit_event</code></td>
+<td>Publish events onto the bus.</td>
+<td><code>events:emit</code></td>
+</tr>
+<tr>
+<td><code>emit_webhook</code></td>
+<td>(reserved) outbound HTTP via webhook worker.</td>
+<td><code>webhooks:emit</code></td>
+</tr>
+<tr>
+<td><code>register_schedule_action</code></td>
+<td>(reserved) custom schedule action.</td>
+<td><code>schedule:register_action</code></td>
+</tr>
+<tr>
+<td><code>invoke_llm</code></td>
+<td>Call the host LLM proxy.</td>
+<td>(post-M4)</td>
+</tr>
+<tr>
+<td><code>mutate_ui_registry</code></td>
+<td>Register/update UI elements.</td>
+<td><code>ui:register</code></td>
+</tr>
+<tr>
+<td><code>propose_policy</code></td>
+<td>Append discipline rules.</td>
+<td><code>policy:propose</code></td>
+</tr>
+<tr>
+<td><code>provide_archetypes</code></td>
+<td>Feed federation archetypes.</td>
+<td><code>archetypes:provide</code></td>
+</tr>
+<tr>
+<td><code>render_markdown_fence</code></td>
+<td>Declare a webview markdown fence.</td>
+<td><code>markdown:register_fence</code></td>
+</tr>
+<tr>
+<td><code>register_provider_adapter</code></td>
+<td>(reserved, post-1.0) provider adapter.</td>
+<td><code>providers:register</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="always-forbidden-effects">Always-forbidden effects</h2>
+<p><code>write_internal_graph</code> and <code>modify_tensions</code>
+are not exposed by <code>ctx</code> at all. A plugin that lists them in
+<code>expectedEffects</code> will fail manifest validation because the
+matching capability does not exist. They are listed here for
+completeness so plugin authors know to put them in
+<code>forbiddenEffects</code> as defensive intent.</p>
+<h2 id="effect-to-seam-matrix">Effect-to-seam matrix</h2>
+<table>
+<thead>
+<tr>
+<th>Seam call</th>
+<th>Effect required in <code>expectedEffects</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.tools.register</code></td>
+<td><code>emit_tool</code></td>
+</tr>
+<tr>
+<td><code>ctx.resources.register</code></td>
+<td><code>emit_resource</code></td>
+</tr>
+<tr>
+<td><code>ctx.events.subscribe</code></td>
+<td><code>read_events</code></td>
+</tr>
+<tr>
+<td><code>ctx.events.emit</code></td>
+<td><code>emit_event</code></td>
+</tr>
+<tr>
+<td><code>ctx.ui.register</code></td>
+<td><code>mutate_ui_registry</code></td>
+</tr>
+<tr>
+<td><code>ctx.policies.propose</code></td>
+<td><code>propose_policy</code></td>
+</tr>
+<tr>
+<td><code>ctx.archetypes.registerProvider</code></td>
+<td><code>provide_archetypes</code></td>
+</tr>
+<tr>
+<td><code>ctx.markdownFences.register</code></td>
+<td><code>render_markdown_fence</code></td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

@@ -18,9 +18,11 @@ import {
   registerCognitiveTools,
 } from "../cognitive/register.js";
 import { registerDisciplineResource } from "../discipline/register.js";
+import { registerPluginContributions } from "../plugins/contributions.js";
 import { startScheduler, stopScheduler } from "../cognitive/scheduler.js";
 import { startLlmReadinessWatcher, stopLlmReadinessWatcher } from "../cognitive/llm-readiness.js";
 import { wireBootstrapOnReady } from "../cognitive/bootstrap-driver.js";
+import { startWebhookWorker, stopWebhookWorker } from "../webhooks/worker.js";
 import { recordToolCall } from "../instance/index.js";
 import { recordToolCall as recordToolMetric } from "../utils/metrics.js";
 import { logger } from "../utils/logger.js";
@@ -130,6 +132,10 @@ export function createServer(): McpServer {
   // v7.0 — Register discipline execution system (ADR-001)
   registerDisciplineResource(server);
 
+  // M4 — Wire any plugin-contributed MCP tools/resources from the
+  // manager's contribution registry onto this session's server.
+  registerPluginContributions(server);
+
   // v5.2 — Start the dream scheduler
   startScheduler(config.scheduler);
 
@@ -146,10 +152,15 @@ export function createServer(): McpServer {
   // instances pending the Slice 2C re-enrich-only path.
   wireBootstrapOnReady();
 
+  // M5 — Start outbound webhook delivery worker. Subscribes to the
+  // graph event bus and fans events out to registered subscriptions.
+  startWebhookWorker();
+
   // Clean shutdown — flush logs before exiting so daemon can verify
   const gracefulExit = () => {
     stopLlmReadinessWatcher();
     stopScheduler();
+    void stopWebhookWorker();
     logger.info("Shutdown complete");
     // Allow stderr to flush to the log file descriptor before exiting
     setTimeout(() => process.exit(0), 200);

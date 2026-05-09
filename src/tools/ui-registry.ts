@@ -85,6 +85,93 @@ async function saveRegistry(data: UIRegistryFile): Promise<void> {
   logger.debug("UI registry saved to disk");
 }
 
+/* ------------------------------------------------------------------ */
+/*  M6 — Plugin UI seam helpers                                       */
+/* ------------------------------------------------------------------ */
+
+export interface PluginUiElementInput {
+  id: string;
+  name: string;
+  purpose: string;
+  category: SemanticElementCategory;
+  inputs: SemanticElement["data_contract"]["inputs"];
+  outputs: SemanticElement["data_contract"]["outputs"];
+  interactions: SemanticElement["interactions"];
+  children?: string[];
+  implementations?: SemanticElement["implementations"];
+  used_by?: string[];
+  tags?: string[];
+}
+
+/**
+ * Host-side upsert used by the M6 plugin UI seam. Performs the same
+ * file-locked merge the `register_ui_element` MCP tool performs, but
+ * with the minimal field set the seam exposes. Plugin-owned elements
+ * carry an automatic `plugin:<plugin-id>` tag so they are easy to
+ * identify and prune on plugin unload.
+ */
+export async function applyPluginUiElement(
+  pluginId: string,
+  input: PluginUiElementInput,
+): Promise<{ merged: boolean }> {
+  const tagSet = new Set(input.tags ?? []);
+  tagSet.add(`plugin:${pluginId}`);
+  return withFileLock("ui_registry.json", async () => {
+    const registry = await loadRegistry();
+    const existing = registry.elements.find((e) => e.id === input.id);
+    let merged = false;
+    if (existing) {
+      existing.name = input.name;
+      existing.purpose = input.purpose;
+      existing.category = input.category;
+      existing.data_contract = { inputs: input.inputs, outputs: input.outputs };
+      existing.interactions = input.interactions;
+      if (input.children !== undefined) existing.children = input.children;
+      const newImpls = input.implementations ?? [];
+      for (const impl of newImpls) {
+        const idx = existing.implementations.findIndex((i) => i.platform === impl.platform);
+        if (idx >= 0) existing.implementations[idx] = impl;
+        else existing.implementations.push(impl);
+      }
+      existing.used_by = [...new Set([...existing.used_by, ...(input.used_by ?? [])])];
+      existing.tags = [...new Set([...(existing.tags ?? []), ...tagSet])];
+      merged = true;
+    } else {
+      const element: SemanticElement = {
+        id: input.id,
+        name: input.name,
+        purpose: input.purpose,
+        category: input.category,
+        data_contract: { inputs: input.inputs, outputs: input.outputs },
+        interactions: input.interactions,
+        ...(input.children !== undefined ? { children: input.children } : {}),
+        implementations: input.implementations ?? [],
+        used_by: input.used_by ?? [],
+        tags: [...tagSet],
+      };
+      registry.elements.push(element);
+    }
+    await saveRegistry(registry);
+    return { merged };
+  });
+}
+
+/**
+ * Host-side removal used when a plugin is unloaded. Drops every element
+ * tagged `plugin:<plugin-id>`. Returns the number of removed entries.
+ */
+export async function removePluginUiElements(pluginId: string): Promise<{ removed: number }> {
+  const tag = `plugin:${pluginId}`;
+  return withFileLock("ui_registry.json", async () => {
+    const registry = await loadRegistry();
+    const before = registry.elements.length;
+    registry.elements = registry.elements.filter((e) => !(e.tags ?? []).includes(tag));
+    const removed = before - registry.elements.length;
+    if (removed > 0) await saveRegistry(registry);
+    return { removed };
+  });
+}
+
 function emptyRegistry(): UIRegistryFile {
   return {
     metadata: {

@@ -1,0 +1,150 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>02-capabilities</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#capabilities-normative"
+id="toc-capabilities-normative">Capabilities (normative)</a></li>
+</ul>
+</nav>
+<h1 id="capabilities-normative">Capabilities (normative)</h1>
+<p><a href="00-index.html">← Index</a> · Source: <a
+href="../../../packages/sdk/src/manifest.ts">packages/sdk/src/manifest.ts</a>
+<code>PluginCapabilitySchema</code></p>
+<p>A capability is a coarse permission a plugin MUST declare to use a
+seam. The host validates the manifest against this enum at load time,
+then re-checks at each seam call site.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Allows (positive)</th>
+<th>Denies (with reason)</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>events:read</code></td>
+<td><code>ctx.events.subscribe(stable_kind, fn)</code></td>
+<td>subscribing to experimental kind →
+<code>event_kind_experimental</code>; kind not in declared subscription
+list → <code>event_kind_not_declared</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>events:read:experimental</code></td>
+<td><code>defineExperimentalEventHandler(...)</code></td>
+<td>unless <code>instance.json:experimental_plugins: true</code> →
+<code>experimental_events_disabled</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>events:emit</code></td>
+<td><code>ctx.events.emit(kind, payload)</code></td>
+<td><code>emit_event</code> not in <code>expectedEffects</code> →
+<code>effect_undeclared</code>; missing capability →
+<code>emit_capability_missing</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>tools:register</code></td>
+<td><code>ctx.tools.register({ name: "&lt;plugin-id&gt;.&lt;x&gt;", ... })</code></td>
+<td>name without <code>&lt;plugin-id&gt;.</code> prefix →
+<code>tool_name_unprefixed</code>; collision with built-in or other
+plugin → <code>tool_name_collision</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>resources:register</code></td>
+<td><code>ctx.resources.register({ uriNamespace: "plugin://&lt;id&gt;/...", ... })</code></td>
+<td>URI not in namespace →
+<code>resource_uri_out_of_namespace</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>resources:read</code></td>
+<td>(reserved) read another plugin's resource</td>
+<td>always denied today</td>
+<td>reserved</td>
+</tr>
+<tr>
+<td><code>ui:register</code></td>
+<td><code>ctx.ui.register({ id: "&lt;plugin-id&gt;.&lt;x&gt;", ... })</code></td>
+<td>id not prefixed → <code>ui_id_unprefixed</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>policy:propose</code></td>
+<td><code>ctx.policies.propose({ id, ... })</code> (tagged
+<code>source: plugin:&lt;id&gt;</code>)</td>
+<td>proposal admits <code>weakens: true</code> or weakens an existing
+rule → <code>policy_weakening_rejected</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>archetypes:provide</code></td>
+<td>`ctx.archetypes.registerProvider({ id, inline</td>
+<td>url</td>
+<td>fetch })`</td>
+</tr>
+<tr>
+<td><code>markdown:register_fence</code></td>
+<td><code>ctx.markdownFences.register({ language, ... })</code></td>
+<td>language regex fails → <code>markdown_fence_language_invalid</code>;
+collision → <code>markdown_fence_language_collision</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>schedule:register_action</code></td>
+<td>(reserved, M4) <code>defineScheduleAction(...)</code></td>
+<td>always denied today</td>
+<td>reserved</td>
+</tr>
+<tr>
+<td><code>webhooks:emit</code></td>
+<td>(reserved, post-MVP) <code>ctx.webhooks.dispatch(...)</code></td>
+<td>always denied today (use core webhook subscriptions instead)</td>
+<td>reserved</td>
+</tr>
+<tr>
+<td><code>providers:register</code></td>
+<td>(reserved, post-1.0) provider adapter seam</td>
+<td>always denied today</td>
+<td>reserved</td>
+</tr>
+</tbody>
+</table>
+<p>A capability not present in <code>manifest.capabilities</code> MUST
+cause the matching seam call to be refused with
+<code>&lt;seam&gt;_capability_missing</code>. The host MUST NOT silently
+drop the call.</p>
+</body>
+</html>

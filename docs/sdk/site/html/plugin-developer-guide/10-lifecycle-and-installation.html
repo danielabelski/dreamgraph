@@ -1,0 +1,139 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>10-lifecycle-and-installation</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#10-installation-and-lifecycle"
+id="toc-10-installation-and-lifecycle">10. Installation and
+lifecycle</a>
+<ul>
+<li><a href="#101-discovery-roots" id="toc-101-discovery-roots">10.1
+Discovery roots</a></li>
+<li><a href="#102-the-five-lifecycle-states"
+id="toc-102-the-five-lifecycle-states">10.2 The five lifecycle
+states</a></li>
+<li><a href="#103-the-cli" id="toc-103-the-cli">10.3 The CLI</a></li>
+<li><a href="#104-hot-reload" id="toc-104-hot-reload">10.4 Hot
+reload</a></li>
+<li><a href="#105-shipping-inside-a-workspace"
+id="toc-105-shipping-inside-a-workspace">10.5 Shipping inside a
+workspace</a></li>
+<li><a href="#106-versioning-and-compatibility"
+id="toc-106-versioning-and-compatibility">10.6 Versioning and
+compatibility</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="10-installation-and-lifecycle">10. Installation and
+lifecycle</h1>
+<p><a href="09-trust-and-security.html">← Trust</a> · <a
+href="11-telemetry-debugging-testing.html">Next: Telemetry &amp; testing
+→</a></p>
+<h2 id="101-discovery-roots">10.1 Discovery roots</h2>
+<p>The host scans exactly two roots:</p>
+<ol type="1">
+<li><code>&lt;instance&gt;/plugins/*/plugin.json</code> —
+folder-style.</li>
+<li><code>&lt;instance&gt;/instance.json:plugins[]</code> — explicit
+<code>[{ path, trusted }]</code> entries.</li>
+</ol>
+<p>Anything elsewhere on disk is ignored. There is no
+<code>node_modules</code> auto-scan.</p>
+<h2 id="102-the-five-lifecycle-states">10.2 The five lifecycle
+states</h2>
+<pre><code>        discover
+        ───────►   discovered
+                       │
+                trust + switch
+                       ▼
+                    loading
+                       │
+                  activate(ctx)
+            ┌──────────┴──────────┐
+            ▼                     ▼
+          loaded              quarantined
+            │                     ▲
+       disable / shutdown      error
+            ▼                     │
+         unloading               (any handler reject /
+            │                     manifest invalid /
+            ▼                     watchdog stall /
+        unloaded                  effect undeclared)</code></pre>
+<p><code>system://plugins</code> exposes the current state for every
+plugin, plus the last seen effects, last error reason, and last
+activation timestamp.</p>
+<h2 id="103-the-cli">10.3 The CLI</h2>
+<pre class="pwsh"><code>dg plugin list &lt;instance&gt;                    # all discovered plugins + state
+dg plugin inspect &lt;instance&gt; &lt;plugin-id&gt;     # full manifest + last telemetry
+dg plugin trust &lt;instance&gt; &lt;plugin-id&gt;       # set instance.json:plugins[].trusted=true
+dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;      # untrust → trust + re-activate
+dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;     # prune contributions, keep entry</code></pre>
+<p>After any change to the plugin's code (or to the SDK or host
+packages), restart the daemon:
+<code>dg restart &lt;instance&gt;</code>.</p>
+<h2 id="104-hot-reload">10.4 Hot reload</h2>
+<p>There is no automatic file-watcher. Each plugin is loaded once per
+daemon process. To pick up code changes:</p>
+<ol type="1">
+<li>Edit the plugin source.</li>
+<li>(If you bundled it) re-build.</li>
+<li><code>dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;</code>
+then <code>dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;</code>.
+The host calls your <code>deactivate()</code> then re-imports the entry
+module and calls <code>activate(ctx)</code> again.</li>
+</ol>
+<p>ESM module caching means the host bypasses the cache by appending a
+unique query-string to the import URL on re-enable. You do not have to
+do anything.</p>
+<h2 id="105-shipping-inside-a-workspace">10.5 Shipping inside a
+workspace</h2>
+<p>If your plugin lives in the same npm workspace as the daemon (rare),
+declare it in the host's install pipeline so <a
+href="../../../scripts/install.ps1">scripts/install.ps1</a> packs it
+into <code>bin/vendor/</code>. Otherwise, ship the plugin folder with
+<code>plugin.json</code> and the compiled entry module — that is the
+entire deliverable.</p>
+<h2 id="106-versioning-and-compatibility">10.6 Versioning and
+compatibility</h2>
+<ul>
+<li>Bump <code>version</code> on every change that affects the manifest,
+the seam shape, or the public behavior of your tools/resources.</li>
+<li>Keep <code>engine.dreamgraph</code> narrow but accurate. The host
+emits a clear <code>engine_version_mismatch</code> rather than a runtime
+crash if the range excludes the current engine.</li>
+<li>The SDK follows semver. Stable event payload shapes never change in
+a backwards-incompatible way within a major. Experimental kinds
+may.</li>
+</ul>
+<p><a href="09-trust-and-security.html">← Trust</a> · <a
+href="11-telemetry-debugging-testing.html">Next: Telemetry &amp; testing
+→</a></p>
+</body>
+</html>

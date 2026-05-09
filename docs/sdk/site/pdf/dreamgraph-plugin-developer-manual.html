@@ -1,0 +1,3033 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>DreamGraph Plugin Developer Manual</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">DreamGraph Plugin Developer Manual</h1>
+<p class="subtitle">Guide and Reference Manual --- v9.0.0 Lattice</p>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#part-i-----plugin-developer-guide"
+id="toc-part-i-----plugin-developer-guide">Part I --- Plugin Developer
+Guide</a></li>
+<li><a href="#dreamgraph-plugin-developer-guide"
+id="toc-dreamgraph-plugin-developer-guide">DreamGraph Plugin Developer
+Guide</a>
+<ul>
+<li><a href="#table-of-contents" id="toc-table-of-contents">Table of
+contents</a></li>
+</ul></li>
+<li><a href="#1-introduction" id="toc-1-introduction">1.
+Introduction</a>
+<ul>
+<li><a href="#11-what-is-a-dreamgraph-plugin"
+id="toc-11-what-is-a-dreamgraph-plugin">1.1 What is a DreamGraph
+plugin?</a></li>
+<li><a href="#12-what-a-plugin-is-not"
+id="toc-12-what-a-plugin-is-not">1.2 What a plugin is
+<em>not</em></a></li>
+<li><a href="#13-seams-shipped-through-m6"
+id="toc-13-seams-shipped-through-m6">1.3 Seams shipped through
+M6</a></li>
+<li><a href="#14-trust-posture-in-one-paragraph"
+id="toc-14-trust-posture-in-one-paragraph">1.4 Trust posture in one
+paragraph</a></li>
+</ul></li>
+<li><a href="#2-quickstart--hello-events-in-five-minutes"
+id="toc-2-quickstart--hello-events-in-five-minutes">2. Quickstart —
+Hello Events in five minutes</a>
+<ul>
+<li><a href="#21-prerequisites" id="toc-21-prerequisites">2.1
+Prerequisites</a></li>
+<li><a href="#22-allow-in-process-plugins-host-switch"
+id="toc-22-allow-in-process-plugins-host-switch">2.2 Allow in-process
+plugins (host switch)</a></li>
+<li><a href="#23-copy-the-example-into-the-instance"
+id="toc-23-copy-the-example-into-the-instance">2.3 Copy the example into
+the instance</a></li>
+<li><a href="#24-trust-the-plugin" id="toc-24-trust-the-plugin">2.4
+Trust the plugin</a></li>
+<li><a href="#25-inspect-what-loaded"
+id="toc-25-inspect-what-loaded">2.5 Inspect what loaded</a></li>
+<li><a href="#26-call-the-contributed-mcp-tool"
+id="toc-26-call-the-contributed-mcp-tool">2.6 Call the contributed MCP
+tool</a></li>
+<li><a href="#27-verify-the-closure-seam-side-effects"
+id="toc-27-verify-the-closure-seam-side-effects">2.7 Verify the
+closure-seam side-effects</a></li>
+<li><a href="#28-what-you-just-exercised"
+id="toc-28-what-you-just-exercised">2.8 What you just exercised</a></li>
+</ul></li>
+<li><a href="#3-anatomy-of-a-plugin" id="toc-3-anatomy-of-a-plugin">3.
+Anatomy of a plugin</a>
+<ul>
+<li><a href="#31-required-files" id="toc-31-required-files">3.1 Required
+files</a></li>
+<li><a href="#32-module-format--esm-only"
+id="toc-32-module-format--esm-only">3.2 Module format — ESM
+only</a></li>
+<li><a href="#33-the-entry-contract" id="toc-33-the-entry-contract">3.3
+The entry contract</a></li>
+<li><a href="#34-dependencies" id="toc-34-dependencies">3.4
+Dependencies</a></li>
+<li><a href="#35-what-the-host-passes-you"
+id="toc-35-what-the-host-passes-you">3.5 What the host passes
+you</a></li>
+</ul></li>
+<li><a href="#4-manifest-and-capabilities"
+id="toc-4-manifest-and-capabilities">4. Manifest and capabilities</a>
+<ul>
+<li><a href="#41-the-intent-first-manifest"
+id="toc-41-the-intent-first-manifest">4.1 The intent-first
+manifest</a></li>
+<li><a href="#42-why-three-orthogonal-axes-capability-effect-intent"
+id="toc-42-why-three-orthogonal-axes-capability-effect-intent">4.2 Why
+three orthogonal axes (capability, effect, intent)?</a></li>
+<li><a href="#43-the-capability-vocabulary"
+id="toc-43-the-capability-vocabulary">4.3 The capability
+vocabulary</a></li>
+<li><a href="#44-the-effect-vocabulary"
+id="toc-44-the-effect-vocabulary">4.4 The effect vocabulary</a></li>
+<li><a href="#45-naming-rules--both-ids-and-tool-names"
+id="toc-45-naming-rules--both-ids-and-tool-names">4.5 Naming rules —
+both ids and tool names</a></li>
+<li><a href="#46-engine-version-range"
+id="toc-46-engine-version-range">4.6 Engine version range</a></li>
+</ul></li>
+<li><a href="#5-the-plugincontext" id="toc-5-the-plugincontext">5. The
+PluginContext</a>
+<ul>
+<li><a href="#51-the-allow-surface" id="toc-51-the-allow-surface">5.1
+The allow surface</a></li>
+<li><a href="#52-the-deny-list" id="toc-52-the-deny-list">5.2 The deny
+list</a></li>
+<li><a href="#53-the-signal" id="toc-53-the-signal">5.3 The
+<code>signal</code></a></li>
+<li><a href="#54-logging" id="toc-54-logging">5.4 Logging</a></li>
+</ul></li>
+<li><a href="#6-seams-tools-and-resources"
+id="toc-6-seams-tools-and-resources">6. Seams: tools and resources</a>
+<ul>
+<li><a href="#61-tools--ctxtoolsregister"
+id="toc-61-tools--ctxtoolsregister">6.1 Tools —
+<code>ctx.tools.register</code></a></li>
+<li><a href="#62-resources--ctxresourcesregister"
+id="toc-62-resources--ctxresourcesregister">6.2 Resources —
+<code>ctx.resources.register</code></a></li>
+</ul></li>
+<li><a href="#7-seams-events" id="toc-7-seams-events">7. Seams:
+events</a>
+<ul>
+<li><a href="#71-subscribe--ctxeventssubscribe"
+id="toc-71-subscribe--ctxeventssubscribe">7.1 Subscribe —
+<code>ctx.events.subscribe</code></a></li>
+<li><a href="#72-emit--ctxeventsemit"
+id="toc-72-emit--ctxeventsemit">7.2 Emit —
+<code>ctx.events.emit</code></a></li>
+</ul></li>
+<li><a href="#8-closure-seams-ui-policies-archetypes-markdown-fences"
+id="toc-8-closure-seams-ui-policies-archetypes-markdown-fences">8.
+Closure seams: UI, policies, archetypes, markdown fences</a>
+<ul>
+<li><a href="#81-ui--ctxuiregister" id="toc-81-ui--ctxuiregister">8.1 UI
+— <code>ctx.ui.register</code></a></li>
+<li><a href="#82-policies--ctxpoliciespropose"
+id="toc-82-policies--ctxpoliciespropose">8.2 Policies —
+<code>ctx.policies.propose</code></a></li>
+<li><a href="#83-archetypes--ctxarchetypesregisterprovider"
+id="toc-83-archetypes--ctxarchetypesregisterprovider">8.3 Archetypes —
+<code>ctx.archetypes.registerProvider</code></a></li>
+<li><a href="#84-markdown-fences--ctxmarkdownfencesregister"
+id="toc-84-markdown-fences--ctxmarkdownfencesregister">8.4 Markdown
+fences — <code>ctx.markdownFences.register</code></a></li>
+</ul></li>
+<li><a href="#9-trust-and-security-model"
+id="toc-9-trust-and-security-model">9. Trust and security model</a>
+<ul>
+<li><a href="#91-the-execution-boundary"
+id="toc-91-the-execution-boundary">9.1 The execution boundary</a></li>
+<li><a href="#92-the-two-safety-switches"
+id="toc-92-the-two-safety-switches">9.2 The two safety switches</a></li>
+<li><a href="#93-the-trust-banner" id="toc-93-the-trust-banner">9.3 The
+trust banner</a></li>
+<li><a href="#94-the-event-loop-watchdog"
+id="toc-94-the-event-loop-watchdog">9.4 The event-loop watchdog</a></li>
+<li><a href="#95-what-quarantine-means"
+id="toc-95-what-quarantine-means">9.5 What "quarantine" means</a></li>
+<li><a href="#96-coming-in-m8" id="toc-96-coming-in-m8">9.6 Coming in
+M8</a></li>
+</ul></li>
+<li><a href="#10-installation-and-lifecycle"
+id="toc-10-installation-and-lifecycle">10. Installation and
+lifecycle</a>
+<ul>
+<li><a href="#101-discovery-roots" id="toc-101-discovery-roots">10.1
+Discovery roots</a></li>
+<li><a href="#102-the-five-lifecycle-states"
+id="toc-102-the-five-lifecycle-states">10.2 The five lifecycle
+states</a></li>
+<li><a href="#103-the-cli" id="toc-103-the-cli">10.3 The CLI</a></li>
+<li><a href="#104-hot-reload" id="toc-104-hot-reload">10.4 Hot
+reload</a></li>
+<li><a href="#105-shipping-inside-a-workspace"
+id="toc-105-shipping-inside-a-workspace">10.5 Shipping inside a
+workspace</a></li>
+<li><a href="#106-versioning-and-compatibility"
+id="toc-106-versioning-and-compatibility">10.6 Versioning and
+compatibility</a></li>
+</ul></li>
+<li><a href="#11-telemetry-debugging-and-testing"
+id="toc-11-telemetry-debugging-and-testing">11. Telemetry, debugging,
+and testing</a>
+<ul>
+<li><a href="#111-the-plugin-telemetry-kinds"
+id="toc-111-the-plugin-telemetry-kinds">11.1 The plugin telemetry
+kinds</a></li>
+<li><a href="#112-reading-telemetry-while-developing"
+id="toc-112-reading-telemetry-while-developing">11.2 Reading telemetry
+while developing</a></li>
+<li><a href="#113-testing" id="toc-113-testing">11.3 Testing</a></li>
+<li><a href="#114-common-debugging-recipes"
+id="toc-114-common-debugging-recipes">11.4 Common debugging
+recipes</a></li>
+</ul></li>
+<li><a href="#12-best-practices-and-pitfalls"
+id="toc-12-best-practices-and-pitfalls">12. Best practices and
+pitfalls</a>
+<ul>
+<li><a href="#121-do" id="toc-121-do">12.1 Do</a></li>
+<li><a href="#122-dont" id="toc-122-dont">12.2 Don't</a></li>
+<li><a href="#123-pitfalls-compendium"
+id="toc-123-pitfalls-compendium">12.3 Pitfalls (compendium)</a></li>
+<li><a href="#124-the-shipping-checklist"
+id="toc-124-the-shipping-checklist">12.4 The shipping checklist</a></li>
+</ul></li>
+<li><a href="#part-ii-----plugin-reference-manual"
+id="toc-part-ii-----plugin-reference-manual">Part II --- Plugin
+Reference Manual</a></li>
+<li><a href="#dreamgraph-plugin-reference-manual"
+id="toc-dreamgraph-plugin-reference-manual">DreamGraph Plugin Reference
+Manual</a>
+<ul>
+<li><a href="#sections" id="toc-sections">Sections</a></li>
+<li><a href="#conventions" id="toc-conventions">Conventions</a></li>
+</ul></li>
+<li><a href="#manifest-schema-normative"
+id="toc-manifest-schema-normative">Manifest schema (normative)</a>
+<ul>
+<li><a href="#top-level-shape" id="toc-top-level-shape">Top-level
+shape</a></li>
+<li><a href="#field-level-constraints"
+id="toc-field-level-constraints">Field-level constraints</a></li>
+<li><a href="#validation-entry-point"
+id="toc-validation-entry-point">Validation entry point</a></li>
+<li><a href="#example" id="toc-example">Example</a></li>
+</ul></li>
+<li><a href="#capabilities-normative"
+id="toc-capabilities-normative">Capabilities (normative)</a></li>
+<li><a href="#effects-normative" id="toc-effects-normative">Effects
+(normative)</a>
+<ul>
+<li><a href="#always-forbidden-effects"
+id="toc-always-forbidden-effects">Always-forbidden effects</a></li>
+<li><a href="#effect-to-seam-matrix"
+id="toc-effect-to-seam-matrix">Effect-to-seam matrix</a></li>
+</ul></li>
+<li><a href="#reject-reasons-normative"
+id="toc-reject-reasons-normative">Reject reasons (normative)</a>
+<ul>
+<li><a href="#per-seam" id="toc-per-seam">Per seam</a></li>
+<li><a href="#host-execution-boundary"
+id="toc-host-execution-boundary">Host execution boundary</a></li>
+<li><a href="#helpers" id="toc-helpers">Helpers</a></li>
+</ul></li>
+<li><a href="#plugincontext-api-normative"
+id="toc-plugincontext-api-normative">PluginContext API (normative)</a>
+<ul>
+<li><a href="#top-level" id="toc-top-level">Top-level</a></li>
+<li><a href="#surfaces" id="toc-surfaces">Surfaces</a></li>
+<li><a href="#seam-definition-shapes"
+id="toc-seam-definition-shapes">Seam definition shapes</a></li>
+<li><a href="#identity-helpers" id="toc-identity-helpers">Identity
+helpers</a></li>
+</ul></li>
+<li><a href="#events-normative" id="toc-events-normative">Events
+(normative)</a>
+<ul>
+<li><a href="#envelope" id="toc-envelope">Envelope</a></li>
+<li><a href="#stable-kinds" id="toc-stable-kinds">Stable kinds</a></li>
+<li><a href="#experimental-kinds"
+id="toc-experimental-kinds">Experimental kinds</a></li>
+<li><a href="#selected-payload-schemas"
+id="toc-selected-payload-schemas">Selected payload schemas</a></li>
+<li><a href="#plugin-defined-kinds"
+id="toc-plugin-defined-kinds">Plugin-defined kinds</a></li>
+<li><a href="#replay" id="toc-replay">Replay</a></li>
+</ul></li>
+<li><a href="#dg-plugin-cli-normative"
+id="toc-dg-plugin-cli-normative"><code>dg plugin</code> CLI
+(normative)</a>
+<ul>
+<li><a href="#dg-plugin-list-instance"
+id="toc-dg-plugin-list-instance"><code>dg plugin list &lt;instance&gt;</code></a></li>
+<li><a href="#dg-plugin-inspect-instance-plugin-id"
+id="toc-dg-plugin-inspect-instance-plugin-id"><code>dg plugin inspect &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#dg-plugin-trust-instance-plugin-id"
+id="toc-dg-plugin-trust-instance-plugin-id"><code>dg plugin trust &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#dg-plugin-enable-instance-plugin-id"
+id="toc-dg-plugin-enable-instance-plugin-id"><code>dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#dg-plugin-disable-instance-plugin-id"
+id="toc-dg-plugin-disable-instance-plugin-id"><code>dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#notes" id="toc-notes">Notes</a></li>
+</ul></li>
+<li><a href="#host-configuration-normative"
+id="toc-host-configuration-normative">Host configuration (normative)</a>
+<ul>
+<li><a href="#environment-variables"
+id="toc-environment-variables">Environment variables</a></li>
+<li><a href="#instancejson"
+id="toc-instancejson"><code>instance.json</code></a></li>
+<li><a href="#discovery-roots-recap"
+id="toc-discovery-roots-recap">Discovery roots (recap)</a></li>
+</ul></li>
+<li><a href="#telemetry-events-normative"
+id="toc-telemetry-events-normative">Telemetry events (normative)</a>
+<ul>
+<li><a href="#common-base" id="toc-common-base">Common base</a></li>
+<li><a href="#per-kind" id="toc-per-kind">Per kind</a></li>
+<li><a href="#stability" id="toc-stability">Stability</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="part-i-----plugin-developer-guide">Part I --- Plugin Developer
+Guide</h1>
+<p>\newpage</p>
+<h1 id="dreamgraph-plugin-developer-guide">DreamGraph Plugin Developer
+Guide</h1>
+<p><strong>Audience:</strong> Engineers writing third-party plugins
+against <code>@dreamgraph/sdk</code>. <strong>Engine baseline:</strong>
+v9.0.0 "Lattice" (M0–M6 implemented; M5 webhooks shipped; M4 schedule
+actions deferred). <strong>Companion:</strong> see the <a
+href="../plugin-reference/00-index.md">Plugin Reference Manual</a> for
+strict, normative tables.</p>
+<p>This guide is task-oriented. It walks you from "what is a plugin"
+through a working example, then explains every seam, the trust model,
+lifecycle, telemetry, testing, and the practices DreamGraph expects.</p>
+<h2 id="table-of-contents">Table of contents</h2>
+<ol type="1">
+<li><a href="01-introduction.md">Introduction</a> — what a plugin is and
+is not.</li>
+<li><a href="02-quickstart.md">Quickstart: Hello Events</a> —
+five-minute end-to-end install.</li>
+<li><a href="03-anatomy.md">Anatomy of a plugin</a> — files, packaging,
+ESM rules.</li>
+<li><a href="04-manifest-and-capabilities.md">Manifest and
+capabilities</a> — <code>plugin.json</code>, intent, effects.</li>
+<li><a href="05-plugin-context.md">The PluginContext</a> — what
+<code>ctx</code> exposes (and what it deliberately does not).</li>
+<li><a href="06-seams-tools-resources.md">Seams: tools and resources</a>
+— the MCP-facing surface.</li>
+<li><a href="07-seams-events.md">Seams: events</a> — subscribe, emit,
+stable vs experimental.</li>
+<li><a href="08-seams-closure.md">Seams: UI, policies, archetypes,
+markdown fences</a> — the M6 closure surface.</li>
+<li><a href="09-trust-and-security.md">Trust and security model</a> —
+in-process today, worker isolation tomorrow.</li>
+<li><a href="10-lifecycle-and-installation.md">Installation and
+lifecycle</a> — discovery, trust, restart, hot-disable.</li>
+<li><a href="11-telemetry-debugging-testing.md">Telemetry, debugging,
+testing</a> — <code>plugin.*</code> events and the test harness.</li>
+<li><a href="12-best-practices.md">Best practices and pitfalls</a> —
+naming, naming, naming. And quotas.</li>
+</ol>
+<blockquote>
+<p><strong>Building this guide locally as HTML/PDF:</strong> run
+<code>scripts/build-plugin-docs.ps1</code>. Outputs land under
+<code>docs/sdk/site/html/</code> and
+<code>docs/sdk/site/pdf/</code>.</p>
+</blockquote>
+<p>\newpage</p>
+<h1 id="1-introduction">1. Introduction</h1>
+<h2 id="11-what-is-a-dreamgraph-plugin">1.1 What is a DreamGraph
+plugin?</h2>
+<p>A <strong>plugin</strong> is a declarative + code package that
+extends a single DreamGraph instance through one or more
+<strong>seams</strong> — typed extension points exposed by the host. A
+plugin ships at minimum:</p>
+<ul>
+<li>a <code>plugin.json</code> manifest validated against the SDK
+schema, and</li>
+<li>an ESM entry module exporting a default <code>activate(ctx)</code>
+function.</li>
+</ul>
+<p>When the host loads the plugin (in-process, see §9), it calls
+<code>activate(ctx)</code> once. Inside that function the plugin uses
+the <code>ctx.*</code> surfaces to register tools, resources, UI
+elements, policy proposals, archetype providers, markdown fences, and to
+subscribe to or emit events.</p>
+<h2 id="12-what-a-plugin-is-not">1.2 What a plugin is <em>not</em></h2>
+<p>DreamGraph deliberately keeps the plugin contract narrow. A plugin
+<strong>cannot</strong>:</p>
+<ul>
+<li>reach the filesystem, network, or other instances directly through
+<code>ctx</code>;</li>
+<li>mutate the internal cognitive graph (<code>dream_graph.json</code>,
+<code>validated_edges.json</code>, <code>tension_log.json</code>,
+<code>event_log.json</code>);</li>
+<li>create or resolve tensions;</li>
+<li>subscribe to the host event bus from outside <code>ctx</code>;</li>
+<li>discover or interact with other plugins;</li>
+<li>invoke arbitrary <code>setInterval</code> / <code>setTimeout</code>
+schedulers (use schedule actions once M4 ships);</li>
+<li>run as a sandboxed process (M3 model is <strong>trusted
+in-process</strong>; see §9).</li>
+</ul>
+<p>The full deny list lives in <a
+href="../plugin-context.md">docs/sdk/plugin-context.md</a> and in §5 of
+this guide.</p>
+<h2 id="13-seams-shipped-through-m6">1.3 Seams shipped through M6</h2>
+<table>
+<thead>
+<tr>
+<th>Seam</th>
+<th>Capability</th>
+<th>Effect</th>
+<th>Milestone</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tools</code></td>
+<td><code>tools:register</code></td>
+<td><code>emit_tool</code></td>
+<td>M3/M4</td>
+</tr>
+<tr>
+<td><code>resources</code></td>
+<td><code>resources:register</code></td>
+<td><code>emit_resource</code></td>
+<td>M3/M4</td>
+</tr>
+<tr>
+<td><code>events.subscribe</code></td>
+<td><code>events:read</code></td>
+<td><code>read_events</code> (implicit)</td>
+<td>M3</td>
+</tr>
+<tr>
+<td><code>events.emit</code></td>
+<td><code>events:emit</code></td>
+<td><code>emit_event</code></td>
+<td>M3</td>
+</tr>
+<tr>
+<td><code>ui</code></td>
+<td><code>ui:register</code></td>
+<td><code>mutate_ui_registry</code></td>
+<td>M6</td>
+</tr>
+<tr>
+<td><code>policies</code></td>
+<td><code>policy:propose</code></td>
+<td><code>propose_policy</code></td>
+<td>M6</td>
+</tr>
+<tr>
+<td><code>archetypes</code></td>
+<td><code>archetypes:provide</code></td>
+<td><code>provide_archetypes</code></td>
+<td>M6</td>
+</tr>
+<tr>
+<td><code>markdownFences</code></td>
+<td><code>markdown:register_fence</code></td>
+<td><code>render_markdown_fence</code></td>
+<td>M6</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Out of scope (post-M6):</strong></p>
+<ul>
+<li><code>webhooks:emit</code> — webhooks ship in M5 as a <em>core</em>
+subsystem, not a plugin seam. Plugins can register subscriptions only
+via the host CLI/MCP tools.</li>
+<li><code>schedule:register_action</code> — the SDK type exists, but the
+host registry refactor (M4) is deferred.
+<code>defineScheduleAction</code> is reserved.</li>
+<li><code>providers:register</code> — provider adapter seam is
+post-1.0.</li>
+<li>Executable iframe UI — the M6 builder is metadata-only.</li>
+</ul>
+<h2 id="14-trust-posture-in-one-paragraph">1.4 Trust posture in one
+paragraph</h2>
+<p>Plugins run <strong>in-process</strong> inside the daemon. They share
+its heap and its Node permissions. The host can refuse to load a plugin
+(manifest invalid, capability not declared, host switch off, plugin not
+trusted), but it cannot prevent a malicious plugin from reaching
+<code>process</code> or <code>fs</code> through Node globals.
+<strong>Treat installing a plugin like editing your
+<code>~/.bashrc</code>.</strong> The full trust model is in §9.</p>
+<p>\newpage</p>
+<h1 id="2-quickstart--hello-events-in-five-minutes">2. Quickstart —
+Hello Events in five minutes</h1>
+<p>This walkthrough installs the bundled
+<code>examples.hello-events</code> reference plugin into a running
+DreamGraph instance and exercises every seam. It is the fastest way to
+confirm your environment is correctly configured.</p>
+<h2 id="21-prerequisites">2.1 Prerequisites</h2>
+<ul>
+<li>DreamGraph v9.0.0 or later, installed
+(<code>dg --version</code>).</li>
+<li>A live instance UUID (<code>dg list</code>).</li>
+<li>An MCP-capable client to call the contributed tool (the VS Code
+extension, Claude Desktop, <code>mcp inspector</code>, or a script using
+<code>@modelcontextprotocol/sdk</code>).</li>
+</ul>
+<h2 id="22-allow-in-process-plugins-host-switch">2.2 Allow in-process
+plugins (host switch)</h2>
+<p>In-process plugin execution is <strong>deny-by-default</strong>. Add
+the line to your instance's <code>engine.env</code> (or set the env var
+before launching the daemon):</p>
+<pre class="dotenv"><code>DG_ALLOW_INPROCESS_PLUGINS=true</code></pre>
+<p>The switch and its caveats are documented in all three engine.env
+templates (<a
+href="../../../templates/default/config/engine.env">default</a>, <a
+href="../../../templates/ollama/config/engine.env">ollama</a>, <a
+href="../../../templates/lmstudio/config/engine.env">lmstudio</a>).</p>
+<h2 id="23-copy-the-example-into-the-instance">2.3 Copy the example into
+the instance</h2>
+<pre class="pwsh"><code>$uuid = &quot;&lt;your-instance-uuid&gt;&quot;
+Copy-Item -Recurse examples/hello-events `
+  &quot;$env:USERPROFILE\.dreamgraph\instances\$uuid\plugins\examples.hello-events&quot;</code></pre>
+<p>DreamGraph discovers plugins from two roots only:</p>
+<ol type="1">
+<li><code>&lt;instance&gt;/plugins/*/plugin.json</code></li>
+<li><code>instance.json:plugins[]</code> (declared paths)</li>
+</ol>
+<p>There is no auto-discovery from arbitrary
+<code>node_modules</code>.</p>
+<h2 id="24-trust-the-plugin">2.4 Trust the plugin</h2>
+<pre class="pwsh"><code>dg plugin trust dreamgraph examples.hello-events
+dg restart dreamgraph</code></pre>
+<p><code>dg plugin trust</code> flips the <code>trusted: true</code>
+flag in <code>instance.json:plugins[]</code>. A plugin must be trusted
+<strong>and</strong> the host switch must be on for in-process loading
+to occur.</p>
+<p>On startup you will see a one-line trust banner per loaded
+plugin:</p>
+<pre><code>plugin examples.hello-events@0.2.0 loaded with FULL HOST TRUST (in-process)</code></pre>
+<h2 id="25-inspect-what-loaded">2.5 Inspect what loaded</h2>
+<pre class="pwsh"><code>dg plugin list dreamgraph
+dg plugin inspect dreamgraph examples.hello-events</code></pre>
+<p>The host exposes a live <code>system://plugins</code> MCP resource
+with the same data: status, intent, runtime, declared and last-seen
+effects.</p>
+<h2 id="26-call-the-contributed-mcp-tool">2.6 Call the contributed MCP
+tool</h2>
+<p>DreamGraph does not ship a CLI shortcut for invoking tools. Use any
+MCP client. The bundled probe script does it via the streamable HTTP
+transport:</p>
+<pre class="pwsh"><code>node scripts/probe-hello-events.mjs</code></pre>
+<p>Expected output:</p>
+<pre><code>tool examples.hello-events.greet  →  { &quot;greeting&quot;: &quot;Hello, world!&quot; }
+resource plugin://examples.hello-events/manifest  →  { id: &quot;...&quot;, version: &quot;0.2.0&quot;, seams: [...] }</code></pre>
+<h2 id="27-verify-the-closure-seam-side-effects">2.7 Verify the
+closure-seam side-effects</h2>
+<p>Each closure seam writes through a host-locked store and prunes on
+unload:</p>
+<pre class="pwsh"><code>$data = &quot;$env:USERPROFILE\.dreamgraph\instances\$uuid\data&quot;
+Get-Content &quot;$data\ui_registry.json&quot;               # contains examples.hello-events.greeting
+Get-Content &quot;$data\plugin_policy_proposals.json&quot;   # contains source: plugin:examples.hello-events</code></pre>
+<p>Disable the plugin and watch every contribution disappear:</p>
+<pre class="pwsh"><code>dg plugin disable dreamgraph examples.hello-events</code></pre>
+<p>The UI element, policy proposal, archetype provider, and markdown
+fence are all removed automatically.</p>
+<h2 id="28-what-you-just-exercised">2.8 What you just exercised</h2>
+<table>
+<thead>
+<tr>
+<th>Seam</th>
+<th>Where to look</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>events.subscribe</code></td>
+<td><code>dg plugin inspect</code> shows declared
+<code>events:read</code> + a subscriber on
+<code>snapshot.changed</code>.</td>
+</tr>
+<tr>
+<td><code>events.emit</code></td>
+<td>The <code>examples.hello-events.activated</code> event appears on
+the bus / SSE stream.</td>
+</tr>
+<tr>
+<td><code>tools.register</code></td>
+<td><code>tools/list</code> over MCP shows
+<code>examples.hello-events.greet</code>.</td>
+</tr>
+<tr>
+<td><code>resources.register</code></td>
+<td><code>resources/list</code> shows
+<code>plugin://examples.hello-events/manifest</code>.</td>
+</tr>
+<tr>
+<td><code>ui.register</code></td>
+<td><code>ui_registry.json</code> gains a tagged entry.</td>
+</tr>
+<tr>
+<td><code>policies.propose</code></td>
+<td><code>plugin_policy_proposals.json</code> gains a
+<code>source: plugin:examples.hello-events</code> entry.</td>
+</tr>
+<tr>
+<td><code>archetypes.registerProvider</code></td>
+<td><code>system://plugins</code> lists the inline provider.</td>
+</tr>
+<tr>
+<td><code>markdownFences.register</code></td>
+<td>The webview SDK can introspect language <code>dg-hello</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>\newpage</p>
+<h1 id="3-anatomy-of-a-plugin">3. Anatomy of a plugin</h1>
+<h2 id="31-required-files">3.1 Required files</h2>
+<pre><code>my-plugin/
+├── plugin.json        # manifest, validated by @dreamgraph/sdk
+├── index.js           # ESM entry (path declared as `main` in manifest)
+├── package.json       # optional but recommended; &quot;type&quot;: &quot;module&quot;
+└── README.md          # optional; appears next to dg plugin inspect</code></pre>
+<p>Anything else (build artifacts, fixtures, sub-modules) is fine. The
+host loads <strong>only</strong> the file referenced by
+<code>manifest.main</code>. Imports inside that file are resolved by
+Node's standard ESM resolver against the plugin folder.</p>
+<h2 id="32-module-format--esm-only">3.2 Module format — ESM only</h2>
+<p>The host loads plugins via dynamic <code>import()</code>. Every
+plugin entry MUST be an ES module. CommonJS is not supported.
+Either:</p>
+<ul>
+<li>Set <code>"type": "module"</code> in the plugin's
+<code>package.json</code>, or</li>
+<li>Use the <code>.mjs</code> extension for the entry file.</li>
+</ul>
+<p>If you write the plugin in TypeScript, ship the compiled JavaScript
+and point <code>main</code> at the build output:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span> <span class="dt">&quot;main&quot;</span><span class="fu">:</span> <span class="st">&quot;./dist/index.js&quot;</span> <span class="fu">}</span></span></code></pre></div>
+<h2 id="33-the-entry-contract">3.3 The entry contract</h2>
+<p>The entry module must default-export <code>activate(ctx)</code>:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">const</span> meta <span class="op">=</span> { <span class="dt">id</span><span class="op">:</span> <span class="st">&quot;acme.changelog&quot;</span><span class="op">,</span> <span class="dt">version</span><span class="op">:</span> <span class="st">&quot;0.1.0&quot;</span> }<span class="op">;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="im">default</span> <span class="kw">function</span> <span class="fu">activate</span>(ctx) {</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  ctx<span class="op">.</span><span class="at">logger</span><span class="op">.</span><span class="fu">info</span>(<span class="st">&quot;activating&quot;</span>)<span class="op">;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">// Register seams synchronously inside activate(). Returning a promise is</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// allowed but the host counts the plugin as &quot;loaded&quot; once activate() resolves.</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  ctx<span class="op">.</span><span class="at">tools</span><span class="op">.</span><span class="fu">register</span>({ <span class="co">/* ... */</span> })<span class="op">;</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> {</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">deactivate</span>() {</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Optional. The host calls this on dg plugin disable / instance shutdown.</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>      <span class="co">// Use it to flush in-flight state. Contributions registered through ctx</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>      <span class="co">// are pruned automatically — you do not need to call unregister manually.</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><code>activate(ctx)</code> may also be <code>async</code>. The host
+awaits it. If <code>activate</code> throws (or the returned promise
+rejects), the host emits <code>plugin.errored</code> with
+<code>reason: "handler_threw"</code> and the plugin is quarantined.</p>
+<h2 id="34-dependencies">3.4 Dependencies</h2>
+<p>The SDK ships with <strong>zero runtime dependencies</strong> beyond
+<code>zod</code> (which the daemon already bundles). For the M3
+trusted-in-process model:</p>
+<ul>
+<li>You <strong>may</strong> use any npm package. The host does not
+constrain <code>node_modules</code>.</li>
+<li>You <strong>should</strong> keep dependencies small and well-known.
+Plugin dependencies live in the daemon's process and inherit its
+trust.</li>
+<li>You <strong>must not</strong> depend on the daemon's internals
+(<code>src/...</code>). The only supported import is
+<code>@dreamgraph/sdk</code>. The daemon's source is not re-exported and
+may change between releases.</li>
+</ul>
+<h2 id="35-what-the-host-passes-you">3.5 What the host passes you</h2>
+<p><code>activate(ctx)</code> receives a fully constructed
+<code>PluginContext</code>. The full shape is documented in <a
+href="05-plugin-context.md">§5 The PluginContext</a>. The shortlist:</p>
+<ul>
+<li><code>ctx.plugin.{id,version}</code></li>
+<li><code>ctx.instance.uuid</code></li>
+<li><code>ctx.logger.{debug,info,warn,error}</code></li>
+<li><code>ctx.events.{subscribe,emit}</code></li>
+<li><code>ctx.tools.register</code></li>
+<li><code>ctx.resources.register</code></li>
+<li><code>ctx.ui.register</code></li>
+<li><code>ctx.policies.propose</code></li>
+<li><code>ctx.archetypes.registerProvider</code></li>
+<li><code>ctx.markdownFences.register</code></li>
+<li><code>ctx.signal</code> — <code>AbortSignal</code>, aborted on
+disable / handler timeout</li>
+</ul>
+<p>\newpage</p>
+<h1 id="4-manifest-and-capabilities">4. Manifest and capabilities</h1>
+<h2 id="41-the-intent-first-manifest">4.1 The intent-first manifest</h2>
+<p>Every plugin ships a <code>plugin.json</code> validated against
+<code>PluginManifestSchema</code> (<a
+href="../../../packages/sdk/src/manifest.ts">source</a>). The schema is
+<strong>intent-first</strong>: it asks not only <em>what permissions you
+want</em> (capabilities) but <em>what observable effects you claim you
+will have</em> (<code>expectedEffects</code>) and <em>what you guarantee
+not to do</em> (<code>forbiddenEffects</code>).</p>
+<pre class="jsonc"><code>{
+  &quot;id&quot;: &quot;acme.changelog&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;displayName&quot;: &quot;Acme Changelog&quot;,
+  &quot;description&quot;: &quot;Weekly changelogs from validated edges.&quot;,
+  &quot;engine&quot;: { &quot;dreamgraph&quot;: &quot;&gt;=9.0.0&quot; },
+  &quot;main&quot;: &quot;./dist/index.js&quot;,
+
+  &quot;intent&quot;: &quot;Summarize validated cognitive changes into weekly changelogs.&quot;,
+  &quot;expectedEffects&quot;: [&quot;read_events&quot;, &quot;emit_resource&quot;, &quot;emit_tool&quot;],
+  &quot;forbiddenEffects&quot;: [&quot;write_internal_graph&quot;, &quot;modify_tensions&quot;],
+
+  &quot;capabilities&quot;: [&quot;events:read&quot;, &quot;tools:register&quot;, &quot;resources:register&quot;],
+
+  &quot;tools&quot;:      [{ &quot;name&quot;: &quot;acme.changelog.summarize_week&quot; }],
+  &quot;resources&quot;:  [{ &quot;uriNamespace&quot;: &quot;plugin://acme.changelog/latest&quot; }],
+  &quot;ui&quot;:         [],
+  &quot;policies&quot;:   [],
+  &quot;archetypeProviders&quot;: [],
+  &quot;markdownFences&quot;:     [],
+
+  &quot;policy&quot;: { &quot;phasePermissions&quot;: [&quot;analysis&quot;], &quot;writableFiles&quot;: [] }
+}</code></pre>
+<h2 id="42-why-three-orthogonal-axes-capability-effect-intent">4.2 Why
+three orthogonal axes (capability, effect, intent)?</h2>
+<table>
+<thead>
+<tr>
+<th>Axis</th>
+<th>Question it answers</th>
+<th>Enforced where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>capabilities</code></td>
+<td><em>Are you allowed to use the API?</em></td>
+<td>At seam call time (gate function)</td>
+</tr>
+<tr>
+<td><code>expectedEffects</code></td>
+<td><em>What do you say you will do?</em></td>
+<td>At every host-mediated effect</td>
+</tr>
+<tr>
+<td><code>forbiddenEffects</code></td>
+<td><em>What do you guarantee NOT to do?</em></td>
+<td>Hard stop, even if capability allows</td>
+</tr>
+<tr>
+<td><code>intent</code></td>
+<td><em>Why are you doing it?</em></td>
+<td>Operator review + telemetry</td>
+</tr>
+</tbody>
+</table>
+<p>A plugin that performs an effect outside <code>expectedEffects</code>
+emits <code>plugin.output.rejected{ reason: "effect_undeclared" }</code>
+and is auto-quarantined. A plugin that hits a
+<code>forbiddenEffects</code> entry is refused even if the matching
+capability would otherwise allow it.</p>
+<h2 id="43-the-capability-vocabulary">4.3 The capability vocabulary</h2>
+<p>Locked for v1 — see <a
+href="../plugin-reference/02-capabilities.md">reference /
+capabilities</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Allows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>events:read</code></td>
+<td>subscribe to <strong>stable</strong> event kinds</td>
+</tr>
+<tr>
+<td><code>events:read:experimental</code></td>
+<td>subscribe to experimental kinds (instance opt-in)</td>
+</tr>
+<tr>
+<td><code>events:emit</code></td>
+<td>publish via <code>ctx.events.emit()</code></td>
+</tr>
+<tr>
+<td><code>tools:register</code></td>
+<td><code>defineTool</code> registration</td>
+</tr>
+<tr>
+<td><code>resources:register</code></td>
+<td><code>defineResource</code> registration</td>
+</tr>
+<tr>
+<td><code>resources:read</code></td>
+<td>(reserved) read other plugins' resources</td>
+</tr>
+<tr>
+<td><code>ui:register</code></td>
+<td>metadata-only UI element registration</td>
+</tr>
+<tr>
+<td><code>policy:propose</code></td>
+<td>append discipline rules tagged <code>plugin:&lt;id&gt;</code></td>
+</tr>
+<tr>
+<td><code>schedule:register_action</code></td>
+<td>(reserved, M4) custom schedule actions</td>
+</tr>
+<tr>
+<td><code>webhooks:emit</code></td>
+<td>(reserved, post-MVP) plugin-driven outbound HTTP</td>
+</tr>
+<tr>
+<td><code>archetypes:provide</code></td>
+<td>register a federation archetype provider</td>
+</tr>
+<tr>
+<td><code>providers:register</code></td>
+<td>(reserved, post-1.0) provider adapter seam</td>
+</tr>
+<tr>
+<td><code>markdown:register_fence</code></td>
+<td>register a webview markdown fence language</td>
+</tr>
+</tbody>
+</table>
+<p>A capability not present in the manifest's <code>capabilities</code>
+array means the matching seam call returns
+<code>*_capability_missing</code> and is dropped.</p>
+<h2 id="44-the-effect-vocabulary">4.4 The effect vocabulary</h2>
+<table>
+<thead>
+<tr>
+<th>Effect</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_events</code></td>
+<td>subscribe to the bus</td>
+</tr>
+<tr>
+<td><code>read_internal_graph</code></td>
+<td>read internal-tier files (graph, validated edges, tensions)</td>
+</tr>
+<tr>
+<td><code>read_external_state</code></td>
+<td>read external-tier files (features, archetypes, ADRs, UI
+registry)</td>
+</tr>
+<tr>
+<td><code>write_internal_graph</code></td>
+<td>mutate the graph</td>
+</tr>
+<tr>
+<td><code>modify_tensions</code></td>
+<td>create/resolve tensions</td>
+</tr>
+<tr>
+<td><code>emit_resource</code></td>
+<td>register/update an MCP resource</td>
+</tr>
+<tr>
+<td><code>emit_tool</code></td>
+<td>register an MCP tool</td>
+</tr>
+<tr>
+<td><code>emit_event</code></td>
+<td>publish events</td>
+</tr>
+<tr>
+<td><code>emit_webhook</code></td>
+<td>(reserved) outbound HTTP via webhook worker</td>
+</tr>
+<tr>
+<td><code>register_schedule_action</code></td>
+<td>(reserved) custom schedule action</td>
+</tr>
+<tr>
+<td><code>invoke_llm</code></td>
+<td>call the host LLM proxy</td>
+</tr>
+<tr>
+<td><code>mutate_ui_registry</code></td>
+<td>register/update UI elements</td>
+</tr>
+<tr>
+<td><code>propose_policy</code></td>
+<td>append discipline rules</td>
+</tr>
+<tr>
+<td><code>provide_archetypes</code></td>
+<td>feed federation archetypes</td>
+</tr>
+<tr>
+<td><code>render_markdown_fence</code></td>
+<td>declare a webview markdown fence</td>
+</tr>
+<tr>
+<td><code>register_provider_adapter</code></td>
+<td>(reserved) provider adapter</td>
+</tr>
+</tbody>
+</table>
+<h2 id="45-naming-rules--both-ids-and-tool-names">4.5 Naming rules —
+both ids and tool names</h2>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Pattern</th>
+<th>Reject reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td><code>^[a-z0-9][a-z0-9.-]*[a-z0-9]$</code> (DNS-like)</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td>Tool <code>name</code></td>
+<td><code>&lt;plugin-id&gt;.&lt;tool_name&gt;</code> (lowercase,
+dot-prefixed)</td>
+<td><code>tool_name_unprefixed</code></td>
+</tr>
+<tr>
+<td>Resource <code>uri</code></td>
+<td><code>plugin://&lt;plugin-id&gt;/...</code></td>
+<td><code>resource_uri_out_of_namespace</code></td>
+</tr>
+<tr>
+<td>UI element <code>id</code></td>
+<td>starts with <code>&lt;plugin-id&gt;.</code></td>
+<td><code>ui_id_unprefixed</code></td>
+</tr>
+<tr>
+<td>Policy proposal id</td>
+<td>lowercase <code>[a-z0-9._-]+</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td>Markdown fence lang</td>
+<td>lowercase <code>[a-z0-9._-]+</code>, no collision</td>
+<td><code>markdown_fence_language_invalid</code> /
+<code>_collision</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Per ADR-128</strong>, tool names must carry primary
+semantics: a model should be able to infer the dominant action and
+target from the name alone, without reading the description. Prefer
+<code>summarize_week</code> over <code>process_data</code>.</p>
+<h2 id="46-engine-version-range">4.6 Engine version range</h2>
+<p><code>engine.dreamgraph</code> is a semver range. The host refuses to
+load plugins whose range excludes the current engine version
+(<code>engine_version_mismatch</code>). Ship the narrowest range that
+actually works — <code>&gt;=9.0.0</code> is appropriate for v1
+plugins.</p>
+<p>\newpage</p>
+<h1 id="5-the-plugincontext">5. The PluginContext</h1>
+<p><code>ctx</code> is the single object the host hands you. Its shape
+is fixed — see <a href="../plugin-reference/05-context-api.md">reference
+/ context-api</a> for the strict TypeScript signatures.</p>
+<h2 id="51-the-allow-surface">5.1 The allow surface</h2>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginContext {</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> plugin<span class="op">:</span>   { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> version<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> instance<span class="op">:</span> { uuid<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> logger<span class="op">:</span>   PluginLogger<span class="op">;</span>       <span class="co">// namespaced, mirrored to event bus</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> events<span class="op">:</span>   { subscribe<span class="op">;</span> emit }<span class="op">;</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> tools<span class="op">:</span>          { register }<span class="op">;</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> resources<span class="op">:</span>      { register }<span class="op">;</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> ui<span class="op">:</span>             { register }<span class="op">;</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> policies<span class="op">:</span>       { propose }<span class="op">;</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> archetypes<span class="op">:</span>     { registerProvider }<span class="op">;</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> markdownFences<span class="op">:</span> { register }<span class="op">;</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span> AbortSignal<span class="op">;</span>          <span class="co">// aborted on disable / timeout</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Every register / propose / subscribe call returns an
+<code>unregister</code>/<code>unsubscribe</code> function. <strong>You
+do not need to call it on shutdown</strong> — the host prunes all
+contributions automatically when the plugin is disabled or the instance
+shuts down. Use the returned functions only when you want a contribution
+to disappear <em>before</em> deactivation (rare).</p>
+<h2 id="52-the-deny-list">5.2 The deny list</h2>
+<p><code>ctx</code> deliberately does <strong>not</strong> expose:</p>
+<ul>
+<li>Raw <code>fs</code>, <code>process</code>, <code>require</code>,
+dynamic <code>import()</code>.</li>
+<li>Any filesystem path (no <code>dataDir</code>, no instance
+root).</li>
+<li>Internal-tier writers (<code>dream_graph.json</code>,
+<code>validated_edges.json</code>, <code>tension_log.json</code>,
+<code>event_log.json</code>).</li>
+<li>Tension mutation (<code>ctx.tensions.create</code>,
+<code>.resolve</code>).</li>
+<li>Graph mutation (<code>ctx.graph.promoteCandidate</code>,
+<code>.editEdge</code>).</li>
+<li>Other plugins' loggers, configs, or quotas.</li>
+<li><code>setInterval</code> / <code>setTimeout</code> helpers —
+long-running or recurring work must use schedule actions (post-M4).</li>
+<li>Network primitives — outbound HTTP goes through the (operator-owned)
+webhook worker, not through <code>ctx</code>.</li>
+</ul>
+<p>This is an <strong>API boundary</strong>, not a runtime sandbox. M3
+plugins run in the daemon's process and <em>can</em> reach Node globals
+if they want to. Doing so is a trust violation and grounds for
+quarantine, not a sandbox escape. See §9 for the full trust
+narrative.</p>
+<h2 id="53-the-signal">5.3 The <code>signal</code></h2>
+<p><code>ctx.signal</code> is an <code>AbortSignal</code> the host
+aborts when:</p>
+<ul>
+<li>the plugin is disabled (<code>dg plugin disable</code>),</li>
+<li>the instance shuts down,</li>
+<li>a handler exceeds the timeout budget,</li>
+<li>the plugin is quarantined for any other reason.</li>
+</ul>
+<p>Pass it to long-running work that supports cancellation
+(<code>fetch(url, { signal })</code>, your own loops). You are not
+required to use it, but ignoring it means your plugin can keep running
+for a few extra seconds during shutdown.</p>
+<h2 id="54-logging">5.4 Logging</h2>
+<p><code>ctx.logger</code> is namespaced under
+<code>plugin:&lt;id&gt;</code>. Lines appear in the daemon's log stream
+and are mirrored to the event bus as standard log events. Do
+<strong>not</strong> use
+<code>console.log</code>/<code>console.error</code> — those bypass the
+bus and the operator may not see them.</p>
+<p>\newpage</p>
+<h1 id="6-seams-tools-and-resources">6. Seams: tools and resources</h1>
+<p>These two seams ship plugin output over MCP. They are the most common
+reason to write a plugin.</p>
+<h2 id="61-tools--ctxtoolsregister">6.1 Tools —
+<code>ctx.tools.register</code></h2>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">tools</span><span class="op">.</span><span class="fu">register</span>({</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">name</span><span class="op">:</span> <span class="st">&quot;acme.changelog.summarize_week&quot;</span><span class="op">,</span>     <span class="co">// MUST start with &quot;&lt;plugin-id&gt;.&quot;</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">description</span><span class="op">:</span> <span class="st">&quot;Summarize the last N days of validated edges.&quot;</span><span class="op">,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">inputSchema</span><span class="op">:</span> {</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">type</span><span class="op">:</span> <span class="st">&quot;object&quot;</span><span class="op">,</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">properties</span><span class="op">:</span> { <span class="dt">days</span><span class="op">:</span> { <span class="dt">type</span><span class="op">:</span> <span class="st">&quot;integer&quot;</span><span class="op">,</span> <span class="dt">minimum</span><span class="op">:</span> <span class="dv">1</span> } }<span class="op">,</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">required</span><span class="op">:</span> [<span class="st">&quot;days&quot;</span>]<span class="op">,</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">expectedEffects</span><span class="op">:</span> [<span class="st">&quot;emit_tool&quot;</span>]<span class="op">,</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">handler</span><span class="op">:</span> <span class="kw">async</span> ({ days }<span class="op">,</span> _extra) <span class="kw">=&gt;</span> {</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> { <span class="dt">summary</span><span class="op">:</span> <span class="vs">`Last </span><span class="sc">${</span>days<span class="sc">}</span><span class="vs"> days...`</span> }<span class="op">;</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="naming-mandatory">Naming (mandatory)</h3>
+<p>The tool <code>name</code> must:</p>
+<ul>
+<li>be lowercase,</li>
+<li>start with the plugin id followed by <code>.</code>,</li>
+<li>carry the primary semantics of the operation (ADR-128).</li>
+</ul>
+<p><code>acme.changelog.summarize_week</code> ✅
+<code>acme.changelog.process</code> ❌ (no semantic verb-target)
+<code>summarize_week</code> ❌ (no plugin prefix →
+<code>tool_name_unprefixed</code>)</p>
+<h3 id="input-schema">Input schema</h3>
+<p>You write a JSON Schema, the host converts it to a Zod shape and uses
+that to validate <code>args</code> before calling your handler.
+Supported keywords today:</p>
+<ul>
+<li><code>type: "object" | "string" | "number" | "integer" | "boolean" | "array"</code></li>
+<li><code>properties</code>, <code>required</code>, <code>items</code>,
+<code>enum</code> (string only),</li>
+<li><code>description</code> (mapped to <code>.describe()</code>).</li>
+</ul>
+<p>Anything else falls back to <code>z.unknown()</code>.</p>
+<h3 id="what-the-host-does-for-you">What the host does for you</h3>
+<ul>
+<li>Registers the tool with the MCP <code>Server.tool()</code>
+factory.</li>
+<li>Validates incoming arguments against your schema; invalid args never
+reach your handler.</li>
+<li>Wraps your handler in <code>plugin.handler.started</code> /
+<code>plugin.handler.completed</code> telemetry with a correlation
+id.</li>
+<li>Emits <code>plugin.output.accepted</code> if the host successfully
+forwarded your output, or <code>plugin.output.rejected{ reason }</code>
+if your handler threw, the effect was undeclared, or the tool name was
+not prefixed.</li>
+</ul>
+<h3 id="what-you-owe-the-host">What you owe the host</h3>
+<ul>
+<li>Return JSON-serializable values from <code>handler</code>. The MCP
+transport encodes the return value as the tool's
+<code>content</code>.</li>
+<li>Honor <code>ctx.signal</code> for any long-running work.</li>
+<li>Keep your handler under the per-plugin handler timeout (default 5 s
+for in-process; configurable). A handler that hangs is killed and the
+plugin is quarantined with <code>handler_timeout</code>.</li>
+</ul>
+<h2 id="62-resources--ctxresourcesregister">6.2 Resources —
+<code>ctx.resources.register</code></h2>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">resources</span><span class="op">.</span><span class="fu">register</span>({</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">uriNamespace</span><span class="op">:</span> <span class="st">&quot;plugin://acme.changelog/latest&quot;</span><span class="op">,</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">name</span><span class="op">:</span> <span class="st">&quot;Latest weekly changelog&quot;</span><span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">description</span><span class="op">:</span> <span class="st">&quot;Returns the most recent rendered summary.&quot;</span><span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">expectedEffects</span><span class="op">:</span> [<span class="st">&quot;emit_resource&quot;</span>]<span class="op">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">handler</span><span class="op">:</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> ({</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">rendered_at</span><span class="op">:</span> <span class="kw">new</span> <span class="bu">Date</span>()<span class="op">.</span><span class="fu">toISOString</span>()<span class="op">,</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">body</span><span class="op">:</span> <span class="st">&quot;## Week ending ...&quot;</span><span class="op">,</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>  })<span class="op">,</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="uri-rules">URI rules</h3>
+<ul>
+<li>MUST start with <code>plugin://&lt;plugin-id&gt;/</code>. Anything
+else → <code>resource_uri_out_of_namespace</code>.</li>
+<li>The namespace is exact: <code>plugin://acme.changelog/latest</code>
+and <code>plugin://acme.changelog/by-id/123</code> are two distinct
+registrations.</li>
+<li>Two plugins cannot collide; the prefix is enforced.</li>
+</ul>
+<h3 id="what-the-host-does">What the host does</h3>
+<ul>
+<li>Exposes the resource over MCP <code>resources/list</code> and
+<code>resources/read</code>.</li>
+<li>Routes reads to your handler; the return value is
+JSON-serialized.</li>
+<li>Emits the same <code>plugin.output.{accepted,rejected}</code>
+telemetry as tools.</li>
+</ul>
+<p>\newpage</p>
+<h1 id="7-seams-events">7. Seams: events</h1>
+<p>Events are the cognitive heartbeat. The SDK exposes two operations:
+subscribe to host-emitted events, and emit your own.</p>
+<h2 id="71-subscribe--ctxeventssubscribe">7.1 Subscribe —
+<code>ctx.events.subscribe</code></h2>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> off <span class="op">=</span> ctx<span class="op">.</span><span class="at">events</span><span class="op">.</span><span class="fu">subscribe</span>(<span class="st">&quot;snapshot.changed&quot;</span><span class="op">,</span> (evt) <span class="kw">=&gt;</span> {</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  ctx<span class="op">.</span><span class="at">logger</span><span class="op">.</span><span class="fu">info</span>(<span class="vs">`observed </span><span class="sc">${</span>evt<span class="op">.</span><span class="at">kind</span><span class="sc">}</span><span class="vs">`</span><span class="op">,</span> evt<span class="op">.</span><span class="at">payload</span>)<span class="op">;</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="stable-vs-experimental">Stable vs experimental</h3>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Capability</th>
+<th>Import from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stable kinds</td>
+<td><code>events:read</code></td>
+<td><code>@dreamgraph/sdk</code></td>
+</tr>
+<tr>
+<td>Experimental</td>
+<td><code>events:read:experimental</code></td>
+<td><code>@dreamgraph/sdk/events/experimental</code></td>
+</tr>
+</tbody>
+</table>
+<p>The split is <strong>type-enforced</strong> in the SDK: the default
+<code>defineEventHandler</code> factory is generic over
+<code>StableEventKind</code>. To subscribe to an experimental kind you
+must use <code>defineExperimentalEventHandler</code> and the host must
+have <code>experimental_plugins: true</code> in
+<code>instance.json</code>. Subscribing to an experimental kind without
+the capability returns <code>event_kind_experimental</code>; subscribing
+to a kind not declared in the manifest returns
+<code>event_kind_not_declared</code>.</p>
+<h3 id="bus-model">Bus model</h3>
+<p>The DreamGraph event bus is <strong>synchronous</strong>: the
+producer call site does not await your handler. The host wraps your
+handler in a deferred queue so a slow subscriber cannot stall cognition.
+Therefore:</p>
+<ul>
+<li>Your handler MAY be async; the queue runner awaits it.</li>
+<li>Your handler MUST tolerate handler-level timeouts (default 5 s). A
+timeout emits <code>handler_timeout</code> and quarantines the
+plugin.</li>
+<li>Your handler runs in the daemon's heap. Long synchronous CPU work
+will be detected by the event-loop watchdog
+(<code>event_loop_stall</code>, see §9).</li>
+</ul>
+<h2 id="72-emit--ctxeventsemit">7.2 Emit —
+<code>ctx.events.emit</code></h2>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">events</span><span class="op">.</span><span class="fu">emit</span>(<span class="st">&quot;examples.hello-events.activated&quot;</span><span class="op">,</span> {</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">at</span><span class="op">:</span> <span class="kw">new</span> <span class="bu">Date</span>()<span class="op">.</span><span class="fu">toISOString</span>()<span class="op">,</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="rules">Rules</h3>
+<ul>
+<li>The kind name MUST NOT collide with a built-in
+<code>GraphEventKind</code>. Conventional practice is
+<code>&lt;plugin-id&gt;.&lt;event_name&gt;</code> (matches the
+tool/resource pattern).</li>
+<li>Emitting a kind requires the <code>events:emit</code> capability
+<strong>and</strong> <code>emit_event</code> in
+<code>expectedEffects</code>. Missing either →
+<code>effect_undeclared</code> or
+<code>emit_capability_missing</code>.</li>
+<li>The payload is JSON-serialized and broadcast on the bus + SSE stream
+(<code>/explorer/api/events</code>) + matching webhook
+subscriptions.</li>
+</ul>
+<h3 id="replay-window">Replay window</h3>
+<p>The SSE stream maintains a 500-event ring buffer; the file-backed
+<code>event_log.json</code> is the long-term record. Plugins should
+treat the bus as <strong>at-most-once</strong>: if your subscriber
+missed an event because your plugin was disabled or the daemon
+restarted, the SSE replay window does not extend back indefinitely.
+Critical state must be reconstructed from a resource read or by reading
+the event log.</p>
+<p>\newpage</p>
+<h1 id="8-closure-seams-ui-policies-archetypes-markdown-fences">8.
+Closure seams: UI, policies, archetypes, markdown fences</h1>
+<p>These four seams are the M6 closure. Each is
+<strong>metadata-only</strong> and writes through a host-locked store
+with automatic prune-on-unload.</p>
+<h2 id="81-ui--ctxuiregister">8.1 UI — <code>ctx.ui.register</code></h2>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">ui</span><span class="op">.</span><span class="fu">register</span>({</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">id</span><span class="op">:</span> <span class="st">&quot;acme.changelog.summary_panel&quot;</span><span class="op">,</span>       <span class="co">// MUST start with &quot;&lt;plugin-id&gt;.&quot;</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">name</span><span class="op">:</span> <span class="st">&quot;Weekly Summary Panel&quot;</span><span class="op">,</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">purpose</span><span class="op">:</span> <span class="st">&quot;Display the latest weekly changelog body.&quot;</span><span class="op">,</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">category</span><span class="op">:</span> <span class="st">&quot;data_display&quot;</span><span class="op">,</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">inputs</span><span class="op">:</span> [</span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    { <span class="dt">name</span><span class="op">:</span> <span class="st">&quot;week_id&quot;</span><span class="op">,</span> <span class="dt">type</span><span class="op">:</span> <span class="st">&quot;string&quot;</span><span class="op">,</span> <span class="dt">required</span><span class="op">:</span> <span class="kw">true</span> }<span class="op">,</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>  ]<span class="op">,</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">outputs</span><span class="op">:</span> []<span class="op">,</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">interactions</span><span class="op">:</span> []<span class="op">,</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">implementations</span><span class="op">:</span> [</span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>    { <span class="dt">platform</span><span class="op">:</span> <span class="st">&quot;react&quot;</span><span class="op">,</span> <span class="dt">component</span><span class="op">:</span> <span class="st">&quot;WeeklySummaryPanel&quot;</span> }<span class="op">,</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>  ]<span class="op">,</span></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>The host validates the element against the live
+<code>ui_registry.json</code> schema and writes it with provenance
+<code>plugin:&lt;plugin-id&gt;</code>. The metadata is consumable by the
+explorer and by external dashboards reading
+<code>ui_registry.json</code>.</p>
+<p><strong>Out of scope for v1:</strong> an executable iframe panel
+runtime. M6 ships the metadata seam only; the iframe contract is
+post-1.0.</p>
+<h2 id="82-policies--ctxpoliciespropose">8.2 Policies —
+<code>ctx.policies.propose</code></h2>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">policies</span><span class="op">.</span><span class="fu">propose</span>({</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">id</span><span class="op">:</span> <span class="st">&quot;weekly-changelog-allowed-during-execution&quot;</span><span class="op">,</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">title</span><span class="op">:</span> <span class="st">&quot;Weekly changelog generation is allowed during the execution phase&quot;</span><span class="op">,</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">rationale</span><span class="op">:</span> <span class="st">&quot;The summary tool is a read-only synthesis with no side-effects.&quot;</span><span class="op">,</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">applies_to</span><span class="op">:</span> [<span class="st">&quot;plugin&quot;</span>]<span class="op">,</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">phases</span><span class="op">:</span> [{ <span class="dt">phase</span><span class="op">:</span> <span class="st">&quot;execution&quot;</span><span class="op">,</span> <span class="dt">permission</span><span class="op">:</span> <span class="st">&quot;allowed&quot;</span> }]<span class="op">,</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">severity</span><span class="op">:</span> <span class="st">&quot;info&quot;</span><span class="op">,</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>Plugins <strong>propose</strong> discipline rules; they cannot
+<strong>weaken</strong> existing rules. A proposal that contradicts a
+stricter built-in rule is rejected with
+<code>policy_weakening_rejected</code>. Accepted proposals land in
+<code>plugin_policy_proposals.json</code> tagged
+<code>source: "plugin:&lt;id&gt;"</code>. The merge into the live
+<code>discipline://manifest</code> happens on a separate,
+operator-reviewed path.</p>
+<h2 id="83-archetypes--ctxarchetypesregisterprovider">8.3 Archetypes —
+<code>ctx.archetypes.registerProvider</code></h2>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">archetypes</span><span class="op">.</span><span class="fu">registerProvider</span>({</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">id</span><span class="op">:</span> <span class="st">&quot;starter-pack&quot;</span><span class="op">,</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">name</span><span class="op">:</span> <span class="st">&quot;Starter Archetype Pack&quot;</span><span class="op">,</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">inline</span><span class="op">:</span> {</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">source</span><span class="op">:</span> <span class="st">&quot;acme.changelog&quot;</span><span class="op">,</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">version</span><span class="op">:</span> <span class="st">&quot;1&quot;</span><span class="op">,</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">archetypes</span><span class="op">:</span> [</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>      { <span class="dt">id</span><span class="op">:</span> <span class="st">&quot;the-weekly-recap&quot;</span><span class="op">,</span> <span class="dt">name</span><span class="op">:</span> <span class="st">&quot;The Weekly Recap&quot;</span><span class="op">,</span> <span class="dt">summary</span><span class="op">:</span> <span class="st">&quot;...&quot;</span><span class="op">,</span> <span class="dt">tags</span><span class="op">:</span> [<span class="st">&quot;example&quot;</span>] }<span class="op">,</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    ]<span class="op">,</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>Two provider modes:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Field</th>
+<th>When polled</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inline</code></td>
+<td><code>inline</code></td>
+<td>Immediately at registration; static feed.</td>
+</tr>
+<tr>
+<td><code>remote</code></td>
+<td><code>url</code>, <code>etag</code></td>
+<td>(Reserved) polled by the federation poller.</td>
+</tr>
+</tbody>
+</table>
+<p>For v1, prefer <code>inline</code>. Live polling is exercised
+separately by federation tests and is not yet part of the plugin
+contract.</p>
+<h2 id="84-markdown-fences--ctxmarkdownfencesregister">8.4 Markdown
+fences — <code>ctx.markdownFences.register</code></h2>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">markdownFences</span><span class="op">.</span><span class="fu">register</span>({</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">language</span><span class="op">:</span> <span class="st">&quot;acme-changelog&quot;</span><span class="op">,</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">label</span><span class="op">:</span> <span class="st">&quot;Acme Changelog&quot;</span><span class="op">,</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">description</span><span class="op">:</span> <span class="st">&quot;Renders a structured changelog block.&quot;</span><span class="op">,</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">platforms</span><span class="op">:</span> [<span class="st">&quot;webview&quot;</span>]<span class="op">,</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>This is a <strong>manifest-only stub</strong> in the host: it tells
+the webview SDK that a fence language exists and describes its rendering
+surface, but the actual renderer lives in a webview-side package
+(<code>window.registerCardFencePlugin</code>). The closure here gives
+operators visibility — they can see which plugins claim which fence
+languages — and reserves the language so two plugins cannot collide
+(<code>markdown_fence_language_collision</code>).</p>
+<p>\newpage</p>
+<h1 id="9-trust-and-security-model">9. Trust and security model</h1>
+<p>DreamGraph v1 ships the <strong>trusted in-process plugin
+model</strong>. This section is required reading before you publish or
+install a plugin.</p>
+<h2 id="91-the-execution-boundary">9.1 The execution boundary</h2>
+<p>Plugins run <strong>inside the daemon's Node process</strong>. They
+share its heap, its file descriptors, and its operating-system
+permissions. The host:</p>
+<ul>
+<li>Enforces the manifest schema and capability gates at the API
+boundary;</li>
+<li>Mediates every host-owned effect (tool registration, resource
+registration, UI/policy/archetype/fence writes, event emission);</li>
+<li>Refuses to load anything not under
+<code>&lt;instance&gt;/plugins/</code> or
+<code>instance.json:plugins[]</code>;</li>
+<li>Refuses to load anything unless
+<code>DG_ALLOW_INPROCESS_PLUGINS=true</code> AND the plugin is
+explicitly <code>trusted: true</code>.</li>
+</ul>
+<p>The host <strong>cannot</strong> prevent malicious plugin code from
+reaching <code>process</code>, <code>fs</code>,
+<code>child_process</code>, or any other Node global. Reaching around
+<code>ctx</code> is a trust violation and grounds for quarantine, not a
+sandbox escape.</p>
+<blockquote>
+<p><strong>Mental model:</strong> installing a DreamGraph plugin is
+closer to editing your <code>~/.bashrc</code> than to installing a
+browser extension. Only install plugins from sources you trust as much
+as you trust the daemon itself.</p>
+</blockquote>
+<h2 id="92-the-two-safety-switches">9.2 The two safety switches</h2>
+<table>
+<thead>
+<tr>
+<th>Switch</th>
+<th>Where</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DG_ALLOW_INPROCESS_PLUGINS</code></td>
+<td>engine.env / process env</td>
+<td><code>false</code></td>
+<td>Operator-wide kill switch. While off, no plugin loads.</td>
+</tr>
+<tr>
+<td><code>instance.json:plugins[].trusted</code></td>
+<td>per-plugin entry in <code>instance.json</code></td>
+<td><code>false</code></td>
+<td>Per-plugin opt-in. Set with
+<code>dg plugin trust &lt;id&gt;</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Loading occurs <strong>only</strong> when both are true. The host
+emits <code>in_process_execution_disabled</code> and refuses the plugin
+otherwise.</p>
+<h2 id="93-the-trust-banner">9.3 The trust banner</h2>
+<p>Every successful in-process load prints exactly one line to the
+daemon log:</p>
+<pre><code>plugin &lt;id&gt;@&lt;ver&gt; loaded with FULL HOST TRUST (in-process)</code></pre>
+<p>If you do not see this line for your plugin, it did not load. Check
+the log for the matching <code>plugin.errored</code> or
+capability-rejection event.</p>
+<h2 id="94-the-event-loop-watchdog">9.4 The event-loop watchdog</h2>
+<p>A <code>setImmediate</code> heartbeat samples Node event-loop lag. If
+the lag exceeds <code>DG_EVENT_LOOP_LAG_MS</code> (default 250 ms) while
+a plugin handler is on the call stack, the host:</p>
+<ol type="1">
+<li>Marks the handler <code>event_loop_stall</code>;</li>
+<li>Waits for the event loop to become responsive;</li>
+<li>Quarantines the plugin and emits
+<code>plugin.errored{ reason: "event_loop_stall" }</code> with the
+measured lag.</li>
+</ol>
+<p>This is detection, not preemption — the watchdog cannot interrupt
+synchronous CPU-bound code. It exists to make stalls visible
+<em>after</em> they happen so operators can disable the offending
+plugin.</p>
+<h2 id="95-what-quarantine-means">9.5 What "quarantine" means</h2>
+<p>A quarantined plugin:</p>
+<ul>
+<li>Has all its registrations pruned (tools, resources, UI, policies,
+archetypes, fences).</li>
+<li>Stops receiving subscribed events.</li>
+<li>Remains visible in <code>system://plugins</code> with
+<code>status: "quarantined"</code> and the reason code.</li>
+<li>Cannot be reloaded until the operator runs
+<code>dg plugin enable &lt;id&gt;</code> (which re-trusts and
+re-attempts activation).</li>
+</ul>
+<h2 id="96-coming-in-m8">9.6 Coming in M8</h2>
+<p>Worker-thread isolation is planned for M8. Plugins declaring
+<code>runtime: "worker"</code> will be loaded into a
+<code>worker_threads.Worker</code>; the <code>PluginContext</code> is
+marshalled across <code>MessagePort</code>. Worker threads improve fault
+and event-loop isolation but are not, by themselves, a complete sandbox
+for untrusted marketplace code. The trusted in-process model is the only
+published contract until M8 ships.</p>
+<p>\newpage</p>
+<h1 id="10-installation-and-lifecycle">10. Installation and
+lifecycle</h1>
+<h2 id="101-discovery-roots">10.1 Discovery roots</h2>
+<p>The host scans exactly two roots:</p>
+<ol type="1">
+<li><code>&lt;instance&gt;/plugins/*/plugin.json</code> —
+folder-style.</li>
+<li><code>&lt;instance&gt;/instance.json:plugins[]</code> — explicit
+<code>[{ path, trusted }]</code> entries.</li>
+</ol>
+<p>Anything elsewhere on disk is ignored. There is no
+<code>node_modules</code> auto-scan.</p>
+<h2 id="102-the-five-lifecycle-states">10.2 The five lifecycle
+states</h2>
+<pre><code>        discover
+        ───────►   discovered
+                       │
+                trust + switch
+                       ▼
+                    loading
+                       │
+                  activate(ctx)
+            ┌──────────┴──────────┐
+            ▼                     ▼
+          loaded              quarantined
+            │                     ▲
+       disable / shutdown      error
+            ▼                     │
+         unloading               (any handler reject /
+            │                     manifest invalid /
+            ▼                     watchdog stall /
+        unloaded                  effect undeclared)</code></pre>
+<p><code>system://plugins</code> exposes the current state for every
+plugin, plus the last seen effects, last error reason, and last
+activation timestamp.</p>
+<h2 id="103-the-cli">10.3 The CLI</h2>
+<pre class="pwsh"><code>dg plugin list &lt;instance&gt;                    # all discovered plugins + state
+dg plugin inspect &lt;instance&gt; &lt;plugin-id&gt;     # full manifest + last telemetry
+dg plugin trust &lt;instance&gt; &lt;plugin-id&gt;       # set instance.json:plugins[].trusted=true
+dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;      # untrust → trust + re-activate
+dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;     # prune contributions, keep entry</code></pre>
+<p>After any change to the plugin's code (or to the SDK or host
+packages), restart the daemon:
+<code>dg restart &lt;instance&gt;</code>.</p>
+<h2 id="104-hot-reload">10.4 Hot reload</h2>
+<p>There is no automatic file-watcher. Each plugin is loaded once per
+daemon process. To pick up code changes:</p>
+<ol type="1">
+<li>Edit the plugin source.</li>
+<li>(If you bundled it) re-build.</li>
+<li><code>dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;</code>
+then <code>dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;</code>.
+The host calls your <code>deactivate()</code> then re-imports the entry
+module and calls <code>activate(ctx)</code> again.</li>
+</ol>
+<p>ESM module caching means the host bypasses the cache by appending a
+unique query-string to the import URL on re-enable. You do not have to
+do anything.</p>
+<h2 id="105-shipping-inside-a-workspace">10.5 Shipping inside a
+workspace</h2>
+<p>If your plugin lives in the same npm workspace as the daemon (rare),
+declare it in the host's install pipeline so <a
+href="../../../scripts/install.ps1">scripts/install.ps1</a> packs it
+into <code>bin/vendor/</code>. Otherwise, ship the plugin folder with
+<code>plugin.json</code> and the compiled entry module — that is the
+entire deliverable.</p>
+<h2 id="106-versioning-and-compatibility">10.6 Versioning and
+compatibility</h2>
+<ul>
+<li>Bump <code>version</code> on every change that affects the manifest,
+the seam shape, or the public behavior of your tools/resources.</li>
+<li>Keep <code>engine.dreamgraph</code> narrow but accurate. The host
+emits a clear <code>engine_version_mismatch</code> rather than a runtime
+crash if the range excludes the current engine.</li>
+<li>The SDK follows semver. Stable event payload shapes never change in
+a backwards-incompatible way within a major. Experimental kinds
+may.</li>
+</ul>
+<p>\newpage</p>
+<h1 id="11-telemetry-debugging-and-testing">11. Telemetry, debugging,
+and testing</h1>
+<h2 id="111-the-plugin-telemetry-kinds">11.1 The plugin telemetry
+kinds</h2>
+<p>Every plugin emits a uniform telemetry stream. Operators (and your
+tests) can subscribe to these on the bus to understand exactly what the
+host is doing on your behalf.</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Emitted when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>plugin.loaded</code></td>
+<td>Manifest accepted, all seams wired.</td>
+</tr>
+<tr>
+<td><code>plugin.unloaded</code></td>
+<td>Graceful disable / shutdown.</td>
+</tr>
+<tr>
+<td><code>plugin.errored</code></td>
+<td>Manifest rejection, capability violation, throw, watchdog
+stall.</td>
+</tr>
+<tr>
+<td><code>plugin.handler.started</code></td>
+<td>A handler/tool/action is about to run (correlation id).</td>
+</tr>
+<tr>
+<td><code>plugin.handler.completed</code></td>
+<td>Handler returned successfully (<code>duration_ms</code>).</td>
+</tr>
+<tr>
+<td><code>plugin.output.accepted</code></td>
+<td>Host wrote/forwarded/dispatched the plugin's output.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected</code></td>
+<td>Host refused (carries <code>reason</code>, see <a
+href="../plugin-reference/04-reject-reasons.md">reject
+reasons</a>).</td>
+</tr>
+</tbody>
+</table>
+<p>Every telemetry event carries <code>plugin_id</code>,
+<code>plugin_version</code>, and the seam involved.
+<code>plugin.output.rejected</code> additionally carries the
+<code>reason</code> code from the central enum and a human-readable
+<code>message</code>.</p>
+<h2 id="112-reading-telemetry-while-developing">11.2 Reading telemetry
+while developing</h2>
+<p>Three options:</p>
+<ul>
+<li><strong>Daemon log</strong> — every <code>plugin.errored</code> and
+<code>plugin.output.rejected</code> is printed.</li>
+<li><strong>SSE</strong> —
+<code>curl -N http://127.0.0.1:8010/explorer/api/events</code> streams
+the whole bus.</li>
+<li><strong><code>event_log.json</code></strong> — under the instance
+data dir, the persistent record.</li>
+</ul>
+<p>For tests, <a
+href="../../../tests/plugins/hello-events-e2e.test.ts">tests/plugins/hello-events-e2e.test.ts</a>
+shows how to assert the exact telemetry sequence in a temp instance.</p>
+<h2 id="113-testing">11.3 Testing</h2>
+<p>The SDK ships a phased test harness:</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Surface</th>
+<th>Use for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Manifest validation fixtures (schema-only)</td>
+<td>unit tests; no runtime, no bus.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Seam mocks: fake <code>PluginContext</code>, stub bus, in-memory
+<code>system://plugins</code></td>
+<td>unit-test a tool handler or subscriber.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Full in-memory daemon harness (post-MVP, opens with M7)</td>
+<td>E2E with real persistence and bus.</td>
+</tr>
+</tbody>
+</table>
+<p>For Phase-1/2 in your own repo:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { parsePluginManifest } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> manifest <span class="im">from</span> <span class="st">&quot;../plugin.json&quot;</span> assert { type<span class="op">:</span> <span class="st">&quot;json&quot;</span> }<span class="op">;</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="fu">it</span>(<span class="st">&quot;manifest parses&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">expect</span>(() <span class="kw">=&gt;</span> <span class="fu">parsePluginManifest</span>(manifest))<span class="op">.</span><span class="at">not</span><span class="op">.</span><span class="fu">toThrow</span>()<span class="op">;</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>For an end-to-end check, copy your plugin folder into a temp instance
+and assert against <code>ui_registry.json</code> /
+<code>plugin_policy_proposals.json</code> / <code>event_log.json</code>.
+The hello-events e2e test is a working template.</p>
+<h2 id="114-common-debugging-recipes">11.4 Common debugging recipes</h2>
+<ul>
+<li><strong>Tool not appearing in <code>tools/list</code>?</strong> The
+plugin probably did not load. Check the daemon log for the trust banner.
+If it's missing, check <code>DG_ALLOW_INPROCESS_PLUGINS</code> and
+<code>dg plugin list</code> (the entry must show
+<code>trusted: true</code>).</li>
+<li><strong>Tool args arrive as <code>undefined</code>?</strong> Earlier
+engine versions had a bug where the MCP tool was registered with an
+empty Zod shape (the JSON Schema wasn't converted). Fixed in v8.3.0; if
+you see this, upgrade.</li>
+<li><strong>Handler throws <code>EventEmitter</code> warning?</strong>
+You probably called <code>ctx.events.subscribe</code> inside a handler
+instead of inside <code>activate(ctx)</code>. All subscriptions should
+happen in <code>activate</code>.</li>
+<li><strong><code>plugin.output.rejected{ reason: "effect_undeclared" }</code>?</strong>
+You emitted a side-effect (event, registration) whose effect is not in
+the manifest's <code>expectedEffects</code>. Add the effect or remove
+the call.</li>
+</ul>
+<p>\newpage</p>
+<h1 id="12-best-practices-and-pitfalls">12. Best practices and
+pitfalls</h1>
+<h2 id="121-do">12.1 Do</h2>
+<ul>
+<li><strong>Name everything for the model, not the human.</strong>
+ADR-128 — tool names must carry the dominant action and target. A model
+should not need your description to pick the right tool.</li>
+<li><strong>Declare every effect.</strong> <code>expectedEffects</code>
+is read by operators and by the discipline engine; missing entries are a
+bug, not a convenience.</li>
+<li><strong>Use <code>forbiddenEffects</code> actively.</strong>
+<code>write_internal_graph</code> and <code>modify_tensions</code>
+should be in <em>every</em> plugin's <code>forbiddenEffects</code>
+unless the plugin's entire reason for existing is graph mutation
+(rare).</li>
+<li><strong>Keep handlers fast.</strong> Default timeout is 5 s.
+Anything slower is either awaiting I/O (use <code>ctx.signal</code>) or
+doing CPU work that belongs in a future schedule action.</li>
+<li><strong>Log through <code>ctx.logger</code>.</strong> Operators see
+those lines. <code>console.log</code> lines do not propagate to the
+bus.</li>
+<li><strong>Treat the bus as at-most-once.</strong> Reconstruct critical
+state from a resource read, not from your subscriber buffer.</li>
+<li><strong>Pin <code>engine.dreamgraph</code> accurately.</strong>
+<code>&gt;=9.0.0</code> is the right floor for v1.</li>
+<li><strong>Ship a README in your plugin folder.</strong>
+<code>dg plugin inspect</code> shows it.</li>
+</ul>
+<h2 id="122-dont">12.2 Don't</h2>
+<ul>
+<li><strong>Don't import from <code>dreamgraph/src/...</code>.</strong>
+The only stable import is <code>@dreamgraph/sdk</code>. Daemon internals
+change without notice.</li>
+<li><strong>Don't reach for <code>fs</code>, <code>process</code>, or
+<code>child_process</code>.</strong> Even though the M3 model can't
+physically stop you, doing so is a trust violation and the operator may
+quarantine your plugin.</li>
+<li><strong>Don't rely on a shared global between handlers.</strong> The
+host may call <code>deactivate</code> and re-<code>activate</code>
+between requests; rebuild state inside <code>activate(ctx)</code> so a
+re-enable is clean.</li>
+<li><strong>Don't poll on a <code>setInterval</code>.</strong> Use the
+schedule action seam once M4 ships. Until then, recurring work belongs
+in the host.</li>
+<li><strong>Don't depend on plugin load order.</strong> Plugins are
+independent. If your plugin needs another plugin's data, read its MCP
+resource explicitly.</li>
+<li><strong>Don't ship secrets in <code>plugin.json</code> or in the
+entry module.</strong> The manifest is world-readable. Use the
+per-plugin config block (<code>config.schema</code>) and document where
+the operator should put credentials (typically
+<code>&lt;instance&gt;/config/&lt;plugin-id&gt;.json</code>).</li>
+</ul>
+<h2 id="123-pitfalls-compendium">12.3 Pitfalls (compendium)</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Plugin shows in <code>dg plugin list</code> but no banner</td>
+<td><code>DG_ALLOW_INPROCESS_PLUGINS</code> is false.</td>
+</tr>
+<tr>
+<td>Banner appears, no contributions visible</td>
+<td>Capability missing in <code>capabilities</code> array.</td>
+</tr>
+<tr>
+<td>Tool args arrive empty</td>
+<td>Bug in engine &lt; 8.3.0; upgrade. Or tool registered with no
+<code>inputSchema</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected{ effect_undeclared }</code></td>
+<td>You emit an event/register a tool whose effect is not in
+<code>expectedEffects</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected{ tool_name_unprefixed }</code></td>
+<td>Tool name doesn't start with <code>&lt;plugin-id&gt;.</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected{ resource_uri_out_of_namespace }</code></td>
+<td>Resource URI doesn't start with
+<code>plugin://&lt;plugin-id&gt;/</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.errored{ event_loop_stall }</code></td>
+<td>Handler did synchronous CPU work &gt;
+<code>DG_EVENT_LOOP_LAG_MS</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.errored{ handler_timeout }</code></td>
+<td>Handler didn't return inside the timeout; honor
+<code>ctx.signal</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.errored{ engine_version_mismatch }</code></td>
+<td><code>engine.dreamgraph</code> semver excludes this engine.</td>
+</tr>
+<tr>
+<td>Webhook never fires for your custom event</td>
+<td>The webhook subscription's <code>events[]</code> doesn't list your
+kind.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="124-the-shipping-checklist">12.4 The shipping checklist</h2>
+<p>Before publishing a plugin:</p>
+<ul class="task-list">
+<li><p><label><input type="checkbox" />Manifest validates against
+<code>parsePluginManifest</code>.</label></p></li>
+<li><p><label><input type="checkbox" />Every tool/resource/UI/policy id
+is <code>&lt;plugin-id&gt;.*</code>.</label></p></li>
+<li><p><label><input type="checkbox" />Every effect the plugin performs
+is in <code>expectedEffects</code>.</label></p></li>
+<li><p><label><input type="checkbox" /><code>forbiddenEffects</code>
+contains everything the plugin guarantees not to do.</label></p></li>
+<li><p><label><input type="checkbox" />README explains: install steps,
+required config, what each tool returns.</label></p></li>
+<li><p><label><input type="checkbox" />Manifest tested with at least one
+manifest fixture test.</label></p></li>
+<li><p><label><input type="checkbox" />Hello-world tool round-trips an
+argument over MCP.</label></p></li>
+<li><p><label><input type="checkbox" />On
+<code>dg plugin disable</code>, all contributions are gone (manual
+<code>Get-Content</code> on the four data files confirms
+this).</label></p></li>
+<li><p><label><input type="checkbox" />Trust banner appears on load;
+<code>system://plugins</code> shows
+<code>status: "loaded"</code>.</label></p></li>
+</ul>
+<p>\newpage</p>
+<h1 id="part-ii-----plugin-reference-manual">Part II --- Plugin
+Reference Manual</h1>
+<p>\newpage</p>
+<h1 id="dreamgraph-plugin-reference-manual">DreamGraph Plugin Reference
+Manual</h1>
+<p><strong>Audience:</strong> Plugin authors and host implementors
+needing strict, normative tables. <strong>Engine baseline:</strong>
+v9.0.0 "Lattice". <strong>Companion:</strong> see the <a
+href="../plugin-developer-guide/00-index.md">Plugin Developer Guide</a>
+for task-oriented walkthroughs.</p>
+<p>This reference is the source of truth. Where the guide and the
+reference disagree, the reference wins. Where the reference and the SDK
+source disagree, the SDK source wins (and a doc bug should be
+filed).</p>
+<h2 id="sections">Sections</h2>
+<ol type="1">
+<li><a href="01-manifest-schema.md">Manifest schema</a> — every field,
+every constraint.</li>
+<li><a href="02-capabilities.md">Capabilities</a> — the locked
+vocabulary.</li>
+<li><a href="03-effects.md">Effects</a> — observable cognitive
+effects.</li>
+<li><a href="04-reject-reasons.md">Reject reasons</a> — every
+<code>plugin.output.rejected.reason</code>.</li>
+<li><a href="05-context-api.md">PluginContext API</a> — TypeScript
+surface.</li>
+<li><a href="06-events.md">Events</a> — stable kinds, experimental
+kinds, payload schemas.</li>
+<li><a href="07-cli.md">CLI</a> — <code>dg plugin</code>
+subcommands.</li>
+<li><a href="08-host-config.md">Host configuration</a> — env vars and
+<code>instance.json</code>.</li>
+<li><a href="09-telemetry-events.md">Telemetry events</a> — the
+<code>plugin.*</code> stream.</li>
+</ol>
+<h2 id="conventions">Conventions</h2>
+<ul>
+<li><strong>MUST / MUST NOT / SHOULD</strong> are used in the RFC 2119
+sense.</li>
+<li>Tables are exhaustive unless explicitly marked
+"non-exhaustive".</li>
+<li>Source-code references link to the canonical file at the repo
+root.</li>
+</ul>
+<p>\newpage</p>
+<h1 id="manifest-schema-normative">Manifest schema (normative)</h1>
+<h2 id="top-level-shape">Top-level shape</h2>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginManifest {</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>                  <span class="dt">string</span><span class="op">;</span>                      <span class="co">// PluginIdSchema</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>                      <span class="co">// ≥ 1 char</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  displayName<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span>                      <span class="co">// ≥ 1 char</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  description<span class="op">?:</span>        <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  author<span class="op">?:</span>             <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  license<span class="op">?:</span>            <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  engine<span class="op">:</span>              { dreamgraph<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span>      <span class="co">// semver range</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>  main<span class="op">:</span>                <span class="dt">string</span><span class="op">;</span>                      <span class="co">// path to ESM entry</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>  intent<span class="op">:</span>              <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>     PluginEffect[]<span class="op">;</span>              <span class="co">// ≥ 1</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">:</span>    PluginEffect[]<span class="op">;</span>              <span class="co">// default []</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>  capabilities<span class="op">:</span>        PluginCapability[]<span class="op">;</span>          <span class="co">// ≥ 1</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  tools<span class="op">:</span>               { name<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>          <span class="co">// default []</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>  resources<span class="op">:</span>           { uriNamespace<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>  <span class="co">// default []</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>  ui<span class="op">:</span>                  { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>  policies<span class="op">:</span>            { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>  archetypeProviders<span class="op">:</span>  { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>  markdownFences<span class="op">:</span>      { language<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>      <span class="co">// default []</span></span>
+<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span>              PluginPolicy<span class="op">;</span>                <span class="co">// default { phasePermissions: [], writableFiles: [] }</span></span>
+<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a>  config<span class="op">?:</span>             { schema<span class="op">?:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb27-22"><a href="#cb27-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The schema is <strong>strict</strong>: unknown top-level fields are
+rejected with <code>manifest_invalid</code>.</p>
+<h2 id="field-level-constraints">Field-level constraints</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Constraint</th>
+<th>Reject reason on violation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td><code>^[a-z0-9][a-z0-9.-]*[a-z0-9]$</code>, ≥ 3 chars</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>non-empty string (semver recommended)</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>engine.dreamgraph</code></td>
+<td>semver range; host engine version MUST satisfy it</td>
+<td><code>engine_version_mismatch</code></td>
+</tr>
+<tr>
+<td><code>main</code></td>
+<td>non-empty path; resolved relative to plugin folder</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>intent</code></td>
+<td>≥ 1 char</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>expectedEffects</code></td>
+<td>≥ 1 entry, each in <code>PluginEffect</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>forbiddenEffects</code></td>
+<td>each in <code>PluginEffect</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>expectedEffects ∩ forbiddenEffects</code></td>
+<td>MUST be empty</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td>≥ 1 entry, each in <code>PluginCapability</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>tools[].name</code></td>
+<td><code>&lt;plugin-id&gt;.&lt;tool&gt;</code> —
+<code>^[a-z0-9][a-z0-9.-]*\.[a-z0-9][a-z0-9_-]*$</code></td>
+<td><code>tool_name_unprefixed</code></td>
+</tr>
+<tr>
+<td><code>resources[].uriNamespace</code></td>
+<td><code>^plugin:\/\/&lt;plugin-id&gt;(?:\/.*)?$</code></td>
+<td><code>resource_uri_out_of_namespace</code></td>
+</tr>
+<tr>
+<td><code>ui[].id</code></td>
+<td>lowercase <code>[a-z0-9._-]+</code></td>
+<td><code>ui_id_unprefixed</code> (at register time)</td>
+</tr>
+<tr>
+<td><code>policies[].id</code></td>
+<td>lowercase <code>[a-z0-9._-]+</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>archetypeProviders[].id</code></td>
+<td>lowercase <code>[a-z0-9._-]+</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>markdownFences[].language</code></td>
+<td>lowercase <code>[a-z0-9._-]+</code></td>
+<td><code>markdown_fence_language_invalid</code></td>
+</tr>
+<tr>
+<td><code>policy.phasePermissions</code></td>
+<td>each ∈ `analysis</td>
+<td>execution</td>
+</tr>
+<tr>
+<td><code>policy.writableFiles</code></td>
+<td>array of strings</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-entry-point">Validation entry point</h2>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { parsePluginManifest<span class="op">,</span> PluginManifestSchema } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> manifest <span class="op">=</span> <span class="fu">parsePluginManifest</span>(<span class="bu">JSON</span><span class="op">.</span><span class="fu">parse</span>(plugin_json_text))<span class="op">;</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a><span class="co">// throws ZodError with reason &quot;manifest_invalid&quot; on failure</span></span></code></pre></div>
+<h2 id="example">Example</h2>
+<p>See <a
+href="../../../examples/hello-events/plugin.json">examples/hello-events/plugin.json</a>
+for a manifest exercising every M6 seam.</p>
+<p>\newpage</p>
+<h1 id="capabilities-normative">Capabilities (normative)</h1>
+<p>A capability is a coarse permission a plugin MUST declare to use a
+seam. The host validates the manifest against this enum at load time,
+then re-checks at each seam call site.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Allows (positive)</th>
+<th>Denies (with reason)</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>events:read</code></td>
+<td><code>ctx.events.subscribe(stable_kind, fn)</code></td>
+<td>subscribing to experimental kind →
+<code>event_kind_experimental</code>; kind not in declared subscription
+list → <code>event_kind_not_declared</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>events:read:experimental</code></td>
+<td><code>defineExperimentalEventHandler(...)</code></td>
+<td>unless <code>instance.json:experimental_plugins: true</code> →
+<code>experimental_events_disabled</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>events:emit</code></td>
+<td><code>ctx.events.emit(kind, payload)</code></td>
+<td><code>emit_event</code> not in <code>expectedEffects</code> →
+<code>effect_undeclared</code>; missing capability →
+<code>emit_capability_missing</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>tools:register</code></td>
+<td><code>ctx.tools.register({ name: "&lt;plugin-id&gt;.&lt;x&gt;", ... })</code></td>
+<td>name without <code>&lt;plugin-id&gt;.</code> prefix →
+<code>tool_name_unprefixed</code>; collision with built-in or other
+plugin → <code>tool_name_collision</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>resources:register</code></td>
+<td><code>ctx.resources.register({ uriNamespace: "plugin://&lt;id&gt;/...", ... })</code></td>
+<td>URI not in namespace →
+<code>resource_uri_out_of_namespace</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>resources:read</code></td>
+<td>(reserved) read another plugin's resource</td>
+<td>always denied today</td>
+<td>reserved</td>
+</tr>
+<tr>
+<td><code>ui:register</code></td>
+<td><code>ctx.ui.register({ id: "&lt;plugin-id&gt;.&lt;x&gt;", ... })</code></td>
+<td>id not prefixed → <code>ui_id_unprefixed</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>policy:propose</code></td>
+<td><code>ctx.policies.propose({ id, ... })</code> (tagged
+<code>source: plugin:&lt;id&gt;</code>)</td>
+<td>proposal admits <code>weakens: true</code> or weakens an existing
+rule → <code>policy_weakening_rejected</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>archetypes:provide</code></td>
+<td>`ctx.archetypes.registerProvider({ id, inline</td>
+<td>url</td>
+<td>fetch })`</td>
+</tr>
+<tr>
+<td><code>markdown:register_fence</code></td>
+<td><code>ctx.markdownFences.register({ language, ... })</code></td>
+<td>language regex fails → <code>markdown_fence_language_invalid</code>;
+collision → <code>markdown_fence_language_collision</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>schedule:register_action</code></td>
+<td>(reserved, M4) <code>defineScheduleAction(...)</code></td>
+<td>always denied today</td>
+<td>reserved</td>
+</tr>
+<tr>
+<td><code>webhooks:emit</code></td>
+<td>(reserved, post-MVP) <code>ctx.webhooks.dispatch(...)</code></td>
+<td>always denied today (use core webhook subscriptions instead)</td>
+<td>reserved</td>
+</tr>
+<tr>
+<td><code>providers:register</code></td>
+<td>(reserved, post-1.0) provider adapter seam</td>
+<td>always denied today</td>
+<td>reserved</td>
+</tr>
+</tbody>
+</table>
+<p>A capability not present in <code>manifest.capabilities</code> MUST
+cause the matching seam call to be refused with
+<code>&lt;seam&gt;_capability_missing</code>. The host MUST NOT silently
+drop the call.</p>
+<p>\newpage</p>
+<h1 id="effects-normative">Effects (normative)</h1>
+<p>An <strong>effect</strong> describes an observable cognitive impact a
+plugin claims it will have (<code>expectedEffects</code>) or guarantees
+it will not have (<code>forbiddenEffects</code>). The host enforces both
+at every host-mediated effect call:</p>
+<ul>
+<li>An effect not in <code>expectedEffects</code> →
+<code>plugin.output.rejected{ effect_undeclared }</code>.</li>
+<li>An effect in <code>forbiddenEffects</code> →
+<code>plugin.output.rejected{ effect_forbidden }</code>, even if the
+matching capability would otherwise allow it.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Effect</th>
+<th>Meaning</th>
+<th>Required capability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_events</code></td>
+<td>Subscribe to the bus (any kind).</td>
+<td><code>events:read</code> (or <code>:experimental</code>)</td>
+</tr>
+<tr>
+<td><code>read_internal_graph</code></td>
+<td>Read internal-tier files (graph, validated edges, tensions).</td>
+<td>(host-mediated, no plugin write API)</td>
+</tr>
+<tr>
+<td><code>read_external_state</code></td>
+<td>Read external-tier files (features, archetypes, ADRs, UI
+registry).</td>
+<td>(host-mediated)</td>
+</tr>
+<tr>
+<td><code>write_internal_graph</code></td>
+<td>Mutate the graph (promote candidates, edit edges).</td>
+<td><strong>always forbidden</strong></td>
+</tr>
+<tr>
+<td><code>modify_tensions</code></td>
+<td>Create or resolve tensions.</td>
+<td><strong>always forbidden</strong></td>
+</tr>
+<tr>
+<td><code>emit_resource</code></td>
+<td>Register or update an MCP resource.</td>
+<td><code>resources:register</code></td>
+</tr>
+<tr>
+<td><code>emit_tool</code></td>
+<td>Register an MCP tool.</td>
+<td><code>tools:register</code></td>
+</tr>
+<tr>
+<td><code>emit_event</code></td>
+<td>Publish events onto the bus.</td>
+<td><code>events:emit</code></td>
+</tr>
+<tr>
+<td><code>emit_webhook</code></td>
+<td>(reserved) outbound HTTP via webhook worker.</td>
+<td><code>webhooks:emit</code></td>
+</tr>
+<tr>
+<td><code>register_schedule_action</code></td>
+<td>(reserved) custom schedule action.</td>
+<td><code>schedule:register_action</code></td>
+</tr>
+<tr>
+<td><code>invoke_llm</code></td>
+<td>Call the host LLM proxy.</td>
+<td>(post-M4)</td>
+</tr>
+<tr>
+<td><code>mutate_ui_registry</code></td>
+<td>Register/update UI elements.</td>
+<td><code>ui:register</code></td>
+</tr>
+<tr>
+<td><code>propose_policy</code></td>
+<td>Append discipline rules.</td>
+<td><code>policy:propose</code></td>
+</tr>
+<tr>
+<td><code>provide_archetypes</code></td>
+<td>Feed federation archetypes.</td>
+<td><code>archetypes:provide</code></td>
+</tr>
+<tr>
+<td><code>render_markdown_fence</code></td>
+<td>Declare a webview markdown fence.</td>
+<td><code>markdown:register_fence</code></td>
+</tr>
+<tr>
+<td><code>register_provider_adapter</code></td>
+<td>(reserved, post-1.0) provider adapter.</td>
+<td><code>providers:register</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="always-forbidden-effects">Always-forbidden effects</h2>
+<p><code>write_internal_graph</code> and <code>modify_tensions</code>
+are not exposed by <code>ctx</code> at all. A plugin that lists them in
+<code>expectedEffects</code> will fail manifest validation because the
+matching capability does not exist. They are listed here for
+completeness so plugin authors know to put them in
+<code>forbiddenEffects</code> as defensive intent.</p>
+<h2 id="effect-to-seam-matrix">Effect-to-seam matrix</h2>
+<table>
+<thead>
+<tr>
+<th>Seam call</th>
+<th>Effect required in <code>expectedEffects</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.tools.register</code></td>
+<td><code>emit_tool</code></td>
+</tr>
+<tr>
+<td><code>ctx.resources.register</code></td>
+<td><code>emit_resource</code></td>
+</tr>
+<tr>
+<td><code>ctx.events.subscribe</code></td>
+<td><code>read_events</code></td>
+</tr>
+<tr>
+<td><code>ctx.events.emit</code></td>
+<td><code>emit_event</code></td>
+</tr>
+<tr>
+<td><code>ctx.ui.register</code></td>
+<td><code>mutate_ui_registry</code></td>
+</tr>
+<tr>
+<td><code>ctx.policies.propose</code></td>
+<td><code>propose_policy</code></td>
+</tr>
+<tr>
+<td><code>ctx.archetypes.registerProvider</code></td>
+<td><code>provide_archetypes</code></td>
+</tr>
+<tr>
+<td><code>ctx.markdownFences.register</code></td>
+<td><code>render_markdown_fence</code></td>
+</tr>
+</tbody>
+</table>
+<p>\newpage</p>
+<h1 id="reject-reasons-normative">Reject reasons (normative)</h1>
+<p>Every <code>plugin.output.rejected</code> event carries one of the
+following <code>reason</code> codes. The set is closed and exported as
+<code>PluginRejectReason</code> from the SDK.</p>
+<h2 id="per-seam">Per seam</h2>
+<h3 id="tools"><code>tools</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tool_name_unprefixed</code></td>
+<td>Tool name does not start with <code>&lt;plugin-id&gt;.</code>.</td>
+</tr>
+<tr>
+<td><code>tool_name_collision</code></td>
+<td>Tool name collides with a built-in or another plugin.</td>
+</tr>
+<tr>
+<td><code>tool_capability_missing</code></td>
+<td><code>tools:register</code> not in
+<code>manifest.capabilities</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="resources"><code>resources</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>resource_uri_out_of_namespace</code></td>
+<td>URI does not start with
+<code>plugin://&lt;plugin-id&gt;/</code>.</td>
+</tr>
+<tr>
+<td><code>resource_capability_missing</code></td>
+<td><code>resources:register</code> not declared.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="events"><code>events</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>event_kind_not_declared</code></td>
+<td>Subscriber kind not listed in the manifest's declared subscription
+set.</td>
+</tr>
+<tr>
+<td><code>event_kind_experimental</code></td>
+<td>Subscriber kind is experimental and the plugin lacks
+<code>events:read:experimental</code>.</td>
+</tr>
+<tr>
+<td><code>experimental_events_disabled</code></td>
+<td>Instance has not opted into
+<code>experimental_plugins: true</code>.</td>
+</tr>
+<tr>
+<td><code>event_capability_missing</code></td>
+<td><code>events:read</code> (or <code>:experimental</code>) not
+declared.</td>
+</tr>
+<tr>
+<td><code>effect_undeclared</code></td>
+<td>Plugin emitted an event whose effect is not in
+<code>expectedEffects</code>.</td>
+</tr>
+<tr>
+<td><code>effect_forbidden</code></td>
+<td>Plugin emitted an event whose effect is in
+<code>forbiddenEffects</code>.</td>
+</tr>
+<tr>
+<td><code>emit_capability_missing</code></td>
+<td><code>events:emit</code> not declared.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ui"><code>ui</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ui_id_unprefixed</code></td>
+<td>Element id does not start with <code>&lt;plugin-id&gt;.</code>.</td>
+</tr>
+<tr>
+<td><code>ui_capability_missing</code></td>
+<td><code>ui:register</code> not declared.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="policy"><code>policy</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>policy_weakening_rejected</code></td>
+<td>Proposal weakens an existing rule (<code>weakens: true</code> or
+detected).</td>
+</tr>
+<tr>
+<td><code>policy_capability_missing</code></td>
+<td><code>policy:propose</code> not declared.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="archetypes"><code>archetypes</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>archetype_schema_invalid</code></td>
+<td>Archetype payload fails schema validation.</td>
+</tr>
+<tr>
+<td><code>archetype_capability_missing</code></td>
+<td><code>archetypes:provide</code> not declared.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="markdown_fences"><code>markdown_fences</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>markdown_fence_capability_missing</code></td>
+<td><code>markdown:register_fence</code> not declared.</td>
+</tr>
+<tr>
+<td><code>markdown_fence_language_collision</code></td>
+<td>Another plugin already owns the fence language.</td>
+</tr>
+<tr>
+<td><code>markdown_fence_language_invalid</code></td>
+<td>Language regex fails.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="schedule-reserved"><code>schedule</code> (reserved)</h3>
+<p><code>action_id_collision</code>, <code>action_schema_missing</code>,
+<code>schedule_capability_missing</code>.</p>
+<h3 id="webhooks-reserved"><code>webhooks</code> (reserved)</h3>
+<p><code>webhook_unsigned</code>, <code>webhook_target_blocked</code>,
+<code>webhook_capability_missing</code>.</p>
+<h3 id="llm-post-m4"><code>llm</code> (post-M4)</h3>
+<p><code>llm_budget_exceeded</code>, <code>llm_disabled</code>,
+<code>llm_capability_missing</code>.</p>
+<h3 id="providers-reserved"><code>providers</code> (reserved)</h3>
+<p><code>provider_capability_missing</code>.</p>
+<h2 id="host-execution-boundary">Host execution boundary</h2>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>in_process_execution_disabled</code></td>
+<td><code>DG_ALLOW_INPROCESS_PLUGINS</code> is false <strong>or</strong>
+plugin not <code>trusted</code>.</td>
+</tr>
+<tr>
+<td><code>plugin_quarantined</code></td>
+<td>Plugin previously errored and is held until manual re-enable.</td>
+</tr>
+<tr>
+<td><code>event_loop_stall</code></td>
+<td>Watchdog detected a stall (lag &gt;
+<code>DG_EVENT_LOOP_LAG_MS</code>).</td>
+</tr>
+<tr>
+<td><code>handler_timeout</code></td>
+<td>Handler did not return within the per-handler timeout.</td>
+</tr>
+<tr>
+<td><code>handler_threw</code></td>
+<td>Handler threw or returned a rejected promise.</td>
+</tr>
+<tr>
+<td><code>manifest_invalid</code></td>
+<td>Manifest failed <code>PluginManifestSchema</code> validation.</td>
+</tr>
+<tr>
+<td><code>engine_version_mismatch</code></td>
+<td>Current engine version is outside
+<code>manifest.engine.dreamgraph</code> range.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="helpers">Helpers</h2>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { rejectSeamOf<span class="op">,</span> isPluginRejectReason } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="fu">rejectSeamOf</span>(<span class="st">&quot;tool_name_unprefixed&quot;</span>)<span class="op">;</span>      <span class="co">// &quot;tools&quot;</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="fu">isPluginRejectReason</span>(<span class="st">&quot;nope&quot;</span>)<span class="op">;</span>              <span class="co">// false</span></span></code></pre></div>
+<p>\newpage</p>
+<h1 id="plugincontext-api-normative">PluginContext API (normative)</h1>
+<h2 id="top-level">Top-level</h2>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginContext {</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> plugin<span class="op">:</span>         { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> version<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> instance<span class="op">:</span>       { uuid<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> logger<span class="op">:</span>         PluginLogger<span class="op">;</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> events<span class="op">:</span>         PluginEventEmitSurface<span class="op">;</span></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> tools<span class="op">:</span>          PluginToolsSurface<span class="op">;</span></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> resources<span class="op">:</span>      PluginResourcesSurface<span class="op">;</span></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> ui<span class="op">:</span>             PluginUiSurface<span class="op">;</span></span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> policies<span class="op">:</span>       PluginPoliciesSurface<span class="op">;</span></span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> archetypes<span class="op">:</span>     PluginArchetypesSurface<span class="op">;</span></span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> markdownFences<span class="op">:</span> PluginMarkdownFencesSurface<span class="op">;</span></span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span>         AbortSignal<span class="op">;</span></span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="surfaces">Surfaces</h2>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginLogger {</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">debug</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">info</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">warn</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">error</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginEventEnvelope {</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> kind<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> payload<span class="op">:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> PluginEventHandler <span class="op">=</span> (e<span class="op">:</span> PluginEventEnvelope) <span class="kw">=&gt;</span> <span class="dt">void</span> <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginEventEmitSurface {</span>
+<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">emit</span>(kind<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> payload<span class="op">:</span> <span class="dt">unknown</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">subscribe</span>(kind<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> handler<span class="op">:</span> PluginEventHandler)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb31-18"><a href="#cb31-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-19"><a href="#cb31-19" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginToolsSurface          { <span class="fu">register</span>(d<span class="op">:</span> ToolDefinition)<span class="op">:</span>              () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb31-20"><a href="#cb31-20" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginResourcesSurface      { <span class="fu">register</span>(d<span class="op">:</span> ResourceDefinition)<span class="op">:</span>          () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb31-21"><a href="#cb31-21" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginUiSurface             { <span class="fu">register</span>(d<span class="op">:</span> UiElementDefinition)<span class="op">:</span>         () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb31-22"><a href="#cb31-22" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginPoliciesSurface       { <span class="fu">propose</span> (p<span class="op">:</span> PolicyProposal)<span class="op">:</span>              () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb31-23"><a href="#cb31-23" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginArchetypesSurface     { <span class="fu">registerProvider</span>(d<span class="op">:</span> ArchetypeProviderDefinition)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb31-24"><a href="#cb31-24" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginMarkdownFencesSurface { <span class="fu">register</span>(d<span class="op">:</span> MarkdownFenceDefinition)<span class="op">:</span>     () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span></code></pre></div>
+<h2 id="seam-definition-shapes">Seam definition shapes</h2>
+<h3 id="tooldefinition"><code>ToolDefinition</code></h3>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ToolDefinition<span class="op">&lt;</span>Input <span class="op">=</span> <span class="dt">unknown</span><span class="op">,</span> Output <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>          <span class="co">// &lt;plugin-id&gt;.&lt;tool&gt;</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>  inputSchema<span class="op">:</span>      JsonSchema<span class="op">;</span>      <span class="co">// converted to Zod by host</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>  PluginEffect[]<span class="op">;</span>  <span class="co">// must include &quot;emit_tool&quot;</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>  handler<span class="op">:</span> (input<span class="op">:</span> Input<span class="op">,</span> ctx<span class="op">:</span> { pluginId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> signal<span class="op">?:</span> AbortSignal })</span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">=&gt;</span> Output <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span>Output<span class="op">&gt;;</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="resourcedefinition"><code>ResourceDefinition</code></h3>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ResourceDefinition<span class="op">&lt;</span>Params <span class="op">=</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;,</span> Output <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>  uriNamespace<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span>          <span class="co">// plugin://&lt;plugin-id&gt;/...</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>  description<span class="op">?:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>  outputSchema<span class="op">?:</span>    JsonSchema<span class="op">;</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>  PluginEffect[]<span class="op">;</span>  <span class="co">// must include &quot;emit_resource&quot;</span></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>  handler<span class="op">:</span> (req<span class="op">:</span> { uri<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> params<span class="op">?:</span> Params }<span class="op">,</span></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>            ctx<span class="op">:</span> { pluginId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> signal<span class="op">?:</span> AbortSignal })</span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">=&gt;</span> Output <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span>Output<span class="op">&gt;;</span></span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="uielementdefinition"><code>UiElementDefinition</code></h3>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> UiElementCategory <span class="op">=</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;data_display&quot;</span> <span class="op">|</span> <span class="st">&quot;data_input&quot;</span> <span class="op">|</span> <span class="st">&quot;navigation&quot;</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;feedback&quot;</span>     <span class="op">|</span> <span class="st">&quot;layout&quot;</span>     <span class="op">|</span> <span class="st">&quot;action&quot;</span> <span class="op">|</span> <span class="st">&quot;composite&quot;</span><span class="op">;</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> UiElementDefinition {</span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span>              <span class="co">// starts with &lt;plugin-id&gt;.</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>  purpose<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a>  category<span class="op">:</span>     UiElementCategory<span class="op">;</span></span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>  inputs<span class="op">:</span>       UiElementInput[]<span class="op">;</span></span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a>  outputs<span class="op">:</span>      UiElementOutput[]<span class="op">;</span></span>
+<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a>  interactions<span class="op">:</span> UiElementInteraction[]<span class="op">;</span></span>
+<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a>  children<span class="op">?:</span>    <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>  implementations<span class="op">?:</span> UiElementImplementation[]<span class="op">;</span></span>
+<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>  used_by<span class="op">?:</span>     <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb34-16"><a href="#cb34-16" aria-hidden="true" tabindex="-1"></a>  tags<span class="op">?:</span>        <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb34-17"><a href="#cb34-17" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span>  <span class="co">// typically [&quot;mutate_ui_registry&quot;]</span></span>
+<span id="cb34-18"><a href="#cb34-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="policyproposal"><code>PolicyProposal</code></h3>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PolicyProposal {</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>  rationale<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>  applies_to<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>  phases<span class="op">:</span>     PhasePermission[]<span class="op">;</span></span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>  severity<span class="op">:</span>   <span class="st">&quot;block&quot;</span> <span class="op">|</span> <span class="st">&quot;warn&quot;</span> <span class="op">|</span> <span class="st">&quot;info&quot;</span><span class="op">;</span></span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>  weakens<span class="op">?:</span>   <span class="kw">false</span><span class="op">;</span>     <span class="co">// MUST be false; reserved</span></span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3
+id="archetypeproviderdefinition"><code>ArchetypeProviderDefinition</code></h3>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeRecord {</span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>  summary<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>  tags<span class="op">?:</span>    <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>  payload<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypePayload {</span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>  source<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>  archetypes<span class="op">:</span> ArchetypeRecord[]<span class="op">;</span></span>
+<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeProviderDefinition {</span>
+<span id="cb36-16"><a href="#cb36-16" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-17"><a href="#cb36-17" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-18"><a href="#cb36-18" aria-hidden="true" tabindex="-1"></a>  url<span class="op">?:</span>     <span class="dt">string</span><span class="op">;</span>            <span class="co">// reserved for remote polling</span></span>
+<span id="cb36-19"><a href="#cb36-19" aria-hidden="true" tabindex="-1"></a>  poll_interval_s<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb36-20"><a href="#cb36-20" aria-hidden="true" tabindex="-1"></a>  inline<span class="op">?:</span>  ArchetypePayload<span class="op">;</span></span>
+<span id="cb36-21"><a href="#cb36-21" aria-hidden="true" tabindex="-1"></a>  fetch<span class="op">?:</span>   () <span class="kw">=&gt;</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchetypePayload<span class="op">&gt;;</span></span>
+<span id="cb36-22"><a href="#cb36-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3
+id="markdownfencedefinition"><code>MarkdownFenceDefinition</code></h3>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> MarkdownFenceDefinition {</span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>  language<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span>         <span class="co">// /^[a-z0-9][a-z0-9._-]*$/</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>  label<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>  platforms<span class="op">?:</span>  <span class="bu">Array</span><span class="op">&lt;</span><span class="st">&quot;webview&quot;</span> <span class="op">|</span> <span class="st">&quot;cli&quot;</span> <span class="op">|</span> <span class="st">&quot;web&quot;</span><span class="op">&gt;;</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="identity-helpers">Identity helpers</h2>
+<p>The SDK ships these zero-cost factories purely for IDE inference:</p>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> {</span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  defineTool<span class="op">,</span> defineResource<span class="op">,</span> defineUiElement<span class="op">,</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>  definePolicyProposal<span class="op">,</span> defineArchetypeProvider<span class="op">,</span> defineMarkdownFence<span class="op">,</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  definePlugin<span class="op">,</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>} <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span></code></pre></div>
+<p>Each <code>define*</code> simply returns its argument with the
+matching type.</p>
+<p>\newpage</p>
+<h1 id="events-normative">Events (normative)</h1>
+<h2 id="envelope">Envelope</h2>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> EventEnvelope {</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>  seq<span class="op">:</span>          <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>  kind<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>  affected_ids<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>  etag<span class="op">:</span>         <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>  ts<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span>            <span class="co">// ISO-8601</span></span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a>  payload<span class="op">?:</span>     <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="stable-kinds">Stable kinds</h2>
+<p>Imported from <code>@dreamgraph/sdk</code>:</p>
+<ul>
+<li><code>snapshot.changed</code></li>
+<li><code>cache.invalidated</code></li>
+</ul>
+<p>Stable kinds MUST remain backwards-compatible within a major SDK
+version. Subscriptions require <code>events:read</code>.</p>
+<h2 id="experimental-kinds">Experimental kinds</h2>
+<p>Imported from <code>@dreamgraph/sdk/events/experimental</code>.
+Subscription requires <code>events:read:experimental</code> AND
+<code>instance.json:experimental_plugins: true</code>.</p>
+<ul>
+<li><code>dream.cycle.completed</code></li>
+<li><code>tension.created</code></li>
+<li><code>tension.resolved</code></li>
+<li><code>candidate.added</code></li>
+<li><code>candidate.promoted</code></li>
+<li><code>candidate.rejected</code></li>
+<li><code>audit.appended</code></li>
+<li><code>schedule.executed</code></li>
+<li><code>schedule.timed_out</code></li>
+<li><code>schedule.paused</code></li>
+<li><code>nightmare.cycle.completed</code></li>
+<li><code>archetype.imported</code></li>
+<li><code>archetype.exported</code></li>
+<li><code>narrative.chapter.appended</code></li>
+</ul>
+<h2 id="selected-payload-schemas">Selected payload schemas</h2>
+<h3 id="scheduleexecuted"><code>schedule.executed</code></h3>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SchedulePayload {</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>  execution_id<span class="op">:</span>   <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>  success<span class="op">:</span>        <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>  status<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>  error<span class="op">:</span>          <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
+<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="scheduletimed_out"><code>schedule.timed_out</code></h3>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ScheduleTimeoutPayload {</span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>  error<span class="op">:</span>          <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="schedulepaused"><code>schedule.paused</code></h3>
+<div class="sourceCode" id="cb42"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SchedulePausedPayload {</span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span>         <span class="st">&quot;error_streak&quot;</span><span class="op">;</span></span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a>  error_count<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3
+id="nightmarecyclecompleted"><code>nightmare.cycle.completed</code></h3>
+<div class="sourceCode" id="cb43"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> NightmarePayload {</span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>  cycle_number<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a>  strategy<span class="op">:</span>        <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a>  threats_found<span class="op">:</span>   <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a>  attack_surfaces<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a>  summary<span class="op">:</span>         { critical<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> high<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> medium<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> low<span class="op">:</span> <span class="dt">number</span> }<span class="op">;</span></span>
+<span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>     <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb43-8"><a href="#cb43-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="archetypeexported"><code>archetype.exported</code></h3>
+<div class="sourceCode" id="cb44"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeExportedPayload {</span>
+<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>  archetypes_exported<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>  file_path<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a>  instance_id<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="archetypeimported"><code>archetype.imported</code></h3>
+<div class="sourceCode" id="cb45"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeImportedPayload {</span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  archetypes_imported<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>  archetypes_skipped<span class="op">:</span>  <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>  tensions_created<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a>  source_instance<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb45-7"><a href="#cb45-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3
+id="narrativechapterappended"><code>narrative.chapter.appended</code></h3>
+<div class="sourceCode" id="cb46"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> NarrativeChapterPayload {</span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a>  chapter_number<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span>          <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a>  cycle_range<span class="op">:</span>    [<span class="dt">number</span><span class="op">,</span> <span class="dt">number</span>]<span class="op">;</span></span>
+<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a>  generated_at<span class="op">:</span>   <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="plugin-defined-kinds">Plugin-defined kinds</h2>
+<p>Plugins MAY emit any kind not in the host taxonomy. The SDK does not
+enforce naming, but the convention
+<code>&lt;plugin-id&gt;.&lt;event_name&gt;</code> matches the pattern
+used for tools, resources, and UI ids.</p>
+<h2 id="replay">Replay</h2>
+<p>The SSE stream (<code>/explorer/api/events</code>) keeps a 500-event
+ring buffer. The persistent record is
+<code>&lt;instance&gt;/data/event_log.json</code> with rotation. The
+plugin contract is <strong>at-most-once</strong>: do not rely on
+receiving every event.</p>
+<p>\newpage</p>
+<h1 id="dg-plugin-cli-normative"><code>dg plugin</code> CLI
+(normative)</h1>
+<p>All commands take the instance name (or UUID) as the first positional
+argument.</p>
+<h2
+id="dg-plugin-list-instance"><code>dg plugin list &lt;instance&gt;</code></h2>
+<p>Lists every discovered plugin with its current state.</p>
+<pre class="pwsh"><code>dg plugin list dreamgraph</code></pre>
+<p>Output columns: <code>id</code>, <code>version</code>,
+<code>state</code>, <code>runtime</code>, <code>trusted</code>,
+<code>last_loaded_at</code>.</p>
+<h2
+id="dg-plugin-inspect-instance-plugin-id"><code>dg plugin inspect &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Prints the full validated manifest, last seen effects, last
+activation timestamp, last error reason (if any), and the path to the
+plugin folder.</p>
+<h2
+id="dg-plugin-trust-instance-plugin-id"><code>dg plugin trust &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Sets <code>trusted: true</code> on the plugin's entry in
+<code>instance.json:plugins[]</code>. Does not load or restart the
+daemon. Run <code>dg restart &lt;instance&gt;</code> to apply.</p>
+<h2
+id="dg-plugin-enable-instance-plugin-id"><code>dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Marks the plugin trusted (if not already) and triggers an in-place
+activate-cycle: calls <code>deactivate()</code> if the plugin is
+currently loaded, then re-imports the entry module (cache-busted) and
+calls <code>activate(ctx)</code>.</p>
+<h2
+id="dg-plugin-disable-instance-plugin-id"><code>dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Calls <code>deactivate()</code>, prunes every contribution registered
+through <code>ctx</code> (tools, resources, UI, policy proposals,
+archetype providers, markdown fences), and unsubscribes every event
+handler. The plugin entry remains in <code>instance.json</code> so a
+future <code>enable</code> reuses the same identity.</p>
+<h2 id="notes">Notes</h2>
+<ul>
+<li>The <code>dg plugin</code> family does not invoke MCP tools or read
+MCP resources. Use any MCP client (VS Code extension, Claude Desktop,
+<code>mcp inspector</code>) for that.</li>
+<li><code>dg plugin trust</code> is idempotent. Repeated runs
+<strong>must not</strong> create duplicate entries in
+<code>instance.json:plugins[]</code> (a known issue in earlier engine
+versions; v8.3.0 deduplicates on write).</li>
+<li>All commands exit non-zero on error; standard <code>--json</code>
+flag is reserved for a future release.</li>
+</ul>
+<p>\newpage</p>
+<h1 id="host-configuration-normative">Host configuration
+(normative)</h1>
+<h2 id="environment-variables">Environment variables</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DG_ALLOW_INPROCESS_PLUGINS</code></td>
+<td><code>false</code></td>
+<td>Master kill switch for in-process plugin execution. While
+<code>false</code>, no plugin loads even if
+<code>trusted: true</code>.</td>
+</tr>
+<tr>
+<td><code>DG_EVENT_LOOP_LAG_MS</code></td>
+<td><code>250</code></td>
+<td>Watchdog threshold (milliseconds). Stalls above this while a plugin
+handler is on the call stack are reported as
+<code>event_loop_stall</code>.</td>
+</tr>
+<tr>
+<td><code>DG_PLUGIN_HANDLER_TIMEOUT_MS</code></td>
+<td><code>5000</code></td>
+<td>Per-handler wall-clock budget. Exceeded handlers emit
+<code>handler_timeout</code> and quarantine the plugin.</td>
+</tr>
+<tr>
+<td><code>DG_PLUGIN_LLM_BUDGET_PCT</code></td>
+<td><code>10</code></td>
+<td>(post-M4) Percentage of host LLM budget reserved for plugins as a
+slice.</td>
+</tr>
+<tr>
+<td><code>WEBHOOK_FAST_BACKOFF</code></td>
+<td>unset</td>
+<td>When set, replaces the spec backoff schedule with
+<code>1s/2s/4s/8s/16s</code> for live testing.</td>
+</tr>
+</tbody>
+</table>
+<p>The Plugin System block in all three engine.env templates
+(<code>default</code>, <code>ollama</code>, <code>lmstudio</code>) lists
+<code>DG_ALLOW_INPROCESS_PLUGINS</code> with the safety wording:</p>
+<pre class="dotenv"><code># --- Plugin System ---
+# DG_ALLOW_INPROCESS_PLUGINS=true   # Enable in-process plugins (potentially unsafe, use with trusted code only)</code></pre>
+<h2 id="instancejson"><code>instance.json</code></h2>
+<pre class="jsonc"><code>{
+  &quot;uuid&quot;: &quot;...&quot;,
+  &quot;experimental_plugins&quot;: false,
+  &quot;plugins&quot;: [
+    { &quot;path&quot;: &quot;plugins/examples.hello-events&quot;, &quot;trusted&quot;: true },
+    { &quot;path&quot;: &quot;plugins/acme.changelog&quot;,        &quot;trusted&quot;: false }
+  ]
+}</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>experimental_plugins</code></td>
+<td>boolean (default <code>false</code>)</td>
+<td>Required for any plugin holding
+<code>events:read:experimental</code>.</td>
+</tr>
+<tr>
+<td><code>plugins[].path</code></td>
+<td>string</td>
+<td>Absolute or instance-relative path to the plugin folder.</td>
+</tr>
+<tr>
+<td><code>plugins[].trusted</code></td>
+<td>boolean (default <code>false</code>)</td>
+<td>Per-plugin trust opt-in. Combined AND with
+<code>DG_ALLOW_INPROCESS_PLUGINS</code>.</td>
+</tr>
+<tr>
+<td><code>plugins[].llm_budget</code></td>
+<td>number (post-M4)</td>
+<td>Override the per-plugin LLM sub-quota.</td>
+</tr>
+</tbody>
+</table>
+<p>The host MUST de-duplicate <code>plugins[]</code> entries by
+<code>path</code> on write to prevent the duplicate-entry pathology that
+affected pre-8.3.0 engines after multiple <code>dg plugin trust</code>
+invocations.</p>
+<h2 id="discovery-roots-recap">Discovery roots (recap)</h2>
+<p>The host scans exactly two locations:</p>
+<ol type="1">
+<li><code>&lt;instance&gt;/plugins/*/plugin.json</code> (folder-style
+auto-discovery).</li>
+<li><code>instance.json:plugins[].path</code> (explicit
+registration).</li>
+</ol>
+<p>There is no <code>node_modules</code> scan. There is no
+auto-discovery from outside the instance directory.</p>
+<p>\newpage</p>
+<h1 id="telemetry-events-normative">Telemetry events (normative)</h1>
+<p>The host emits a uniform <code>plugin.*</code> stream on the
+cognitive event bus. Every event carries a common base envelope plus
+per-kind extras.</p>
+<h2 id="common-base">Common base</h2>
+<div class="sourceCode" id="cb50"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginTelemetryBase {</span>
+<span id="cb50-2"><a href="#cb50-2" aria-hidden="true" tabindex="-1"></a>  plugin_id<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb50-3"><a href="#cb50-3" aria-hidden="true" tabindex="-1"></a>  plugin_version<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb50-4"><a href="#cb50-4" aria-hidden="true" tabindex="-1"></a>  ts<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>            <span class="co">// ISO-8601</span></span>
+<span id="cb50-5"><a href="#cb50-5" aria-hidden="true" tabindex="-1"></a>  correlation_id<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span>           <span class="co">// matches handler.started/completed</span></span>
+<span id="cb50-6"><a href="#cb50-6" aria-hidden="true" tabindex="-1"></a>  seam<span class="op">?:</span>          <span class="st">&quot;tools&quot;</span> <span class="op">|</span> <span class="st">&quot;resources&quot;</span> <span class="op">|</span> <span class="st">&quot;events&quot;</span> <span class="op">|</span> <span class="st">&quot;ui&quot;</span></span>
+<span id="cb50-7"><a href="#cb50-7" aria-hidden="true" tabindex="-1"></a>                 <span class="op">|</span> <span class="st">&quot;policy&quot;</span> <span class="op">|</span> <span class="st">&quot;archetypes&quot;</span> <span class="op">|</span> <span class="st">&quot;markdown_fences&quot;</span> <span class="op">|</span> <span class="st">&quot;host&quot;</span><span class="op">;</span></span>
+<span id="cb50-8"><a href="#cb50-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="per-kind">Per kind</h2>
+<h3 id="pluginloaded"><code>plugin.loaded</code></h3>
+<p>Emitted after manifest acceptance and successful
+<code>activate(ctx)</code>.</p>
+<div class="sourceCode" id="cb51"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginLoadedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
+<span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a>  runtime<span class="op">:</span>           <span class="st">&quot;in-process&quot;</span><span class="op">;</span>   <span class="co">// &quot;worker&quot; reserved for M8</span></span>
+<span id="cb51-3"><a href="#cb51-3" aria-hidden="true" tabindex="-1"></a>  declared_effects<span class="op">:</span>  PluginEffect[]<span class="op">;</span></span>
+<span id="cb51-4"><a href="#cb51-4" aria-hidden="true" tabindex="-1"></a>  declared_capabilities<span class="op">:</span> PluginCapability[]<span class="op">;</span></span>
+<span id="cb51-5"><a href="#cb51-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="pluginunloaded"><code>plugin.unloaded</code></h3>
+<p>Emitted on graceful disable / shutdown.</p>
+<div class="sourceCode" id="cb52"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginUnloadedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
+<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span> <span class="st">&quot;disable&quot;</span> <span class="op">|</span> <span class="st">&quot;shutdown&quot;</span> <span class="op">|</span> <span class="st">&quot;reload&quot;</span><span class="op">;</span></span>
+<span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="pluginerrored"><code>plugin.errored</code></h3>
+<p>Emitted on manifest rejection, unhandled throw, watchdog stall, or
+any quarantine path.</p>
+<div class="sourceCode" id="cb53"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginErroredPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
+<span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span>  PluginRejectReason<span class="op">;</span>       <span class="co">// see reference §4</span></span>
+<span id="cb53-3"><a href="#cb53-3" aria-hidden="true" tabindex="-1"></a>  message<span class="op">:</span> <span class="dt">string</span><span class="op">;</span>                   <span class="co">// human-readable</span></span>
+<span id="cb53-4"><a href="#cb53-4" aria-hidden="true" tabindex="-1"></a>  stack<span class="op">?:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb53-5"><a href="#cb53-5" aria-hidden="true" tabindex="-1"></a>  measured_lag_ms<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span>          <span class="co">// present iff reason === &quot;event_loop_stall&quot;</span></span>
+<span id="cb53-6"><a href="#cb53-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="pluginhandlerstarted"><code>plugin.handler.started</code></h3>
+<p>Emitted just before a tool handler / resource handler / event
+subscriber runs.</p>
+<div class="sourceCode" id="cb54"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginHandlerStartedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
+<span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a>  correlation_id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb54-3"><a href="#cb54-3" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_handler&quot;</span><span class="op">;</span></span>
+<span id="cb54-4"><a href="#cb54-4" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span>            <span class="co">// tool name / uri / event kind</span></span>
+<span id="cb54-5"><a href="#cb54-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3
+id="pluginhandlercompleted"><code>plugin.handler.completed</code></h3>
+<p>Emitted on handler success.</p>
+<div class="sourceCode" id="cb55"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginHandlerCompletedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
+<span id="cb55-2"><a href="#cb55-2" aria-hidden="true" tabindex="-1"></a>  correlation_id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb55-3"><a href="#cb55-3" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_handler&quot;</span><span class="op">;</span></span>
+<span id="cb55-4"><a href="#cb55-4" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb55-5"><a href="#cb55-5" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb55-6"><a href="#cb55-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="pluginoutputaccepted"><code>plugin.output.accepted</code></h3>
+<p>Emitted when the host successfully forwarded / wrote / dispatched the
+plugin's output.</p>
+<div class="sourceCode" id="cb56"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginOutputAcceptedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
+<span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_emit&quot;</span></span>
+<span id="cb56-3"><a href="#cb56-3" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;ui_register&quot;</span> <span class="op">|</span> <span class="st">&quot;policy_propose&quot;</span></span>
+<span id="cb56-4"><a href="#cb56-4" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;archetype_register&quot;</span> <span class="op">|</span> <span class="st">&quot;markdown_fence_register&quot;</span><span class="op">;</span></span>
+<span id="cb56-5"><a href="#cb56-5" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb56-6"><a href="#cb56-6" aria-hidden="true" tabindex="-1"></a>  effect<span class="op">:</span>         PluginEffect<span class="op">;</span></span>
+<span id="cb56-7"><a href="#cb56-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="pluginoutputrejected"><code>plugin.output.rejected</code></h3>
+<p>Emitted when the host refused output (capability missing, effect
+undeclared, forbidden, schema invalid, namespace violation, quota
+exceeded, etc.).</p>
+<div class="sourceCode" id="cb57"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb57-1"><a href="#cb57-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginOutputRejectedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
+<span id="cb57-2"><a href="#cb57-2" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_emit&quot;</span></span>
+<span id="cb57-3"><a href="#cb57-3" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;ui_register&quot;</span> <span class="op">|</span> <span class="st">&quot;policy_propose&quot;</span></span>
+<span id="cb57-4"><a href="#cb57-4" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;archetype_register&quot;</span> <span class="op">|</span> <span class="st">&quot;markdown_fence_register&quot;</span><span class="op">;</span></span>
+<span id="cb57-5"><a href="#cb57-5" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb57-6"><a href="#cb57-6" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span>         PluginRejectReason<span class="op">;</span></span>
+<span id="cb57-7"><a href="#cb57-7" aria-hidden="true" tabindex="-1"></a>  message<span class="op">:</span>        <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb57-8"><a href="#cb57-8" aria-hidden="true" tabindex="-1"></a>  attempted_effect<span class="op">?:</span> PluginEffect<span class="op">;</span></span>
+<span id="cb57-9"><a href="#cb57-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="stability">Stability</h2>
+<p><code>plugin.loaded</code>, <code>plugin.unloaded</code>,
+<code>plugin.errored</code>, <code>plugin.handler.*</code>,
+<code>plugin.output.accepted</code>, and
+<code>plugin.output.rejected</code> are part of the
+<strong>stable</strong> event surface for v1. Their payload shapes will
+only grow additively within a major SDK version.</p>
+</body>
+</html>

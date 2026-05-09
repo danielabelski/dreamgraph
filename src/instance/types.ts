@@ -250,4 +250,5 @@ export const DATA_STUBS: Record<string, unknown> = {
   "workflows.json":         [],
   "data_model.json":        [],
   "index.json":             { entities: {} },
+  "plugin_policy_proposals.json": { proposals: [] },
 };

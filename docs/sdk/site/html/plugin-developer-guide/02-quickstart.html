@@ -1,0 +1,188 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>02-quickstart</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#2-quickstart--hello-events-in-five-minutes"
+id="toc-2-quickstart--hello-events-in-five-minutes">2. Quickstart —
+Hello Events in five minutes</a>
+<ul>
+<li><a href="#21-prerequisites" id="toc-21-prerequisites">2.1
+Prerequisites</a></li>
+<li><a href="#22-allow-in-process-plugins-host-switch"
+id="toc-22-allow-in-process-plugins-host-switch">2.2 Allow in-process
+plugins (host switch)</a></li>
+<li><a href="#23-copy-the-example-into-the-instance"
+id="toc-23-copy-the-example-into-the-instance">2.3 Copy the example into
+the instance</a></li>
+<li><a href="#24-trust-the-plugin" id="toc-24-trust-the-plugin">2.4
+Trust the plugin</a></li>
+<li><a href="#25-inspect-what-loaded"
+id="toc-25-inspect-what-loaded">2.5 Inspect what loaded</a></li>
+<li><a href="#26-call-the-contributed-mcp-tool"
+id="toc-26-call-the-contributed-mcp-tool">2.6 Call the contributed MCP
+tool</a></li>
+<li><a href="#27-verify-the-closure-seam-side-effects"
+id="toc-27-verify-the-closure-seam-side-effects">2.7 Verify the
+closure-seam side-effects</a></li>
+<li><a href="#28-what-you-just-exercised"
+id="toc-28-what-you-just-exercised">2.8 What you just exercised</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="2-quickstart--hello-events-in-five-minutes">2. Quickstart —
+Hello Events in five minutes</h1>
+<p><a href="01-introduction.html">← Introduction</a> · <a
+href="03-anatomy.html">Next: Anatomy →</a></p>
+<p>This walkthrough installs the bundled
+<code>examples.hello-events</code> reference plugin into a running
+DreamGraph instance and exercises every seam. It is the fastest way to
+confirm your environment is correctly configured.</p>
+<h2 id="21-prerequisites">2.1 Prerequisites</h2>
+<ul>
+<li>DreamGraph v9.0.0 or later, installed
+(<code>dg --version</code>).</li>
+<li>A live instance UUID (<code>dg list</code>).</li>
+<li>An MCP-capable client to call the contributed tool (the VS Code
+extension, Claude Desktop, <code>mcp inspector</code>, or a script using
+<code>@modelcontextprotocol/sdk</code>).</li>
+</ul>
+<h2 id="22-allow-in-process-plugins-host-switch">2.2 Allow in-process
+plugins (host switch)</h2>
+<p>In-process plugin execution is <strong>deny-by-default</strong>. Add
+the line to your instance's <code>engine.env</code> (or set the env var
+before launching the daemon):</p>
+<pre class="dotenv"><code>DG_ALLOW_INPROCESS_PLUGINS=true</code></pre>
+<p>The switch and its caveats are documented in all three engine.env
+templates (<a
+href="../../../templates/default/config/engine.env">default</a>, <a
+href="../../../templates/ollama/config/engine.env">ollama</a>, <a
+href="../../../templates/lmstudio/config/engine.env">lmstudio</a>).</p>
+<h2 id="23-copy-the-example-into-the-instance">2.3 Copy the example into
+the instance</h2>
+<pre class="pwsh"><code>$uuid = &quot;&lt;your-instance-uuid&gt;&quot;
+Copy-Item -Recurse examples/hello-events `
+  &quot;$env:USERPROFILE\.dreamgraph\instances\$uuid\plugins\examples.hello-events&quot;</code></pre>
+<p>DreamGraph discovers plugins from two roots only:</p>
+<ol type="1">
+<li><code>&lt;instance&gt;/plugins/*/plugin.json</code></li>
+<li><code>instance.json:plugins[]</code> (declared paths)</li>
+</ol>
+<p>There is no auto-discovery from arbitrary
+<code>node_modules</code>.</p>
+<h2 id="24-trust-the-plugin">2.4 Trust the plugin</h2>
+<pre class="pwsh"><code>dg plugin trust dreamgraph examples.hello-events
+dg restart dreamgraph</code></pre>
+<p><code>dg plugin trust</code> flips the <code>trusted: true</code>
+flag in <code>instance.json:plugins[]</code>. A plugin must be trusted
+<strong>and</strong> the host switch must be on for in-process loading
+to occur.</p>
+<p>On startup you will see a one-line trust banner per loaded
+plugin:</p>
+<pre><code>plugin examples.hello-events@0.2.0 loaded with FULL HOST TRUST (in-process)</code></pre>
+<h2 id="25-inspect-what-loaded">2.5 Inspect what loaded</h2>
+<pre class="pwsh"><code>dg plugin list dreamgraph
+dg plugin inspect dreamgraph examples.hello-events</code></pre>
+<p>The host exposes a live <code>system://plugins</code> MCP resource
+with the same data: status, intent, runtime, declared and last-seen
+effects.</p>
+<h2 id="26-call-the-contributed-mcp-tool">2.6 Call the contributed MCP
+tool</h2>
+<p>DreamGraph does not ship a CLI shortcut for invoking tools. Use any
+MCP client. The bundled probe script does it via the streamable HTTP
+transport:</p>
+<pre class="pwsh"><code>node scripts/probe-hello-events.mjs</code></pre>
+<p>Expected output:</p>
+<pre><code>tool examples.hello-events.greet  →  { &quot;greeting&quot;: &quot;Hello, world!&quot; }
+resource plugin://examples.hello-events/manifest  →  { id: &quot;...&quot;, version: &quot;0.2.0&quot;, seams: [...] }</code></pre>
+<h2 id="27-verify-the-closure-seam-side-effects">2.7 Verify the
+closure-seam side-effects</h2>
+<p>Each closure seam writes through a host-locked store and prunes on
+unload:</p>
+<pre class="pwsh"><code>$data = &quot;$env:USERPROFILE\.dreamgraph\instances\$uuid\data&quot;
+Get-Content &quot;$data\ui_registry.json&quot;               # contains examples.hello-events.greeting
+Get-Content &quot;$data\plugin_policy_proposals.json&quot;   # contains source: plugin:examples.hello-events</code></pre>
+<p>Disable the plugin and watch every contribution disappear:</p>
+<pre class="pwsh"><code>dg plugin disable dreamgraph examples.hello-events</code></pre>
+<p>The UI element, policy proposal, archetype provider, and markdown
+fence are all removed automatically.</p>
+<h2 id="28-what-you-just-exercised">2.8 What you just exercised</h2>
+<table>
+<thead>
+<tr>
+<th>Seam</th>
+<th>Where to look</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>events.subscribe</code></td>
+<td><code>dg plugin inspect</code> shows declared
+<code>events:read</code> + a subscriber on
+<code>snapshot.changed</code>.</td>
+</tr>
+<tr>
+<td><code>events.emit</code></td>
+<td>The <code>examples.hello-events.activated</code> event appears on
+the bus / SSE stream.</td>
+</tr>
+<tr>
+<td><code>tools.register</code></td>
+<td><code>tools/list</code> over MCP shows
+<code>examples.hello-events.greet</code>.</td>
+</tr>
+<tr>
+<td><code>resources.register</code></td>
+<td><code>resources/list</code> shows
+<code>plugin://examples.hello-events/manifest</code>.</td>
+</tr>
+<tr>
+<td><code>ui.register</code></td>
+<td><code>ui_registry.json</code> gains a tagged entry.</td>
+</tr>
+<tr>
+<td><code>policies.propose</code></td>
+<td><code>plugin_policy_proposals.json</code> gains a
+<code>source: plugin:examples.hello-events</code> entry.</td>
+</tr>
+<tr>
+<td><code>archetypes.registerProvider</code></td>
+<td><code>system://plugins</code> lists the inline provider.</td>
+</tr>
+<tr>
+<td><code>markdownFences.register</code></td>
+<td>The webview SDK can introspect language <code>dg-hello</code>.</td>
+</tr>
+</tbody>
+</table>
+<p><a href="01-introduction.html">← Introduction</a> · <a
+href="03-anatomy.html">Next: Anatomy →</a></p>
+</body>
+</html>

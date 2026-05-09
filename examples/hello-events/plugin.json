@@ -1,0 +1,49 @@
+{
+  "id": "examples.hello-events",
+  "version": "0.2.0",
+  "displayName": "Hello Events",
+  "description": "Reference plugin demonstrating every in-process M3-M6 seam: events (read+emit), tools, resources, ui, policy proposals, archetype providers, and markdown fences.",
+  "engine": {
+    "dreamgraph": ">=9.0.0"
+  },
+  "main": "./index.js",
+  "intent": "End-to-end smoke surface for the in-process plugin host. Used by tests and examples to verify discovery, telemetry, contributions, and unload pruning across all closure seams.",
+  "expectedEffects": [
+    "emit_event",
+    "emit_tool",
+    "emit_resource",
+    "mutate_ui_registry",
+    "propose_policy",
+    "provide_archetypes",
+    "render_markdown_fence"
+  ],
+  "forbiddenEffects": ["write_internal_graph"],
+  "capabilities": [
+    "events:read",
+    "events:emit",
+    "tools:register",
+    "resources:register",
+    "ui:register",
+    "policy:propose",
+    "archetypes:provide",
+    "markdown:register_fence"
+  ],
+  "tools": [
+    { "name": "examples.hello-events.greet" }
+  ],
+  "resources": [
+    { "uriNamespace": "plugin://examples.hello-events/manifest" }
+  ],
+  "ui": [
+    { "id": "examples.hello-events.greeting" }
+  ],
+  "policies": [
+    { "id": "declare-effects" }
+  ],
+  "archetypeProviders": [
+    { "id": "starter-pack" }
+  ],
+  "markdownFences": [
+    { "language": "dg-hello" }
+  ]
+}

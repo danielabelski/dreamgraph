@@ -468,7 +468,7 @@ export async function verifyGracefulShutdown(
  */
 export async function resolveInstanceForCommand(
   query: string | undefined,
-  flags: Record<string, string | true>,
+  flags: Record<string, string | string[] | true>,
 ): Promise<{ entry: RegistryEntry; instanceRoot: string; masterDir: string }> {
   if (!query) {
     throw new Error(

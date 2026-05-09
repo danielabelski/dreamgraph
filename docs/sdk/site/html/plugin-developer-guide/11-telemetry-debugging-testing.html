@@ -1,0 +1,248 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>11-telemetry-debugging-testing</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#11-telemetry-debugging-and-testing"
+id="toc-11-telemetry-debugging-and-testing">11. Telemetry, debugging,
+and testing</a>
+<ul>
+<li><a href="#111-the-plugin-telemetry-kinds"
+id="toc-111-the-plugin-telemetry-kinds">11.1 The plugin telemetry
+kinds</a></li>
+<li><a href="#112-reading-telemetry-while-developing"
+id="toc-112-reading-telemetry-while-developing">11.2 Reading telemetry
+while developing</a></li>
+<li><a href="#113-testing" id="toc-113-testing">11.3 Testing</a></li>
+<li><a href="#114-common-debugging-recipes"
+id="toc-114-common-debugging-recipes">11.4 Common debugging
+recipes</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="11-telemetry-debugging-and-testing">11. Telemetry, debugging,
+and testing</h1>
+<p><a href="10-lifecycle-and-installation.html">← Lifecycle</a> · <a
+href="12-best-practices.html">Next: Best practices →</a></p>
+<h2 id="111-the-plugin-telemetry-kinds">11.1 The plugin telemetry
+kinds</h2>
+<p>Every plugin emits a uniform telemetry stream. Operators (and your
+tests) can subscribe to these on the bus to understand exactly what the
+host is doing on your behalf.</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Emitted when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>plugin.loaded</code></td>
+<td>Manifest accepted, all seams wired.</td>
+</tr>
+<tr>
+<td><code>plugin.unloaded</code></td>
+<td>Graceful disable / shutdown.</td>
+</tr>
+<tr>
+<td><code>plugin.errored</code></td>
+<td>Manifest rejection, capability violation, throw, watchdog
+stall.</td>
+</tr>
+<tr>
+<td><code>plugin.handler.started</code></td>
+<td>A handler/tool/action is about to run (correlation id).</td>
+</tr>
+<tr>
+<td><code>plugin.handler.completed</code></td>
+<td>Handler returned successfully (<code>duration_ms</code>).</td>
+</tr>
+<tr>
+<td><code>plugin.output.accepted</code></td>
+<td>Host wrote/forwarded/dispatched the plugin's output.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected</code></td>
+<td>Host refused (carries <code>reason</code>, see <a
+href="../plugin-reference/04-reject-reasons.html">reject
+reasons</a>).</td>
+</tr>
+</tbody>
+</table>
+<p>Every telemetry event carries <code>plugin_id</code>,
+<code>plugin_version</code>, and the seam involved.
+<code>plugin.output.rejected</code> additionally carries the
+<code>reason</code> code from the central enum and a human-readable
+<code>message</code>.</p>
+<h2 id="112-reading-telemetry-while-developing">11.2 Reading telemetry
+while developing</h2>
+<p>Three options:</p>
+<ul>
+<li><strong>Daemon log</strong> — every <code>plugin.errored</code> and
+<code>plugin.output.rejected</code> is printed.</li>
+<li><strong>SSE</strong> —
+<code>curl -N http://127.0.0.1:8010/explorer/api/events</code> streams
+the whole bus.</li>
+<li><strong><code>event_log.json</code></strong> — under the instance
+data dir, the persistent record.</li>
+</ul>
+<p>For tests, <a
+href="../../../tests/plugins/hello-events-e2e.test.ts">tests/plugins/hello-events-e2e.test.ts</a>
+shows how to assert the exact telemetry sequence in a temp instance.</p>
+<h2 id="113-testing">11.3 Testing</h2>
+<p>The SDK ships a phased test harness:</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Surface</th>
+<th>Use for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Manifest validation fixtures (schema-only)</td>
+<td>unit tests; no runtime, no bus.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Seam mocks: fake <code>PluginContext</code>, stub bus, in-memory
+<code>system://plugins</code></td>
+<td>unit-test a tool handler or subscriber.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Full in-memory daemon harness (post-MVP, opens with M7)</td>
+<td>E2E with real persistence and bus.</td>
+</tr>
+</tbody>
+</table>
+<p>For Phase-1/2 in your own repo:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { parsePluginManifest } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> manifest <span class="im">from</span> <span class="st">&quot;../plugin.json&quot;</span> assert { type<span class="op">:</span> <span class="st">&quot;json&quot;</span> }<span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="fu">it</span>(<span class="st">&quot;manifest parses&quot;</span><span class="op">,</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">expect</span>(() <span class="kw">=&gt;</span> <span class="fu">parsePluginManifest</span>(manifest))<span class="op">.</span><span class="at">not</span><span class="op">.</span><span class="fu">toThrow</span>()<span class="op">;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>For an end-to-end check, copy your plugin folder into a temp instance
+and assert against <code>ui_registry.json</code> /
+<code>plugin_policy_proposals.json</code> / <code>event_log.json</code>.
+The hello-events e2e test is a working template.</p>
+<h2 id="114-common-debugging-recipes">11.4 Common debugging recipes</h2>
+<ul>
+<li><strong>Tool not appearing in <code>tools/list</code>?</strong> The
+plugin probably did not load. Check the daemon log for the trust banner.
+If it's missing, check <code>DG_ALLOW_INPROCESS_PLUGINS</code> and
+<code>dg plugin list</code> (the entry must show
+<code>trusted: true</code>).</li>
+<li><strong>Tool args arrive as <code>undefined</code>?</strong> Earlier
+engine versions had a bug where the MCP tool was registered with an
+empty Zod shape (the JSON Schema wasn't converted). Fixed in v8.3.0; if
+you see this, upgrade.</li>
+<li><strong>Handler throws <code>EventEmitter</code> warning?</strong>
+You probably called <code>ctx.events.subscribe</code> inside a handler
+instead of inside <code>activate(ctx)</code>. All subscriptions should
+happen in <code>activate</code>.</li>
+<li><strong><code>plugin.output.rejected{ reason: "effect_undeclared" }</code>?</strong>
+You emitted a side-effect (event, registration) whose effect is not in
+the manifest's <code>expectedEffects</code>. Add the effect or remove
+the call.</li>
+</ul>
+<p><a href="10-lifecycle-and-installation.html">← Lifecycle</a> · <a
+href="12-best-practices.html">Next: Best practices →</a></p>
+</body>
+</html>

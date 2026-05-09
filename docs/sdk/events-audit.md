@@ -29,6 +29,13 @@ M2 rule: an event kind is stable only after its producer exists, payload shape i
 | `archetype.imported` | yes | `src/cognitive/federation.ts` `importArchetypes(...)` | envelope with `affected_ids` from incoming archetype ids; payload `{ archetypes_imported, archetypes_skipped, tensions_created, source_instance, timestamp }` | same; stabilize after producer/SSE coverage and import contract review | experimental |
 | `archetype.exported` | yes | `src/cognitive/federation.ts` `exportArchetypes()` | envelope with `affected_ids` from exported archetype ids; payload `{ archetypes_exported, file_path, instance_id, timestamp }` | same; stabilize after producer/SSE coverage and export contract review | experimental |
 | `narrative.chapter.appended` | yes | `src/cognitive/narrator.ts` `appendToStory(...)` | envelope with `affected_ids: []`; payload `{ chapter_number, title, cycle_range, generated_at }` | same; stabilize after producer/SSE coverage and narrative payload review | experimental |
+| `plugin.loaded` | no — host producer lands in M3 | (M3) `@dreamgraph/host` plugin loader | (none yet) | `{ plugin_id, plugin_version, occurred_at, runtime, trusted, capabilities }` per `@dreamgraph/sdk/telemetry` | stable (host-owned) |
+| `plugin.unloaded` | no — host producer lands in M3 | (M3) `@dreamgraph/host` shutdown / disable / quarantine | (none yet) | `{ plugin_id, plugin_version, occurred_at, reason }` per `@dreamgraph/sdk/telemetry` | stable (host-owned) |
+| `plugin.errored` | no — host producer lands in M3 | (M3) host capability/effect gate + watchdog | (none yet) | `{ plugin_id, plugin_version, occurred_at, reason, message, event_loop_lag_ms? }` per `@dreamgraph/sdk/telemetry` | stable (host-owned) |
+| `plugin.handler.started` | no — host producer lands in M3 | (M3) host invocation wrapper | (none yet) | `{ plugin_id, plugin_version, occurred_at, correlation_id, seam, target }` per `@dreamgraph/sdk/telemetry` | stable (host-owned) |
+| `plugin.handler.completed` | no — host producer lands in M3 | (M3) host invocation wrapper | (none yet) | `{ plugin_id, plugin_version, occurred_at, correlation_id, seam, target, duration_ms, ok }` per `@dreamgraph/sdk/telemetry` | stable (host-owned) |
+| `plugin.output.accepted` | no — host producer lands in M3 | (M3) host effect-envelope check | (none yet) | `{ plugin_id, plugin_version, occurred_at, correlation_id, effect, seam, target? }` per `@dreamgraph/sdk/telemetry` | stable (host-owned) |
+| `plugin.output.rejected` | no — host producer lands in M3 | (M3) host capability/effect gate registry | (none yet) | `{ plugin_id, plugin_version, occurred_at, correlation_id?, reason, seam, target?, detail? }` where `reason` is a `PluginRejectReason` per `@dreamgraph/sdk/reject-reasons` | stable (host-owned) |
 
 ## Deferred / post-M2 event kinds
 
@@ -59,6 +66,13 @@ No event is promoted by declaration alone.
 | --- | --- | --- |
 | `snapshot.changed` | `tests/explorer-events.test.ts` | GraphEventBus monotonic/replay tests emit `snapshot.changed`; SSE tests assert live and replay delivery of `snapshot.changed`. |
 | `cache.invalidated` | `tests/explorer-events.test.ts` | GraphEventBus monotonic/replay tests emit `cache.invalidated`; SSE snapshot test confirms delivery when no `Last-Event-ID` is present. |
+| `plugin.loaded` | (M3) — host producer not yet implemented | Stable contract published in `@dreamgraph/sdk/telemetry`; producer-side test lands with `@dreamgraph/host` loader in M3. |
+| `plugin.unloaded` | (M3) — host producer not yet implemented | Stable contract published in `@dreamgraph/sdk/telemetry`; producer-side test lands with M3 host loader. |
+| `plugin.errored` | (M3) — host producer not yet implemented | Stable contract published in `@dreamgraph/sdk/telemetry`; producer-side test lands with M3 host loader (capability gate + watchdog). |
+| `plugin.handler.started` | (M3) — host producer not yet implemented | Stable contract published in `@dreamgraph/sdk/telemetry`; producer-side test lands with M3 host invocation wrapper. |
+| `plugin.handler.completed` | (M3) — host producer not yet implemented | Stable contract published in `@dreamgraph/sdk/telemetry`; producer-side test lands with M3 host invocation wrapper. |
+| `plugin.output.accepted` | (M3) — host producer not yet implemented | Stable contract published in `@dreamgraph/sdk/telemetry`; producer-side test lands with M3 host effect-envelope check. |
+| `plugin.output.rejected` | (M3) — host producer not yet implemented | Stable contract published in `@dreamgraph/sdk/telemetry`; reasons enumerated in `@dreamgraph/sdk/reject-reasons`; producer-side test lands with M3 host capability/effect gate registry. |
 
 ## Post-M2 backlog items
 

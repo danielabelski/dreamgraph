@@ -9,6 +9,30 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./loader": {
+      "types": "./dist/loader.d.ts",
+      "import": "./dist/loader.js"
+    },
+    "./gates": {
+      "types": "./dist/gates.d.ts",
+      "import": "./dist/gates.js"
+    },
+    "./telemetry": {
+      "types": "./dist/telemetry-emitter.d.ts",
+      "import": "./dist/telemetry-emitter.js"
+    },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "import": "./dist/registry.js"
+    },
+    "./watchdog": {
+      "types": "./dist/watchdog.d.ts",
+      "import": "./dist/watchdog.js"
+    },
+    "./context": {
+      "types": "./dist/context.d.ts",
+      "import": "./dist/context.js"
     }
   },
   "files": [
@@ -17,5 +41,8 @@
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@dreamgraph/sdk": "0.0.0"
   }
 }

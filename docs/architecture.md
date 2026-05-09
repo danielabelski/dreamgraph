@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **8.3.0**
+Version: **9.0.0**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -64,6 +64,7 @@ src/
   src/cli/commands/instances.ts
   src/cli/commands/lifecycle-ops.ts
   src/cli/commands/migrate.ts
+  src/cli/commands/plugin.ts
   src/cli/commands/restart.ts
   src/cli/commands/scan.ts
   src/cli/commands/schedule.ts
@@ -109,6 +110,8 @@ src/
   src/instance/registry.ts
   src/instance/scope.ts
   src/instance/types.ts
+  src/plugins/manager.ts
+  src/plugins/contributions.ts
   src/resources/register.ts
   src/server/dashboard.ts
   src/server/server.ts
@@ -124,6 +127,7 @@ src/
   src/tools/git-senses.ts
   src/tools/init-graph.ts
   src/tools/living-docs-exporter.ts
+  src/tools/plugin-ops.ts
   src/tools/query-resource.ts
   src/tools/register.ts
   src/tools/runtime-senses.ts
@@ -235,6 +239,11 @@ scripts/
   scripts/generate-architecture-tree.mjs
   scripts/install.ps1
   scripts/install.sh
+packages/
+  packages/sdk/        # @dreamgraph/sdk — public plugin contracts (manifest, telemetry kinds, reject reasons)
+  packages/host/       # @dreamgraph/host — in-process plugin loader, gate registry, watchdog, telemetry emitter
+examples/
+  examples/hello-events/   # M3 reference plugin demonstrating manifest discovery + trust banner
 ```
 
 ## Version Semantics

@@ -1,0 +1,206 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>07-seams-events</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#7-seams-events" id="toc-7-seams-events">7. Seams:
+events</a>
+<ul>
+<li><a href="#71-subscribe--ctxeventssubscribe"
+id="toc-71-subscribe--ctxeventssubscribe">7.1 Subscribe —
+<code>ctx.events.subscribe</code></a>
+<ul>
+<li><a href="#stable-vs-experimental"
+id="toc-stable-vs-experimental">Stable vs experimental</a></li>
+<li><a href="#bus-model" id="toc-bus-model">Bus model</a></li>
+</ul></li>
+<li><a href="#72-emit--ctxeventsemit"
+id="toc-72-emit--ctxeventsemit">7.2 Emit —
+<code>ctx.events.emit</code></a>
+<ul>
+<li><a href="#rules" id="toc-rules">Rules</a></li>
+<li><a href="#replay-window" id="toc-replay-window">Replay
+window</a></li>
+</ul></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="7-seams-events">7. Seams: events</h1>
+<p><a href="06-seams-tools-resources.html">← Tools &amp; Resources</a> ·
+<a href="08-seams-closure.html">Next: Closure seams →</a></p>
+<p>Events are the cognitive heartbeat. The SDK exposes two operations:
+subscribe to host-emitted events, and emit your own.</p>
+<h2 id="71-subscribe--ctxeventssubscribe">7.1 Subscribe —
+<code>ctx.events.subscribe</code></h2>
+<div class="sourceCode" id="cb1"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> off <span class="op">=</span> ctx<span class="op">.</span><span class="at">events</span><span class="op">.</span><span class="fu">subscribe</span>(<span class="st">&quot;snapshot.changed&quot;</span><span class="op">,</span> (evt) <span class="kw">=&gt;</span> {</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  ctx<span class="op">.</span><span class="at">logger</span><span class="op">.</span><span class="fu">info</span>(<span class="vs">`observed </span><span class="sc">${</span>evt<span class="op">.</span><span class="at">kind</span><span class="sc">}</span><span class="vs">`</span><span class="op">,</span> evt<span class="op">.</span><span class="at">payload</span>)<span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="stable-vs-experimental">Stable vs experimental</h3>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Capability</th>
+<th>Import from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stable kinds</td>
+<td><code>events:read</code></td>
+<td><code>@dreamgraph/sdk</code></td>
+</tr>
+<tr>
+<td>Experimental</td>
+<td><code>events:read:experimental</code></td>
+<td><code>@dreamgraph/sdk/events/experimental</code></td>
+</tr>
+</tbody>
+</table>
+<p>The split is <strong>type-enforced</strong> in the SDK: the default
+<code>defineEventHandler</code> factory is generic over
+<code>StableEventKind</code>. To subscribe to an experimental kind you
+must use <code>defineExperimentalEventHandler</code> and the host must
+have <code>experimental_plugins: true</code> in
+<code>instance.json</code>. Subscribing to an experimental kind without
+the capability returns <code>event_kind_experimental</code>; subscribing
+to a kind not declared in the manifest returns
+<code>event_kind_not_declared</code>.</p>
+<h3 id="bus-model">Bus model</h3>
+<p>The DreamGraph event bus is <strong>synchronous</strong>: the
+producer call site does not await your handler. The host wraps your
+handler in a deferred queue so a slow subscriber cannot stall cognition.
+Therefore:</p>
+<ul>
+<li>Your handler MAY be async; the queue runner awaits it.</li>
+<li>Your handler MUST tolerate handler-level timeouts (default 5 s). A
+timeout emits <code>handler_timeout</code> and quarantines the
+plugin.</li>
+<li>Your handler runs in the daemon's heap. Long synchronous CPU work
+will be detected by the event-loop watchdog
+(<code>event_loop_stall</code>, see §9).</li>
+</ul>
+<h2 id="72-emit--ctxeventsemit">7.2 Emit —
+<code>ctx.events.emit</code></h2>
+<div class="sourceCode" id="cb2"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>ctx<span class="op">.</span><span class="at">events</span><span class="op">.</span><span class="fu">emit</span>(<span class="st">&quot;examples.hello-events.activated&quot;</span><span class="op">,</span> {</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">at</span><span class="op">:</span> <span class="kw">new</span> <span class="bu">Date</span>()<span class="op">.</span><span class="fu">toISOString</span>()<span class="op">,</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<h3 id="rules">Rules</h3>
+<ul>
+<li>The kind name MUST NOT collide with a built-in
+<code>GraphEventKind</code>. Conventional practice is
+<code>&lt;plugin-id&gt;.&lt;event_name&gt;</code> (matches the
+tool/resource pattern).</li>
+<li>Emitting a kind requires the <code>events:emit</code> capability
+<strong>and</strong> <code>emit_event</code> in
+<code>expectedEffects</code>. Missing either →
+<code>effect_undeclared</code> or
+<code>emit_capability_missing</code>.</li>
+<li>The payload is JSON-serialized and broadcast on the bus + SSE stream
+(<code>/explorer/api/events</code>) + matching webhook
+subscriptions.</li>
+</ul>
+<h3 id="replay-window">Replay window</h3>
+<p>The SSE stream maintains a 500-event ring buffer; the file-backed
+<code>event_log.json</code> is the long-term record. Plugins should
+treat the bus as <strong>at-most-once</strong>: if your subscriber
+missed an event because your plugin was disabled or the daemon
+restarted, the SSE replay window does not extend back indefinitely.
+Critical state must be reconstructed from a resource read or by reading
+the event log.</p>
+<p><a href="06-seams-tools-resources.html">← Tools &amp; Resources</a> ·
+<a href="08-seams-closure.html">Next: Closure seams →</a></p>
+</body>
+</html>

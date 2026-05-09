@@ -20,6 +20,7 @@ export const PluginCapabilitySchema = z.enum([
   "webhooks:emit",
   "archetypes:provide",
   "providers:register",
+  "markdown:register_fence",
 ]);
 
 export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
@@ -38,6 +39,8 @@ export const PluginEffectSchema = z.enum([
   "invoke_llm",
   "mutate_ui_registry",
   "propose_policy",
+  "provide_archetypes",
+  "render_markdown_fence",
   "register_provider_adapter",
 ]);
 
@@ -65,6 +68,53 @@ export const PluginManifestToolSchema = z
 export const PluginManifestResourceSchema = z
   .object({
     uriNamespace: PluginResourceUriNamespaceSchema,
+  })
+  .strict();
+
+/**
+ * Manifest-level UI element declaration. Only the id is declared statically;
+ * the full {@link UiElementDefinition} is provided at runtime via
+ * `ctx.ui.register()` so the host can validate the element against the
+ * live registry schema and emit telemetry.
+ *
+ * The id MUST be prefixed with `<plugin-id>.` (matches the runtime gate).
+ */
+export const PluginManifestUiElementSchema = z
+  .object({
+    id: z
+      .string()
+      .min(3)
+      .regex(/^[a-z0-9][a-z0-9._-]*$/, "UI element ids must be lowercase, dot/dash/underscore separated"),
+  })
+  .strict();
+
+/** Manifest declaration for a discipline-rule proposal (§4.6). */
+export const PluginManifestPolicyProposalSchema = z
+  .object({
+    id: z
+      .string()
+      .min(2)
+      .regex(/^[a-z0-9][a-z0-9._-]*$/, "Policy proposal ids must be lowercase"),
+  })
+  .strict();
+
+/** Manifest declaration for an archetype provider (§4.8). */
+export const PluginManifestArchetypeProviderSchema = z
+  .object({
+    id: z
+      .string()
+      .min(2)
+      .regex(/^[a-z0-9][a-z0-9._-]*$/, "Archetype provider ids must be lowercase"),
+  })
+  .strict();
+
+/** Manifest declaration for a markdown fence language (§4.9). */
+export const PluginManifestMarkdownFenceSchema = z
+  .object({
+    language: z
+      .string()
+      .min(1)
+      .regex(/^[a-z0-9][a-z0-9._-]*$/, "Markdown fence languages must be lowercase, dot/dash/underscore separated"),
   })
   .strict();
 
@@ -97,6 +147,10 @@ export const PluginManifestSchema = z
     capabilities: z.array(PluginCapabilitySchema).min(1),
     tools: z.array(PluginManifestToolSchema).default([]),
     resources: z.array(PluginManifestResourceSchema).default([]),
+    ui: z.array(PluginManifestUiElementSchema).default([]),
+    policies: z.array(PluginManifestPolicyProposalSchema).default([]),
+    archetypeProviders: z.array(PluginManifestArchetypeProviderSchema).default([]),
+    markdownFences: z.array(PluginManifestMarkdownFenceSchema).default([]),
     policy: PluginPolicySchema.default({ phasePermissions: [], writableFiles: [] }),
     config: z
       .object({

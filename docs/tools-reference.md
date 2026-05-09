@@ -1,6 +1,6 @@
 # DreamGraph Tools Reference
 
-> Complete catalog of all 73 MCP tools (28 cognitive + 35 general + 10 discipline) and 26 MCP resources.
+> Complete catalog of all 75 MCP tools (28 cognitive + 37 general + 10 discipline) and 27 MCP resources.
 
 The DreamGraph Architect actively calls these tools during conversations to build, query, enrich, and maintain the knowledge graph. Any MCP-compatible client can also invoke them directly.
 
@@ -364,7 +364,7 @@ End an active lucid dream session — persist accepted edges and return to AWAKE
 
 ---
 
-## General Tools (35)
+## General Tools (37)
 
 Registered in [src/tools/register.ts](../src/tools/register.ts). These provide I/O, visualization, documentation, and operational knowledge capabilities.
 
@@ -831,6 +831,29 @@ When `sections` includes `all`, every section above is exported (cognitive_statu
 
 ---
 
+### Plugin Operations (M3.5)
+
+Lifecycle control for in-process plugins loaded by `@dreamgraph/host`. Both tools target a discovered plugin by id and operate on the live registry; they emit `plugin.unloaded` / `plugin.loaded` telemetry on the internal event bus and update `system://plugins`. Available via the MCP server and via `dg plugin reload|unload`.
+
+#### `plugin_reload`
+
+Unload a plugin and re-discover + re-activate it from disk in one step. Use after editing the plugin source to pick up changes without restarting the daemon. Contributed MCP tools/resources are dropped and re-registered from the fresh manifest.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pluginId` | string | yes | Manifest `id` of a currently loaded plugin |
+
+#### `plugin_unload`
+
+Deactivate a loaded plugin, abort its `AbortSignal`, drop its event subscriptions and contributed tools/resources, and remove it from the live registry without touching its files on disk.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pluginId` | string | yes | Manifest `id` of a currently loaded plugin |
+| `reason` | enum | no | `shutdown` \| `disable` \| `reload` \| `quarantine` (defaults to `disable`); attached to the `plugin.unloaded` telemetry envelope |
+
+---
+
 ## Discipline Execution Tools (9)
 
 Registered in [src/discipline/tools.ts](../src/discipline/tools.ts). These enforce the five-phase execution model (ADR-014).
@@ -932,7 +955,7 @@ Complete or abandon the active discipline session.
 
 ---
 
-## MCP Resources (26)
+## MCP Resources (27)
 
 | URI | Description |
 |-----|-------------|
@@ -973,6 +996,21 @@ System resources (registered in [src/resources/register.ts](../src/resources/reg
 | `system://datastores` | Shared infrastructure (databases) referenced by data_model. Includes scanned table metadata. Empty when no datastore is configured. |
 | `system://capabilities` | Server capabilities, strategies & available tools |
 | `system://index` | Central entity index for fast lookup and cross-resource linking. `type` covers features/workflows/data_model plus the four auxiliary kinds (`test_suite`, `configuration`, `automation_script`, `mcp_tool`) populated by `scan_project`. |
+| `system://plugins` | M3/M3.5/M4 plugin host inventory. `loaded[]` entries now include `activated`, `subscription_count`, `contributed_tools[]` (names) and `contributed_resources[]` (uri namespaces) alongside the original M3 fields (`id`, `version`, `trusted`, `capabilities`, `last_seen_effects`, `last_rejection`). Also lists `discovered_not_loaded[]`. Updated live by `plugin_reload`/`plugin_unload`. |
+
+### Plugin telemetry event kinds (M3)
+
+The plugin host (`@dreamgraph/host`) re-publishes seven stable event kinds on the internal `graphEventBus` so the daemon, dashboards, and operator tooling can observe plugin lifecycle without depending on host internals:
+
+| Kind | When |
+|------|------|
+| `plugin.loaded` | A discovered plugin passed all gates and was added to the registry |
+| `plugin.unloaded` | A loaded plugin was removed (shutdown, deactivation, manifest change) |
+| `plugin.errored` | The host rejected or failed a plugin (see `PluginRejectReasons`) |
+| `plugin.handler.started` | A plugin handler began running |
+| `plugin.handler.completed` | A plugin handler finished running |
+| `plugin.output.accepted` | A plugin's output passed effect/capability gates |
+| `plugin.output.rejected` | A plugin's output was rejected by the gate registry |
 
 ---
 

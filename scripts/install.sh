@@ -255,23 +255,91 @@ mkdir -p "$BIN_DIR"
 cp -r "$SOURCE_DIST" "$DIST_TARGET"
 ok "dist/ copied"
 
+# Workspace packages (@dreamgraph/sdk, @dreamgraph/host) cannot be resolved
+# from the registry; pack them into the bin vendor dir and rewrite the deps
+# to file: references so `npm install --omit=dev` can complete offline.
+VENDOR_DIR="$BIN_DIR/vendor"
+[[ -d "$VENDOR_DIR" ]] && rm -rf "$VENDOR_DIR"
+mkdir -p "$VENDOR_DIR"
+
+WORKSPACE_PACKAGES=("@dreamgraph/sdk" "@dreamgraph/host")
+declare -A WORKSPACE_TARBALLS=()
+for ws_name in "${WORKSPACE_PACKAGES[@]}"; do
+    echo -e "  ${CYAN}Packing $ws_name...${NC}"
+    pushd "$SOURCE_DIR" >/dev/null
+    run_logged --quiet -- npm pack --workspace "$ws_name" --pack-destination "$VENDOR_DIR" --loglevel=warn
+    pack_exit_code="${RUN_LOGGED_EXIT_CODE:-0}"
+    pack_output="${RUN_LOGGED_OUTPUT:-}"
+    popd >/dev/null
+    if [[ "$pack_exit_code" -ne 0 ]]; then
+        fail "npm pack $ws_name failed (exit code $pack_exit_code)"
+    fi
+    # The tarball name is "<scope>-<name>-<version>.tgz" (scope dash-folded).
+    tarball_name=""
+    while IFS= read -r line; do
+        [[ "$line" == *.tgz ]] || continue
+        tarball_name="$(basename "${line//$'\r'/}")"
+    done <<< "$pack_output"
+    if [[ -z "$tarball_name" ]]; then
+        # Fallback: scan vendor dir for the most recent matching tarball.
+        expected_prefix="${ws_name//@/}"
+        expected_prefix="${expected_prefix//\//-}"
+        shopt -s nullglob
+        candidates=("$VENDOR_DIR/${expected_prefix}"-*.tgz)
+        shopt -u nullglob
+        if [[ ${#candidates[@]} -gt 0 ]]; then
+            # Pick the newest by mtime.
+            newest=""
+            newest_mtime=0
+            for cand in "${candidates[@]}"; do
+                mtime=$(stat -c %Y "$cand" 2>/dev/null || stat -f %m "$cand" 2>/dev/null || echo 0)
+                if [[ "$mtime" -gt "$newest_mtime" ]]; then
+                    newest_mtime="$mtime"
+                    newest="$cand"
+                fi
+            done
+            [[ -n "$newest" ]] && tarball_name="$(basename "$newest")"
+        fi
+    fi
+    [[ -z "$tarball_name" ]] && fail "Could not determine tarball name for $ws_name"
+    WORKSPACE_TARBALLS[$ws_name]="file:./vendor/$tarball_name"
+    ok "Packed $ws_name -> vendor/$tarball_name"
+done
+
+# Build the bin package.json, swapping workspace deps for file: tarballs.
+WS_OVERRIDES_JSON="{}"
+for ws_name in "${WORKSPACE_PACKAGES[@]}"; do
+    WS_OVERRIDES_JSON=$(node -e "
+      const o = JSON.parse(process.argv[1]);
+      o[process.argv[2]] = process.argv[3];
+      process.stdout.write(JSON.stringify(o));
+    " "$WS_OVERRIDES_JSON" "$ws_name" "${WORKSPACE_TARBALLS[$ws_name]}")
+done
+
 node -e "
   const pkg = JSON.parse(require('fs').readFileSync('$PACKAGE_JSON', 'utf8'));
+  const overrides = JSON.parse(process.argv[1]);
+  const deps = Object.assign({}, pkg.dependencies || {});
+  for (const [name, spec] of Object.entries(overrides)) {
+    deps[name] = spec;
+  }
   const binPkg = {
     name: 'dreamgraph-global',
     version: pkg.version,
     type: 'module',
-    dependencies: pkg.dependencies || {}
+    dependencies: deps
   };
   require('fs').writeFileSync(
     '$BIN_DIR/package.json',
     JSON.stringify(binPkg, null, 2)
   );
-"
+" "$WS_OVERRIDES_JSON"
 ok "package.json created"
 
 echo -e "  ${CYAN}Installing dependencies...${NC}"
 [[ -d "$BIN_DIR/node_modules" ]] && rm -rf "$BIN_DIR/node_modules"
+# Also ensure no stale lockfile is reused -- file: deps must be resolved fresh.
+[[ -f "$BIN_DIR/package-lock.json" ]] && rm -f "$BIN_DIR/package-lock.json"
 (
     cd "$BIN_DIR"
     run_logged -- npm install --omit=dev --loglevel=warn

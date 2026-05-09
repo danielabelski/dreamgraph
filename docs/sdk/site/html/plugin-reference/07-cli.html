@@ -1,0 +1,99 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>07-cli</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#dg-plugin-cli-normative"
+id="toc-dg-plugin-cli-normative"><code>dg plugin</code> CLI
+(normative)</a>
+<ul>
+<li><a href="#dg-plugin-list-instance"
+id="toc-dg-plugin-list-instance"><code>dg plugin list &lt;instance&gt;</code></a></li>
+<li><a href="#dg-plugin-inspect-instance-plugin-id"
+id="toc-dg-plugin-inspect-instance-plugin-id"><code>dg plugin inspect &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#dg-plugin-trust-instance-plugin-id"
+id="toc-dg-plugin-trust-instance-plugin-id"><code>dg plugin trust &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#dg-plugin-enable-instance-plugin-id"
+id="toc-dg-plugin-enable-instance-plugin-id"><code>dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#dg-plugin-disable-instance-plugin-id"
+id="toc-dg-plugin-disable-instance-plugin-id"><code>dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;</code></a></li>
+<li><a href="#notes" id="toc-notes">Notes</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="dg-plugin-cli-normative"><code>dg plugin</code> CLI
+(normative)</h1>
+<p><a href="00-index.html">← Index</a></p>
+<p>All commands take the instance name (or UUID) as the first positional
+argument.</p>
+<h2
+id="dg-plugin-list-instance"><code>dg plugin list &lt;instance&gt;</code></h2>
+<p>Lists every discovered plugin with its current state.</p>
+<pre class="pwsh"><code>dg plugin list dreamgraph</code></pre>
+<p>Output columns: <code>id</code>, <code>version</code>,
+<code>state</code>, <code>runtime</code>, <code>trusted</code>,
+<code>last_loaded_at</code>.</p>
+<h2
+id="dg-plugin-inspect-instance-plugin-id"><code>dg plugin inspect &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Prints the full validated manifest, last seen effects, last
+activation timestamp, last error reason (if any), and the path to the
+plugin folder.</p>
+<h2
+id="dg-plugin-trust-instance-plugin-id"><code>dg plugin trust &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Sets <code>trusted: true</code> on the plugin's entry in
+<code>instance.json:plugins[]</code>. Does not load or restart the
+daemon. Run <code>dg restart &lt;instance&gt;</code> to apply.</p>
+<h2
+id="dg-plugin-enable-instance-plugin-id"><code>dg plugin enable &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Marks the plugin trusted (if not already) and triggers an in-place
+activate-cycle: calls <code>deactivate()</code> if the plugin is
+currently loaded, then re-imports the entry module (cache-busted) and
+calls <code>activate(ctx)</code>.</p>
+<h2
+id="dg-plugin-disable-instance-plugin-id"><code>dg plugin disable &lt;instance&gt; &lt;plugin-id&gt;</code></h2>
+<p>Calls <code>deactivate()</code>, prunes every contribution registered
+through <code>ctx</code> (tools, resources, UI, policy proposals,
+archetype providers, markdown fences), and unsubscribes every event
+handler. The plugin entry remains in <code>instance.json</code> so a
+future <code>enable</code> reuses the same identity.</p>
+<h2 id="notes">Notes</h2>
+<ul>
+<li>The <code>dg plugin</code> family does not invoke MCP tools or read
+MCP resources. Use any MCP client (VS Code extension, Claude Desktop,
+<code>mcp inspector</code>) for that.</li>
+<li><code>dg plugin trust</code> is idempotent. Repeated runs
+<strong>must not</strong> create duplicate entries in
+<code>instance.json:plugins[]</code> (a known issue in earlier engine
+versions; v8.3.0 deduplicates on write).</li>
+<li>All commands exit non-zero on error; standard <code>--json</code>
+flag is reserved for a future release.</li>
+</ul>
+</body>
+</html>

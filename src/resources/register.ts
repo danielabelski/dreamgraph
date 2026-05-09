@@ -22,6 +22,14 @@ import type {
 } from "../types/index.js";
 import { formatJsonToolOutput } from "../utils/tool-output.js";
 import { getRuntimeMetricsSnapshotV1 } from "../observability/runtime-metrics.js";
+import {
+  getContributedResources,
+  getContributedTools,
+  getLastDiscoveredPlugins,
+  getPluginRegistry,
+  getPluginSubscriptionCount,
+  isPluginActivated,
+} from "../plugins/manager.js";
 
 export function registerResources(server: McpServer): void {
   // -----------------------------------------------------------------------
@@ -357,5 +365,108 @@ export function registerResources(server: McpServer): void {
     metricsHandler
   );
 
-  logger.info("Registered 8 resources (including ops://metrics and system://metrics)");
+  // -----------------------------------------------------------------------
+  // system://plugins — M3 plugin host registry view
+  // -----------------------------------------------------------------------
+  server.resource(
+    "system-plugins",
+    "system://plugins",
+    {
+      description:
+        "Live view of plugins discovered and loaded by the host runtime " +
+        "(@dreamgraph/host). Includes manifest summary, runtime, trust " +
+        "level, status, and the most recent rejection reason if any.",
+      mimeType: "application/json",
+    },
+    async (uri) => {
+      logger.debug(`Resource requested: ${uri.href}`);
+      const registry = getPluginRegistry();
+      const loaded = registry.list();
+      const discovered = getLastDiscoveredPlugins();
+      const loadedIds = new Set(loaded.map((e) => e.manifest.id));
+      const allTools = getContributedTools();
+      const allResources = getContributedResources();
+      const payload = {
+        loaded: loaded.map((e) => {
+          const tools = allTools
+            .filter((t) => t.pluginId === e.manifest.id)
+            .map((t) => t.definition.name);
+          const resources = allResources
+            .filter((r) => r.pluginId === e.manifest.id)
+            .map((r) => r.definition.uriNamespace);
+          return {
+            id: e.manifest.id,
+            version: e.manifest.version,
+            runtime: e.runtime,
+            trusted: e.trusted,
+            status: e.status,
+            loaded_at: e.loadedAt,
+            activated: isPluginActivated(e.manifest.id),
+            subscription_count: getPluginSubscriptionCount(e.manifest.id),
+            contributed_tools: tools,
+            contributed_resources: resources,
+            capabilities: e.manifest.capabilities,
+            last_seen_effects: e.lastSeenEffects,
+            last_rejection: e.lastRejection ?? null,
+          };
+        }),
+        discovered_not_loaded: discovered
+          .filter((d) => !loadedIds.has(d.manifest.id))
+          .map((d) => ({
+            id: d.manifest.id,
+            version: d.manifest.version,
+            trusted: d.trusted,
+            enabled: d.enabled,
+            manifest_source: d.manifestSourcePath,
+          })),
+      };
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: formatJsonToolOutput(payload),
+          },
+        ],
+      };
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // system://webhooks — M5 outbound webhook subsystem view
+  // -----------------------------------------------------------------------
+  server.resource(
+    "system-webhooks",
+    "system://webhooks",
+    {
+      description:
+        "M5 outbound webhook subsystem. `subscriptions[]` lists registered " +
+        "endpoints with delivery stats (secrets redacted). `dead_letter[]` " +
+        "lists deliveries that exhausted retries. Updated live by the " +
+        "webhook delivery worker.",
+      mimeType: "application/json",
+    },
+    async (uri) => {
+      logger.debug(`Resource requested: ${uri.href}`);
+      const { listSubscriptions, listDeadLetter } = await import(
+        "../webhooks/store.js"
+      );
+      const [subs, dlq] = await Promise.all([listSubscriptions(), listDeadLetter()]);
+      const payload = {
+        subscriptions: subs.map((s) => ({ ...s, secret: "***redacted***" })),
+        dead_letter: dlq,
+      };
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: formatJsonToolOutput(payload),
+          },
+        ],
+      };
+    },
+  );
+
+  logger.info("Registered 10 resources (including ops://metrics, system://metrics, system://plugins, system://webhooks)");
 }

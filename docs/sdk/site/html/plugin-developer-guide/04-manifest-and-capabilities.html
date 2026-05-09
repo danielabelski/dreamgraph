@@ -1,0 +1,330 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>04-manifest-and-capabilities</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#4-manifest-and-capabilities"
+id="toc-4-manifest-and-capabilities">4. Manifest and capabilities</a>
+<ul>
+<li><a href="#41-the-intent-first-manifest"
+id="toc-41-the-intent-first-manifest">4.1 The intent-first
+manifest</a></li>
+<li><a href="#42-why-three-orthogonal-axes-capability-effect-intent"
+id="toc-42-why-three-orthogonal-axes-capability-effect-intent">4.2 Why
+three orthogonal axes (capability, effect, intent)?</a></li>
+<li><a href="#43-the-capability-vocabulary"
+id="toc-43-the-capability-vocabulary">4.3 The capability
+vocabulary</a></li>
+<li><a href="#44-the-effect-vocabulary"
+id="toc-44-the-effect-vocabulary">4.4 The effect vocabulary</a></li>
+<li><a href="#45-naming-rules--both-ids-and-tool-names"
+id="toc-45-naming-rules--both-ids-and-tool-names">4.5 Naming rules —
+both ids and tool names</a></li>
+<li><a href="#46-engine-version-range"
+id="toc-46-engine-version-range">4.6 Engine version range</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="4-manifest-and-capabilities">4. Manifest and capabilities</h1>
+<p><a href="03-anatomy.html">← Anatomy</a> · <a
+href="05-plugin-context.html">Next: PluginContext →</a></p>
+<h2 id="41-the-intent-first-manifest">4.1 The intent-first manifest</h2>
+<p>Every plugin ships a <code>plugin.json</code> validated against
+<code>PluginManifestSchema</code> (<a
+href="../../../packages/sdk/src/manifest.ts">source</a>). The schema is
+<strong>intent-first</strong>: it asks not only <em>what permissions you
+want</em> (capabilities) but <em>what observable effects you claim you
+will have</em> (<code>expectedEffects</code>) and <em>what you guarantee
+not to do</em> (<code>forbiddenEffects</code>).</p>
+<pre class="jsonc"><code>{
+  &quot;id&quot;: &quot;acme.changelog&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;displayName&quot;: &quot;Acme Changelog&quot;,
+  &quot;description&quot;: &quot;Weekly changelogs from validated edges.&quot;,
+  &quot;engine&quot;: { &quot;dreamgraph&quot;: &quot;&gt;=9.0.0&quot; },
+  &quot;main&quot;: &quot;./dist/index.js&quot;,
+
+  &quot;intent&quot;: &quot;Summarize validated cognitive changes into weekly changelogs.&quot;,
+  &quot;expectedEffects&quot;: [&quot;read_events&quot;, &quot;emit_resource&quot;, &quot;emit_tool&quot;],
+  &quot;forbiddenEffects&quot;: [&quot;write_internal_graph&quot;, &quot;modify_tensions&quot;],
+
+  &quot;capabilities&quot;: [&quot;events:read&quot;, &quot;tools:register&quot;, &quot;resources:register&quot;],
+
+  &quot;tools&quot;:      [{ &quot;name&quot;: &quot;acme.changelog.summarize_week&quot; }],
+  &quot;resources&quot;:  [{ &quot;uriNamespace&quot;: &quot;plugin://acme.changelog/latest&quot; }],
+  &quot;ui&quot;:         [],
+  &quot;policies&quot;:   [],
+  &quot;archetypeProviders&quot;: [],
+  &quot;markdownFences&quot;:     [],
+
+  &quot;policy&quot;: { &quot;phasePermissions&quot;: [&quot;analysis&quot;], &quot;writableFiles&quot;: [] }
+}</code></pre>
+<h2 id="42-why-three-orthogonal-axes-capability-effect-intent">4.2 Why
+three orthogonal axes (capability, effect, intent)?</h2>
+<table>
+<thead>
+<tr>
+<th>Axis</th>
+<th>Question it answers</th>
+<th>Enforced where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>capabilities</code></td>
+<td><em>Are you allowed to use the API?</em></td>
+<td>At seam call time (gate function)</td>
+</tr>
+<tr>
+<td><code>expectedEffects</code></td>
+<td><em>What do you say you will do?</em></td>
+<td>At every host-mediated effect</td>
+</tr>
+<tr>
+<td><code>forbiddenEffects</code></td>
+<td><em>What do you guarantee NOT to do?</em></td>
+<td>Hard stop, even if capability allows</td>
+</tr>
+<tr>
+<td><code>intent</code></td>
+<td><em>Why are you doing it?</em></td>
+<td>Operator review + telemetry</td>
+</tr>
+</tbody>
+</table>
+<p>A plugin that performs an effect outside <code>expectedEffects</code>
+emits <code>plugin.output.rejected{ reason: "effect_undeclared" }</code>
+and is auto-quarantined. A plugin that hits a
+<code>forbiddenEffects</code> entry is refused even if the matching
+capability would otherwise allow it.</p>
+<h2 id="43-the-capability-vocabulary">4.3 The capability vocabulary</h2>
+<p>Locked for v1 — see <a
+href="../plugin-reference/02-capabilities.html">reference /
+capabilities</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Allows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>events:read</code></td>
+<td>subscribe to <strong>stable</strong> event kinds</td>
+</tr>
+<tr>
+<td><code>events:read:experimental</code></td>
+<td>subscribe to experimental kinds (instance opt-in)</td>
+</tr>
+<tr>
+<td><code>events:emit</code></td>
+<td>publish via <code>ctx.events.emit()</code></td>
+</tr>
+<tr>
+<td><code>tools:register</code></td>
+<td><code>defineTool</code> registration</td>
+</tr>
+<tr>
+<td><code>resources:register</code></td>
+<td><code>defineResource</code> registration</td>
+</tr>
+<tr>
+<td><code>resources:read</code></td>
+<td>(reserved) read other plugins' resources</td>
+</tr>
+<tr>
+<td><code>ui:register</code></td>
+<td>metadata-only UI element registration</td>
+</tr>
+<tr>
+<td><code>policy:propose</code></td>
+<td>append discipline rules tagged <code>plugin:&lt;id&gt;</code></td>
+</tr>
+<tr>
+<td><code>schedule:register_action</code></td>
+<td>(reserved, M4) custom schedule actions</td>
+</tr>
+<tr>
+<td><code>webhooks:emit</code></td>
+<td>(reserved, post-MVP) plugin-driven outbound HTTP</td>
+</tr>
+<tr>
+<td><code>archetypes:provide</code></td>
+<td>register a federation archetype provider</td>
+</tr>
+<tr>
+<td><code>providers:register</code></td>
+<td>(reserved, post-1.0) provider adapter seam</td>
+</tr>
+<tr>
+<td><code>markdown:register_fence</code></td>
+<td>register a webview markdown fence language</td>
+</tr>
+</tbody>
+</table>
+<p>A capability not present in the manifest's <code>capabilities</code>
+array means the matching seam call returns
+<code>*_capability_missing</code> and is dropped.</p>
+<h2 id="44-the-effect-vocabulary">4.4 The effect vocabulary</h2>
+<table>
+<thead>
+<tr>
+<th>Effect</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_events</code></td>
+<td>subscribe to the bus</td>
+</tr>
+<tr>
+<td><code>read_internal_graph</code></td>
+<td>read internal-tier files (graph, validated edges, tensions)</td>
+</tr>
+<tr>
+<td><code>read_external_state</code></td>
+<td>read external-tier files (features, archetypes, ADRs, UI
+registry)</td>
+</tr>
+<tr>
+<td><code>write_internal_graph</code></td>
+<td>mutate the graph</td>
+</tr>
+<tr>
+<td><code>modify_tensions</code></td>
+<td>create/resolve tensions</td>
+</tr>
+<tr>
+<td><code>emit_resource</code></td>
+<td>register/update an MCP resource</td>
+</tr>
+<tr>
+<td><code>emit_tool</code></td>
+<td>register an MCP tool</td>
+</tr>
+<tr>
+<td><code>emit_event</code></td>
+<td>publish events</td>
+</tr>
+<tr>
+<td><code>emit_webhook</code></td>
+<td>(reserved) outbound HTTP via webhook worker</td>
+</tr>
+<tr>
+<td><code>register_schedule_action</code></td>
+<td>(reserved) custom schedule action</td>
+</tr>
+<tr>
+<td><code>invoke_llm</code></td>
+<td>call the host LLM proxy</td>
+</tr>
+<tr>
+<td><code>mutate_ui_registry</code></td>
+<td>register/update UI elements</td>
+</tr>
+<tr>
+<td><code>propose_policy</code></td>
+<td>append discipline rules</td>
+</tr>
+<tr>
+<td><code>provide_archetypes</code></td>
+<td>feed federation archetypes</td>
+</tr>
+<tr>
+<td><code>render_markdown_fence</code></td>
+<td>declare a webview markdown fence</td>
+</tr>
+<tr>
+<td><code>register_provider_adapter</code></td>
+<td>(reserved) provider adapter</td>
+</tr>
+</tbody>
+</table>
+<h2 id="45-naming-rules--both-ids-and-tool-names">4.5 Naming rules —
+both ids and tool names</h2>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Pattern</th>
+<th>Reject reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td><code>^[a-z0-9][a-z0-9.-]*[a-z0-9]$</code> (DNS-like)</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td>Tool <code>name</code></td>
+<td><code>&lt;plugin-id&gt;.&lt;tool_name&gt;</code> (lowercase,
+dot-prefixed)</td>
+<td><code>tool_name_unprefixed</code></td>
+</tr>
+<tr>
+<td>Resource <code>uri</code></td>
+<td><code>plugin://&lt;plugin-id&gt;/...</code></td>
+<td><code>resource_uri_out_of_namespace</code></td>
+</tr>
+<tr>
+<td>UI element <code>id</code></td>
+<td>starts with <code>&lt;plugin-id&gt;.</code></td>
+<td><code>ui_id_unprefixed</code></td>
+</tr>
+<tr>
+<td>Policy proposal id</td>
+<td>lowercase <code>[a-z0-9._-]+</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td>Markdown fence lang</td>
+<td>lowercase <code>[a-z0-9._-]+</code>, no collision</td>
+<td><code>markdown_fence_language_invalid</code> /
+<code>_collision</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Per ADR-128</strong>, tool names must carry primary
+semantics: a model should be able to infer the dominant action and
+target from the name alone, without reading the description. Prefer
+<code>summarize_week</code> over <code>process_data</code>.</p>
+<h2 id="46-engine-version-range">4.6 Engine version range</h2>
+<p><code>engine.dreamgraph</code> is a semver range. The host refuses to
+load plugins whose range excludes the current engine version
+(<code>engine_version_mismatch</code>). Ship the narrowest range that
+actually works — <code>&gt;=9.0.0</code> is appropriate for v1
+plugins.</p>
+<p><a href="03-anatomy.html">← Anatomy</a> · <a
+href="05-plugin-context.html">Next: PluginContext →</a></p>
+</body>
+</html>

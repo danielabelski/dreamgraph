@@ -1,0 +1,185 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>12-best-practices</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#12-best-practices-and-pitfalls"
+id="toc-12-best-practices-and-pitfalls">12. Best practices and
+pitfalls</a>
+<ul>
+<li><a href="#121-do" id="toc-121-do">12.1 Do</a></li>
+<li><a href="#122-dont" id="toc-122-dont">12.2 Don't</a></li>
+<li><a href="#123-pitfalls-compendium"
+id="toc-123-pitfalls-compendium">12.3 Pitfalls (compendium)</a></li>
+<li><a href="#124-the-shipping-checklist"
+id="toc-124-the-shipping-checklist">12.4 The shipping checklist</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="12-best-practices-and-pitfalls">12. Best practices and
+pitfalls</h1>
+<p><a href="11-telemetry-debugging-testing.html">← Telemetry &amp;
+testing</a> · <a href="00-index.html">Index ↑</a></p>
+<h2 id="121-do">12.1 Do</h2>
+<ul>
+<li><strong>Name everything for the model, not the human.</strong>
+ADR-128 — tool names must carry the dominant action and target. A model
+should not need your description to pick the right tool.</li>
+<li><strong>Declare every effect.</strong> <code>expectedEffects</code>
+is read by operators and by the discipline engine; missing entries are a
+bug, not a convenience.</li>
+<li><strong>Use <code>forbiddenEffects</code> actively.</strong>
+<code>write_internal_graph</code> and <code>modify_tensions</code>
+should be in <em>every</em> plugin's <code>forbiddenEffects</code>
+unless the plugin's entire reason for existing is graph mutation
+(rare).</li>
+<li><strong>Keep handlers fast.</strong> Default timeout is 5 s.
+Anything slower is either awaiting I/O (use <code>ctx.signal</code>) or
+doing CPU work that belongs in a future schedule action.</li>
+<li><strong>Log through <code>ctx.logger</code>.</strong> Operators see
+those lines. <code>console.log</code> lines do not propagate to the
+bus.</li>
+<li><strong>Treat the bus as at-most-once.</strong> Reconstruct critical
+state from a resource read, not from your subscriber buffer.</li>
+<li><strong>Pin <code>engine.dreamgraph</code> accurately.</strong>
+<code>&gt;=9.0.0</code> is the right floor for v1.</li>
+<li><strong>Ship a README in your plugin folder.</strong>
+<code>dg plugin inspect</code> shows it.</li>
+</ul>
+<h2 id="122-dont">12.2 Don't</h2>
+<ul>
+<li><strong>Don't import from <code>dreamgraph/src/...</code>.</strong>
+The only stable import is <code>@dreamgraph/sdk</code>. Daemon internals
+change without notice.</li>
+<li><strong>Don't reach for <code>fs</code>, <code>process</code>, or
+<code>child_process</code>.</strong> Even though the M3 model can't
+physically stop you, doing so is a trust violation and the operator may
+quarantine your plugin.</li>
+<li><strong>Don't rely on a shared global between handlers.</strong> The
+host may call <code>deactivate</code> and re-<code>activate</code>
+between requests; rebuild state inside <code>activate(ctx)</code> so a
+re-enable is clean.</li>
+<li><strong>Don't poll on a <code>setInterval</code>.</strong> Use the
+schedule action seam once M4 ships. Until then, recurring work belongs
+in the host.</li>
+<li><strong>Don't depend on plugin load order.</strong> Plugins are
+independent. If your plugin needs another plugin's data, read its MCP
+resource explicitly.</li>
+<li><strong>Don't ship secrets in <code>plugin.json</code> or in the
+entry module.</strong> The manifest is world-readable. Use the
+per-plugin config block (<code>config.schema</code>) and document where
+the operator should put credentials (typically
+<code>&lt;instance&gt;/config/&lt;plugin-id&gt;.json</code>).</li>
+</ul>
+<h2 id="123-pitfalls-compendium">12.3 Pitfalls (compendium)</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Plugin shows in <code>dg plugin list</code> but no banner</td>
+<td><code>DG_ALLOW_INPROCESS_PLUGINS</code> is false.</td>
+</tr>
+<tr>
+<td>Banner appears, no contributions visible</td>
+<td>Capability missing in <code>capabilities</code> array.</td>
+</tr>
+<tr>
+<td>Tool args arrive empty</td>
+<td>Bug in engine &lt; 8.3.0; upgrade. Or tool registered with no
+<code>inputSchema</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected{ effect_undeclared }</code></td>
+<td>You emit an event/register a tool whose effect is not in
+<code>expectedEffects</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected{ tool_name_unprefixed }</code></td>
+<td>Tool name doesn't start with <code>&lt;plugin-id&gt;.</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected{ resource_uri_out_of_namespace }</code></td>
+<td>Resource URI doesn't start with
+<code>plugin://&lt;plugin-id&gt;/</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.errored{ event_loop_stall }</code></td>
+<td>Handler did synchronous CPU work &gt;
+<code>DG_EVENT_LOOP_LAG_MS</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.errored{ handler_timeout }</code></td>
+<td>Handler didn't return inside the timeout; honor
+<code>ctx.signal</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.errored{ engine_version_mismatch }</code></td>
+<td><code>engine.dreamgraph</code> semver excludes this engine.</td>
+</tr>
+<tr>
+<td>Webhook never fires for your custom event</td>
+<td>The webhook subscription's <code>events[]</code> doesn't list your
+kind.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="124-the-shipping-checklist">12.4 The shipping checklist</h2>
+<p>Before publishing a plugin:</p>
+<ul class="task-list">
+<li><label><input type="checkbox" />Manifest validates against
+<code>parsePluginManifest</code>.</label></li>
+<li><label><input type="checkbox" />Every tool/resource/UI/policy id is
+<code>&lt;plugin-id&gt;.*</code>.</label></li>
+<li><label><input type="checkbox" />Every effect the plugin performs is
+in <code>expectedEffects</code>.</label></li>
+<li><label><input type="checkbox" /><code>forbiddenEffects</code>
+contains everything the plugin guarantees not to do.</label></li>
+<li><label><input type="checkbox" />README explains: install steps,
+required config, what each tool returns.</label></li>
+<li><label><input type="checkbox" />Manifest tested with at least one
+manifest fixture test.</label></li>
+<li><label><input type="checkbox" />Hello-world tool round-trips an
+argument over MCP.</label></li>
+<li><label><input type="checkbox" />On <code>dg plugin disable</code>,
+all contributions are gone (manual <code>Get-Content</code> on the four
+data files confirms this).</label></li>
+<li><label><input type="checkbox" />Trust banner appears on load;
+<code>system://plugins</code> shows
+<code>status: "loaded"</code>.</label></li>
+</ul>
+<p><a href="11-telemetry-debugging-testing.html">← Telemetry &amp;
+testing</a> · <a href="00-index.html">Index ↑</a></p>
+</body>
+</html>

@@ -4,7 +4,7 @@
   "displayName": "Example Plugin",
   "description": "Minimal valid manifest fixture for SDK schema validation.",
   "engine": {
-    "dreamgraph": ">=8.3.0"
+    "dreamgraph": ">=9.0.0"
   },
   "main": "./dist/index.js",
   "intent": "Validate the minimum plugin manifest contract.",

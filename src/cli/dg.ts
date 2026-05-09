@@ -43,7 +43,7 @@ import { cmdSchedule } from "./commands/schedule.js";
 
 function printUsage(): void {
   console.log(`
-DreamGraph CLI — Instance Management (v8.3.0 Bedrock)
+DreamGraph CLI — Instance Management (v9.0.0 Lattice)
 
 Usage:
   dg <command> [options]
@@ -68,6 +68,8 @@ Commands:
   export <query> --format <f> Export instance data (snapshot|docs|archetypes)
   fork <query> [--name <n>]   Fork an instance (copy all data)
   migrate                     Migrate legacy flat data/ to a UUID instance
+  plugin <subcmd> <query>     Manage host runtime plugins (list/inspect/enable/disable/trust/untrust/reload/unload)
+  webhook <subcmd> <query>    Manage outbound webhook subscriptions (M5: list/add/remove/enable/disable/test/dead-letter/replay)
 
 Options:
   --help, -h                  Show this help message
@@ -78,7 +80,7 @@ Run 'dg <command> --help' for command-specific options.
 }
 
 function printVersion(): void {
-  console.log("DreamGraph CLI v8.3.0 (Bedrock)");
+  console.log("DreamGraph CLI v9.0.0 (Lattice)");
 }
 
 /* ------------------------------------------------------------------ */
@@ -87,12 +89,28 @@ function printVersion(): void {
 
 export interface ParsedArgs {
   positional: string[];
-  flags: Record<string, string | true>;
+  flags: Record<string, string | string[] | true>;
 }
 
 export function parseCliArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
-  const flags: Record<string, string | true> = {};
+  const flags: Record<string, string | string[] | true> = {};
+
+  const assign = (key: string, value: string | true): void => {
+    const existing = flags[key];
+    if (existing === undefined) {
+      flags[key] = value;
+      return;
+    }
+    // Repeated flag: collect into an array. `true` (bare flag) is
+    // overwritten by a value; bare repeats stay `true`.
+    if (value === true) return;
+    if (existing === true) {
+      flags[key] = value;
+      return;
+    }
+    flags[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -100,19 +118,19 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       const key = arg.slice(2);
       const next = argv[i + 1];
       if (next && !next.startsWith("--")) {
-        flags[key] = next;
+        assign(key, next);
         i++;
       } else {
-        flags[key] = true;
+        assign(key, true);
       }
     } else if (arg.startsWith("-") && arg.length === 2) {
       const key = arg.slice(1);
       const next = argv[i + 1];
       if (next && !next.startsWith("-")) {
-        flags[key] = next;
+        assign(key, next);
         i++;
       } else {
-        flags[key] = true;
+        assign(key, true);
       }
     } else {
       positional.push(arg);
@@ -232,6 +250,20 @@ async function main(): Promise<void> {
       case "migrate":
         await cmdMigrate(positional.slice(1), flags);
         break;
+
+      case "plugin":
+      case "plugins": {
+        const { cmdPlugin } = await import("./commands/plugin.js");
+        await cmdPlugin(positional.slice(1), flags);
+        break;
+      }
+
+      case "webhook":
+      case "webhooks": {
+        const { cmdWebhook } = await import("./commands/webhook.js");
+        await cmdWebhook(positional.slice(1), flags);
+        break;
+      }
 
       default:
         console.error(`Unknown command: ${command}`);

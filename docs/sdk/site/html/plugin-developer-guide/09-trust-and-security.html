@@ -1,0 +1,158 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>09-trust-and-security</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#9-trust-and-security-model"
+id="toc-9-trust-and-security-model">9. Trust and security model</a>
+<ul>
+<li><a href="#91-the-execution-boundary"
+id="toc-91-the-execution-boundary">9.1 The execution boundary</a></li>
+<li><a href="#92-the-two-safety-switches"
+id="toc-92-the-two-safety-switches">9.2 The two safety switches</a></li>
+<li><a href="#93-the-trust-banner" id="toc-93-the-trust-banner">9.3 The
+trust banner</a></li>
+<li><a href="#94-the-event-loop-watchdog"
+id="toc-94-the-event-loop-watchdog">9.4 The event-loop watchdog</a></li>
+<li><a href="#95-what-quarantine-means"
+id="toc-95-what-quarantine-means">9.5 What "quarantine" means</a></li>
+<li><a href="#96-coming-in-m8" id="toc-96-coming-in-m8">9.6 Coming in
+M8</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="9-trust-and-security-model">9. Trust and security model</h1>
+<p><a href="08-seams-closure.html">← Closure seams</a> · <a
+href="10-lifecycle-and-installation.html">Next: Lifecycle →</a></p>
+<p>DreamGraph v1 ships the <strong>trusted in-process plugin
+model</strong>. This section is required reading before you publish or
+install a plugin.</p>
+<h2 id="91-the-execution-boundary">9.1 The execution boundary</h2>
+<p>Plugins run <strong>inside the daemon's Node process</strong>. They
+share its heap, its file descriptors, and its operating-system
+permissions. The host:</p>
+<ul>
+<li>Enforces the manifest schema and capability gates at the API
+boundary;</li>
+<li>Mediates every host-owned effect (tool registration, resource
+registration, UI/policy/archetype/fence writes, event emission);</li>
+<li>Refuses to load anything not under
+<code>&lt;instance&gt;/plugins/</code> or
+<code>instance.json:plugins[]</code>;</li>
+<li>Refuses to load anything unless
+<code>DG_ALLOW_INPROCESS_PLUGINS=true</code> AND the plugin is
+explicitly <code>trusted: true</code>.</li>
+</ul>
+<p>The host <strong>cannot</strong> prevent malicious plugin code from
+reaching <code>process</code>, <code>fs</code>,
+<code>child_process</code>, or any other Node global. Reaching around
+<code>ctx</code> is a trust violation and grounds for quarantine, not a
+sandbox escape.</p>
+<blockquote>
+<p><strong>Mental model:</strong> installing a DreamGraph plugin is
+closer to editing your <code>~/.bashrc</code> than to installing a
+browser extension. Only install plugins from sources you trust as much
+as you trust the daemon itself.</p>
+</blockquote>
+<h2 id="92-the-two-safety-switches">9.2 The two safety switches</h2>
+<table>
+<thead>
+<tr>
+<th>Switch</th>
+<th>Where</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DG_ALLOW_INPROCESS_PLUGINS</code></td>
+<td>engine.env / process env</td>
+<td><code>false</code></td>
+<td>Operator-wide kill switch. While off, no plugin loads.</td>
+</tr>
+<tr>
+<td><code>instance.json:plugins[].trusted</code></td>
+<td>per-plugin entry in <code>instance.json</code></td>
+<td><code>false</code></td>
+<td>Per-plugin opt-in. Set with
+<code>dg plugin trust &lt;id&gt;</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Loading occurs <strong>only</strong> when both are true. The host
+emits <code>in_process_execution_disabled</code> and refuses the plugin
+otherwise.</p>
+<h2 id="93-the-trust-banner">9.3 The trust banner</h2>
+<p>Every successful in-process load prints exactly one line to the
+daemon log:</p>
+<pre><code>plugin &lt;id&gt;@&lt;ver&gt; loaded with FULL HOST TRUST (in-process)</code></pre>
+<p>If you do not see this line for your plugin, it did not load. Check
+the log for the matching <code>plugin.errored</code> or
+capability-rejection event.</p>
+<h2 id="94-the-event-loop-watchdog">9.4 The event-loop watchdog</h2>
+<p>A <code>setImmediate</code> heartbeat samples Node event-loop lag. If
+the lag exceeds <code>DG_EVENT_LOOP_LAG_MS</code> (default 250 ms) while
+a plugin handler is on the call stack, the host:</p>
+<ol type="1">
+<li>Marks the handler <code>event_loop_stall</code>;</li>
+<li>Waits for the event loop to become responsive;</li>
+<li>Quarantines the plugin and emits
+<code>plugin.errored{ reason: "event_loop_stall" }</code> with the
+measured lag.</li>
+</ol>
+<p>This is detection, not preemption — the watchdog cannot interrupt
+synchronous CPU-bound code. It exists to make stalls visible
+<em>after</em> they happen so operators can disable the offending
+plugin.</p>
+<h2 id="95-what-quarantine-means">9.5 What "quarantine" means</h2>
+<p>A quarantined plugin:</p>
+<ul>
+<li>Has all its registrations pruned (tools, resources, UI, policies,
+archetypes, fences).</li>
+<li>Stops receiving subscribed events.</li>
+<li>Remains visible in <code>system://plugins</code> with
+<code>status: "quarantined"</code> and the reason code.</li>
+<li>Cannot be reloaded until the operator runs
+<code>dg plugin enable &lt;id&gt;</code> (which re-trusts and
+re-attempts activation).</li>
+</ul>
+<h2 id="96-coming-in-m8">9.6 Coming in M8</h2>
+<p>Worker-thread isolation is planned for M8. Plugins declaring
+<code>runtime: "worker"</code> will be loaded into a
+<code>worker_threads.Worker</code>; the <code>PluginContext</code> is
+marshalled across <code>MessagePort</code>. Worker threads improve fault
+and event-loop isolation but are not, by themselves, a complete sandbox
+for untrusted marketplace code. The trusted in-process model is the only
+published contract until M8 ships.</p>
+<p><a href="08-seams-closure.html">← Closure seams</a> · <a
+href="10-lifecycle-and-installation.html">Next: Lifecycle →</a></p>
+</body>
+</html>
