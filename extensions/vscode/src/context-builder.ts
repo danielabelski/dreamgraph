@@ -1645,10 +1645,11 @@ export class ContextBuilder {
     const symbolName = symbolPath.includes(".")
       ? symbolPath.split(".").pop()!
       : symbolPath;
-    const nameLower = symbolName.toLowerCase();
+    const nameLower = (symbolName ?? "").toLowerCase();
 
-    const matchScore = (candidate: string): number => {
-      const c = candidate.toLowerCase();
+    const matchScore = (candidate: string | undefined | null): number => {
+      const c = (candidate ?? "").toLowerCase();
+      if (!c || !nameLower) return 0;
       if (c === nameLower) return 1.0;
       if (c.startsWith(nameLower) || nameLower.startsWith(c)) return 0.75;
       if (c.includes(nameLower) || nameLower.includes(c)) return 0.5;
@@ -2056,12 +2057,15 @@ export class ContextBuilder {
     const symbolName = symbolPath.includes(".")
       ? symbolPath.split(".").pop()!
       : symbolPath;
-    const nameLower = symbolName.toLowerCase();
+    const nameLower = (symbolName ?? "").toLowerCase();
 
     /** Score a candidate string against the symbol name.
-     *  Returns 0 (no match) → 1 (exact) with intermediate values for prefix / substring. */
-    const matchScore = (candidate: string): number => {
-      const c = candidate.toLowerCase();
+     *  Returns 0 (no match) → 1 (exact) with intermediate values for prefix / substring.
+     *  Defensive: graph entities occasionally arrive with missing id/name/title fields
+     *  (legacy data, partial scans). Coerce to '' instead of crashing the continuation pass. */
+    const matchScore = (candidate: string | undefined | null): number => {
+      const c = (candidate ?? "").toLowerCase();
+      if (!c || !nameLower) return 0;
       if (c === nameLower) return 1.0;           // exact
       if (c.startsWith(nameLower) || nameLower.startsWith(c)) return 0.75; // prefix
       if (c.includes(nameLower) || nameLower.includes(c)) return 0.5;      // substring
@@ -2217,11 +2221,14 @@ export class ContextBuilder {
       };
     }
 
-    // Partial / fuzzy match → heavy drift, lower confidence
-    const fuzzyMatch = currentSymbols.some((s) =>
-      s.name.toLowerCase().includes(leafName.toLowerCase()) ||
-      leafName.toLowerCase().includes(s.name.toLowerCase()),
-    );
+    // Partial / fuzzy match → heavy drift, lower confidence. Defensive: tolerate
+    // symbols whose name field is missing or non-string (legacy graph data).
+    const leafLower = (leafName ?? "").toLowerCase();
+    const fuzzyMatch = leafLower.length > 0 && currentSymbols.some((s) => {
+      const sn = (s.name ?? "").toLowerCase();
+      if (!sn) return false;
+      return sn.includes(leafLower) || leafLower.includes(sn);
+    });
     if (fuzzyMatch) {
       return {
         ...anchor,

@@ -58,9 +58,13 @@ export declare class McpClient implements vscode.Disposable {
      */
     getCognitiveStatus(): Promise<unknown>;
     /**
-     * Query a DreamGraph resource by type (feature, workflow, etc.)
+     * Query a DreamGraph resource by URI and optional top-level field filter.
+     *
+     * Examples:
+     * - queryResource("system://features")
+     * - queryResource("dream://adrs", { status: "accepted" })
      */
-    queryResource(type: string, name?: string): Promise<unknown>;
+    queryResource(uri: string, filter?: Record<string, unknown>): Promise<unknown>;
     /**
      * Query architecture decisions.
      */

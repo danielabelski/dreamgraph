@@ -260,6 +260,34 @@ export function getStyles(): string {
     }
     .attachment-remove:hover { opacity: 1; }
 
+    /* ── In-bubble attachment snapshot (user message) ── */
+    .message-attachments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .message-attachment-thumb {
+      max-width: 140px;
+      max-height: 140px;
+      border-radius: 4px;
+      border: 1px solid var(--vscode-panel-border);
+      object-fit: cover;
+      display: block;
+    }
+    .message-attachment-file {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      line-height: 1.4;
+      opacity: 0.85;
+    }
+
     /* ── Composer ── */
     #composer {
       display: flex;
@@ -927,6 +955,40 @@ export function getStyles(): string {
       border-bottom: 1px solid var(--vscode-panel-border);
       background: var(--vscode-sideBarSectionHeader-background, transparent);
       font-size: 0.82em;
+    }
+    /* Patch #1.5: header autonomy dropdown + pass/time budget pills */
+    .autonomy-mode-select {
+      min-width: 100px;
+    }
+    .pass-budget, .time-budget {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 0.78em;
+      font-variant-numeric: tabular-nums;
+      padding: 2px 6px;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 3px;
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.9;
+    }
+    .pass-budget-active {
+      color: var(--vscode-charts-green, #89d185);
+      border-color: currentColor;
+    }
+    .pass-budget-low {
+      color: var(--vscode-charts-orange, #d18616);
+      border-color: currentColor;
+    }
+    .time-budget {
+      opacity: 0.5; /* default — overridden by ticker when a budget is active */
+    }
+    .time-budget-active { opacity: 1; }
+    .time-budget-low {
+      color: var(--vscode-charts-orange, #d18616);
+      border-color: currentColor;
+    }
+    .time-budget-exhausted {
+      color: var(--vscode-errorForeground, #f14c4c);
+      border-color: currentColor;
     }
     .autonomy-mode {
       font-weight: 600;

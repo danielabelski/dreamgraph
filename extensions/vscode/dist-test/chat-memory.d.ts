@@ -6,6 +6,7 @@
  * state across workspaces or daemon targets.
  */
 import * as vscode from 'vscode';
+import type { BudgetSnapshot } from './budget-coordinator.js';
 export interface PersistedMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
@@ -26,10 +27,23 @@ export interface PersistedMessage {
 export declare class ChatMemory {
     private readonly context;
     private static readonly storageKeyPrefix;
+    private static readonly budgetStorageKeyPrefix;
     constructor(context: vscode.ExtensionContext);
     load(instanceId: string): Promise<PersistedMessage[]>;
     save(instanceId: string, messages: PersistedMessage[]): Promise<void>;
     clear(instanceId: string): Promise<void>;
+    /**
+     * Phase 2: load the per-instance BudgetSnapshot + turn counter, if any.
+     * Returns `null` for fresh instances. Malformed entries are treated as
+     * absent — the coordinator handles `null` cleanly.
+     */
+    loadBudgetState(instanceId: string): Promise<{
+        snapshot: BudgetSnapshot;
+        turnCounter: number;
+    } | null>;
+    saveBudgetState(instanceId: string, snapshot: BudgetSnapshot, turnCounter: number): Promise<void>;
+    clearBudgetState(instanceId: string): Promise<void>;
     private getStorageKey;
+    private getBudgetStorageKey;
 }
 //# sourceMappingURL=chat-memory.d.ts.map

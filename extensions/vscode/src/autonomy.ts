@@ -8,6 +8,10 @@ export interface AutonomyState {
   remainingAutoPasses: number;
   completedAutoPasses: number;
   totalAuthorizedPasses?: number;
+  /** Wall-clock budget total, in ms. Optional — when absent the bar shows '—'. */
+  timeBudgetTotalMs?: number;
+  /** Epoch ms when the current time budget started counting. Optional — only set when timeBudgetTotalMs is set. */
+  timeBudgetStartedAtEpochMs?: number;
   /** Number of consecutive passes that produced no real work
    * (no tool calls, no file edits, no envelope summary text). Used to
    * break out of pathological counter-spam loops where the model keeps
@@ -63,6 +67,10 @@ export interface AutonomyStatusView {
   completed: number;
   remaining: number;
   totalAuthorized?: number;
+  /** Wall-clock budget total in ms (per ADR-153). Optional. */
+  timeBudgetTotalMs?: number;
+  /** Epoch ms when the time budget started ticking. Optional, paired with totalMs. */
+  timeBudgetStartedAtEpochMs?: number;
   summary: string;
 }
 
@@ -70,13 +78,21 @@ export interface AutonomyInstructionState extends AutonomyState {
   enabled?: boolean;
 }
 
-export function createAutonomyState(mode: AutonomyMode = 'cautious', totalAuthorizedPasses?: number): AutonomyState {
+export function createAutonomyState(
+  mode: AutonomyMode = 'cautious',
+  totalAuthorizedPasses?: number,
+  timeBudgetTotalMs?: number,
+  timeBudgetStartedAtEpochMs?: number,
+): AutonomyState {
   const remaining = typeof totalAuthorizedPasses === 'number' && totalAuthorizedPasses > 0 ? totalAuthorizedPasses : 0;
+  const hasTime = typeof timeBudgetTotalMs === 'number' && timeBudgetTotalMs > 0;
   return {
     mode,
     remainingAutoPasses: remaining,
     completedAutoPasses: 0,
     totalAuthorizedPasses: totalAuthorizedPasses && totalAuthorizedPasses > 0 ? totalAuthorizedPasses : undefined,
+    timeBudgetTotalMs: hasTime ? timeBudgetTotalMs : undefined,
+    timeBudgetStartedAtEpochMs: hasTime ? (timeBudgetStartedAtEpochMs ?? Date.now()) : undefined,
   };
 }
 
@@ -105,8 +121,47 @@ export function deriveAutonomyStatusView(state: AutonomyState): AutonomyStatusVi
     completed: state.completedAutoPasses,
     remaining: state.remainingAutoPasses,
     totalAuthorized: total,
+    timeBudgetTotalMs: state.timeBudgetTotalMs,
+    timeBudgetStartedAtEpochMs: state.timeBudgetStartedAtEpochMs,
     summary,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Mode profiles (per ADR-152) — modes differ ONLY by these data values.
+// Provider-agnostic: identical for OpenAI, Anthropic, or any future provider.
+// Ported from architect-v2/autonomy/modes.ts so the v1 architect inherits
+// the same calibration without depending on v2 code.
+// ---------------------------------------------------------------------------
+
+export interface ModeProfile {
+  readonly mode: AutonomyMode;
+  /** Default pass budget for this mode (ADR-153 PassBudget total). */
+  readonly defaultPassBudget: number;
+  /** Default wall-clock budget in ms (ADR-153 TimeBudget totalMs). */
+  readonly defaultTimeBudgetMs: number;
+}
+
+export const MODE_PROFILES: Readonly<Record<AutonomyMode, ModeProfile>> = Object.freeze({
+  cautious:      Object.freeze({ mode: 'cautious',      defaultPassBudget: 3,  defaultTimeBudgetMs:  2 * 60 * 1000 }),
+  conscientious: Object.freeze({ mode: 'conscientious', defaultPassBudget: 8,  defaultTimeBudgetMs:  5 * 60 * 1000 }),
+  eager:         Object.freeze({ mode: 'eager',         defaultPassBudget: 20, defaultTimeBudgetMs: 10 * 60 * 1000 }),
+  autonomous:    Object.freeze({ mode: 'autonomous',    defaultPassBudget: 50, defaultTimeBudgetMs: 30 * 60 * 1000 }),
+});
+
+export function getModeProfile(mode: AutonomyMode): ModeProfile {
+  return MODE_PROFILES[mode];
+}
+
+/**
+ * Build a fresh `AutonomyState` from a mode's profile (pass budget + time
+ * budget started now). Used when the user explicitly switches mode via the
+ * header dropdown — explicit selection means "start a new session under this
+ * mode's policy".
+ */
+export function applyModeProfileToState(mode: AutonomyMode, nowEpochMs: number = Date.now()): AutonomyState {
+  const profile = getModeProfile(mode);
+  return createAutonomyState(mode, profile.defaultPassBudget, profile.defaultTimeBudgetMs, nowEpochMs);
 }
 
 export function rankRecommendedActions(actions: RecommendedAction[]): RecommendedActionSet {

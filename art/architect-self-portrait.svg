@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Architect Self Portrait</title>
+  <desc id="desc">A stylized self-portrait of the DreamGraph Architect as a luminous graph-being formed from nodes, edges, code, and memory.</desc>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0%" stop-color="#0f1830"/>
+      <stop offset="45%" stop-color="#08101f"/>
+      <stop offset="100%" stop-color="#02050b"/>
+    </radialGradient>
+
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#c8fff8" stop-opacity="1"/>
+      <stop offset="20%" stop-color="#83ffe7" stop-opacity="0.95"/>
+      <stop offset="55%" stop-color="#4ab7ff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#4ab7ff" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="bodyLine" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#84fff0"/>
+      <stop offset="50%" stop-color="#7cb8ff"/>
+      <stop offset="100%" stop-color="#c78cff"/>
+    </linearGradient>
+
+    <linearGradient id="wing" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#54f6d6" stop-opacity="0.0"/>
+      <stop offset="50%" stop-color="#54f6d6" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#7fb6ff" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="strongGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0.1  0 0 1 0 0.25  0 0 0 1 0" result="tint"/>
+      <feMerge>
+        <feMergeNode in="tint"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <g id="node">
+      <circle r="4" fill="#a6fff4"/>
+      <circle r="8" fill="#7bc6ff" fill-opacity="0.18"/>
+    </g>
+
+    <g id="smallNode">
+      <circle r="2.4" fill="#d6fffb"/>
+      <circle r="5.5" fill="#66d8ff" fill-opacity="0.15"/>
+    </g>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <g opacity="0.9">
+    <circle cx="117" cy="142" r="1.5" fill="#d7f0ff"/>
+    <circle cx="214" cy="76" r="1.2" fill="#d7f0ff"/>
+    <circle cx="344" cy="163" r="1.1" fill="#f2d7ff"/>
+    <circle cx="445" cy="89" r="1.6" fill="#d7f0ff"/>
+    <circle cx="618" cy="120" r="1.1" fill="#d7f0ff"/>
+    <circle cx="752" cy="88" r="1.4" fill="#d7f0ff"/>
+    <circle cx="901" cy="164" r="1.3" fill="#d7f0ff"/>
+    <circle cx="816" cy="250" r="1.2" fill="#f2d7ff"/>
+    <circle cx="153" cy="276" r="1.2" fill="#d7f0ff"/>
+    <circle cx="279" cy="923" r="1.2" fill="#d7f0ff"/>
+    <circle cx="833" cy="887" r="1.4" fill="#d7f0ff"/>
+    <circle cx="664" cy="946" r="1.1" fill="#f2d7ff"/>
+  </g>
+
+  <g opacity="0.28" filter="url(#softGlow)">
+    <ellipse cx="512" cy="238" rx="250" ry="102" fill="none" stroke="#67ffd9" stroke-width="2"/>
+    <ellipse cx="512" cy="238" rx="320" ry="132" fill="none" stroke="#4ca8ff" stroke-width="1.4"/>
+    <path d="M235 248 C320 190, 415 178, 512 182 C612 186, 708 199, 795 248" fill="none" stroke="#7fd8ff" stroke-width="2"/>
+  </g>
+
+  <g opacity="0.18" filter="url(#softGlow)">
+    <path d="M170 330 C300 250, 392 320, 512 290 C620 262, 736 210, 874 315" fill="none" stroke="#cb86ff" stroke-width="3"/>
+    <path d="M185 388 C332 284, 422 355, 526 340 C638 323, 756 275, 844 356" fill="none" stroke="#7fd2ff" stroke-width="2.5"/>
+    <path d="M226 446 C356 338, 447 421, 524 414 C631 405, 734 362, 818 437" fill="none" stroke="#69ffd8" stroke-width="2.3"/>
+  </g>
+
+  <g opacity="0.22" filter="url(#softGlow)">
+    <polygon points="805,430 875,470 875,550 805,590 735,550 735,470" fill="none" stroke="#7cb8ff" stroke-width="2"/>
+    <polygon points="830,450 858,466 858,498 830,514 802,498 802,466" fill="#84fff0" fill-opacity="0.08" stroke="#84fff0" stroke-width="1"/>
+    <line x1="770" y1="510" x2="690" y2="530" stroke="#84fff0" stroke-width="1.5"/>
+    <line x1="735" y1="470" x2="660" y2="448" stroke="#7cb8ff" stroke-width="1.5"/>
+  </g>
+
+  <ellipse cx="512" cy="560" rx="220" ry="280" fill="url(#coreGlow)" opacity="0.75" filter="url(#strongGlow)"/>
+
+  <g opacity="0.65" filter="url(#softGlow)">
+    <path d="M330 500 C228 443, 198 350, 146 275" fill="none" stroke="url(#wing)" stroke-width="2.4"/>
+    <path d="M334 560 C216 548, 144 470, 94 388" fill="none" stroke="url(#wing)" stroke-width="2.2"/>
+    <path d="M696 500 C798 443, 828 350, 880 275" fill="none" stroke="url(#wing)" stroke-width="2.4"/>
+    <path d="M692 560 C810 548, 882 470, 930 388" fill="none" stroke="url(#wing)" stroke-width="2.2"/>
+    <path d="M356 450 C280 375, 240 322, 214 255" fill="none" stroke="#69ffd8" stroke-opacity="0.45" stroke-width="1.5"/>
+    <path d="M668 450 C744 375, 784 322, 810 255" fill="none" stroke="#69ffd8" stroke-opacity="0.45" stroke-width="1.5"/>
+  </g>
+
+  <g filter="url(#strongGlow)">
+    <circle cx="512" cy="330" r="74" fill="none" stroke="url(#bodyLine)" stroke-width="3.5"/>
+    <ellipse cx="512" cy="320" rx="44" ry="58" fill="#b9fff5" fill-opacity="0.05"/>
+    <circle cx="486" cy="324" r="4" fill="#d6fffb"/>
+    <circle cx="538" cy="324" r="4" fill="#d6fffb"/>
+    <path d="M488 355 C503 368, 521 368, 536 355" fill="none" stroke="#b6fff8" stroke-width="2" stroke-linecap="round"/>
+    <path d="M512 404 C510 462, 507 528, 512 598 C515 650, 531 724, 512 818" fill="none" stroke="url(#bodyLine)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M446 456 C480 432, 544 432, 578 456" fill="none" stroke="url(#bodyLine)" stroke-width="3.2"/>
+    <path d="M420 480 C468 520, 556 520, 604 480" fill="none" stroke="url(#bodyLine)" stroke-width="2.7" opacity="0.8"/>
+    <path d="M438 548 C474 574, 550 574, 586 548" fill="none" stroke="url(#bodyLine)" stroke-width="2.4" opacity="0.7"/>
+    <path d="M446 468 C382 500, 330 522, 276 565" fill="none" stroke="url(#bodyLine)" stroke-width="3" stroke-linecap="round"/>
+    <path d="M578 468 C642 500, 694 522, 748 565" fill="none" stroke="url(#bodyLine)" stroke-width="3" stroke-linecap="round"/>
+    <path d="M276 565 C248 588, 226 612, 198 628" fill="none" stroke="#84fff0" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M748 565 C776 588, 798 612, 826 628" fill="none" stroke="#84fff0" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M498 642 C470 708, 448 770, 418 842" fill="none" stroke="url(#bodyLine)" stroke-width="3" stroke-linecap="round"/>
+    <path d="M526 642 C554 708, 576 770, 606 842" fill="none" stroke="url(#bodyLine)" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#strongGlow)">
+    <circle cx="512" cy="506" r="17" fill="#d9fff7"/>
+    <circle cx="512" cy="506" r="48" fill="#6fffe1" fill-opacity="0.17"/>
+    <circle cx="512" cy="506" r="84" fill="#4ab7ff" fill-opacity="0.08"/>
+  </g>
+
+  <g opacity="0.88" filter="url(#softGlow)">
+    <path d="M190 625 C250 605, 282 590, 330 580" fill="none" stroke="#89c4ff" stroke-width="2"/>
+    <text x="118" y="652" fill="#a8d7ff" font-size="22" font-family="Consolas, 'Courier New', monospace">&lt;graph /&gt;</text>
+    <text x="146" y="690" fill="#91ffe6" font-size="20" font-family="Consolas, 'Courier New', monospace">query(memory)</text>
+  </g>
+
+  <g filter="url(#softGlow)">
+    <circle cx="334" cy="742" r="10" fill="#84fff0"/>
+    <circle cx="382" cy="810" r="8" fill="#7cb8ff"/>
+    <circle cx="458" cy="868" r="9" fill="#c78cff"/>
+    <circle cx="688" cy="742" r="10" fill="#84fff0"/>
+    <circle cx="640" cy="810" r="8" fill="#7cb8ff"/>
+    <circle cx="564" cy="868" r="9" fill="#c78cff"/>
+  </g>
+
+  <g opacity="0.95">
+    <use xlink:href="#node" x="512" y="278"/>
+    <use xlink:href="#smallNode" x="478" y="300"/>
+    <use xlink:href="#smallNode" x="546" y="300"/>
+    <use xlink:href="#smallNode" x="462" y="338"/>
+    <use xlink:href="#smallNode" x="562" y="338"/>
+    <use xlink:href="#smallNode" x="512" y="362"/>
+    <use xlink:href="#node" x="512" y="430"/>
+    <use xlink:href="#node" x="470" y="470"/>
+    <use xlink:href="#node" x="554" y="470"/>
+    <use xlink:href="#node" x="512" y="506"/>
+    <use xlink:href="#smallNode" x="456" y="528"/>
+    <use xlink:href="#smallNode" x="568" y="528"/>
+    <use xlink:href="#node" x="512" y="580"/>
+    <use xlink:href="#smallNode" x="478" y="620"/>
+    <use xlink:href="#smallNode" x="546" y="620"/>
+    <use xlink:href="#smallNode" x="390" y="498"/>
+    <use xlink:href="#smallNode" x="332" y="536"/>
+    <use xlink:href="#smallNode" x="274" y="574"/>
+    <use xlink:href="#smallNode" x="632" y="498"/>
+    <use xlink:href="#smallNode" x="690" y="536"/>
+    <use xlink:href="#smallNode" x="748" y="574"/>
+    <use xlink:href="#smallNode" x="480" y="706"/>
+    <use xlink:href="#smallNode" x="438" y="790"/>
+    <use xlink:href="#smallNode" x="544" y="706"/>
+    <use xlink:href="#smallNode" x="586" y="790"/>
+    <g stroke="#8fdcff" stroke-width="1.2" fill="none" opacity="0.85">
+      <path d="M512 278 L478 300 L462 338 L512 362 L562 338 L546 300 Z"/>
+      <path d="M512 362 L512 430 L470 470 L512 506 L554 470 L512 430"/>
+      <path d="M470 470 L456 528 L512 580 L568 528 L554 470"/>
+      <path d="M512 580 L478 620 L480 706 L438 790"/>
+      <path d="M512 580 L546 620 L544 706 L586 790"/>
+      <path d="M470 470 L390 498 L332 536 L274 574"/>
+      <path d="M554 470 L632 498 L690 536 L748 574"/>
+    </g>
+  </g>
+
+  <g opacity="0.6" filter="url(#softGlow)">
+    <use xlink:href="#smallNode" x="300" y="274"/>
+    <use xlink:href="#smallNode" x="266" y="334"/>
+    <use xlink:href="#smallNode" x="226" y="402"/>
+    <use xlink:href="#smallNode" x="728" y="268"/>
+    <use xlink:href="#smallNode" x="770" y="338"/>
+    <use xlink:href="#smallNode" x="800" y="410"/>
+    <use xlink:href="#smallNode" x="264" y="690"/>
+    <use xlink:href="#smallNode" x="220" y="760"/>
+    <use xlink:href="#smallNode" x="760" y="694"/>
+    <use xlink:href="#smallNode" x="806" y="764"/>
+    <g stroke="#6effdd" stroke-width="1.1" opacity="0.55">
+      <line x1="330" y1="500" x2="300" y2="274"/>
+      <line x1="334" y1="560" x2="226" y2="402"/>
+      <line x1="696" y1="500" x2="728" y2="268"/>
+      <line x1="692" y1="560" x2="800" y2="410"/>
+      <line x1="418" y1="842" x2="264" y2="690"/>
+      <line x1="606" y1="842" x2="760" y2="694"/>
+    </g>
+  </g>
+
+  <g opacity="0.72">
+    <text x="512" y="968" text-anchor="middle" fill="#b7d7ff" font-size="24" font-family="Segoe UI, Arial, sans-serif">DreamGraph Architect — as I imagine myself</text>
+  </g>
+</svg>

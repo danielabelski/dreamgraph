@@ -1,21 +1,27 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.MODE_PROFILES = void 0;
 exports.createAutonomyState = createAutonomyState;
 exports.isPassCountingActive = isPassCountingActive;
 exports.decrementPassBudget = decrementPassBudget;
 exports.deriveAutonomyStatusView = deriveAutonomyStatusView;
+exports.getModeProfile = getModeProfile;
+exports.applyModeProfileToState = applyModeProfileToState;
 exports.rankRecommendedActions = rankRecommendedActions;
 exports.computeDoAllEligibility = computeDoAllEligibility;
 exports.chooseActionForMode = chooseActionForMode;
 exports.shouldContinueAfterPass = shouldContinueAfterPass;
 exports.getAutonomyInstructionBlock = getAutonomyInstructionBlock;
-function createAutonomyState(mode = 'cautious', totalAuthorizedPasses) {
+function createAutonomyState(mode = 'cautious', totalAuthorizedPasses, timeBudgetTotalMs, timeBudgetStartedAtEpochMs) {
     const remaining = typeof totalAuthorizedPasses === 'number' && totalAuthorizedPasses > 0 ? totalAuthorizedPasses : 0;
+    const hasTime = typeof timeBudgetTotalMs === 'number' && timeBudgetTotalMs > 0;
     return {
         mode,
         remainingAutoPasses: remaining,
         completedAutoPasses: 0,
         totalAuthorizedPasses: totalAuthorizedPasses && totalAuthorizedPasses > 0 ? totalAuthorizedPasses : undefined,
+        timeBudgetTotalMs: hasTime ? timeBudgetTotalMs : undefined,
+        timeBudgetStartedAtEpochMs: hasTime ? (timeBudgetStartedAtEpochMs ?? Date.now()) : undefined,
     };
 }
 function isPassCountingActive(state) {
@@ -41,8 +47,29 @@ function deriveAutonomyStatusView(state) {
         completed: state.completedAutoPasses,
         remaining: state.remainingAutoPasses,
         totalAuthorized: total,
+        timeBudgetTotalMs: state.timeBudgetTotalMs,
+        timeBudgetStartedAtEpochMs: state.timeBudgetStartedAtEpochMs,
         summary,
     };
+}
+exports.MODE_PROFILES = Object.freeze({
+    cautious: Object.freeze({ mode: 'cautious', defaultPassBudget: 3, defaultTimeBudgetMs: 2 * 60 * 1000 }),
+    conscientious: Object.freeze({ mode: 'conscientious', defaultPassBudget: 8, defaultTimeBudgetMs: 5 * 60 * 1000 }),
+    eager: Object.freeze({ mode: 'eager', defaultPassBudget: 20, defaultTimeBudgetMs: 10 * 60 * 1000 }),
+    autonomous: Object.freeze({ mode: 'autonomous', defaultPassBudget: 50, defaultTimeBudgetMs: 30 * 60 * 1000 }),
+});
+function getModeProfile(mode) {
+    return exports.MODE_PROFILES[mode];
+}
+/**
+ * Build a fresh `AutonomyState` from a mode's profile (pass budget + time
+ * budget started now). Used when the user explicitly switches mode via the
+ * header dropdown — explicit selection means "start a new session under this
+ * mode's policy".
+ */
+function applyModeProfileToState(mode, nowEpochMs = Date.now()) {
+    const profile = getModeProfile(mode);
+    return createAutonomyState(mode, profile.defaultPassBudget, profile.defaultTimeBudgetMs, nowEpochMs);
 }
 function rankRecommendedActions(actions) {
     const eligible = actions.filter((action) => action.eligible && action.withinScope);
@@ -90,8 +117,16 @@ function shouldContinueAfterPass(state, signal, actionSet) {
     if (signal.hasBlockingFailure) {
         return { shouldContinue: false, reason: 'Stopped: blocking failure encountered.', selectionMode: 'none' };
     }
+    // Counter-spam guard: two passes in a row that produced no tool calls,
+    // no file edits, and no real report — force user confirmation rather
+    // than burning more pass budget on a model that is silently failing.
+    if ((state.consecutiveEmptyPasses ?? 0) >= 2) {
+        return { shouldContinue: false, reason: 'Paused: two empty passes in a row — select an action or type "resume" to continue.', selectionMode: 'user' };
+    }
     if (!signal.hasClearNextStep) {
-        return { shouldContinue: false, reason: 'Stopped: no clear next step exists.', selectionMode: 'none' };
+        // Pause for user selection rather than hard-stopping. The webview will show
+        // any action chips that were broadcast; the user can select one or type "resume".
+        return { shouldContinue: false, reason: 'Paused: no clear next step identified — select an action or type "resume" to continue.', selectionMode: 'user' };
     }
     if (!signal.nextStepWithinScope) {
         return { shouldContinue: false, reason: 'Stopped: next step is outside current scope.', selectionMode: 'none' };

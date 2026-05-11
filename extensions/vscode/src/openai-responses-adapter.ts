@@ -5,6 +5,10 @@ import {
   compactRawMessagesForProvider,
   minifyToolDefinitions,
 } from "./request-compaction";
+import {
+  ARCHITECT_PASS_JSON_SCHEMA,
+  ARCHITECT_PASS_SCHEMA_NAME,
+} from "./architect-pass-schema.js";
 
 export type OpenAIResponsesReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type OpenAIResponsesTextVerbosity = "low" | "medium" | "high";
@@ -15,6 +19,15 @@ export interface OpenAIResponsesOptions {
   textVerbosity: OpenAIResponsesTextVerbosity;
   rawMessages?: unknown[];
   tools?: ToolDefinition[];
+  /**
+   * When true, attach the canonical `architect_pass_envelope` JSON schema
+   * to the request via `text.format = { type: 'json_schema', strict: true }`.
+   * The Responses API enforces the schema server-side: model output is
+   * grammar-constrained to the schema and parses cleanly with JSON.parse.
+   * When the model decides to call a tool instead, it emits a `function_call`
+   * output item and no text — strict mode does not interfere with tool use.
+   */
+  structuredOutput?: boolean;
 }
 
 export interface OpenAIResponsesData {
@@ -49,7 +62,17 @@ export function buildOpenAIResponsesRequest(
       ? translateRawToOpenAIResponses(compactedRawMessages)
       : compactedMessages.map((m) => ({ role: m.role, content: toOpenAIResponsesContent(m.content) })),
     reasoning: { effort: options.reasoningEffort },
-    text: { verbosity: options.textVerbosity },
+    text: options.structuredOutput
+      ? {
+          verbosity: options.textVerbosity,
+          format: {
+            type: "json_schema",
+            name: ARCHITECT_PASS_SCHEMA_NAME,
+            schema: ARCHITECT_PASS_JSON_SCHEMA,
+            strict: true,
+          },
+        }
+      : { verbosity: options.textVerbosity },
     // Stateless multi-turn tool loops on gpt-5.5/o-series require these:
     //   * store=false: opt out of server-side state retention (we replay).
     //   * include reasoning.encrypted_content: the only way to get the

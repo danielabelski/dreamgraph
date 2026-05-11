@@ -1,6 +1,6 @@
-# Plugin Context M0 Notes
+# Plugin Context
 
-M1 exposes declaration helpers only. The runtime `PluginContext` is intentionally minimal and non-authoritative until host loading ships later.
+`PluginContext` is part of the shipped DreamGraph v9.0.0 plugin baseline. It is an authoritative runtime surface used by loaded plugins for capabilities such as logging, resource access, tool interaction, lifecycle-aware behavior, and other host-provided integrations. Earlier roadmap-era wording that described it as provisional or pending future host loading no longer applies after the M0–M6 baseline recorded in ADR-139.
 
 ## Current declaration context
 

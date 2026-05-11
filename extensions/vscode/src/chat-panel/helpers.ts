@@ -66,8 +66,49 @@ export function stringifyToolResult(result: unknown): string {
   }
 }
 
-export function deriveVerdict(content: string, trace: ToolTraceEntry[]): VerdictBanner {
-  const normalized = content.toLowerCase();
+/**
+ * Patch #1 (renderer invariant): payload-safe stringifier for OutcomeCards.
+ * Same shape as stringifyToolResult but with a hard length ceiling so a
+ * runaway tool result cannot blow past the chat render limit. The full
+ * payload is still recoverable via the underlying tool trace.
+ */
+const OUTCOME_PAYLOAD_MAX_CHARS = 8_000;
+export function safeStringifyForOutcome(result: unknown): string {
+  const raw = stringifyToolResult(result);
+  if (raw.length <= OUTCOME_PAYLOAD_MAX_CHARS) return raw;
+  const head = raw.slice(0, OUTCOME_PAYLOAD_MAX_CHARS);
+  return `${head}\n\n[... ${(raw.length - OUTCOME_PAYLOAD_MAX_CHARS).toLocaleString()} chars omitted from outcome payload ...]`;
+}
+
+/**
+ * Derive a one-line summary for an OutcomeCard subtitle. Prefers a top-level
+ * `summary`/`message`/`status` field on the parsed payload, falls back to a
+ * single-line snippet of the payload text. Always returns at most 200 chars
+ * with no embedded newlines so it is safe to splat onto the fence header.
+ */
+export function summarizeOutcomePayload(payloadText: string): string {
+  if (!payloadText) return '';
+  // Try to pull a structured summary out of a JSON payload.
+  const trimmed = payloadText.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      for (const key of ['summary', 'message', 'status', 'description']) {
+        const v = parsed[key];
+        if (typeof v === 'string' && v.trim()) {
+          return v.replace(/\s+/g, ' ').trim().slice(0, 200);
+        }
+      }
+    } catch {
+      // not JSON — fall through to text snippet
+    }
+  }
+  const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? '';
+  return firstLine.replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+export function deriveVerdict(content: string | undefined, trace: ToolTraceEntry[]): VerdictBanner {
+  const normalized = (content ?? '').toLowerCase();
   const failedCount = trace.filter((t) => t.status === 'failed').length;
   if (normalized.includes('verified:') || normalized.includes('confirmed:') || (trace.length > 0 && failedCount === 0)) {
     return {

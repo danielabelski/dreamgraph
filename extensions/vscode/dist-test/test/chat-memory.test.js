@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
 const chat_memory_1 = require("../chat-memory");
+const budget_coordinator_1 = require("../budget-coordinator");
 class FakeGlobalState {
     data = new Map();
     get(key) {
@@ -113,5 +114,62 @@ class FakeGlobalState {
     strict_1.default.equal(restored[0]?.anchor?.symbolPath, 'ContextBuilder._resolveGraphContext');
     strict_1.default.equal(restored[0]?.anchor?.confidence, 0.92);
     strict_1.default.deepStrictEqual(restored[0]?.anchor?.symbolRange, { startLine: 700, endLine: 890 });
+});
+(0, node_test_1.default)('Phase 2 � ChatMemory persists and restores BudgetSnapshot per instance', async () => {
+    const context = { globalState: new FakeGlobalState() };
+    const memory = new chat_memory_1.ChatMemory(context);
+    strict_1.default.equal(await memory.loadBudgetState('instance-a'), null);
+    const c = new budget_coordinator_1.BudgetCoordinator(null, {
+        expectedTokensPerTurn: 16_000,
+        transportCeilingTokens: 180_000,
+        debtCarryFraction: 1.0,
+        turnNumber: 1,
+        modelId: 'test-model',
+    });
+    c.recordComponentActual('tool:read_source_code', 6_500);
+    c.recordComponentActual('context:graph', 4_000);
+    c.recordComponentActual('context:evidence', 2_000);
+    const snap = c.finalizeTurn();
+    await memory.saveBudgetState('instance-a', snap, 1);
+    const restored = await memory.loadBudgetState('instance-a');
+    strict_1.default.ok(restored);
+    strict_1.default.equal(restored.turnCounter, 1);
+    strict_1.default.deepStrictEqual(restored.snapshot, snap);
+    strict_1.default.equal(await memory.loadBudgetState('instance-b'), null);
+    await memory.clear('instance-a');
+    strict_1.default.equal(await memory.loadBudgetState('instance-a'), null);
+});
+(0, node_test_1.default)('Phase 2 � restored BudgetSnapshot rehydrates a coordinator with identical pressure', async () => {
+    const context = { globalState: new FakeGlobalState() };
+    const memory = new chat_memory_1.ChatMemory(context);
+    const c = new budget_coordinator_1.BudgetCoordinator(null, {
+        expectedTokensPerTurn: 16_000,
+        transportCeilingTokens: 180_000,
+        debtCarryFraction: 1.0,
+        turnNumber: 1,
+        modelId: 'test-model',
+    });
+    c.recordComponentActual('tool:big', 25_000);
+    const snap = c.finalizeTurn();
+    await memory.saveBudgetState('instance-x', snap, 1);
+    const restored = await memory.loadBudgetState('instance-x');
+    strict_1.default.ok(restored);
+    const live = new budget_coordinator_1.BudgetCoordinator(snap, {
+        expectedTokensPerTurn: 16_000,
+        transportCeilingTokens: 180_000,
+        debtCarryFraction: 1.0,
+        turnNumber: 2,
+        modelId: 'test-model',
+    });
+    const reloaded = new budget_coordinator_1.BudgetCoordinator(restored.snapshot, {
+        expectedTokensPerTurn: 16_000,
+        transportCeilingTokens: 180_000,
+        debtCarryFraction: 1.0,
+        turnNumber: 2,
+        modelId: 'test-model',
+    });
+    strict_1.default.equal(reloaded.getPressure(), live.getPressure());
+    strict_1.default.equal(reloaded.getContextPressureLabel(), live.getContextPressureLabel());
+    strict_1.default.equal(reloaded.getRemainingTargetTokens(), live.getRemainingTargetTokens());
 });
 //# sourceMappingURL=chat-memory.test.js.map

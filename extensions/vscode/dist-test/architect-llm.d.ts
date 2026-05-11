@@ -5,7 +5,7 @@
  * structured prompts assembled from the context orchestration layer.
  */
 import * as vscode from "vscode";
-export type ArchitectProvider = "anthropic" | "openai" | "ollama";
+export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio";
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export interface ArchitectConfig {
     provider: ArchitectProvider;
@@ -55,6 +55,11 @@ export interface ToolUseRequest {
 export interface ArchitectToolResponse extends ArchitectResponse {
     toolCalls: ToolUseRequest[];
     stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop" | string;
+    /** Provider-specific verbatim assistant turn items.
+     * For OpenAI Responses API (gpt-5.5/o-series) this is the full `output[]`
+     * array including `reasoning` items. The chat panel persists these so the
+     * next turn can replay them and preserve stateless reasoning context. */
+    providerRawAssistant?: unknown[];
 }
 export interface ToolDefinition {
     name: string;
@@ -73,6 +78,25 @@ export interface ToolResultMessage {
 export type StreamCallback = (chunk: string) => void;
 export declare const ANTHROPIC_MODELS: string[];
 export declare const OPENAI_MODELS: string[];
+/**
+ * Optional sink that receives structured budget summaries.
+ * Set by extension activation via `setRequestBudgetSink(inspector.logRequestBudget.bind(inspector))`
+ * so output appears in the "DreamGraph Context" output channel.
+ * Falls back to console.log/warn if no sink is registered.
+ */
+type RequestBudgetSink = (summary: {
+    callsite: string;
+    model: string;
+    inputChars: number;
+    approxTokens: number;
+    sections: Array<{
+        name: string;
+        chars: number;
+        approxTokens: number;
+    }>;
+    warn?: boolean;
+}) => void;
+export declare function setRequestBudgetSink(sink: RequestBudgetSink | undefined): void;
 export declare class ArchitectLlm implements vscode.Disposable {
     private _config;
     private _secretStorage;
@@ -100,6 +124,16 @@ export declare class ArchitectLlm implements vscode.Disposable {
     private _translateRawToOpenAI;
     private _callAnthropic;
     private _callAnthropicWithTools;
+    private _usesOpenAIResponsesApi;
+    private _getOpenAIReasoningEffort;
+    private _getOpenAITextVerbosity;
+    private _toOpenAIResponsesContent;
+    private _translateRawToOpenAIResponses;
+    private _buildOpenAIResponsesRequest;
+    private _extractOpenAIResponsesText;
+    private _extractOpenAIResponsesToolCalls;
+    private _callOpenAIResponses;
+    private _callOpenAIResponsesWithTools;
     private _callOpenAIWithTools;
     private _streamAnthropic;
     private _callOpenAI;
@@ -112,4 +146,5 @@ export declare class ArchitectLlm implements vscode.Disposable {
     private _ensureConfigured;
     dispose(): void;
 }
+export {};
 //# sourceMappingURL=architect-llm.d.ts.map

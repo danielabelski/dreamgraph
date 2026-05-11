@@ -4,7 +4,7 @@
  *
  * @see TDD §7.5 (Prompt Architecture), §7.4 (Chat Flow)
  */
-import type { EditorContextEnvelope } from "../types.js";
+import type { EditorContextEnvelope, ArchitectLensSelection } from "../types.js";
 import { type AutonomyInstructionState } from "../autonomy.js";
 export type ArchitectTask = "explain" | "validate" | "patch" | "suggest" | "chat";
 export interface AssembledPrompt {
@@ -23,9 +23,9 @@ export interface AssembledPrompt {
  * @param autonomyState - Optional autonomy state to inject policy/contract blocks
  * @param provider - Optional LLM provider name to inject provider-specific discipline
  */
-export declare function assemblePrompt(task: ArchitectTask, envelope: EditorContextEnvelope | null, contextText?: string, additionalInstructions?: string, autonomyState?: AutonomyInstructionState, provider?: string): AssembledPrompt;
+export declare function assemblePrompt(task: ArchitectTask, envelope: EditorContextEnvelope | null, contextText?: string, additionalInstructions?: string, autonomyState?: AutonomyInstructionState, provider?: string, lens?: ArchitectLensSelection): AssembledPrompt;
 /**
  * Infer the best task overlay from an intent mode and optional command source.
  */
-export declare function inferTask(intentMode: string, commandSource?: string): ArchitectTask;
+export declare function inferTask(intentMode: string, commandSource?: string, prompt?: string): ArchitectTask;
 //# sourceMappingURL=index.d.ts.map

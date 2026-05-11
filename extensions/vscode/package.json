@@ -2,7 +2,7 @@
   "name": "dreamgraph-vscode",
   "displayName": "DreamGraph",
   "description": "DreamGraph-native development agent — intentional context, architectural discipline, knowledge-grounded AI.",
-  "version": "9.0.0",
+  "version": "10.0.0",
   "icon": "media/dreamgraph-icon.png",
   "publisher": "siteledger-solutions",
   "homepage": "https://dreamgraph.nofs.ai/",
@@ -231,10 +231,15 @@
           "default": "anthropic",
           "description": "LLM provider for the Architect model. Local options: ollama (default :11434), lmstudio (default :1234/v1)."
         },
+        "dreamgraph.architect.useCorePass": {
+          "type": "boolean",
+          "default": false,
+          "description": "Phase-1 seam (ADR-089): route Architect chat turns through architect-core/runPass instead of the inline orchestration in chat-panel.ts. Off by default; flip per window during migration. Provider-agnostic; behavior is intended to be byte-identical."
+        },
         "dreamgraph.architect.model": {
           "type": "string",
-          "default": "claude-opus-4-6",
-          "description": "Model name for the Architect (e.g., 'claude-opus-4-6')."
+          "default": "claude-opus-4-7",
+          "description": "Model name for the Architect (e.g., 'claude-opus-4-7' or 'gpt-5.5')."
         },
         "dreamgraph.architect.baseUrl": {
           "type": "string",
@@ -269,11 +274,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show a per-turn budget pill in the chat header with debt, last-turn actual tokens, pressure label, and component breakdown."
-        },
-        "dreamgraph.architect.maxRequestChars": {
-          "type": "number",
-          "default": 320000,
-          "description": "Hard ceiling on the serialized LLM request body (chars). Requests exceeding this are aborted before the network call to prevent runaway long-context costs. ~320k chars ≈ 80k tokens."
         },
         "dreamgraph.architect.reportingMode": {
           "type": "string",
@@ -340,13 +340,14 @@
     }
   },
   "scripts": {
-    "build": "npm run build:webview && tsc -p ./tsconfig.json && npm run build:extension && npm run build:vendor",
+    "build": "npm run lint:isolation && npm run build:webview && tsc -p ./tsconfig.json && npm run build:extension && npm run build:vendor",
     "build:webview": "esbuild src/webview/index.ts --bundle --outfile=dist/webview.js --format=iife --platform=browser",
     "build:extension": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --format=cjs --platform=node --target=node18 --external:vscode --minify",
-    "build:vendor": "node -e \"const fs=require('fs'),path=require('path');const out=path.join('dist','vendor');fs.mkdirSync(out,{recursive:true});for(const [src,dst] of [['node_modules/markdown-it/dist/markdown-it.min.js','markdown-it.min.js'],['node_modules/dompurify/dist/purify.min.js','purify.min.js']]){fs.copyFileSync(src,path.join(out,dst));console.log('copied',src,'->',path.join(out,dst));}\"",
+    "build:vendor": "node -e \"const fs=require('fs'),path=require('path');const out=path.join('dist','vendor');fs.mkdirSync(out,{recursive:true});for(const [src,dst] of [['node_modules/markdown-it/dist/markdown-it.min.js','markdown-it.min.js'],['node_modules/dompurify/dist/purify.min.js','purify.min.js']]){let s=fs.readFileSync(src,'utf8');s=s.replace(/[\\n\\r]*\\/\\/[#@]\\s*sourceMappingURL=.*$/m,'');fs.writeFileSync(path.join(out,dst),s);console.log('vendored',src,'->',path.join(out,dst));}\"",
     "watch": "tsc -watch -p ./tsconfig.json",
     "package": "vsce package",
     "lint": "eslint src --ext ts",
+    "lint:isolation": "node scripts/lint-isolation.mjs",
     "test:context-contract": "npm run build && node --test dist/test/context-architecture-contract.test.js",
     "test:context-bench": "npm run build && node --test dist/test/context-architecture-contract.test.js",
     "test:environment-context": "npm run build && node --test dist/test/environment-context.test.js dist/test/context-builder-environment.test.js dist/test/context-builder-integration.test.js dist/test/context-architecture-contract.test.js"

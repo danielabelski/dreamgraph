@@ -63,6 +63,8 @@ const changed_files_view_js_1 = require("./changed-files-view.js");
 const graph_signal_js_1 = require("./graph-signal.js");
 const chat_memory_js_1 = require("./chat-memory.js");
 const local_tools_js_1 = require("./local-tools.js");
+// architect-v2 (M7): parallel surface — does NOT touch v1 ChatPanel.
+const index_js_1 = require("./architect-v2/host/index.js");
 const commands_js_1 = require("./commands.js");
 /* ------------------------------------------------------------------ */
 /*  State                                                             */
@@ -76,7 +78,7 @@ function activate(context) {
     // VS Code may move views out of their declared container on reinstall,
     // hiding the activity bar icon. Reset once per version to fix this.
     const versionKey = "dreamgraph.lastActivatedVersion";
-    const currentVersion = "7.0.1";
+    const currentVersion = "9.0.0";
     const lastVersion = context.globalState.get(versionKey);
     if (lastVersion !== currentVersion) {
         void vscode.commands.executeCommand("workbench.action.resetViewLocations");
@@ -125,6 +127,29 @@ function activate(context) {
     // ---- Layer 1: VS Code Integration ----
     const statusBar = new status_bar_js_1.StatusBarManager();
     const contextInspector = new context_inspector_js_1.ContextInspector();
+    chatPanel.setContextInspector(contextInspector);
+    // Route the architect-llm input-budget guard to the "DreamGraph Context" output channel.
+    (0, architect_llm_js_1.setRequestBudgetSink)((summary) => contextInspector.logRequestBudget(summary));
+    // ---- Keep DreamGraph container visible / recoverable ----
+    // We only update the status-bar restore button here. We do NOT call
+    // ensureContainerVisible() — it runs workbench.action.resetViewLocations
+    // and several *.focus commands, which are heavyweight UI operations.
+    // Firing them on every editor click / focus change locks the UI thread
+    // for several seconds at a time. Recovery is initiated by the user
+    // clicking the restore button (statusBar.setRestoreSidebarVisible).
+    const syncDreamGraphVisibility = () => {
+        const shouldShowRestore = !chatPanel.isVisible && !dashboardView.isVisible;
+        statusBar.setRestoreSidebarVisible(shouldShowRestore);
+    };
+    context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => {
+        syncDreamGraphVisibility();
+    }), vscode.window.onDidChangeWindowState((state) => {
+        if (state.focused) {
+            syncDreamGraphVisibility();
+        }
+    }), vscode.window.onDidChangeActiveTextEditor(() => {
+        syncDreamGraphVisibility();
+    }));
     // ---- Wire health monitor → status bar ----
     healthMonitor.onTransition((event) => {
         statusBar.update(healthMonitor.state, currentInstance?.name);
@@ -162,6 +187,9 @@ function activate(context) {
         ["dreamgraph.switchInstance", () => (0, commands_js_1.switchInstanceCommand)(services)],
         ["dreamgraph.showStatus", () => (0, commands_js_1.showStatusCommand)(services)],
         ["dreamgraph.openDashboard", () => (0, commands_js_1.openDashboardCommand)(services)],
+        ["dreamgraph.openExplorer", () => (0, commands_js_1.openExplorerCommand)(services)],
+        ["dreamgraph.toggleGpuMetrics", () => (0, commands_js_1.toggleGpuMetricsCommand)()],
+        ["dreamgraph.restoreSidebar", () => (0, commands_js_1.restoreSidebarCommand)(services)],
         ["dreamgraph.startDaemon", () => (0, commands_js_1.startDaemonCommand)(services)],
         ["dreamgraph.stopDaemon", () => (0, commands_js_1.stopDaemonCommand)(services)],
         ["dreamgraph.inspectContext", () => (0, commands_js_1.inspectContextCommand)(services)],
@@ -188,6 +216,17 @@ function activate(context) {
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(chat_panel_js_1.ChatPanel.viewType, chatPanel, {
         webviewOptions: { retainContextWhenHidden: true },
     }), vscode.window.registerWebviewViewProvider(dashboard_view_js_1.DashboardViewProvider.viewType, dashboardView), changedFilesTreeView);
+    // ---- architect-v2 panel (M7 parallel surface) ----
+    // Registered alongside v1 so users can smoke-test the new chat without
+    // losing v1. v9.x keeps both; v10 cutover (M9-M11) removes v1.
+    const architectV2Panel = new index_js_1.ArchitectV2Panel({
+        context,
+        mcpClient,
+    });
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(index_js_1.ArchitectV2Panel.viewType, architectV2Panel, { webviewOptions: { retainContextWhenHidden: true } }), architectV2Panel, vscode.commands.registerCommand("dreamgraph.openArchitectV2", async () => {
+        await vscode.commands.executeCommand("workbench.view.extension.dreamgraph-sidebar");
+        await vscode.commands.executeCommand(`${index_js_1.ArchitectV2Panel.viewType}.focus`);
+    }));
     // ---- Register disposables ----
     context.subscriptions.push(daemonClient, mcpClient, healthMonitor, statusBar, contextInspector, architectLlm, chatPanel, dashboardView, changedFiles, graphSignal);
     // ---- Listen for configuration changes ----
@@ -215,6 +254,11 @@ function activate(context) {
         // Delay slightly to let VS Code finish loading
         setTimeout(() => void (0, commands_js_1.connectCommand)(services), 1500);
     }
+    syncDreamGraphVisibility();
+    // Ensure the container is recoverable even before the first manual open.
+    setTimeout(() => {
+        syncDreamGraphVisibility();
+    }, 2000);
 }
 /* ------------------------------------------------------------------ */
 /*  Deactivate                                                        */

@@ -1,8 +1,17 @@
 export type ChatRole = 'user' | 'assistant' | 'system';
+export interface ChatMessageAttachmentSnapshot {
+    id: string;
+    name: string;
+    kind: 'text' | 'image';
+    mimeType: string;
+    size: number;
+    dataBase64?: string;
+}
 export interface ChatMessage {
     role: ChatRole;
     content: string;
     timestamp: string;
+    attachments?: ReadonlyArray<ChatMessageAttachmentSnapshot>;
 }
 export interface AttachmentPreview {
     id: string;

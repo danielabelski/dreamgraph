@@ -1,5 +1,5 @@
-﻿/**
- * DreamGraph Architect LLM Provider â€” Layer 2 (Context Orchestration).
+/**
+ * DreamGraph Architect LLM Provider — Layer 2 (Context Orchestration).
  *
  * Calls the Architect model (Anthropic, OpenAI, or Ollama) with
  * structured prompts assembled from the context orchestration layer.
@@ -20,6 +20,14 @@ import {
   compactSystemPrompt,
   minifyToolDefinitions,
 } from "./request-compaction";
+import {
+  ARCHITECT_PASS_JSON_SCHEMA,
+  ARCHITECT_PASS_SCHEMA_NAME,
+} from "./architect-pass-schema.js";
+import {
+  StrictNarrativeStreamExtractor,
+  projectStrictEnvelopeToLegacy,
+} from "./architect-pass-projection.js";
 
 export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio";
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -91,15 +99,15 @@ export interface ToolResultMessage {
 export type StreamCallback = (chunk: string) => void;
 
 export const ANTHROPIC_MODELS = [
-  "claude-opus-4-6",
   "claude-opus-4-7",
+  "claude-opus-4-6",
   "claude-sonnet-4-6",
   "claude-haiku-4-5",
 ];
 
 export const OPENAI_MODELS = [
-  "gpt-5",
   "gpt-5.5",
+  "gpt-5",
   "gpt-5.4",
   "gpt-4.1",
   "gpt-4.1-mini",
@@ -114,20 +122,13 @@ export const OPENAI_MODELS = [
 /*  Emergency input-budget brakes                                     */
 /* ------------------------------------------------------------------ */
 /**
- * Hard ceilings on the serialized request body sent to any LLM provider.
- * Exists to prevent runaway context regressions (e.g. accidental inclusion of
- * generated docs/, full graph JSON, or unbounded chat history) from silently
- * burning into the long-context pricing tier.
- *
- * If the budget is exceeded the request is aborted with a descriptive error
- * BEFORE the network call — failing fast is cheaper than failing slowly.
- *
- * Tunable via the `dreamgraph.architect.maxRequestChars` setting; default is
- * 320_000 chars (~80k tokens) which comfortably fits a fully-loaded
- * Architect prompt + 20-turn history but rejects 300k-char accidents.
+ * Per-section warning threshold (chars). Telemetry only � no requests are
+ * rejected client-side. The pressure-aware `BudgetCoordinator` (token economy)
+ * is the sole authority on context sizing; provider APIs reject anything that
+ * actually overflows their server-side window. We only log here so unusually
+ * large sections (system prompt blow-ups, runaway tool histories, etc.) remain
+ * visible in the "DreamGraph Context" output channel.
  */
-const DEFAULT_MAX_REQUEST_CHARS = 320_000;
-/** Per-section warning threshold (chars). */
 const SECTION_WARN_CHARS = 80_000;
 
 /**
@@ -184,19 +185,9 @@ function _logRequestBudget(callsite: string, model: string, body: Record<string,
   else console.log('[DreamGraph][llm_input_budget]', JSON.stringify({ callsite, model, inputChars, approxTokens }));
 }
 
-function _enforceRequestBudget(callsite: string, model: string, body: Record<string, unknown>): string {
+function _serializeAndLogRequest(callsite: string, model: string, body: Record<string, unknown>): string {
   const serialized = JSON.stringify(body);
   _logRequestBudget(callsite, model, body, serialized);
-  const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
-  const max = cfg.get<number>('maxRequestChars') ?? DEFAULT_MAX_REQUEST_CHARS;
-  if (serialized.length > max) {
-    throw new Error(
-      `LLM request budget exceeded at ${callsite}: ${serialized.length.toLocaleString()} chars ` +
-      `(~${Math.ceil(serialized.length / 4).toLocaleString()} tokens) > limit ${max.toLocaleString()}. ` +
-      `Likely culprits: generated docs/ pulled into context, full graph JSON injected, unbounded chat history, ` +
-      `or duplicated context sections. Raise dreamgraph.architect.maxRequestChars to override.`,
-    );
-  }
   return serialized;
 }
 
@@ -334,7 +325,8 @@ export class ArchitectLlm implements vscode.Disposable {
   async loadConfig(): Promise<void> {
     const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
     const provider = (cfg.get<string>("provider") ?? "anthropic") as ArchitectProvider;
-    const model = cfg.get<string>("model") ?? "claude-opus-4-6";
+    const configuredModel = (cfg.get<string>("model") ?? "").trim();
+    const model = configuredModel || this._defaultModel(provider);
     const baseUrl = cfg.get<string>("baseUrl") || this._defaultBaseUrl(provider);
 
     let apiKey = "";
@@ -466,9 +458,13 @@ export class ArchitectLlm implements vscode.Disposable {
     if (typeof content === "string") return content;
     return content.map((block) => {
       if (block.type === "text") return { type: "text", text: block.text };
+      // OpenAI Chat Completions API uses `image_url` (object form), distinct
+      // from the Responses API which uses `input_image` (string form). This
+      // serializer is only ever invoked from the chat/completions endpoints
+      // — the Responses path runs through `_toOpenAIResponsesContent`.
       return {
-        type: "input_image",
-        image_url: `data:${block.mimeType};base64,${block.dataBase64}`,
+        type: "image_url",
+        image_url: { url: `data:${block.mimeType};base64,${block.dataBase64}` },
       };
     });
   }
@@ -521,11 +517,21 @@ export class ArchitectLlm implements vscode.Disposable {
         if (nonToolBlocks.length > 0) {
           const translated = nonToolBlocks.map((b) => {
             if (b.type === "image") {
+              // Two equivalent inbound shapes:
+              //  (a) Anthropic-style: { source: { type: 'base64', media_type, data } }
+              //  (b) Canonical ArchitectImageBlock: { mimeType, dataBase64, fileName? }
+              // Both must serialize to OpenAI Chat Completions' image_url object.
               const src = b.source as Record<string, unknown> | undefined;
               if (src && src.type === "base64") {
                 return {
                   type: "image_url",
                   image_url: { url: `data:${src.media_type};base64,${src.data}` },
+                };
+              }
+              if (typeof b.mimeType === "string" && typeof b.dataBase64 === "string") {
+                return {
+                  type: "image_url",
+                  image_url: { url: `data:${b.mimeType};base64,${b.dataBase64}` },
                 };
               }
             }
@@ -568,7 +574,7 @@ export class ArchitectLlm implements vscode.Disposable {
         "x-api-key": config.apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: _enforceRequestBudget('callAnthropic', config.model, requestBody),
+      body: _serializeAndLogRequest('callAnthropic', config.model, requestBody),
       signal,
     });
 
@@ -608,7 +614,7 @@ export class ArchitectLlm implements vscode.Disposable {
         "x-api-key": config.apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: _enforceRequestBudget('callAnthropicWithTools', config.model, requestBody),
+      body: _serializeAndLogRequest('callAnthropicWithTools', config.model, requestBody),
       signal,
     });
 
@@ -679,7 +685,81 @@ export class ArchitectLlm implements vscode.Disposable {
       textVerbosity: this._getOpenAITextVerbosity(),
       rawMessages,
       tools,
+      structuredOutput: this._isStructuredOutputEnabled(config.provider),
     });
+  }
+
+  /**
+   * Whether to attach the canonical architect-pass JSON schema to outbound
+   * requests for the given provider. Today only OpenAI's first-party API
+   * (Chat Completions + Responses) is supported \u2014 LM Studio's openai-compat
+   * endpoint accepts `response_format` but its model-side enforcement varies
+   * by loaded model, so we keep it opt-in via the same setting.
+   *
+   * Setting: `dreamgraph.architect.structuredOutput` (boolean, default true
+   * for `openai`, false otherwise). User can disable to fall back to the
+   * legacy fenced-JSON contract if a specific snapshot rejects schemas.
+   */
+  private _isStructuredOutputEnabled(provider: ArchitectProvider): boolean {
+    const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
+    const explicit = cfg.get<boolean>("structuredOutput");
+    if (typeof explicit === "boolean") return explicit;
+    // Default ON for OpenAI (strict json_schema is grammar-constrained server-side).
+    // Default OFF for ollama and lmstudio: schema support exists in recent Ollama
+    // (>=0.5) and via OpenAI-compat in LM Studio, but enforcement quality depends
+    // on the loaded model, so users opt in. Default OFF for anthropic: forced
+    // tool-use is the only API-level enforcement and it conflicts with the
+    // agentic tool loop, so we keep Anthropic on its prompt-driven envelope.
+    return provider === "openai";
+  }
+
+  /**
+   * Build the `format` body field for the Ollama /api/chat request. Recent
+   * Ollama (>=0.5) accepts a JSON Schema object here and grammar-constrains
+   * the response server-side, mirroring OpenAI's strict json_schema mode.
+   * Returns an empty object when structured output is disabled — callers
+   * spread the result so the field simply doesn't appear on the wire for
+   * older Ollama versions that wouldn't recognize it.
+   */
+  private _ollamaFormatField(provider: ArchitectProvider): Record<string, unknown> {
+    if (!this._isStructuredOutputEnabled(provider)) return {};
+    return { format: ARCHITECT_PASS_JSON_SCHEMA };
+  }
+
+  /**
+   * Build the `response_format` body field for OpenAI Chat Completions.
+   * Strict json_schema mode is grammar-constrained server-side: the model
+   * physically cannot emit text outside the schema. Returns an empty object
+   * when structured output is disabled — callers spread the result into the
+   * request body so the field simply doesn't appear.
+   */
+  private _openAIChatResponseFormat(provider: ArchitectProvider): Record<string, unknown> {
+    if (!this._isStructuredOutputEnabled(provider)) return {};
+    return {
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: ARCHITECT_PASS_SCHEMA_NAME,
+          schema: ARCHITECT_PASS_JSON_SCHEMA,
+          strict: true,
+        },
+      },
+    };
+  }
+
+  /**
+   * When structured-output mode is on, the wire content is a strict
+   * `architect_pass_envelope` JSON object. Project it back to the legacy
+   * "prose markdown + fenced ```json envelope" shape so every existing
+   * downstream parser (autonomy, summary card, webview body renderer)
+   * keeps working without needing to learn the new shape. When projection
+   * fails or structured output is off, the original content is returned
+   * unchanged.
+   */
+  private _maybeProjectStructuredContent(config: ArchitectConfig, content: string): string {
+    if (!this._isStructuredOutputEnabled(config.provider)) return content;
+    const projection = projectStrictEnvelopeToLegacy(content);
+    return projection ? projection.legacyContent : content;
   }
 
     private _extractOpenAIResponsesText(data: {
@@ -706,7 +786,7 @@ export class ArchitectLlm implements vscode.Disposable {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: _enforceRequestBudget('callOpenAIResponses', config.model, requestBody),
+      body: _serializeAndLogRequest('callOpenAIResponses', config.model, requestBody),
       signal,
     });
 
@@ -719,7 +799,7 @@ export class ArchitectLlm implements vscode.Disposable {
     };
 
     return {
-      content: this._extractOpenAIResponsesText(data),
+      content: this._maybeProjectStructuredContent(config, this._extractOpenAIResponsesText(data)),
       promptTokens: data.usage?.input_tokens ?? 0,
       completionTokens: data.usage?.output_tokens ?? 0,
       durationMs: Date.now() - start,
@@ -741,7 +821,7 @@ export class ArchitectLlm implements vscode.Disposable {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: _enforceRequestBudget('callOpenAIResponsesWithTools', config.model, requestBody),
+      body: _serializeAndLogRequest('callOpenAIResponsesWithTools', config.model, requestBody),
       signal,
     });
 
@@ -757,7 +837,7 @@ export class ArchitectLlm implements vscode.Disposable {
     const toolCalls = this._extractOpenAIResponsesToolCalls(data);
 
     return {
-      content: this._extractOpenAIResponsesText(data),
+      content: this._maybeProjectStructuredContent(config, this._extractOpenAIResponsesText(data)),
       promptTokens: data.usage?.input_tokens ?? 0,
       completionTokens: data.usage?.output_tokens ?? 0,
       durationMs: Date.now() - start,
@@ -808,11 +888,12 @@ export class ArchitectLlm implements vscode.Disposable {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: _enforceRequestBudget('callOpenAIWithTools', config.model, {
+      body: _serializeAndLogRequest('callOpenAIWithTools', config.model, {
         model: config.model,
         max_completion_tokens: 16384,
         messages: apiMessages,
         tools: openaiTools,
+        ...this._openAIChatResponseFormat(config.provider),
       }),
       signal,
     });
@@ -829,7 +910,7 @@ export class ArchitectLlm implements vscode.Disposable {
 
     const choice = data.choices[0];
     return {
-      content: choice?.message?.content ?? "",
+      content: this._maybeProjectStructuredContent(config, choice?.message?.content ?? ""),
       promptTokens: data.usage?.prompt_tokens ?? 0,
       completionTokens: data.usage?.completion_tokens ?? 0,
       durationMs: Date.now() - start,
@@ -865,7 +946,7 @@ export class ArchitectLlm implements vscode.Disposable {
         "x-api-key": config.apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: _enforceRequestBudget('streamAnthropic', config.model, requestBody),
+      body: _serializeAndLogRequest('streamAnthropic', config.model, requestBody),
       signal,
     });
 
@@ -889,10 +970,11 @@ export class ArchitectLlm implements vscode.Disposable {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: _enforceRequestBudget('callOpenAI', config.model, {
+      body: _serializeAndLogRequest('callOpenAI', config.model, {
         model: config.model,
         max_completion_tokens: 16384,
         messages: messages.map((m) => ({ role: m.role, content: this._toOpenAIContent(m.content) })),
+        ...this._openAIChatResponseFormat(config.provider),
       }),
       signal,
     });
@@ -904,8 +986,13 @@ export class ArchitectLlm implements vscode.Disposable {
       usage: { prompt_tokens: number; completion_tokens: number };
     };
 
+    const rawContent = data.choices[0]?.message?.content ?? "";
+    const projectedContent = this._isStructuredOutputEnabled(config.provider)
+      ? (projectStrictEnvelopeToLegacy(rawContent)?.legacyContent ?? rawContent)
+      : rawContent;
+
     return {
-      content: data.choices[0]?.message?.content ?? "",
+      content: projectedContent,
       promptTokens: data.usage?.prompt_tokens ?? 0,
       completionTokens: data.usage?.completion_tokens ?? 0,
       durationMs: Date.now() - start,
@@ -925,16 +1012,37 @@ export class ArchitectLlm implements vscode.Disposable {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: _enforceRequestBudget('streamOpenAI', config.model, {
+      body: _serializeAndLogRequest('streamOpenAI', config.model, {
         model: config.model,
         max_completion_tokens: 16384,
         stream: true,
         messages: messages.map((m) => ({ role: m.role, content: this._toOpenAIContent(m.content) })),
+        ...this._openAIChatResponseFormat(config.provider),
       }),
       signal,
     });
 
     if (!res.ok) throw new Error(`OpenAI API error (${res.status}): ${await res.text()}`);
+
+    // When strict structured-output is on, the wire content is a single JSON
+    // object that begins with `{`. Stream the unescaped `narrative` field to
+    // the live UI (so the user sees clean prose, not raw JSON), buffer the
+    // rest, and project to the legacy fenced-envelope shape on completion so
+    // every downstream parser keeps working untouched.
+    if (this._isStructuredOutputEnabled(config.provider)) {
+      const extractor = new StrictNarrativeStreamExtractor();
+      const wrapped: StreamCallback = (chunk) => {
+        const visible = extractor.feed(chunk);
+        if (visible) onChunk(visible);
+      };
+      const raw = await this._readSSEStream(res, wrapped, start, "openai");
+      // Replay the full raw text into the extractor so finalize sees
+      // everything (the wrapper above only forwarded narrative chars). The
+      // SSE reader assembled the full content from deltas; feed any unfed
+      // tail by replacing the buffer wholesale via finalize on raw content.
+      const projection = projectStrictEnvelopeToLegacy(raw.content);
+      return projection ? { ...raw, content: projection.legacyContent } : raw;
+    }
     return this._readSSEStream(res, onChunk, start, "openai");
   }
 
@@ -948,10 +1056,11 @@ export class ArchitectLlm implements vscode.Disposable {
     const res = await fetch(`${config.baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: _enforceRequestBudget('callOllama', config.model, {
+      body: _serializeAndLogRequest('callOllama', config.model, {
         model: config.model,
         messages: messages.map((m) => ({ role: m.role, content: this._toOllamaContent(m.content) })),
         stream: false,
+        ...this._ollamaFormatField(config.provider),
       }),
       signal,
     });
@@ -965,7 +1074,7 @@ export class ArchitectLlm implements vscode.Disposable {
     };
 
     return {
-      content: data.message?.content ?? "",
+      content: this._maybeProjectStructuredContent(config, data.message?.content ?? ""),
       promptTokens: data.prompt_eval_count ?? 0,
       completionTokens: data.eval_count ?? 0,
       durationMs: Date.now() - start,
@@ -982,10 +1091,11 @@ export class ArchitectLlm implements vscode.Disposable {
     const res = await fetch(`${config.baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: _enforceRequestBudget('streamOllama', config.model, {
+      body: _serializeAndLogRequest('streamOllama', config.model, {
         model: config.model,
         messages: messages.map((m) => ({ role: m.role, content: this._toOllamaContent(m.content) })),
         stream: true,
+        ...this._ollamaFormatField(config.provider),
       }),
       signal,
     });
@@ -998,6 +1108,13 @@ export class ArchitectLlm implements vscode.Disposable {
     let fullContent = "";
     let promptTokens = 0;
     let completionTokens = 0;
+
+    // When structured-output mode is on the wire content is a strict JSON
+    // envelope; stream the unescaped narrative to the live UI and project
+    // to the legacy fenced shape on completion. Mirrors the OpenAI Chat
+    // Completions streaming path so downstream consumers see one shape.
+    const structuredOn = this._isStructuredOutputEnabled(config.provider);
+    const extractor = structuredOn ? new StrictNarrativeStreamExtractor() : null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1014,7 +1131,12 @@ export class ArchitectLlm implements vscode.Disposable {
         const chunk = parsed.message?.content ?? "";
         if (chunk) {
           fullContent += chunk;
-          onChunk(chunk);
+          if (extractor) {
+            const visible = extractor.feed(chunk);
+            if (visible) onChunk(visible);
+          } else {
+            onChunk(chunk);
+          }
         }
         if (parsed.done) {
           promptTokens = parsed.prompt_eval_count ?? promptTokens;
@@ -1025,8 +1147,12 @@ export class ArchitectLlm implements vscode.Disposable {
       }
     }
 
+    const projectedContent = structuredOn
+      ? (projectStrictEnvelopeToLegacy(fullContent)?.legacyContent ?? fullContent)
+      : fullContent;
+
     return {
-      content: fullContent,
+      content: projectedContent,
       promptTokens,
       completionTokens,
       durationMs: Date.now() - start,
@@ -1117,6 +1243,21 @@ export class ArchitectLlm implements vscode.Disposable {
         return "http://localhost:11434";
       case "lmstudio":
         return "http://localhost:1234/v1";
+      default:
+        return "";
+    }
+  }
+
+  private _defaultModel(provider: ArchitectProvider): string {
+    switch (provider) {
+      case "anthropic":
+        return ANTHROPIC_MODELS[0];
+      case "openai":
+        return OPENAI_MODELS[0];
+      case "ollama":
+        return "llama3.1";
+      case "lmstudio":
+        return "";
       default:
         return "";
     }

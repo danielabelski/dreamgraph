@@ -11,7 +11,9 @@ import {
 import type { StructuredPassEnvelope } from './autonomy-structured.js';
 
 export interface PassAnalysisInput {
-  content: string;
+  /** Assistant text from the pass. May be undefined when the model emitted
+   * only tool calls or when the response was aborted. */
+  content: string | undefined;
   actions?: RecommendedAction[];
   /** Structured envelope parsed from the LLM response. When present its fields
    * are authoritative over prose-regex-derived equivalents. */
@@ -31,8 +33,11 @@ export interface PassAnalysisResult {
   nextPrompt?: string;
 }
 
-export function inferPassOutcomeSignal(content: string): PassOutcomeSignal {
-  const lower = content.toLowerCase();
+export function inferPassOutcomeSignal(content: string | undefined): PassOutcomeSignal {
+  // Continuation passes can legitimately contain no assistant text (the model
+  // emitted only tool calls, or the response was cancelled). Treat that as a
+  // neutral signal rather than crashing on `undefined.toLowerCase()`.
+  const lower = (content ?? '').toLowerCase();
   const goalSufficientlyReached = /ready for commit|done and verified|goal sufficiently reached|completed successfully/.test(lower);
   // Intentionally narrow — broad terms like "error:" and standalone "failed" fire
   // on too much normal prose ("error: none", "what failed was"). Only trigger on
@@ -62,12 +67,49 @@ export function inferPassOutcomeSignal(content: string): PassOutcomeSignal {
 }
 
 export function buildContinuationPrompt(selectedAction?: RecommendedAction): string {
+  // Patch #1 (renderer invariant — continuation half): the next tool MUST be
+  // declared specifically, not implied. The model must either invoke the
+  // named tool with bound arguments OR emit a structured envelope explaining
+  // why it cannot. No ambiguous prose continuations.
   if (!selectedAction) {
-    return 'Continue with your strongest in-scope recommended next step. Keep the visible autonomy counters up to date and stop if the original goal is sufficiently reached or progress stalls.';
+    return [
+      'Continue with your strongest in-scope recommended next step.',
+      '',
+      'Continuation contract:',
+      '- If a single tool can advance the goal, invoke it directly this turn.',
+      '- Then emit one structured json envelope. Each `recommended_next_steps[*]`',
+      '  that maps to a single tool call MUST set both `tool` (exact snake_case',
+      '  name) and `tool_args` (object). Do not propose a step without a tool',
+      '  binding when one is available.',
+      '- Stop only if the original goal is sufficiently reached or progress stalls.',
+    ].join('\n');
   }
 
-  const toolHint = selectedAction.tool ? ` (${selectedAction.tool})` : '';
-  return `Continue with the recommended next step: ${selectedAction.label}${toolHint}. Keep the visible autonomy counters up to date and stop if the original goal is sufficiently reached or progress stalls.`;
+  const toolName = selectedAction.tool;
+  const argsJson = selectedAction.toolArgs
+    ? JSON.stringify(selectedAction.toolArgs)
+    : null;
+  const lines = [
+    `Continue with the recommended next step: ${selectedAction.label}.`,
+    '',
+    'Continuation contract:',
+  ];
+  if (toolName) {
+    lines.push(`- Invoke the tool \`${toolName}\` directly this turn.`);
+    if (argsJson) {
+      lines.push(`- Pre-bound arguments: \`${argsJson}\`. Adjust only if clearly wrong.`);
+    }
+  } else {
+    lines.push('- Identify the single tool that advances this step and invoke it directly this turn.');
+  }
+  lines.push(
+    '- Then emit one structured json envelope. Every recommended_next_steps[*]',
+    '  that maps to a single tool call MUST set `tool` (exact snake_case name)',
+    '  and `tool_args` (object). Do not propose a step without a tool binding',
+    '  when one is available.',
+    '- Stop only if the original goal is sufficiently reached or progress stalls.',
+  );
+  return lines.join('\n');
 }
 
 export function analyzePass(state: AutonomyState, input: PassAnalysisInput): PassAnalysisResult {

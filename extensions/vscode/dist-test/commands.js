@@ -51,6 +51,9 @@ exports.reconnectCommand = reconnectCommand;
 exports.switchInstanceCommand = switchInstanceCommand;
 exports.showStatusCommand = showStatusCommand;
 exports.openDashboardCommand = openDashboardCommand;
+exports.openExplorerCommand = openExplorerCommand;
+exports.toggleGpuMetricsCommand = toggleGpuMetricsCommand;
+exports.restoreSidebarCommand = restoreSidebarCommand;
 exports.startDaemonCommand = startDaemonCommand;
 exports.stopDaemonCommand = stopDaemonCommand;
 exports.inspectContextCommand = inspectContextCommand;
@@ -212,8 +215,100 @@ function showStatusCommand(svc) {
 /* ------------------------------------------------------------------ */
 /*  Command: Open Dashboard (§2.6)                                    */
 /* ------------------------------------------------------------------ */
-async function openDashboardCommand(_svc) {
-    await vscode.commands.executeCommand("dreamgraph.dashboardView.focus");
+async function openDashboardCommand(svc) {
+    await svc.dashboardView.ensureContainerVisible();
+    svc.statusBar.setRestoreSidebarVisible(false);
+    await svc.dashboardView.open();
+}
+/* ------------------------------------------------------------------ */
+/*  Command: Open Explorer                                            */
+/* ------------------------------------------------------------------ */
+let explorerPanel;
+let explorerPanelUrl;
+async function openExplorerCommand(svc) {
+    // Resolve the daemon URL the same way the dashboard does: prefer the
+    // currently connected instance's daemon port (which the daemon-client is
+    // already pointed at), and only fall back to the static configuration
+    // when no instance is connected. Reading `dreamgraph.daemonPort` directly
+    // would give the default 8100 even when the actual daemon is on a
+    // different port (auto-selected when 8100 is busy), which renders the
+    // Explorer iframe as an empty black panel.
+    const config = vscode.workspace.getConfiguration("dreamgraph");
+    const host = config.get("daemonHost") ?? "127.0.0.1";
+    const instance = svc.getInstance();
+    const port = instance?.daemon.port ??
+        svc.daemonClient.port ??
+        config.get("daemonPort") ??
+        8100;
+    const url = `http://${host}:${port}/explorer/`;
+    if (explorerPanel) {
+        if (explorerPanelUrl !== url) {
+            explorerPanel.webview.html = renderExplorerHtml(url);
+            explorerPanelUrl = url;
+        }
+        explorerPanel.reveal(vscode.ViewColumn.Active);
+        return;
+    }
+    explorerPanel = vscode.window.createWebviewPanel("dreamgraph.explorer", "DreamGraph Explorer", vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
+    explorerPanel.onDidDispose(() => {
+        explorerPanel = undefined;
+        explorerPanelUrl = undefined;
+    });
+    explorerPanel.webview.html = renderExplorerHtml(url);
+    explorerPanelUrl = url;
+}
+function renderExplorerHtml(url) {
+    return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>DreamGraph Explorer</title>
+    <style>
+      html, body { height: 100%; margin: 0; padding: 0; background: #0b0d10; color: #d8dde3; font-family: -apple-system, "Segoe UI", sans-serif; }
+      iframe { width: 100%; height: 100%; border: 0; display: block; }
+    </style>
+  </head>
+  <body>
+    <iframe id="dg-explorer-iframe" src="${url}" title="DreamGraph Explorer"></iframe>
+    <script>
+      // Relay messages from the VS Code extension host (which can only
+      // postMessage into this top-level webview) down to the Explorer
+      // iframe so commands like \`dreamgraph.toggleGpuMetrics\` reach it.
+      window.addEventListener('message', function (e) {
+        var data = e && e.data;
+        if (!data || typeof data !== 'object') return;
+        if (typeof data.type !== 'string' || data.type.indexOf('dreamgraph.') !== 0) return;
+        var f = document.getElementById('dg-explorer-iframe');
+        if (f && f.contentWindow) {
+          f.contentWindow.postMessage(data, '*');
+        }
+      });
+    </script>
+  </body>
+</html>`;
+}
+/* ------------------------------------------------------------------ */
+/*  Command: Toggle GPU Metrics overlay in Explorer                   */
+/* ------------------------------------------------------------------ */
+async function toggleGpuMetricsCommand() {
+    if (!explorerPanel) {
+        void vscode.window.showInformationMessage("DreamGraph: open the Explorer first to toggle the GPU metrics overlay.");
+        return;
+    }
+    void explorerPanel.webview.postMessage({
+        type: "dreamgraph.toggleGpuMetrics",
+    });
+}
+async function restoreSidebarCommand(svc) {
+    await svc.dashboardView.ensureContainerVisible();
+    svc.statusBar.setRestoreSidebarVisible(false);
+    try {
+        await svc.dashboardView.open();
+        void vscode.window.showInformationMessage("DreamGraph: sidebar restored and dashboard opened.");
+    }
+    catch (err) {
+        void vscode.window.showWarningMessage(`DreamGraph: attempted sidebar restore, but opening the dashboard may still need manual recovery — ${err instanceof Error ? err.message : String(err)}`);
+    }
 }
 /* ------------------------------------------------------------------ */
 /*  Command: Start Daemon (§2.6.3)                                    */
@@ -314,7 +409,12 @@ async function stopDaemonCommand(svc) {
 /* ------------------------------------------------------------------ */
 async function inspectContextCommand(svc) {
     const envelope = await svc.contextBuilder.buildEnvelope(undefined, "inspectContext");
+    const packet = await svc.contextBuilder.buildReasoningPacket(envelope, {
+        commandSource: "inspectContext",
+    });
+    svc.contextInspector.clearContextChannel();
     svc.contextInspector.logEnvelope(envelope);
+    svc.contextInspector.logReasoningPacket(packet);
     svc.contextInspector.showContextChannel();
 }
 /* ------------------------------------------------------------------ */
@@ -339,8 +439,16 @@ async function statusQuickPickCommand(svc) {
             description: "Full instance details",
         },
         {
+            label: "$(layout-sidebar-left) Restore Sidebar",
+            description: "Re-show DreamGraph activity bar icon and open dashboard",
+        },
+        {
             label: "$(globe) Open Dashboard",
             description: "Open web dashboard",
+        },
+        {
+            label: "$(graph) Open Explorer",
+            description: "Open graph explorer (curated mutations)",
         },
         {
             label: "$(eye) Inspect Context",
@@ -361,8 +469,12 @@ async function statusQuickPickCommand(svc) {
             return switchInstanceCommand(svc);
         case "$(info) Show Status":
             return showStatusCommand(svc), undefined;
+        case "$(layout-sidebar-left) Restore Sidebar":
+            return restoreSidebarCommand(svc);
         case "$(globe) Open Dashboard":
             return openDashboardCommand(svc);
+        case "$(graph) Open Explorer":
+            return openExplorerCommand(svc);
         case "$(eye) Inspect Context":
             return inspectContextCommand(svc), undefined;
     }
@@ -488,6 +600,7 @@ async function setArchitectApiKeyCommand(svc) {
             { label: "anthropic", description: "Anthropic (Claude)" },
             { label: "openai", description: "OpenAI (GPT)" },
             { label: "ollama", description: "Ollama (local)" },
+            { label: "lmstudio", description: "LM Studio (local OpenAI-compatible server)" },
         ], { placeHolder: "Select a provider first" });
         if (!picked)
             return;
@@ -496,9 +609,13 @@ async function setArchitectApiKeyCommand(svc) {
             .update("provider", provider, vscode.ConfigurationTarget.Global);
         await svc.architectLlm.loadConfig();
     }
-    // Step 2: Ollama doesn't need a key
+    // Step 2: Local providers don't need a real API key
     if (provider === "ollama") {
         vscode.window.showInformationMessage("DreamGraph: Ollama does not require an API key.");
+        return;
+    }
+    if (provider === "lmstudio") {
+        vscode.window.showInformationMessage("DreamGraph: LM Studio does not require an API key (a placeholder is sent automatically).");
         return;
     }
     // Step 3: Prompt for key

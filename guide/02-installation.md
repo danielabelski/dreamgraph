@@ -66,7 +66,7 @@ The installer modifies PATH. Your **current** terminal won't see the change. Ope
 
 ```bash
 dg --version
-# DreamGraph CLI v9.0.0 (Lattice)
+# DreamGraph CLI v10.0.0 (Renata)
 
 dg --help
 # (lists every subcommand)

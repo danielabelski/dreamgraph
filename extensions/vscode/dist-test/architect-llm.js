@@ -40,7 +40,10 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ArchitectLlm = exports.OPENAI_MODELS = exports.ANTHROPIC_MODELS = void 0;
+exports.setRequestBudgetSink = setRequestBudgetSink;
 const vscode = __importStar(require("vscode"));
+const openai_responses_adapter_1 = require("./openai-responses-adapter");
+const request_compaction_1 = require("./request-compaction");
 exports.ANTHROPIC_MODELS = [
     "claude-opus-4-6",
     "claude-opus-4-7",
@@ -49,6 +52,7 @@ exports.ANTHROPIC_MODELS = [
 ];
 exports.OPENAI_MODELS = [
     "gpt-5",
+    "gpt-5.5",
     "gpt-5.4",
     "gpt-4.1",
     "gpt-4.1-mini",
@@ -57,6 +61,63 @@ exports.OPENAI_MODELS = [
     "o3",
     "o4-mini",
 ];
+/* ------------------------------------------------------------------ */
+/*  Emergency input-budget brakes                                     */
+/* ------------------------------------------------------------------ */
+/**
+ * Per-section warning threshold (chars). Telemetry only � no requests are
+ * rejected client-side. The pressure-aware `BudgetCoordinator` (token economy)
+ * is the sole authority on context sizing; provider APIs reject anything that
+ * actually overflows their server-side window. We only log here so unusually
+ * large sections (system prompt blow-ups, runaway tool histories, etc.) remain
+ * visible in the "DreamGraph Context" output channel.
+ */
+const SECTION_WARN_CHARS = 80_000;
+let _budgetSink;
+function setRequestBudgetSink(sink) {
+    _budgetSink = sink;
+}
+function _logRequestBudget(callsite, model, body, serialized) {
+    // Per-section breakdown: top-level keys + system + per-message char counts.
+    const sections = [];
+    const push = (name, content) => {
+        const s = typeof content === 'string' ? content : JSON.stringify(content ?? '');
+        const chars = s.length;
+        sections.push({ name, chars, approxTokens: Math.ceil(chars / 4) });
+    };
+    if (typeof body.system === 'string')
+        push('system', body.system);
+    const messages = body.messages;
+    if (Array.isArray(messages)) {
+        messages.forEach((m, i) => {
+            const role = m.role ?? 'unknown';
+            push(`messages[${i}].${role}`, m.content);
+        });
+    }
+    const tools = body.tools;
+    if (Array.isArray(tools))
+        push('tools', tools);
+    const inputChars = serialized.length;
+    const approxTokens = Math.ceil(inputChars / 4);
+    const oversizedSections = sections.filter((s) => s.chars > SECTION_WARN_CHARS);
+    const warn = oversizedSections.length > 0 || inputChars > 200_000;
+    const topSections = sections.sort((a, b) => b.chars - a.chars).slice(0, 10);
+    if (_budgetSink) {
+        _budgetSink({ callsite, model, inputChars, approxTokens, sections: topSections, warn });
+        return;
+    }
+    // Fallback: console output if no sink registered yet (early activation).
+    const summary = { callsite, model, inputChars, approxTokens, sections: topSections };
+    if (warn)
+        console.warn('[DreamGraph][llm_input_budget]', JSON.stringify(summary));
+    else
+        console.log('[DreamGraph][llm_input_budget]', JSON.stringify({ callsite, model, inputChars, approxTokens }));
+}
+function _serializeAndLogRequest(callsite, model, body) {
+    const serialized = JSON.stringify(body);
+    _logRequestBudget(callsite, model, body, serialized);
+    return serialized;
+}
 class ArchitectLlm {
     _config = null;
     _secretStorage;
@@ -98,6 +159,8 @@ class ArchitectLlm {
             }
             case "ollama":
                 return { textAttachments: true, imageAttachments: false };
+            case "lmstudio":
+                return { textAttachments: true, imageAttachments: false };
             default:
                 return { textAttachments: false, imageAttachments: false };
         }
@@ -132,19 +195,21 @@ class ArchitectLlm {
         return summarized ? { type: "adaptive", display: "summarized" } : { type: "adaptive" };
     }
     _buildAnthropicMessagesRequest(config, messages, system, tools, stream) {
+        const compactedSystem = system ? (0, request_compaction_1.compactSystemPrompt)(system) : undefined;
+        const compactedTools = tools ? (0, request_compaction_1.minifyToolDefinitions)(tools) : undefined;
         const body = {
             model: config.model,
             max_tokens: this._getAnthropicMaxTokens(config.model),
             messages,
         };
-        if (system) {
-            body.system = system;
+        if (compactedSystem) {
+            body.system = compactedSystem;
         }
         if (stream) {
             body.stream = true;
         }
-        if (tools && tools.length > 0) {
-            body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
+        if (compactedTools && compactedTools.length > 0) {
+            body.tools = compactedTools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
         }
         if (config.model.startsWith("claude-opus-4-7")) {
             body.output_config = { effort: this._getAnthropicEffort(config.model) };
@@ -157,11 +222,17 @@ class ArchitectLlm {
     }
     async loadConfig() {
         const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
-        const provider = (cfg.get("provider") ?? "");
-        const model = cfg.get("model") ?? "";
+        const provider = (cfg.get("provider") ?? "anthropic");
+        const model = cfg.get("model") ?? "claude-opus-4-6";
         const baseUrl = cfg.get("baseUrl") || this._defaultBaseUrl(provider);
         let apiKey = "";
-        if (provider && provider !== "ollama") {
+        if (provider === "lmstudio") {
+            // LM Studio ignores the auth header but the OpenAI-compat code path
+            // sends `Authorization: Bearer <key>` unconditionally. A literal
+            // placeholder avoids "Bearer " (empty) which some setups reject.
+            apiKey = "lm-studio";
+        }
+        else if (provider && provider !== "ollama") {
             apiKey = (await this._secretStorage.get(`dreamgraph.apiKey.${provider}`)) ?? "";
         }
         this._config = { provider, model, baseUrl, apiKey };
@@ -183,6 +254,7 @@ class ArchitectLlm {
             case "anthropic":
                 return this._callAnthropic(config, messages, start, signal);
             case "openai":
+            case "lmstudio":
                 return this._callOpenAI(config, messages, start, signal);
             case "ollama":
                 return this._callOllama(config, messages, start, signal);
@@ -198,6 +270,7 @@ class ArchitectLlm {
             case "anthropic":
                 return this._streamAnthropic(config, messages, onChunk, start, signal);
             case "openai":
+            case "lmstudio":
                 return this._streamOpenAI(config, messages, onChunk, start, signal);
             case "ollama":
                 return this._streamOllama(config, messages, onChunk, start, signal);
@@ -209,13 +282,20 @@ class ArchitectLlm {
         this._ensureConfigured();
         const config = this._config;
         const start = Date.now();
+        const compactedRequest = (0, request_compaction_1.applySharedRequestCompaction)({
+            messages,
+            rawMessages,
+            tools,
+            provider: config.provider,
+        });
         switch (config.provider) {
             case "anthropic":
-                return this._callAnthropicWithTools(config, messages, tools, start, rawMessages, signal);
+                return this._callAnthropicWithTools(config, compactedRequest.messages, compactedRequest.tools ?? [], start, compactedRequest.rawMessages, signal);
             case "openai":
-                return this._callOpenAIWithTools(config, messages, tools, start, rawMessages, signal);
+            case "lmstudio":
+                return this._callOpenAIWithTools(config, compactedRequest.messages, compactedRequest.tools ?? [], start, compactedRequest.rawMessages, signal);
             case "ollama": {
-                const resp = await this._callOllama(config, messages, start, signal);
+                const resp = await this._callOllama(config, compactedRequest.messages, start, signal);
                 return { ...resp, toolCalls: [], stopReason: "end_turn" };
             }
             default:
@@ -249,9 +329,13 @@ class ArchitectLlm {
         return content.map((block) => {
             if (block.type === "text")
                 return { type: "text", text: block.text };
+            // OpenAI Chat Completions API uses `image_url` (object form), distinct
+            // from the Responses API which uses `input_image` (string form). This
+            // serializer is only ever invoked from the chat/completions endpoints
+            // — the Responses path runs through `_toOpenAIResponsesContent`.
             return {
-                type: "input_image",
-                image_url: `data:${block.mimeType};base64,${block.dataBase64}`,
+                type: "image_url",
+                image_url: { url: `data:${block.mimeType};base64,${block.dataBase64}` },
             };
         });
     }
@@ -298,11 +382,21 @@ class ArchitectLlm {
                 if (nonToolBlocks.length > 0) {
                     const translated = nonToolBlocks.map((b) => {
                         if (b.type === "image") {
+                            // Two equivalent inbound shapes:
+                            //  (a) Anthropic-style: { source: { type: 'base64', media_type, data } }
+                            //  (b) Canonical ArchitectImageBlock: { mimeType, dataBase64, fileName? }
+                            // Both must serialize to OpenAI Chat Completions' image_url object.
                             const src = b.source;
                             if (src && src.type === "base64") {
                                 return {
                                     type: "image_url",
                                     image_url: { url: `data:${src.media_type};base64,${src.data}` },
+                                };
+                            }
+                            if (typeof b.mimeType === "string" && typeof b.dataBase64 === "string") {
+                                return {
+                                    type: "image_url",
+                                    image_url: { url: `data:${b.mimeType};base64,${b.dataBase64}` },
                                 };
                             }
                         }
@@ -334,7 +428,7 @@ class ArchitectLlm {
                 "x-api-key": config.apiKey,
                 "anthropic-version": "2023-06-01",
             },
-            body: JSON.stringify(requestBody),
+            body: _serializeAndLogRequest('callAnthropic', config.model, requestBody),
             signal,
         });
         if (!res.ok)
@@ -360,7 +454,7 @@ class ArchitectLlm {
                 "x-api-key": config.apiKey,
                 "anthropic-version": "2023-06-01",
             },
-            body: JSON.stringify(requestBody),
+            body: _serializeAndLogRequest('callAnthropicWithTools', config.model, requestBody),
             signal,
         });
         if (!res.ok)
@@ -377,8 +471,110 @@ class ArchitectLlm {
             stopReason: data.stop_reason ?? "end_turn",
         };
     }
+    _usesOpenAIResponsesApi(model) {
+        return (0, openai_responses_adapter_1.usesOpenAIResponsesApi)(model);
+    }
+    _getOpenAIReasoningEffort() {
+        const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
+        const configured = (cfg.get("openai.reasoningEffort") ?? "").trim().toLowerCase();
+        if (configured === "low" || configured === "medium" || configured === "high" || configured === "xhigh") {
+            return configured;
+        }
+        return "medium";
+    }
+    _getOpenAITextVerbosity() {
+        const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
+        const configured = (cfg.get("openai.verbosity") ?? "").trim().toLowerCase();
+        if (configured === "low" || configured === "medium" || configured === "high") {
+            return configured;
+        }
+        const reportingMode = (cfg.get("reportingMode") ?? "standard").trim().toLowerCase();
+        if (reportingMode === "deep" || reportingMode === "forensic") {
+            return "medium";
+        }
+        return "low";
+    }
+    _toOpenAIResponsesContent(content) {
+        return (0, openai_responses_adapter_1.toOpenAIResponsesContent)(content);
+    }
+    _translateRawToOpenAIResponses(raw) {
+        return (0, openai_responses_adapter_1.translateRawToOpenAIResponses)(raw);
+    }
+    _buildOpenAIResponsesRequest(config, messages, rawMessages, tools) {
+        return (0, openai_responses_adapter_1.buildOpenAIResponsesRequest)(messages, {
+            model: config.model,
+            reasoningEffort: this._getOpenAIReasoningEffort(),
+            textVerbosity: this._getOpenAITextVerbosity(),
+            rawMessages,
+            tools,
+        });
+    }
+    _extractOpenAIResponsesText(data) {
+        return (0, openai_responses_adapter_1.extractOpenAIResponsesText)(data);
+    }
+    _extractOpenAIResponsesToolCalls(data) {
+        return (0, openai_responses_adapter_1.extractOpenAIResponsesToolCalls)(data);
+    }
+    async _callOpenAIResponses(config, messages, start, signal) {
+        const requestBody = this._buildOpenAIResponsesRequest(config, messages);
+        const res = await fetch(`${config.baseUrl}/responses`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: _serializeAndLogRequest('callOpenAIResponses', config.model, requestBody),
+            signal,
+        });
+        if (!res.ok)
+            throw new Error(`OpenAI Responses API error (${res.status}): ${await res.text()}`);
+        const data = (await res.json());
+        return {
+            content: this._extractOpenAIResponsesText(data),
+            promptTokens: data.usage?.input_tokens ?? 0,
+            completionTokens: data.usage?.output_tokens ?? 0,
+            durationMs: Date.now() - start,
+        };
+    }
+    async _callOpenAIResponsesWithTools(config, messages, tools, start, rawMessages, signal) {
+        const requestBody = this._buildOpenAIResponsesRequest(config, messages, rawMessages, tools);
+        const res = await fetch(`${config.baseUrl}/responses`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: _serializeAndLogRequest('callOpenAIResponsesWithTools', config.model, requestBody),
+            signal,
+        });
+        if (!res.ok)
+            throw new Error(`OpenAI Responses API error (${res.status}): ${await res.text()}`);
+        const data = (await res.json());
+        const toolCalls = this._extractOpenAIResponsesToolCalls(data);
+        return {
+            content: this._extractOpenAIResponsesText(data),
+            promptTokens: data.usage?.input_tokens ?? 0,
+            completionTokens: data.usage?.output_tokens ?? 0,
+            durationMs: Date.now() - start,
+            toolCalls,
+            // Verbatim output[] items (incl. reasoning) for stateless replay.
+            providerRawAssistant: (0, openai_responses_adapter_1.extractOpenAIResponsesRawItems)(data),
+            stopReason: toolCalls.length > 0
+                ? "tool_use"
+                : data.incomplete_details?.reason === "max_output_tokens"
+                    ? "max_tokens"
+                    : data.status ?? "end_turn",
+        };
+    }
     async _callOpenAIWithTools(config, messages, tools, start, rawMessages, signal) {
-        const openaiTools = tools.map((t) => ({
+        if (this._usesOpenAIResponsesApi(config.model)) {
+            return this._callOpenAIResponsesWithTools(config, messages, tools, start, rawMessages, signal);
+        }
+        // Trim tool descriptions / strip schema metadata to keep the `tools`
+        // section out of the budget hot path. Mirrors the Anthropic and
+        // OpenAI Responses paths (both already call `minifyToolDefinitions`).
+        const compactedTools = (0, request_compaction_1.minifyToolDefinitions)(tools);
+        const openaiTools = compactedTools.map((t) => ({
             type: "function",
             function: { name: t.name, description: t.description, parameters: t.inputSchema },
         }));
@@ -395,7 +591,7 @@ class ArchitectLlm {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${config.apiKey}`,
             },
-            body: JSON.stringify({
+            body: _serializeAndLogRequest('callOpenAIWithTools', config.model, {
                 model: config.model,
                 max_completion_tokens: 16384,
                 messages: apiMessages,
@@ -430,7 +626,7 @@ class ArchitectLlm {
                 "x-api-key": config.apiKey,
                 "anthropic-version": "2023-06-01",
             },
-            body: JSON.stringify(requestBody),
+            body: _serializeAndLogRequest('streamAnthropic', config.model, requestBody),
             signal,
         });
         if (!res.ok)
@@ -438,13 +634,16 @@ class ArchitectLlm {
         return this._readSSEStream(res, onChunk, start, "anthropic");
     }
     async _callOpenAI(config, messages, start, signal) {
+        if (this._usesOpenAIResponsesApi(config.model)) {
+            return this._callOpenAIResponses(config, messages, start, signal);
+        }
         const res = await fetch(`${config.baseUrl}/chat/completions`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${config.apiKey}`,
             },
-            body: JSON.stringify({
+            body: _serializeAndLogRequest('callOpenAI', config.model, {
                 model: config.model,
                 max_completion_tokens: 16384,
                 messages: messages.map((m) => ({ role: m.role, content: this._toOpenAIContent(m.content) })),
@@ -468,7 +667,7 @@ class ArchitectLlm {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${config.apiKey}`,
             },
-            body: JSON.stringify({
+            body: _serializeAndLogRequest('streamOpenAI', config.model, {
                 model: config.model,
                 max_completion_tokens: 16384,
                 stream: true,
@@ -484,7 +683,7 @@ class ArchitectLlm {
         const res = await fetch(`${config.baseUrl}/api/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+            body: _serializeAndLogRequest('callOllama', config.model, {
                 model: config.model,
                 messages: messages.map((m) => ({ role: m.role, content: this._toOllamaContent(m.content) })),
                 stream: false,
@@ -505,7 +704,7 @@ class ArchitectLlm {
         const res = await fetch(`${config.baseUrl}/api/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+            body: _serializeAndLogRequest('streamOllama', config.model, {
                 model: config.model,
                 messages: messages.map((m) => ({ role: m.role, content: this._toOllamaContent(m.content) })),
                 stream: true,
@@ -625,6 +824,8 @@ class ArchitectLlm {
                 return "https://api.openai.com/v1";
             case "ollama":
                 return "http://localhost:11434";
+            case "lmstudio":
+                return "http://localhost:1234/v1";
             default:
                 return "";
         }
@@ -636,7 +837,7 @@ class ArchitectLlm {
         if (!this._config.model) {
             throw new Error('Architect model name not set. Set "dreamgraph.architect.model" in settings.');
         }
-        if (this._config.provider !== "ollama" && !this._config.apiKey) {
+        if (this._config.provider !== "ollama" && this._config.provider !== "lmstudio" && !this._config.apiKey) {
             throw new Error(`No API key stored for ${this._config.provider}. Use "DreamGraph: Set Architect API Key" to store one.`);
         }
     }

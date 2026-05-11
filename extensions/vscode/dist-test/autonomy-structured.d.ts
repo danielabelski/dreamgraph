@@ -6,6 +6,6 @@ export interface StructuredPassEnvelope {
     uncertainty?: 'low' | 'medium' | 'high';
     nextSteps: RecommendedAction[];
 }
-export declare function extractStructuredPassEnvelope(content: string): StructuredPassEnvelope;
+export declare function extractStructuredPassEnvelope(content: string | undefined): StructuredPassEnvelope;
 export declare function buildRecommendedActionSetFromContent(content: string): RecommendedActionSet;
 //# sourceMappingURL=autonomy-structured.d.ts.map

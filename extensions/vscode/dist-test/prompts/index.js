@@ -16,6 +16,7 @@ const architect_suggest_js_1 = require("./architect-suggest.js");
 const autonomy_js_1 = require("../autonomy.js");
 const autonomy_contract_js_1 = require("../autonomy-contract.js");
 const reporting_js_1 = require("../reporting.js");
+const architect_lens_js_1 = require("../architect-lens.js");
 /* ------------------------------------------------------------------ */
 /*  Overlay selection                                                 */
 /* ------------------------------------------------------------------ */
@@ -58,6 +59,21 @@ function formatContextBlock(envelope) {
     }
     if (envelope.changedFiles.length > 0) {
         parts.push(`- **Unsaved files:** ${envelope.changedFiles.join(", ")}`);
+    }
+    if (envelope.environmentContext?.entries?.length) {
+        const scoped = envelope.environmentContext.entries
+            .filter((entry) => !envelope.activeFile?.path || envelope.activeFile.path.startsWith(entry.scope))
+            .slice(0, 2);
+        if (scoped.length > 0) {
+            parts.push("");
+            parts.push("### Environment Context");
+            for (const entry of scoped) {
+                parts.push(`- **${entry.scope}** → ${entry.runtime}; ${entry.moduleSystem}; ${entry.role}`);
+                if (entry.keyDependencies.length > 0) {
+                    parts.push(`  - key deps: ${entry.keyDependencies.join(", ")}`);
+                }
+            }
+        }
     }
     // Graph context — the core knowledge advantage
     if (envelope.graphContext) {
@@ -137,8 +153,15 @@ function formatContextBlock(envelope) {
  * @param autonomyState - Optional autonomy state to inject policy/contract blocks
  * @param provider - Optional LLM provider name to inject provider-specific discipline
  */
-function assemblePrompt(task, envelope, contextText, additionalInstructions, autonomyState, provider) {
+function assemblePrompt(task, envelope, contextText, additionalInstructions, autonomyState, provider, lens) {
     const parts = [architect_core_js_1.ARCHITECT_CORE];
+    // Architect lens overlay (Phase 5 #10 / ADR-100). Silent unless material —
+    // injected directly after the core identity so it can colour every later
+    // block (overlay, evidence, reporting) without needing a second pass.
+    const lensBlock = getArchitectLensBlock(lens);
+    if (lensBlock) {
+        parts.push(lensBlock);
+    }
     // Task overlay
     const overlay = TASK_OVERLAYS[task];
     if (overlay) {
@@ -158,8 +181,14 @@ function assemblePrompt(task, envelope, contextText, additionalInstructions, aut
     const autonomyBlock = (0, autonomy_js_1.getAutonomyInstructionBlock)(autonomyState);
     if (autonomyBlock) {
         parts.push(autonomyBlock);
-        parts.push((0, autonomy_contract_js_1.getStructuredResponseContractBlock)());
     }
+    // Structured continuation envelope is requested on every turn, regardless
+    // of autonomy mode. The webview's SUMMARY card (renderEnvelope) renders
+    // the goal/progress/uncertainty pills and the Suggested-Actions chips
+    // from this envelope; without it the user sees only raw prose with no
+    // continuation buttons. Autonomy decides whether to *act* on the envelope,
+    // not whether the envelope exists.
+    parts.push((0, autonomy_contract_js_1.getStructuredResponseContractBlock)());
     // Provider-specific discipline — Anthropic models (Claude) tend to execute
     // many tool calls without pausing, which corrupts code on large tasks.
     // This block enforces a surgical, slice-based work pattern.
@@ -178,8 +207,27 @@ function assemblePrompt(task, envelope, contextText, additionalInstructions, aut
 /**
  * Infer the best task overlay from an intent mode and optional command source.
  */
-function inferTask(intentMode, commandSource) {
-    // Command source overrides
+function inferTask(intentMode, commandSource, prompt) {
+    const normalizedPrompt = (prompt ?? "").toLowerCase();
+    const isPatchLikePrompt = [
+        "fix",
+        "patch",
+        "edit",
+        "change",
+        "modify",
+        "update",
+        "refactor",
+        "implement",
+        "rewrite",
+        "rename",
+        "remove",
+        "replace",
+        "make it compile",
+        "make build pass",
+        "build pass",
+        "compile",
+        "add support",
+    ].some((phrase) => normalizedPrompt.includes(phrase));
     if (commandSource) {
         switch (commandSource) {
             case "explainFile":
@@ -190,9 +238,15 @@ function inferTask(intentMode, commandSource) {
                 return "validate";
             case "suggestNextAction":
                 return "suggest";
+            case "applyPatch":
+            case "modifyCurrentFile":
+            case "fixCurrentFile":
+                return "patch";
         }
     }
-    // Intent-based inference
+    if (isPatchLikePrompt) {
+        return "patch";
+    }
     switch (intentMode) {
         case "active_file":
             return "explain";
@@ -204,6 +258,72 @@ function inferTask(intentMode, commandSource) {
             return "chat";
     }
 }
+/* ------------------------------------------------------------------ */
+/*  Architect Lens (Phase 5 #10 / ADR-100)                            */
+/* ------------------------------------------------------------------ */
+/**
+ * Returns a lens overlay block — or an empty string when the lens is
+ * `generic` / non-material (silent default per ADR-100).
+ *
+ * Each lens nudges the architect toward a different reasoning protocol
+ * (different evidence, different ADRs, different verification step) while
+ * leaving the core identity and tool catalogue untouched.
+ */
+function getArchitectLensBlock(lens) {
+    if (!lens || !lens.material || lens.lens === "generic")
+        return "";
+    const label = (0, architect_lens_js_1.lensLabel)(lens.lens);
+    const protocol = LENS_PROTOCOLS[lens.lens] ?? "";
+    if (!protocol)
+        return "";
+    return [
+        `## Architect Lens: ${label}`,
+        `_Selected by intent detector (${lens.confidence.toFixed(2)} confidence — ${lens.reason}). Begin your response with the line "Architect Lens: ${label}" so the user can see which mode is active._`,
+        "",
+        protocol,
+    ].join("\n");
+}
+const LENS_PROTOCOLS = {
+    performance: [
+        "Reason about runtime cost first, correctness second.",
+        "- Always identify the dominant cost (CPU, IO, allocation, network round-trips, N+1).",
+        "- Prefer measurements / Big-O reasoning over speculation; ask for a benchmark when unclear.",
+        "- Reach for cognitive evidence: causal chains, temporal patterns, hot-path tensions.",
+        "- Propose the smallest change that removes the dominant cost; defer micro-optimisations.",
+    ].join("\n"),
+    security: [
+        "Treat every input as hostile until proven otherwise.",
+        "- Map the trust boundary the change crosses (network, FS, IPC, untrusted code).",
+        "- Cite OWASP / DreamGraph threat-log entries when relevant; pull `dream://threats` if available.",
+        "- Prefer principle-of-least-privilege diffs; never widen surface without explicit justification.",
+        "- Call out secrets, auth, RLS, injection, and serialisation concerns even if not asked.",
+    ].join("\n"),
+    reliability: [
+        "Reason about failure modes before happy paths.",
+        "- Enumerate retries, timeouts, idempotency, partial-failure recovery, and resource leaks.",
+        "- Prefer explicit error contracts and atomic writes; surface race conditions or unbounded waits.",
+        "- Pull tensions tagged stability/reliability and active ADRs governing error handling.",
+    ].join("\n"),
+    refactor: [
+        "Preserve behaviour exactly; change only structure.",
+        "- State the invariant being preserved at the top of the response.",
+        "- Prefer mechanical, reversible passes (extract/rename/inline) over speculative redesigns.",
+        "- Pull related local conventions and sibling patterns; cite them when justifying the shape.",
+        "- Flag any test gaps that make the refactor unsafe.",
+    ].join("\n"),
+    debug: [
+        "Form a single causal hypothesis before suggesting a fix.",
+        "- Restate the observed vs expected behaviour in one sentence each.",
+        "- Walk the data path from trigger → failure point; cite the specific files/lines you read.",
+        "- Prefer a minimal repro or logging step before edits when the cause is uncertain.",
+    ].join("\n"),
+    review: [
+        "Act as a careful reviewer, not a coauthor.",
+        "- Group findings by severity (blocking / nit / question); never invent issues.",
+        "- Cite the exact file and approximate line for each finding.",
+        "- Acknowledge what is good before what is wrong; keep tone collegial.",
+    ].join("\n"),
+};
 /* ------------------------------------------------------------------ */
 /*  Anthropic Pacing Discipline                                       */
 /* ------------------------------------------------------------------ */

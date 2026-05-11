@@ -10,12 +10,25 @@ export interface StructuredPassEnvelope {
   nextSteps: RecommendedAction[];
 }
 
-export function extractStructuredPassEnvelope(content: string): StructuredPassEnvelope {
-  const block = extractPrimaryJsonEnvelope(content);
+export function extractStructuredPassEnvelope(content: string | undefined): StructuredPassEnvelope {
+  // Continuation passes can have empty/undefined assistant text (tool-only or
+  // aborted). Treat as a neutral envelope rather than crashing.
+  const safeContent = content ?? '';
+  const block = extractPrimaryJsonEnvelope(safeContent);
   if (block) {
-    const nextSteps = (block.recommended_next_steps ?? []).map((step, index) => toActionFromStructured(step, index + 1));
+    // Models occasionally emit malformed `recommended_next_steps` entries
+    // (missing/non-string `label`, wrong shape). Filter them out before they
+    // reach the continuation planner — a malformed step can otherwise crash
+    // the autonomy loop the moment any code touches `step.label.toLowerCase()`,
+    // which then surfaces to the user as "Error during continuation: Cannot
+    // read properties of undefined (reading 'toLowerCase')" and silently
+    // skips a continuation that should not have been attempted in the first
+    // place.
+    const nextSteps = (block.recommended_next_steps ?? [])
+      .map((step, index) => toActionFromStructured(step, index + 1))
+      .filter((action): action is RecommendedAction => action !== null);
     return {
-      summary: block.summary ?? extractSummary(content),
+      summary: block.summary ?? extractSummary(safeContent),
       goalStatus: block.goal_status ?? 'partial',
       progressStatus: block.progress_status ?? 'advancing',
       uncertainty: block.uncertainty ?? 'low',
@@ -23,8 +36,8 @@ export function extractStructuredPassEnvelope(content: string): StructuredPassEn
     };
   }
 
-  const nextSteps = extractRecommendedActions(content);
-  const lower = content.toLowerCase();
+  const nextSteps = extractRecommendedActions(safeContent);
+  const lower = safeContent.toLowerCase();
   const goalStatus = /goal sufficiently reached|done and verified|completed successfully|ready for commit/.test(lower)
     ? 'complete'
     : /blocked|cannot proceed|blocking failure/.test(lower)
@@ -42,7 +55,7 @@ export function extractStructuredPassEnvelope(content: string): StructuredPassEn
       : 'low';
 
   return {
-    summary: extractSummary(content),
+    summary: extractSummary(safeContent),
     goalStatus,
     progressStatus,
     uncertainty,
@@ -110,7 +123,10 @@ function extractRecommendedActions(content: string): RecommendedAction[] {
     const single = content.match(/next recommended slice:\s*([^\n]+)/i)
       ?? content.match(/next recommended step:\s*([^\n]+)/i)
       ?? content.match(/recommended next step:\s*([^\n]+)/i);
-    if (single?.[1]) return [toAction(single[1].trim(), 1)];
+    if (single?.[1]) {
+      const action = toAction(single[1].trim(), 1);
+      return action ? [action] : [];
+    }
     return [];
   }
 
@@ -137,19 +153,27 @@ function extractRecommendedActions(content: string): RecommendedAction[] {
   let priority = 1;
   return found
     .filter((b) => b.indent === actionsAtIndent && !isHeaderBullet(b.label))
-    .map((b) => toAction(b.label, priority++));
+    .map((b) => toAction(b.label, priority++))
+    .filter((action): action is RecommendedAction => action !== null);
 }
 
-function toAction(label: string, priority: number): RecommendedAction {
-  const id = label
+function toAction(label: unknown, priority: number): RecommendedAction | null {
+  // Coerce defensively: structured envelopes occasionally arrive with
+  // non-string labels (number, null, nested object) when the model
+  // hallucinates the schema. Reject anything that doesn't yield a
+  // non-empty trimmed string — a step with no human-readable label is
+  // not actionable anyway.
+  const labelStr = typeof label === 'string' ? label.trim() : '';
+  if (!labelStr) return null;
+  const id = labelStr
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 64) || `action-${priority}`;
-  const batchGroup = /clickable|webview|ui|header|status/.test(label.toLowerCase()) ? 'ui' : undefined;
+  const batchGroup = /clickable|webview|ui|header|status/.test(labelStr.toLowerCase()) ? 'ui' : undefined;
   return {
     id,
-    label,
+    label: labelStr,
     priority,
     eligible: true,
     withinScope: true,
@@ -168,8 +192,9 @@ function toActionFromStructured(step: {
   batch_group?: string;
   tool?: string;
   tool_args?: Record<string, unknown>;
-}, fallbackPriority: number): RecommendedAction {
+}, fallbackPriority: number): RecommendedAction | null {
   const normalized = toAction(step.label, step.priority ?? fallbackPriority);
+  if (!normalized) return null;
   return {
     ...normalized,
     id: step.id?.trim() || normalized.id,

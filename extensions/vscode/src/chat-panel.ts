@@ -34,6 +34,8 @@ import type { ChangedFilesView, ChangeType } from './changed-files-view';
 import { LOCAL_TOOL_DEFINITIONS, isLocalTool, executeLocalTool } from './local-tools.js';
 import { assemblePrompt, inferTask } from './prompts/index.js';
 import { selectToolGroups } from './tool-groups.js';
+import { runPassViaCore } from './architect-core/runner.js';
+import type { ChatPanelHost } from './architect-core/adapters/host.js';
 import {
   createAutonomyState,
   deriveAutonomyStatusView,
@@ -43,7 +45,23 @@ import {
 } from './autonomy.js';
 import { analyzePass, advanceAutonomyStateIfContinued, buildContinuationPrompt } from './autonomy-loop.js';
 import { extractStructuredPassEnvelope } from './autonomy-structured.js';
+import { extractPrimaryEnvelope } from './envelope-utils.js';
 import { getAutonomyMode, getAutonomyPassBudget, parseAutonomyRequest } from './reporting.js';
+import { applyModeProfileToState, getModeProfile, type AutonomyMode } from './autonomy.js';
+
+/**
+ * Build the initial AutonomyState for a given mode, honouring the user's
+ * explicit `dreamgraph.architect.autoPassBudget` setting when present, but
+ * always defaulting to the mode profile's PassBudget + TimeBudget so the
+ * header pills are never empty (per ADR-153 — both budgets must be visible).
+ */
+function _initialAutonomyStateFromSettings(): AutonomyState {
+  const mode = getAutonomyMode();
+  const explicitBudget = getAutonomyPassBudget();
+  const profile = getModeProfile(mode);
+  const totalPasses = (typeof explicitBudget === 'number' && explicitBudget > 0) ? explicitBudget : profile.defaultPassBudget;
+  return createAutonomyState(mode, totalPasses, profile.defaultTimeBudgetMs, Date.now());
+}
 import * as helpers from './chat-panel/helpers.js';
 import {
   BudgetCoordinator,
@@ -87,15 +105,48 @@ function _truncateHistoryMessage(content: string, cap: number): string {
 }
 
 function buildBoundedConversationMessages(
-  messages: Array<{ role: ChatRole; content: string }>,
+  messages: Array<{ role: ChatRole; content: string; attachments?: ReadonlyArray<ChatMessageAttachmentSnapshot> }>,
   maxRecent: number = 20,
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
-  const filtered = messages.filter((m) => m.role === 'user' || m.role === 'assistant') as Array<{ role: 'user' | 'assistant'; content: string }>;
+  const filtered = messages.filter((m) => m.role === 'user' || m.role === 'assistant') as Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    attachments?: ReadonlyArray<ChatMessageAttachmentSnapshot>;
+  }>;
   const sliced = filtered.slice(-maxRecent);
   const recentStart = sliced.length - HISTORY_RECENT_KEEP;
   return sliced.map((m, i) => {
     const cap = i >= recentStart ? HISTORY_RECENT_MAX_CHARS : HISTORY_OLDER_MAX_CHARS;
-    return { role: m.role, content: _truncateHistoryMessage(m.content, cap) };
+    const text = _truncateHistoryMessage(m.content, cap);
+
+    // CRITICAL — DO NOT REPLAY ATTACHMENT BYTES IN HISTORY.
+    //
+    // An earlier iteration of this function inlined image base64 from each
+    // user message's `attachments` snapshot as canonical content blocks so
+    // the model could "see" prior pictures on follow-up turns. That created
+    // an O(turns × image_bytes) wire-cost bomb: a single 1.8 MB attached
+    // image was re-serialized on every subsequent prompt — observed live
+    // as 5.4 MB / ~1.36 M tokens per request to a chat-completions model.
+    //
+    // The attachment snapshot persists ONLY for two reasons:
+    //   (1) the user-bubble thumbnail / file-info chip in the chat panel,
+    //   (2) record-keeping so the user can see what they sent.
+    // The model received the image bytes ONCE, on the originating turn, via
+    // the live `_buildUserContentBlocks` path. Subsequent turns must NOT
+    // re-send them; if the user wants the model to look again they can
+    // re-attach (cheap, explicit, observable in token telemetry).
+    //
+    // We DO surface a tiny text marker so the model knows an image was
+    // attached at that point in the conversation — but only as a name/type
+    // mention, never bytes.
+    const markers: string[] = [];
+    if (m.role === 'user' && m.attachments && m.attachments.length > 0) {
+      for (const a of m.attachments) {
+        markers.push(`[attachment: ${a.name} · ${a.kind} · ${a.mimeType}]`);
+      }
+    }
+    const composed = markers.length > 0 ? `${text}\n\n${markers.join('\n')}` : text;
+    return { role: m.role, content: composed };
   });
 }
 
@@ -142,6 +193,19 @@ function _elideStaleToolResults(rawMessages: unknown[], keepLastPairs: number): 
 }
 
 
+interface ChatMessageAttachmentSnapshot {
+  id: string;
+  name: string;
+  kind: 'text' | 'image';
+  mimeType: string;
+  size: number;
+  // Present for images so the user bubble can render an inline thumbnail
+  // without re-reading the source file. Omitted for text attachments
+  // (their bytes were inlined into the prompt; the snapshot is purely
+  // informational and should display name/type/size).
+  dataBase64?: string;
+}
+
 interface ChatMessage {
   id?: string;
   role: ChatRole;
@@ -155,6 +219,7 @@ interface ChatMessage {
   verdict?: VerdictBanner;
   toolTrace?: ToolTraceEntry[];
   anchor?: import('./types.js').SemanticAnchor;
+  attachments?: ReadonlyArray<ChatMessageAttachmentSnapshot>;
 }
 
 interface MessageAction {
@@ -262,6 +327,10 @@ interface AutonomyStatusMessage {
   completed: number;
   remaining: number;
   totalAuthorized?: number;
+  /** Per ADR-153 — total wall-clock budget in ms. */
+  timeBudgetTotalMs?: number;
+  /** Per ADR-153 — epoch ms when the time budget started ticking. */
+  timeBudgetStartedAtEpochMs?: number;
   summary: string;
 }
 
@@ -368,7 +437,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   private _hoverActionStateByMessage = new Map<string, HoverActionState>();
 
   /** Autonomy session state — tracks mode, pass budget, and continuation policy. */
-  private _autonomyState: AutonomyState = createAutonomyState(getAutonomyMode(), getAutonomyPassBudget());
+  private _autonomyState: AutonomyState = _initialAutonomyStateFromSettings();
   /** Whether autonomy continuation is actively enabled for this session. */
   private _autonomyEnabled = getAutonomyMode() !== 'cautious' || (getAutonomyPassBudget() ?? 0) > 0;
   /** The last set of recommended actions from a pass analysis. */
@@ -670,6 +739,19 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     timestamp: new Date().toISOString(),
     instanceId: this.currentInstanceId,
     anchor: liveAnchor,
+    // Snapshot the prompt-bar attachments onto the durable user message so
+    // the chat bubble can render thumbnails/file-info even after the prompt
+    // bar is cleared (and after restoreState rehydrates from disk).
+    attachments: this.attachments.length > 0
+      ? this.attachments.map((a) => ({
+          id: a.id,
+          name: a.name,
+          kind: a.kind,
+          mimeType: a.mimeType,
+          size: a.size,
+          dataBase64: a.kind === 'image' ? a.dataBase64 : undefined,
+        }))
+      : undefined,
   };
   this.messages.push(userMessage);
   if (this.contextBuilder) {
@@ -684,7 +766,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   await this.postState();
   await this.postMessage({ type: 'toolTrace', calls: [] });
   this._autonomyEnabled = getAutonomyMode() !== 'cautious' || (getAutonomyPassBudget() ?? 0) > 0;
-  this._autonomyState = createAutonomyState(getAutonomyMode(), getAutonomyPassBudget());
+  this._autonomyState = _initialAutonomyStateFromSettings();
   this._lastRecommendedActions = [];
   this._autonomyContinuing = false;
   // Capture task continuation context before clearing it — it will be injected
@@ -757,9 +839,76 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // truncate per-message content (most-recent 2 keep up to 16KB, older capped at 4KB).
     // Without these caps a single prompt can pull in 200-600KB of prior assistant
     // envelopes + tool-trace text and tip the request into long-context pricing.
+    // Image attachment BYTES are intentionally NOT replayed across turns —
+    // see `buildBoundedConversationMessages`. Each user message carries a
+    // tiny `[attachment: name · kind · mime]` text marker for context only.
     ...buildBoundedConversationMessages(this.messages, 20)
       .map((message) => ({ role: message.role, content: message.content }) as ArchitectMessage),
   ];
+
+  // ADR-089 Phase 3b — capture per-turn attachment state into outer-scope
+  // vars so the seam path (`_buildCorePassHost`) can hand the SAME blocks /
+  // dropped-name list / summary string to `runPassViaCore`. The inline path
+  // mutates `conversation` and clears `this.attachments` immediately; without
+  // capturing here, the seam would see empty attachment state and silently
+  // drop image bytes. These vars are populated inside the attachments block
+  // below and consumed at the seam call site (~line 882).
+  let capturedTurnBlocks: ArchitectContentBlock[] | undefined;
+  let capturedDroppedAttachmentNames: string[] = [];
+  const capturedAttachmentSummary = attachmentInstruction;
+  const capturedStopContextBlock: string | undefined = continuationContext || undefined;
+  // Read the seam routing flag once; controls whether the inline path
+  // owns the attachment clear (false) or defers it to `host.clearAttachments`
+  // inside `runPass` step 7 (true).
+  const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get<boolean>('useCorePass') === true;
+
+  // D3 — multi-modal: if the user attached files, replace the last user
+  // message's content with typed content blocks so architect-llm's per-provider
+  // serializers (`_toAnthropicContent` → `image`, `_toOpenAIContent` →
+  // `image_url`) actually transmit the bytes. The seam is provider-adaptive;
+  // this call site just produces the canonical block array. Without this the
+  // attachment was only visible as the text summary in the system prompt and
+  // the image bytes never reached the model.
+  if (this.attachments.length > 0) {
+    const caps = this.architectLlm?.getModelCapabilities() ?? { textAttachments: false, imageAttachments: false };
+    const droppedImages = this.attachments.filter((a) => a.kind === 'image' && (!caps.imageAttachments || !a.dataBase64));
+    if (droppedImages.length > 0) {
+      const providerLabel = this.architectLlm?.provider ?? 'current provider';
+      const modelLabel = this.architectLlm?.currentConfig?.model ?? 'current model';
+      const names = droppedImages.map((a) => a.name).join(', ');
+      const noticeMsg: ChatMessage = {
+        id: this._createMessageId(),
+        role: 'system',
+        content: `Image attachment${droppedImages.length > 1 ? 's' : ''} not sent: ${providerLabel}/${modelLabel} does not accept images. (${names})`,
+        timestamp: new Date().toISOString(),
+        instanceId: this.currentInstanceId,
+      };
+      this.messages.push(noticeMsg);
+      await this.persistMessages();
+      await this.postMessage({ type: 'addMessage', message: noticeMsg, actions: [], roleMeta: this._roleMetaFor(noticeMsg), contextFooter: undefined });
+      capturedDroppedAttachmentNames = droppedImages.map((a) => a.name);
+    }
+    const blocks = this._buildUserContentBlocks(trimmed);
+    for (let i = conversation.length - 1; i >= 0; i--) {
+      if (conversation[i].role === 'user') {
+        conversation[i] = { role: 'user', content: blocks };
+        break;
+      }
+    }
+    capturedTurnBlocks = blocks;
+    // Attachments are bound to the message that just shipped — they are NOT
+    // pinned across future turns. On the inline path we clear before the
+    // network call so the user can immediately attach something new for the
+    // next prompt. On the seam path the driver clears via `host.clearAttachments`
+    // inside `runPass` step 7 (same lifecycle, just owned by the seam).
+    if (!useCorePass) {
+      this.attachments = [];
+      // Broadcast the cleared attachment list so the prompt-bar chips
+      // disappear immediately. `postState()` only carries `messages`; the
+      // attachment chips are driven by the `setAttachments` channel.
+      await this._syncAttachments();
+    }
+  }
 
   this.streaming = true;
   this.streamingContent = '';
@@ -769,6 +918,10 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     await this.postMessage({ type: 'stream-start' });
 
     let fullContent = '';
+    // Set to true when the architect-core seam (`runPassViaCore`) handles
+    // assistant-message persistence and broadcasts via `host.persistAssistantMessage`.
+    // The inline post-LLM block then skips its duplicate push/persist/broadcast.
+    let seamOwnedAssistant = false;
     const mcpTools = await this._listMcpToolsLazy();
     const allTools: ToolDefinition[] = [
       ...mcpTools.map((tool) => ({
@@ -807,20 +960,79 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     if (tools.length > 0) {
       fullContent = await this.runAgenticLoop(conversation, tools);
     } else {
-      const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
-      try {
-        await this.architectLlm.stream(conversation, (chunk: string) => {
-          const safeChunk = this._redactSecrets(chunk);
-          fullContent += safeChunk;
-          this.streamingContent += safeChunk;
-          void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-        }, req.signal);
-      } finally {
-        req.dispose();
+      // ADR-089 Phase 3a — text-only seam route. When the user enables
+      // `dreamgraph.architect.useCorePass`, the no-tools branch goes
+      // through `runPassViaCore` so the architect-core driver exercises
+      // the real v1-bound port set end-to-end. The inline fallback
+      // below remains the source of truth when the flag is off, and is
+      // also the safety net if the host preconditions don't hold.
+      // Phase 3b — attachment state captured upstream (`capturedTurnBlocks`,
+      // `capturedDroppedAttachmentNames`, `capturedAttachmentSummary`,
+      // `capturedStopContextBlock`) is threaded into the host so the seam
+      // sees the SAME multi-modal blocks the inline path would have shipped.
+      if (useCorePass) {
+        const host = this._buildCorePassHost(
+          envelope,
+          task,
+          contextResult,
+          conversation,
+          conversation,
+          {
+            contentBlocks: capturedTurnBlocks,
+            droppedAttachmentNames: capturedDroppedAttachmentNames,
+            attachmentSummary: capturedAttachmentSummary,
+            stopContextBlock: capturedStopContextBlock,
+          },
+        );
+        const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
+        try {
+          const passResult = await runPassViaCore({
+            host,
+            text: trimmed,
+            tools: [],
+            onStreamChunk: (chunk: string) => {
+              const safeChunk = this._redactSecrets(chunk);
+              fullContent += safeChunk;
+              this.streamingContent += safeChunk;
+              void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+            },
+            abortSignal: req.signal,
+          });
+          if (!fullContent && passResult.assistantMessage.content) {
+            fullContent = passResult.assistantMessage.content;
+          }
+          if (passResult.stopReason === 'error') {
+            throw new Error(`runPassViaCore reported error stopReason: ${passResult.assistantMessage.content}`);
+          }
+          // The seam's `host.persistAssistantMessage` already pushed the
+          // assistant message, persisted, and broadcast verdict/toolTrace/
+          // summary card. Mark the inline post-LLM block to skip so we
+          // don't double-write or double-broadcast.
+          seamOwnedAssistant = true;
+        } finally {
+          req.dispose();
+        }
+      } else {
+        const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
+        try {
+          await this.architectLlm.stream(conversation, (chunk: string) => {
+            const safeChunk = this._redactSecrets(chunk);
+            fullContent += safeChunk;
+            this.streamingContent += safeChunk;
+            void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+          }, req.signal);
+        } finally {
+          req.dispose();
+        }
       }
     }
 
     const cleaned = fullContent.trim() || '(No response)';
+    if (seamOwnedAssistant) {
+      // The architect-core seam already pushed the assistant message,
+      // persisted, and broadcast verdict/toolTrace/summary card via
+      // `host.persistAssistantMessage`. Nothing more to do for this turn.
+    } else {
     this._capturePrimedTools(cleaned, this._lastAvailableToolNames);
     const assistantMessage: ChatMessage = {
       id: this._createMessageId(),
@@ -859,6 +1071,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         conversation,
         tools,
       );
+    }
     }
   } catch (err) {
     const recovered = await this._recoverFromLlmTimeout(err, trimmed, envelope);
@@ -919,6 +1132,204 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     reasoningPacket: null,
   };
 }
+
+  /**
+   * ADR-089 Phase 3a — build the narrow `ChatPanelHost` accessor surface
+   * that the architect-core adapters bind to. The host projects the
+   * already-constructed envelope, context, autonomy state, and bounded
+   * conversation, and provides the REAL persistence + state-broadcast
+   * implementations the seam invokes through MemoryPort/AutonomyPort/
+   * AttachmentPort. No empty stubs: every declared method does the work
+   * its name promises (idempotent where v1 also wrote the same record).
+   *
+   * Phase 3a routing predicate (text-only no-tools, no attachments, no
+   * autonomy, no stop-context) is enforced at the call site in
+   * `handleUserMessage`. Hooks that the predicate guarantees cannot be
+   * reached this phase (executeTool) fail loud rather than no-op so a
+   * future widening of the predicate that forgets to wire them is
+   * surfaced immediately.
+   */
+  private _buildCorePassHost(
+    envelope: import('./types.js').EditorContextEnvelope,
+    task: ReturnType<typeof inferTask>,
+    contextResult: { assembledContext: string; reasoningPacket: import('./types.js').ReasoningPacket | null },
+    conversation: ArchitectMessage[],
+    llmConversationForAutonomy: ArchitectMessage[],
+    perTurn: {
+      contentBlocks: ArchitectContentBlock[] | undefined;
+      droppedAttachmentNames: readonly string[];
+      attachmentSummary: string;
+      stopContextBlock: string | undefined;
+    },
+  ): ChatPanelHost {
+    // The seam composer rebuilds `conversation` from prior + new turn,
+    // so it only needs the prior slice. We strip the outer system message
+    // and the trailing user turn that handleUserMessage already added.
+    const priorMessages: ArchitectMessage[] = conversation
+      .filter((m) => m.role !== 'system')
+      .slice(0, -1);
+
+    const llm = this.architectLlm!;
+    const cb = this.contextBuilder!;
+    const panel = this;
+
+    return {
+      architectLlm: llm,
+      contextBuilder: cb,
+      budgetCoordinator: this._currentBudgetCoordinator,
+      priorMessages,
+      task,
+      envelope,
+      contextResult,
+      autonomyState: this._autonomyState,
+      autonomyEnabled: this._autonomyEnabled,
+      // Phase 3b — real per-turn projection. The inline path computed
+      // these once upstream (block array, dropped image names, summary
+      // for the system prompt, continuation block from prior stop-context).
+      // The seam reuses them verbatim so multi-modal bytes, dropped-image
+      // awareness, and resume framing all reach `runPass` unchanged.
+      stopContextBlock: perTurn.stopContextBlock,
+      contentBlocks: perTurn.contentBlocks,
+      droppedAttachmentNames: perTurn.droppedAttachmentNames,
+      attachmentSummary: perTurn.attachmentSummary,
+
+      // Idempotent user-message persistence. `handleUserMessage` already
+      // pushed the user turn at line ~694 (always, for crash safety
+      // before the LLM call); the seam's call here detects that and
+      // re-runs the canonical anchor-refresh persist so the durable
+      // store always sees the latest envelope. If the predicate ever
+      // widens to a path where the user message has NOT been pre-pushed,
+      // this method will push it before persisting. Real work both ways.
+      persistUserMessage: async (text: string, _contentBlocks?: readonly unknown[]) => {
+        void _contentBlocks;
+        const last = panel.messages[panel.messages.length - 1];
+        const alreadyPushed = !!last && last.role === 'user' && (last.fullContent ?? last.content) === text;
+        if (!alreadyPushed) {
+          const userMsg: ChatMessage = {
+            id: panel._createMessageId(),
+            role: 'user',
+            content: text,
+            fullContent: text,
+            timestamp: new Date().toISOString(),
+            instanceId: panel.currentInstanceId,
+          };
+          panel.messages.push(userMsg);
+        }
+        if (panel.contextBuilder) {
+          await panel._persistMessagesWithCanonicalAnchorRefresh(envelope);
+        } else {
+          await panel.persistMessages();
+        }
+      },
+
+      // Canonical assistant-turn handling — single source of truth for
+      // assistant persistence on the seam path. Mirrors the inline
+      // continuation post-processing (verdict-derive, render-limit,
+      // implicit-entity detect) so both `handleUserMessage` AND
+      // `_runAutonomyContinuationPass` get identical treatment when they
+      // route through the seam. `addMessage` (single bubble append) is
+      // used instead of `postState` (full re-render) to preserve the
+      // bubble's enter animation and the user's scroll state — also
+      // matches v1 continuation's broadcast.
+      persistAssistantMessage: async (args) => {
+        const rawContent = (args.content ?? '').trim() || '(No response)';
+        // Per-chunk redaction already happened in onStreamChunk; this is
+        // an idempotent safety net for the assembled string and any
+        // non-streamed (tool-loop) content path that didn't pass through.
+        const redactedFullContent = panel._redactSecrets(rawContent);
+        panel._capturePrimedTools(redactedFullContent, panel._lastAvailableToolNames);
+        // Verdict is recomputed from the assistant text + tool trace so
+        // continuation passes (which run without an upstream verdict
+        // assignment) get a fresh assessment, not a stale `_lastVerdict`.
+        const derivedVerdict = panel._deriveVerdict(redactedFullContent, panel._lastToolTrace);
+        if (derivedVerdict) {
+          panel._lastVerdict = derivedVerdict;
+        }
+        const finalContent = panel._applyRenderLimits(redactedFullContent);
+        const implicitEntities = panel._detectImplicitEntities(redactedFullContent);
+        const implicitEntityNotice = implicitEntities.names.length > 0
+          ? panel._formatImplicitEntityNotice(implicitEntities)
+          : undefined;
+        const assistantMessage: ChatMessage = {
+          id: panel._createMessageId(),
+          role: 'assistant',
+          content: finalContent.content,
+          fullContent: redactedFullContent,
+          implicitEntityNotice,
+          timestamp: new Date().toISOString(),
+          instanceId: panel.currentInstanceId,
+          verdict: panel._lastVerdict ?? undefined,
+          toolTrace: panel._lastToolTrace.length > 0 ? [...panel._lastToolTrace] : undefined,
+        };
+        panel.messages.push(assistantMessage);
+        if (panel.contextBuilder) {
+          await panel._persistMessagesWithCanonicalAnchorRefresh(envelope);
+        } else {
+          await panel.persistMessages();
+        }
+        if (panel._lastVerdict) {
+          await panel.postMessage({ type: 'verdict', verdict: panel._lastVerdict });
+        }
+        await panel.postMessage({ type: 'toolTrace', calls: panel._lastToolTrace });
+        await panel.postMessage({
+          type: 'addMessage',
+          message: assistantMessage,
+          actions: panel._buildMessageActions(assistantMessage),
+          roleMeta: panel._roleMetaFor(assistantMessage),
+          contextFooter: panel._contextFooterFor(assistantMessage),
+        });
+        if (assistantMessage.id) {
+          panel._broadcastSummaryCard(redactedFullContent, assistantMessage.id);
+        }
+        if (panel._autonomyEnabled && assistantMessage.id) {
+          await panel._handleAutonomyPassComplete(
+            redactedFullContent,
+            assistantMessage.id,
+            llmConversationForAutonomy,
+            [],
+          );
+        }
+      },
+
+      // Real, idempotent — clears the panel's pending-attachment array
+      // exactly as v1's inline path does at line ~819. Must broadcast via
+      // `_syncAttachments` so the prompt-bar chips disappear in the webview;
+      // mutating `panel.attachments` alone leaves the chips lingering until
+      // the next user-driven attachment change.
+      clearAttachments: async () => {
+        panel.attachments = [];
+        await panel._syncAttachments();
+      },
+
+      // Real, conditional — Phase 3a's routing predicate excludes
+      // autonomy, so this branch is currently unreachable; the
+      // implementation matches v1 inline behavior so widening the
+      // predicate in Phase 3c needs no change here.
+      recordPassCompleted: async (_args) => {
+        void _args;
+        // Inline assistant-handling already invoked _handleAutonomyPassComplete
+        // through persistAssistantMessage when autonomy was enabled. Nothing
+        // additional to record at the seam level for v1 today; the autonomy
+        // state machine carries its own bookkeeping and is the source of truth.
+      },
+
+      // Fail-loud: the Phase 3a predicate guarantees tools=[] reaches
+      // the seam, so this hook is unreachable. If someone widens the
+      // predicate without wiring a real executor, this throws so the
+      // first tool-call attempt surfaces the bug immediately.
+      executeTool: async () => {
+        throw new Error(
+          'ChatPanelHost.executeTool: not wired in Phase 3a (text-only seam route). ' +
+            'Widen the routing predicate in handleUserMessage only after implementing this hook ' +
+            'against runAgenticLoop\'s per-tool dispatch (isLocalTool/_callMcpToolWithLazyConnect, ' +
+            'compressToolResult, _lastToolTrace push, contextBuilder.maybeInvalidateForTool).',
+        );
+      },
+
+      getProviderCapabilities: () =>
+        llm.getModelCapabilities() ?? { textAttachments: false, imageAttachments: false },
+    };
+  }
 
   private _buildUserContentBlocks(text: string): ArchitectContentBlock[] {
     const capabilities = this.architectLlm?.getModelCapabilities() ?? { textAttachments: false, imageAttachments: false };
@@ -1207,7 +1618,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     await this.postState();
     if (this.draftText) await this.postMessage({ type: 'restoreDraft', text: this.draftText });
     await this._syncAttachments();
-    if (this._autonomyEnabled) this._broadcastAutonomyStatus();
+    // Patch #1.5: always broadcast autonomy state so the header dropdown +
+    // pass-budget pill stay populated even when the active mode is cautious.
+    this._broadcastAutonomyStatus();
   }
 
   private async postState(): Promise<void> {
@@ -1446,11 +1859,25 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           throw new Error('Tool action is missing a tool name.');
         }
         const result = await this._executeMessageActionTool(action.toolName, action.toolArgs ?? {});
-        const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+        // Patch #1 (renderer invariant): never dump raw JSON into chat.
+        // Emit a typed `outcome` fence the webview renders as a collapsible
+        // OutcomeCard. The payload sits inside an inner <details> so it is
+        // recordable but never leaks into the visible surface by default.
+        const payloadText = typeof result === 'string'
+          ? result
+          : helpers.safeStringifyForOutcome(result);
+        const summaryLine = helpers.summarizeOutcomePayload(payloadText);
+        const fenceBody = [
+          `tool: ${action.toolName}`,
+          `status: ok`,
+          summaryLine ? `summary: ${summaryLine}` : '',
+          '',
+          this._redactSecrets(payloadText),
+        ].filter((l, i) => l !== '' || i === 3).join('\n');
         const toolMessage: ChatMessage = {
           id: this._createMessageId(),
           role: 'system',
-          content: `Action result (${action.label})\n\n${this._redactSecrets(resultText)}`,
+          content: `Action result (${action.label})\n\n\`\`\`outcome\n${fenceBody}\n\`\`\``,
           timestamp: new Date().toISOString(),
           instanceId: this.currentInstanceId,
         };
@@ -1629,7 +2056,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       const models = provider === 'anthropic' ? ANTHROPIC_MODELS
         : provider === 'openai' ? OPENAI_MODELS
         : [];
-      const defaultModel = models[0] ?? '';
+      const previousModel = this.architectLlm.currentConfig?.model ?? '';
+      const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
       // ollama uses no API key; lmstudio uses a fixed literal placeholder
       // (LM Studio ignores the auth header but the OpenAI-compat code path
       // sends one regardless).
@@ -1687,7 +2115,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   private _syncAutonomyFromSettings(): void {
     const mode = getAutonomyMode();
     const budget = getAutonomyPassBudget();
-    this._autonomyState = createAutonomyState(mode, budget);
+    this._autonomyState = _initialAutonomyStateFromSettings();
     this._autonomyEnabled = mode !== 'cautious' || (budget ?? 0) > 0;
     if (this._autonomyEnabled) this._broadcastAutonomyStatus();
   }
@@ -1707,11 +2135,20 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     if (!hasAutonomyKeyword) return;
 
     const parsed = parseAutonomyRequest(text, this._autonomyState);
+    // Per ADR-153: if the user named a mode but no pass count, fall back to
+    // that mode's profile defaults (Patch #2.1 — keeps PassBudget+TimeBudget
+    // pills populated). An explicit count in the prose still wins.
+    const profile = getModeProfile(parsed.mode);
+    const total = (typeof parsed.totalAuthorizedPasses === 'number' && parsed.totalAuthorizedPasses > 0)
+      ? parsed.totalAuthorizedPasses
+      : profile.defaultPassBudget;
     this._autonomyState = {
       mode: parsed.mode,
-      remainingAutoPasses: parsed.remainingAutoPasses,
+      remainingAutoPasses: total - parsed.completedAutoPasses,
       completedAutoPasses: parsed.completedAutoPasses,
-      totalAuthorizedPasses: parsed.totalAuthorizedPasses,
+      totalAuthorizedPasses: total,
+      timeBudgetTotalMs: profile.defaultTimeBudgetMs,
+      timeBudgetStartedAtEpochMs: Date.now(),
     };
     this._autonomyEnabled = true;
     this._broadcastAutonomyStatus();
@@ -1721,13 +2158,20 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const valid = ['cautious', 'conscientious', 'eager', 'autonomous'] as const;
     const m = valid.find((v) => v === mode);
     if (!m) return;
-    this._autonomyState = { ...this._autonomyState, mode: m };
+    // Per ADR-152/153: explicit mode selection from the header is a fresh
+    // session under that mode's profile (PassBudget + TimeBudget reset). The
+    // legacy `dreamgraph.architect.autoPassBudget` setting is honoured only
+    // for the user-typed `parseAutonomyRequest` path — dropdown clicks always
+    // apply the canonical mode profile so the budgets visibly mean something.
+    this._autonomyState = applyModeProfileToState(m as AutonomyMode);
     this._autonomyEnabled = true;
     this._broadcastAutonomyStatus();
   }
 
   private _resetAutonomy(): void {
-    this._autonomyState = createAutonomyState('cautious');
+    // Reset to cautious profile so pills still show 3/3 + 2:00/2:00
+    // rather than placeholders (per ADR-153, budgets are always visible).
+    this._autonomyState = applyModeProfileToState('cautious');
     this._autonomyEnabled = false;
     this._autonomyContinuing = false;
     this._lastRecommendedActions = [];
@@ -1744,6 +2188,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         completed: status.completed,
         remaining: status.remaining,
         totalAuthorized: status.totalAuthorized,
+        timeBudgetTotalMs: status.timeBudgetTotalMs,
+        timeBudgetStartedAtEpochMs: status.timeBudgetStartedAtEpochMs,
         summary: status.summary,
       },
     });
@@ -1777,6 +2223,32 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       toolCallCount,
       fileEditCount,
     });
+
+    // Patch #3: TimeBudget enforcement (ADR-153). Even when analyzePass
+    // says continue, stop the run if the wall-clock budget is exhausted.
+    // Provider-agnostic — pure clock check, no model/provider branching.
+    const timeExhausted = (() => {
+      const total = this._autonomyState.timeBudgetTotalMs;
+      const startedAt = this._autonomyState.timeBudgetStartedAtEpochMs;
+      if (typeof total !== 'number' || total <= 0) return false;
+      if (typeof startedAt !== 'number' || startedAt <= 0) return false;
+      return (Date.now() - startedAt) >= total;
+    })();
+    if (timeExhausted && result.decision.shouldContinue) {
+      const minutes = Math.round((this._autonomyState.timeBudgetTotalMs ?? 0) / 60000);
+      const stopMsg: ChatMessage = {
+        id: this._createMessageId(),
+        role: 'system',
+        content: `Stopped: TimeBudget exhausted (${minutes} min cap for mode "${this._autonomyState.mode}"). Reset autonomy or switch mode to continue.`,
+        timestamp: new Date().toISOString(),
+        instanceId: this.currentInstanceId,
+      };
+      this.messages.push(stopMsg);
+      await this.persistMessages();
+      await this.postMessage({ type: 'addMessage', message: stopMsg, actions: [], roleMeta: this._roleMetaFor(stopMsg), contextFooter: undefined });
+      this._broadcastAutonomyStatus();
+      return;
+    }
 
     // Note: action chips are rendered inline by the SUMMARY envelope card
     // (see card-renderer.ts renderEnvelope). No separate broadcast needed —
@@ -1931,14 +2403,72 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
       const llmMessages: ArchitectMessage[] = [{ role: 'system', content: system }];
       // Bounded history: same caps as handleUserMessage (last 20 turns, per-message char caps).
+      // Attachment image bytes are NOT replayed — only a text marker survives;
+      // re-attach explicitly if the model needs to look at the picture again.
       for (const msg of buildBoundedConversationMessages(this.messages, 20)) {
         llmMessages.push({ role: msg.role, content: msg.content });
       }
 
       await this.postMessage({ type: 'stream-start' });
 
+      // ADR-089 Phase 3c — autonomy continuation slice. When the seam
+      // flag is on AND no tools are selected AND we have an envelope,
+      // continuation flows through `runPassViaCore` so the architect-
+      // core driver owns the assistant turn (verdict, render limits,
+      // implicit-entity detect, addMessage broadcast, recursive autonomy
+      // trigger) via `host.persistAssistantMessage`. The inline path
+      // below remains the source of truth for tool-using continuations
+      // until Phase 3d wires `host.executeTool`.
+      const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get<boolean>('useCorePass') === true;
+      const seamRoute = useCorePass && tools.length === 0 && envelope !== null;
+      let seamOwnedAssistant = false;
+
       let fullContent = '';
-      if (tools.length > 0) {
+      if (seamRoute) {
+        const host = this._buildCorePassHost(
+          envelope!,
+          task,
+          contextResult,
+          llmMessages,
+          llmMessages,
+          {
+            contentBlocks: undefined,
+            droppedAttachmentNames: [],
+            attachmentSummary: '',
+            stopContextBlock: undefined,
+          },
+        );
+        // Reset the re-entrancy guard BEFORE the seam runs so the
+        // recursive `_handleAutonomyPassComplete` invoked from inside
+        // `host.persistAssistantMessage` is not silently dropped by the
+        // guard at line ~2328. Mirrors the inline path which resets the
+        // flag immediately before its own recursive call (line ~2474).
+        this._autonomyContinuing = false;
+        const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
+        try {
+          const passResult = await runPassViaCore({
+            host,
+            text: prompt,
+            tools: [],
+            onStreamChunk: (chunk: string) => {
+              const safeChunk = this._redactSecrets(chunk);
+              fullContent += safeChunk;
+              this.streamingContent += safeChunk;
+              void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+            },
+            abortSignal: req.signal,
+          });
+          if (!fullContent && passResult.assistantMessage.content) {
+            fullContent = passResult.assistantMessage.content;
+          }
+          if (passResult.stopReason === 'error') {
+            throw new Error(`runPassViaCore reported error stopReason: ${passResult.assistantMessage.content}`);
+          }
+          seamOwnedAssistant = true;
+        } finally {
+          req.dispose();
+        }
+      } else if (tools.length > 0) {
         fullContent = await this.runAgenticLoop(llmMessages, tools);
       } else {
         const req = this._createRequestSignal();
@@ -1952,6 +2482,15 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         } finally {
           req.dispose();
         }
+      }
+
+      if (seamOwnedAssistant) {
+        // The seam's `host.persistAssistantMessage` already pushed the
+        // assistant message, persisted, broadcast verdict/toolTrace/
+        // addMessage/summary card, AND invoked the recursive autonomy
+        // pass. Just close the stream UI and exit.
+        await this.postMessage({ type: 'stream-end', done: true });
+        return;
       }
 
       const redactedFullContent = this._redactSecrets(fullContent);
@@ -2004,7 +2543,24 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     } catch (err: unknown) {
       const errorText = err instanceof Error ? err.message : String(err);
       const isAbort = err instanceof DOMException && err.name === 'AbortError';
-      const displayText = isAbort ? 'Autonomous continuation stopped.' : `Error during continuation: ${errorText}`;
+      // Stack trace is essential for diagnosing regressions in continuation —
+      // the host catches everything from envelope build, prompt assembly,
+      // agentic loop, and post-processing in one block. Surface the top
+      // user-code frame in the SYSTEM card so the crash site is visible
+      // without forcing the user to open the Extension Host log.
+      let topFrame: string | undefined;
+      if (!isAbort && err instanceof Error && err.stack) {
+        console.error('[DreamGraph] continuation pass failed:', err.stack);
+        const frames = err.stack.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('at '));
+        // Prefer the first frame inside our own dist/ bundle — skips internal
+        // node frames and Promise/async machinery so the user sees the
+        // actual call site (e.g. "at ChatPanel._foo (extension.js:12345)").
+        topFrame = frames.find((l) => l.includes('extension.js') || l.includes('dist'))
+          ?? frames[0];
+      }
+      const displayText = isAbort
+        ? 'Autonomous continuation stopped.'
+        : `Error during continuation: ${errorText}${topFrame ? `\n\n\`${topFrame}\`` : ''}`;
       const errMsg: ChatMessage = { id: this._createMessageId(), role: 'system', content: displayText, timestamp: new Date().toISOString(), instanceId: this.currentInstanceId };
       this.messages.push(errMsg);
       await this.persistMessages();
@@ -2023,6 +2579,24 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
    */
   private _broadcastSummaryCard(content: string, messageId: string): void {
     try {
+      // Duplicate-card guard: when the assistant content embeds a parseable
+      // structured envelope (fenced ```json or bare {…"summary":…}), the
+      // assistant bubble's body renderer (`renderAssistantBody`, webview)
+      // already replaces the markdown with `window.renderEnvelope(...)`.
+      // Broadcasting `summaryCard` in that case would append a SECOND,
+      // visually identical card under the same bubble (the webview handler
+      // only de-dupes prior `.dg-envelope-card-host` siblings, not the
+      // body-embedded card). Detect the same envelope shape the body uses
+      // and short-circuit; the broadcast remains active for prose-only
+      // turns where the body falls back to plain markdown and the
+      // host-side prose extractor synthesises the only visible card.
+      // Still persist the recommended-action set so chip clicks in the
+      // body-rendered card resolve via `_executeRecommendedAction`.
+      if (extractPrimaryEnvelope(content)) {
+        const env = extractStructuredPassEnvelope(content);
+        this._lastRecommendedActions = env.nextSteps;
+        return;
+      }
       const env = extractStructuredPassEnvelope(content);
       // Skip when there is genuinely nothing to show (no summary AND no
       // status differentiation AND no actions). Avoids drawing an empty
@@ -2680,6 +3254,14 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   <div class="header">
     <select id="provider-select" title="Provider"></select>
     <select id="model-select" title="Model"></select>
+    <select id="autonomy-mode-select" class="autonomy-mode-select" title="Autonomy mode">
+      <option value="cautious">cautious</option>
+      <option value="conscientious">conscientious</option>
+      <option value="eager">eager</option>
+      <option value="autonomous">autonomous</option>
+    </select>
+    <span id="pass-budget" class="pass-budget" title="Pass budget — remaining / total">— / —</span>
+    <span id="time-budget" class="time-budget" title="Time budget (ADR-153) — wired in next patch">—</span>
     <button id="set-api-key-btn" class="icon-btn" title="Set API key" aria-label="Set API key">🔑</button>
     <button id="clear-btn" class="icon-btn" title="Clear conversation" aria-label="Clear conversation">🗑️</button>
   </div>
@@ -2762,6 +3344,14 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    function formatAttachmentSize(bytes) {
+      const n = Number(bytes);
+      if (!isFinite(n) || n <= 0) return '0 B';
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+      return (n / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
     function setEmptyStateVisible(visible) {
@@ -3014,12 +3604,12 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           const rendered = wrapper.firstElementChild;
           if (!rendered) return false;
           if (obj && typeof obj === 'object') {
+            // The renderer now emits data-action-label directly on each
+            // button (it also drops dead/synthetic "Step N" entries), so
+            // index-based reassignment from steps[] would mis-align after
+            // skipped entries. Only set Do-all label list, which is whole-list.
             const steps = Array.isArray(obj.recommended_next_steps) ? obj.recommended_next_steps : [];
             const labels = steps.map((step) => (step && typeof step.label === 'string' ? step.label : '')).filter(Boolean);
-            rendered.querySelectorAll('.dg-envelope-action').forEach((button, index) => {
-              const label = labels[index];
-              if (label) button.setAttribute('data-action-label', label);
-            });
             const doAllButton = rendered.querySelector('.dg-envelope-do-all');
             if (doAllButton && labels.length > 0) {
               doAllButton.setAttribute('data-action-labels', JSON.stringify(labels));
@@ -3144,6 +3734,28 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           bubble.appendChild(body);
         } else {
           bubble.textContent = message.content || '';
+        }
+        const atts = Array.isArray(message.attachments) ? message.attachments : [];
+        if (atts.length > 0) {
+          const wrap = document.createElement('div');
+          wrap.className = 'message-attachments';
+          for (const att of atts) {
+            if (att.kind === 'image' && att.dataBase64) {
+              const img = document.createElement('img');
+              img.className = 'message-attachment-thumb';
+              img.alt = att.name || 'attachment';
+              img.title = (att.name || '') + ' · ' + (att.mimeType || 'image') + ' · ' + formatAttachmentSize(att.size);
+              img.src = 'data:' + (att.mimeType || 'image/png') + ';base64,' + att.dataBase64;
+              wrap.appendChild(img);
+            } else {
+              const chip = document.createElement('div');
+              chip.className = 'message-attachment-file';
+              const icon = att.kind === 'image' ? '🖼️' : '📄';
+              chip.textContent = icon + ' ' + (att.name || 'attachment') + ' · ' + (att.mimeType || 'file') + ' · ' + formatAttachmentSize(att.size);
+              wrap.appendChild(chip);
+            }
+          }
+          bubble.appendChild(wrap);
         }
         const footer = renderContextFooter(contextFooter);
         if (footer) bubble.appendChild(footer);
@@ -3386,6 +3998,44 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     attachBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickAttachments' }));
     const autonomyResetBtn = document.getElementById('autonomy-reset-btn');
     if (autonomyResetBtn) autonomyResetBtn.addEventListener('click', () => vscode.postMessage({ type: 'resetAutonomy' }));
+    // Patch #1.5: header autonomy dropdown posts setAutonomyMode (handler exists since v1).
+    const autonomyModeSelect = document.getElementById('autonomy-mode-select');
+    if (autonomyModeSelect) {
+      autonomyModeSelect.addEventListener('change', () => vscode.postMessage({ type: 'setAutonomyMode', mode: autonomyModeSelect.value }));
+    }
+    // Patch #2: install a single 1Hz ticker that renders the TimeBudget pill
+    // from the latest cached params. Provider-agnostic — pure client clock.
+    (function installTimeBudgetTicker() {
+      const fmt = function(ms) {
+        if (ms <= 0) return '0:00';
+        const totalSec = Math.floor(ms / 1000);
+        const m = Math.floor(totalSec / 60);
+        const s = totalSec - m * 60;
+        return String(m) + ':' + (s < 10 ? '0' + s : String(s));
+      };
+      const render = function() {
+        const el = document.getElementById('time-budget');
+        if (!el) return;
+        const tb = window.__dgTimeBudget;
+        if (!tb) {
+          el.textContent = '—';
+          el.classList.remove('time-budget-active', 'time-budget-low', 'time-budget-exhausted');
+          el.style.opacity = '0.5';
+          return;
+        }
+        const elapsed = Math.max(0, Date.now() - tb.startedAt);
+        const remaining = Math.max(0, tb.totalMs - elapsed);
+        el.textContent = fmt(remaining) + ' / ' + fmt(tb.totalMs);
+        el.style.opacity = '1';
+        const pctLeft = remaining / tb.totalMs;
+        el.classList.toggle('time-budget-exhausted', remaining <= 0);
+        el.classList.toggle('time-budget-low', remaining > 0 && pctLeft <= 0.2);
+        el.classList.toggle('time-budget-active', remaining > 0);
+      };
+      window.__dgRenderTimeBudget = render;
+      setInterval(render, 1000);
+      render();
+    })();
     providerSelect.addEventListener('change', () => vscode.postMessage({ type: 'changeProvider', provider: providerSelect.value }));
     modelSelect.addEventListener('change', () => vscode.postMessage({ type: 'changeModel', model: modelSelect.value }));
     setApiKeyBtn.addEventListener('click', () => vscode.postMessage({ type: 'setApiKey' }));
@@ -3561,6 +4211,10 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           const label = document.getElementById('autonomy-mode-label');
           const counter = document.getElementById('autonomy-counter');
           const resetBtn = document.getElementById('autonomy-reset-btn');
+          // Patch #1.5: header dropdown + pass-budget pill mirror state.
+          const modeSelect = document.getElementById('autonomy-mode-select');
+          const passBudget = document.getElementById('pass-budget');
+          const timeBudgetEl = document.getElementById('time-budget');
           if (bar && label && counter && resetBtn) {
             const s = msg.status;
             bar.style.display = 'flex';
@@ -3568,6 +4222,32 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             label.className = 'autonomy-mode autonomy-mode-' + s.mode;
             counter.textContent = s.countingActive ? s.summary : '';
             resetBtn.style.display = s.mode !== 'cautious' || s.countingActive ? 'inline-flex' : 'none';
+            if (modeSelect && modeSelect.value !== s.mode) modeSelect.value = s.mode;
+            if (passBudget) {
+              // ADR-153: PassBudget is required and must be visible. We render
+              // remaining/total whenever a budget exists, even when not actively
+              // counting, so the user always knows the cap.
+              const total = (typeof s.totalAuthorized === 'number' && s.totalAuthorized > 0)
+                ? s.totalAuthorized : null;
+              if (total !== null) {
+                const remaining = typeof s.remaining === 'number' ? s.remaining : total;
+                passBudget.textContent = String(remaining) + ' / ' + String(total);
+                passBudget.classList.toggle('pass-budget-active', !!s.countingActive);
+                passBudget.classList.toggle('pass-budget-low', remaining <= Math.max(1, Math.floor(total * 0.2)));
+              } else {
+                passBudget.textContent = '— / —';
+                passBudget.classList.remove('pass-budget-active', 'pass-budget-low');
+              }
+            }
+            // Patch #2: cache TimeBudget params + render via shared 1Hz ticker
+            // (initialized once at startup). When no time budget is active we
+            // null the cache so the ticker shows the placeholder dash.
+            if (timeBudgetEl) {
+              const totalMs = typeof s.timeBudgetTotalMs === 'number' && s.timeBudgetTotalMs > 0 ? s.timeBudgetTotalMs : 0;
+              const startedAt = typeof s.timeBudgetStartedAtEpochMs === 'number' ? s.timeBudgetStartedAtEpochMs : 0;
+              window.__dgTimeBudget = (totalMs > 0 && startedAt > 0) ? { totalMs: totalMs, startedAt: startedAt } : null;
+              if (typeof window.__dgRenderTimeBudget === 'function') window.__dgRenderTimeBudget();
+            }
           }
           break;
         }
@@ -3645,14 +4325,11 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             uncertainty: env.uncertainty,
             recommended_next_steps: steps,
           });
-          // Annotate chips with action ids/labels so the existing
-          // .dg-envelope-action click handler resolves them correctly.
+          // Renderer now emits data-action-id/label directly per surviving
+          // chip and skips dead "Step N" entries, so an index walk over the
+          // raw steps[] array would mis-align after any drops. Only the
+          // Do-all whole-list label set is patched here.
           const labels = steps.map((s) => (s && typeof s.label === 'string' ? s.label : '')).filter(Boolean);
-          host.querySelectorAll('.dg-envelope-action').forEach((btn, i) => {
-            const step = steps[i] || {};
-            if (step.id) btn.setAttribute('data-action-id', String(step.id));
-            if (step.label) btn.setAttribute('data-action-label', String(step.label));
-          });
           const doAllBtn = host.querySelector('.dg-envelope-do-all');
           if (doAllBtn) {
             if (env.doAllEligible && labels.length > 1) {

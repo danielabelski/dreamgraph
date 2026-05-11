@@ -27,8 +27,11 @@ const node_path_1 = require("node:path");
     const source = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'chat-panel.ts'), 'utf8');
     strict_1.default.match(source, /MAX_ENTITY_LINKS_PER_MESSAGE = 100/);
     strict_1.default.match(source, /private _detectImplicitEntities\(content: string\): ImplicitEntityDetectionResult/);
-    strict_1.default.match(source, /Implicit entity references detected:/);
-    strict_1.default.match(source, /Entity link cap reached/);
+    // Implicit-entity notice text and entity-link cap message live in the extracted
+    // pure helpers module after the chat-panel.ts split (F-06).
+    const helpers = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'chat-panel', 'helpers.ts'), 'utf8');
+    strict_1.default.match(helpers, /Implicit entity references detected:/);
+    strict_1.default.match(helpers, /Entity link cap reached/);
 });
 (0, node_test_1.default)('Slice 5 next pass adds implicit entity notice styling', () => {
     const styles = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'webview', 'styles.ts'), 'utf8');

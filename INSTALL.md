@@ -1,4 +1,4 @@
-# Installing DreamGraph v9.0.0 "Lattice"
+# Installing DreamGraph v10.0.0 "Renata"
 
 One-command install from source. Builds the MCP server, deploys the `dg` CLI globally, and installs the VS Code extension with DreamGraph Explorer.
 
@@ -38,7 +38,7 @@ bash scripts/install.sh
 That's it. After install, open a **new terminal** and run:
 
 ```bash
-dg --version          # DreamGraph CLI v9.0.0 (Lattice)
+dg --version          # DreamGraph CLI v10.0.0 (Renata)
 dg --help             # Show all commands
 ```
 

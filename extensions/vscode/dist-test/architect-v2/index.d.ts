@@ -1,0 +1,3 @@
+export declare const ARCHITECT_V2_SKELETON_VERSION = "0.0.0-slice1";
+export { createArchitectHost, InMemoryKeyValueStore, UnboundMcpClient, type ArchitectHost, type ArchitectHostOptions, type ContextDiscoveryRecorder, type ExecutorPort, type FallbackSignalProvider, type HostRunPassInput, type KeyValueStore, type McpClient, type MemoryPort, type OrchestratorPorts, type PassResult, type ProjectGraphReader, type ProjectGraphRecorder, } from "./host/index.js";
+//# sourceMappingURL=index.d.ts.map

@@ -95,6 +95,20 @@ export function getCardRendererScript(): string {
             body: parsed.body || f.summary || '',
           };
         }
+        if (type === 'outcome') {
+          // Patch #1 (renderer invariant): every action result is a typed,
+          // collapsible OutcomeCard. The payload body is hidden behind an
+          // inner <details> so raw JSON never leaks into the chat surface.
+          var status = (f.status || 'ok').toLowerCase();
+          var statusLabel = status === 'error' || status === 'fail' ? 'ERROR' : 'OK';
+          return {
+            title: f.tool ? ('Tool: ' + f.tool) : 'Action result',
+            subtitle: f.summary || '',
+            meta: [statusLabel, f.duration_ms ? (f.duration_ms + 'ms') : null].filter(Boolean),
+            body: parsed.body || '',
+            collapsedBody: true,
+          };
+        }
         return null;
       }
 
@@ -104,10 +118,19 @@ export function getCardRendererScript(): string {
         const meta = Array.isArray(normalized.meta) && normalized.meta.length > 0
           ? '<div class="dg-card-meta">' + normalized.meta.map(function(item) { return '<span class="dg-card-chip">' + escHtml(item) + '</span>'; }).join('') + '</div>'
           : '';
-        const body = normalized.body
-          ? '<div class="dg-card-body">' + escHtml(normalized.body).replace(/\\n/g, '<br>') + '</div>'
-          : '';
-        return '<details class="dg-card dg-card-' + escAttr(type) + '" open>' +
+        var body = '';
+        if (normalized.body) {
+          if (normalized.collapsedBody) {
+            // Payload tucked away — preserves whitespace, never markdown-injects.
+            body = '<details class="dg-card-payload"><summary>Show payload</summary>' +
+              '<pre class="dg-card-payload-pre">' + escHtml(normalized.body) + '</pre>' +
+            '</details>';
+          } else {
+            body = '<div class="dg-card-body">' + escHtml(normalized.body).replace(/\\n/g, '<br>') + '</div>';
+          }
+        }
+        var openAttr = normalized.collapsedBody ? '' : ' open';
+        return '<details class="dg-card dg-card-' + escAttr(type) + '"' + openAttr + '>' +
           '<summary class="dg-card-summary">' +
             '<span class="dg-card-type">' + escHtml(type.toUpperCase()) + '</span>' +
             '<span class="dg-card-title">' + title + '</span>' +
@@ -134,20 +157,45 @@ export function getCardRendererScript(): string {
 
         var steps = Array.isArray(env.recommended_next_steps) ? env.recommended_next_steps : [];
         if (steps.length > 0) {
-          html += '<div class="dg-envelope-actions">';
-          html += '<div class="dg-envelope-actions-label">Suggested Actions</div>';
+          // Per user rule: never render a button that hides what it does.
+          // Drop steps whose visible label would be a synthetic "Step N"
+          // placeholder, and synthesize a useful label from the rationale
+          // when the model omitted one. Any step lacking BOTH a usable
+          // label/rationale AND a tool binding is silently skipped — a
+          // dead button is worse than no button.
+          var rendered = [];
           for (var i = 0; i < steps.length; i++) {
-            var step = steps[i];
-            var label = step.label || step.id || ('Step ' + (i + 1));
-            var title = step.rationale ? escAttr(step.rationale) : '';
-            html += '<button class="action-chip dg-envelope-action" data-action-id="' + escAttr(step.id || '') + '"' +
-                    (title ? ' title="' + title + '"' : '') + '>' +
-                    escHtml(label) + '</button>';
+            var step = steps[i] || {};
+            var rawLabel = (typeof step.label === 'string' ? step.label : '').trim();
+            var rationale = (typeof step.rationale === 'string' ? step.rationale : '').trim();
+            var hasToolBinding = !!(step.tool && String(step.tool).trim());
+            // Reject placeholder labels like "Step 1", "step 2", "Step N".
+            var looksGeneric = /^step\s*\d+$/i.test(rawLabel) || /^todo$/i.test(rawLabel);
+            var label = rawLabel && !looksGeneric ? rawLabel : '';
+            if (!label && rationale) {
+              label = rationale.length > 60 ? rationale.slice(0, 57).trim() + '…' : rationale;
+            }
+            if (!label && hasToolBinding) {
+              label = 'Run ' + String(step.tool);
+            }
+            if (!label) continue; // skip dead button
+            rendered.push({ id: step.id || '', label: label, title: rationale, raw: step });
           }
-          if (steps.length > 1) {
-            html += '<button class="action-chip action-chip-all dg-envelope-do-all">Do all</button>';
+          if (rendered.length > 0) {
+            html += '<div class="dg-envelope-actions">';
+            html += '<div class="dg-envelope-actions-label">Suggested Actions</div>';
+            for (var j = 0; j < rendered.length; j++) {
+              var r = rendered[j];
+              html += '<button class="action-chip dg-envelope-action" data-action-id="' + escAttr(r.id) + '"' +
+                      ' data-action-label="' + escAttr(r.label) + '"' +
+                      (r.title ? ' title="' + escAttr(r.title) + '"' : '') + '>' +
+                      escHtml(r.label) + '</button>';
+            }
+            if (rendered.length > 1) {
+              html += '<button class="action-chip action-chip-all dg-envelope-do-all">Do all</button>';
+            }
+            html += '</div>';
           }
-          html += '</div>';
         }
         html += '</div>';
         return html;
@@ -461,7 +509,7 @@ export function getCardRendererScript(): string {
             return defaultFence(tokens, idx, options, env, self);
           }
 
-          if (!/^(entity|adr|tension|insight)$/.test(lang)) {
+          if (!/^(entity|adr|tension|insight|outcome)$/.test(lang)) {
             return defaultFence(tokens, idx, options, env, self);
           }
 

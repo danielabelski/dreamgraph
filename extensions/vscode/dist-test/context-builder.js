@@ -41,9 +41,12 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ContextBuilder = void 0;
+exports.ContextBuilder = exports.shouldFetchDeepInsight = void 0;
 const vscode = __importStar(require("vscode"));
 const intent_detector_js_1 = require("./intent-detector.js");
+const architect_lens_js_1 = require("./architect-lens.js");
+const context_cache_js_1 = require("./context-cache.js");
+const deep_insights_js_1 = require("./context-fetchers/deep-insights.js");
 /* ------------------------------------------------------------------ */
 /*  Token budget estimation (§3.7)                                    */
 /* ------------------------------------------------------------------ */
@@ -51,11 +54,55 @@ const intent_detector_js_1 = require("./intent-detector.js");
 function estimateTokens(text) {
     return Math.ceil(text.length / 4);
 }
+/* ------------------------------------------------------------------ */
+/*  Graph evidence reserve (ADR-097)                                  */
+/* ------------------------------------------------------------------ */
+/** Evidence kinds that draw from the hard-reserved graph slice (ADR-097). */
+const GRAPH_EVIDENCE_KINDS = new Set([
+    "feature",
+    "workflow",
+    "adr",
+    "ui",
+    "api",
+    "tension",
+    "causal",
+    "temporal",
+    "data_model",
+    "cognitive_status",
+]);
+function isGraphEvidenceKind(kind) {
+    return GRAPH_EVIDENCE_KINDS.has(kind);
+}
+/**
+ * Compute the hard-reserved graph token slice per ADR-097 absolute caps.
+ *  - ≤8k  window: clamp(15%, 800, 1200)
+ *  - ≤32k window: clamp(15%, 2000, 4000)
+ *  - 128k+ window: dynamic, capped at 10% of window (max 12000)
+ */
+function computeGraphReserve(maxTokens) {
+    if (!Number.isFinite(maxTokens) || maxTokens <= 0)
+        return 0;
+    if (maxTokens <= 8_000) {
+        return Math.max(800, Math.min(1200, Math.floor(maxTokens * 0.15)));
+    }
+    if (maxTokens <= 32_000) {
+        return Math.max(2_000, Math.min(4_000, Math.floor(maxTokens * 0.15)));
+    }
+    return Math.min(12_000, Math.floor(maxTokens * 0.1));
+}
 function summarizeSelection(startLine, endLine) {
     return startLine === endLine
         ? "selection near the current focus point (approximate anchor only; may drift)"
         : "selection spanning the current focus region (approximate anchor only; may drift)";
 }
+/* ------------------------------------------------------------------ */
+/*  Phase 3 — BudgetCoordinator reader contract                       */
+/* ------------------------------------------------------------------ */
+// Re-exported from a vscode-free module so unit tests can import the
+// policy helper without pulling in `vscode`.
+var budget_coordinator_reader_js_1 = require("./budget-coordinator-reader.js");
+Object.defineProperty(exports, "shouldFetchDeepInsight", { enumerable: true, get: function () { return budget_coordinator_reader_js_1.shouldFetchDeepInsight; } });
+const budget_coordinator_reader_js_2 = require("./budget-coordinator-reader.js");
 class ContextBuilder {
     _mcpClient;
     _daemonClient;
@@ -68,7 +115,45 @@ class ContextBuilder {
     updateOptions(options) {
         Object.assign(this._options, options);
     }
-    async buildEnvelope(prompt, commandSource) {
+    _environmentMetrics = null;
+    _previousStablePrefixHash = null;
+    /**
+     * Per-instance caches for hot-path context lookups.
+     *
+     * `buildEnvelope` runs synchronously in front of every LLM call — every cache miss
+     * here directly delays the first visible token (and the first tool call) in the
+     * chat panel. The {@link ContextCache} owns:
+     *  - environment-snapshot slot (5 min TTL)
+     *  - deep-insights slot (30 s TTL — dreams/causal/temporal/cognitive)
+     *  - process-wide context-fetch timeout counter (F-14 observability)
+     *  - the cognitive-mutating-tool list that drives {@link maybeInvalidateForTool}
+     *  - the hard MCP fetch ceiling (F-07)
+     */
+    _cache = new context_cache_js_1.ContextCache();
+    /** Read-only snapshot of context-fetch timeouts (tool -> count). */
+    static getContextFetchTimeoutStats() {
+        return context_cache_js_1.ContextCache.getTimeoutStats();
+    }
+    async buildEnvelope(prompt, commandSource, 
+    /**
+     * Phase 3 of NEVER_FAIL_BUDGET_DEBT_PLAN — optional turn-scoped coordinator.
+     * When supplied, `buildEnvelope` adapts deep-insights and environment fetches
+     * to the coordinator's pressure label (the coordinator owns all pressure
+     * decisions; this site only reads `getContextPressureLabel()`).
+     *
+     * Trim policy (Plan §3.1 — deep insights first, then environment):
+     *  - 'low'    → full fidelity (no trim)
+     *  - 'normal' → full fidelity (no trim — reserved for future tier-2 trims)
+     *  - 'high'   → drop optional deep-insights tiers (temporal, cognitive_status,
+     *               and feature/workflow when only optionally needed) and reduce
+     *               the environment block to the runtime/package-manager header
+     *               (no per-scope entries).
+     *
+     * ADR-097: the curated graph-evidence slice is NEVER trimmed here. Deep-insights
+     * are advisory MCP fetches layered on top of the graph slice; trimming them
+     * leaves the ADR-097 reserve intact.
+     */
+    coordinator) {
         const editor = vscode.window.activeTextEditor;
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
         const intentInput = {
@@ -89,6 +174,16 @@ class ContextBuilder {
         const cursorAnchor = editor
             ? await this._deriveCursorSemanticAnchor(editor)
             : undefined;
+        const environmentModule = await import("./environment-context.js");
+        const environmentSnapshot = workspaceRoot
+            ? await this._getCachedEnvironmentSnapshot(workspaceRoot, environmentModule)
+            : null;
+        const fullEnvironmentEntries = environmentModule.selectEnvironmentContextForFile(environmentSnapshot, editor ? vscode.workspace.asRelativePath(editor.document.uri) : null);
+        // Phase 3 — environment trim (Plan §3.1 tier 4). Under 'high' pressure we
+        // drop the per-scope entries and keep only the runtime/package-manager
+        // header so the LLM still knows the toolchain. Lower pressure: full set.
+        const pressureLabel = coordinator?.getContextPressureLabel?.() ?? 'low';
+        const environmentEntries = pressureLabel === 'high' ? [] : fullEnvironmentEntries;
         const envelope = {
             workspaceRoot,
             instanceId: this._options.instance?.uuid ?? null,
@@ -119,14 +214,44 @@ class ContextBuilder {
                 .filter((d) => d.isDirty)
                 .map((d) => vscode.workspace.asRelativePath(d.uri)),
             pinnedFiles: [],
+            environmentContext: environmentSnapshot
+                ? {
+                    workspaceRuntime: environmentSnapshot.workspaceRuntime,
+                    workspacePackageManager: environmentSnapshot.workspacePackageManager,
+                    entries: environmentEntries,
+                }
+                : null,
             graphContext: null,
             intentMode: mode,
             intentConfidence: confidence,
         };
+        if (environmentSnapshot) {
+            const renderResult = environmentModule.renderEnvironmentContextBlockWithMetrics(environmentSnapshot, envelope.activeFile?.path ?? null, this._environmentMetrics
+                ? {
+                    hash: this._environmentMetrics.hash,
+                    stablePrefixHash: this._environmentMetrics.stablePrefixHash,
+                }
+                : null);
+            this._environmentMetrics = renderResult.metrics;
+        }
+        else {
+            this._environmentMetrics = null;
+        }
+        // Phase 3 — report environment tier actuals to the coordinator (read-only;
+        // the coordinator never blocks).
+        if (coordinator?.recordComponentActual) {
+            try {
+                const envTokens = this._environmentMetrics?.tokenEstimate ?? 0;
+                coordinator.recordComponentActual('context:env', envTokens);
+            }
+            catch {
+                // Reporting must never break envelope assembly.
+            }
+        }
         // Phase 2: resolve graph context (evidence-driven)
         const plan = await this.createContextPlan(envelope, prompt, commandSource);
         if (plan.requiredEvidence.length > 0 || plan.optionalEvidence.length > 0) {
-            envelope.graphContext = await this.resolveGraphContext(envelope, plan);
+            envelope.graphContext = await this.resolveGraphContext(envelope, plan, coordinator);
         }
         // Phase 3: one-pass anchor promotion — now that graphContext is available,
         // upgrade any symbol-level anchors to canonical graph identity (entity/workflow/ADR/UI).
@@ -194,8 +319,359 @@ class ContextBuilder {
     async createContextPlan(envelope, prompt, commandSource) {
         return this._createContextPlan(envelope, prompt, commandSource);
     }
-    async resolveGraphContext(envelope, plan) {
-        return this._resolveGraphContext(envelope, plan);
+    _isPatchLikeRequest(envelope, plan) {
+        const task = `${plan.taskSummary} ${envelope.intentMode}`.toLowerCase();
+        return [
+            "fix",
+            "patch",
+            "edit",
+            "change",
+            "modify",
+            "update",
+            "refactor",
+            "implement",
+            "rewrite",
+            "rename",
+            "remove",
+            "replace",
+            "compile",
+            "build",
+        ].some((keyword) => task.includes(keyword));
+    }
+    async _buildImportContractEvidence(excerpt, envelope, plan) {
+        if (!this._isPatchLikeRequest(envelope, plan)) {
+            return null;
+        }
+        const importMatches = Array.from(excerpt.matchAll(/import\s+([^\n]*?)\s+from\s+["']([^"']+)["']/g));
+        if (importMatches.length === 0) {
+            return null;
+        }
+        const summaries = await Promise.all(importMatches.slice(0, 4).map(async (match) => {
+            const clause = match[1].replace(/\s+/g, ' ').trim();
+            const modulePath = match[2];
+            const verified = await this._resolveImportContractSummary(modulePath, envelope);
+            if (verified)
+                return `- ${verified}`;
+            const defaultMatch = clause.match(/^([A-Za-z_$][\w$]*)\s*(,|$)/);
+            const namedMatch = clause.match(/\{([^}]+)\}/);
+            const namespaceMatch = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+            const pieces = [];
+            if (defaultMatch)
+                pieces.push(`default=${defaultMatch[1]}`);
+            if (namespaceMatch)
+                pieces.push(`namespace=* as ${namespaceMatch[1]}`);
+            if (namedMatch) {
+                const named = namedMatch[1]
+                    .split(',')
+                    .map((part) => part.trim())
+                    .filter(Boolean)
+                    .join(', ');
+                if (named)
+                    pieces.push(`named={${named}}`);
+            }
+            return `- ${modulePath}: observed clause ${pieces.length > 0 ? pieces.join('; ') : clause}`;
+        }));
+        const content = [
+            '## Import Contracts',
+            'Verified import contracts for the current patch target:',
+            ...summaries,
+            'Use only imported symbols evidenced here unless you verify additional exports with tools.',
+        ].join('\n');
+        return {
+            kind: 'import_contract',
+            title: 'Import contracts',
+            content,
+            relevance: 0.92,
+            confidence: summaries.some((line) => !line.includes('observed clause')) ? 0.82 : 0.6,
+            anchor: envelope.activeFile?.path,
+            tokenCost: estimateTokens(content),
+            required: true,
+        };
+    }
+    async _buildTypeContractEvidence(excerpt, envelope, plan) {
+        if (!this._isPatchLikeRequest(envelope, plan)) {
+            return null;
+        }
+        const referencedTypes = new Set();
+        for (const match of excerpt.matchAll(/\b(?:type|interface|implements|extends|as)\s+([A-Z][A-Za-z0-9_]*)/g)) {
+            referencedTypes.add(match[1]);
+        }
+        for (const match of excerpt.matchAll(/\b([A-Z][A-Za-z0-9_]*)\s*(?:<[^>]+>)?/g)) {
+            const candidate = match[1];
+            if (['Promise', 'Array', 'Map', 'Set', 'Record', 'ReturnType', 'Awaited', 'Partial', 'Required', 'Readonly'].includes(candidate)) {
+                continue;
+            }
+            referencedTypes.add(candidate);
+        }
+        if (referencedTypes.size === 0) {
+            return null;
+        }
+        const verifiedSummaries = await Promise.all(Array.from(referencedTypes).slice(0, 6).map((typeName) => this._resolveTypeContractSummary(typeName, envelope)));
+        const typeSummaries = Array.from(referencedTypes)
+            .slice(0, 6)
+            .map((typeName, index) => verifiedSummaries[index]
+            ? `- verified contract: ${verifiedSummaries[index]}`
+            : `- referenced type: ${typeName}`);
+        const objectShapeHints = Array.from(excerpt.matchAll(/\b([a-zA-Z_][\w]*)\s*:\s*(["'`][^"'`]+["'`]|true|false|\d+|[A-Za-z_][\w<>]*)/g))
+            .slice(0, 8)
+            .map((match) => `- field candidate: ${match[1]} = ${match[2]}`);
+        const contentLines = [
+            '## Type Contracts',
+            'Verified and observed type contracts for the current patch target:',
+            ...typeSummaries,
+        ];
+        if (objectShapeHints.length > 0) {
+            contentLines.push('Observed object-shape/value hints in the excerpt:');
+            contentLines.push(...objectShapeHints);
+        }
+        contentLines.push('Match returned object literals and discriminants to these evidenced contracts; do not invent new union or enum members.');
+        const content = contentLines.join('\n');
+        return {
+            kind: 'type_contract',
+            title: 'Type contracts',
+            content,
+            relevance: 0.92,
+            confidence: verifiedSummaries.some(Boolean) ? 0.84 : 0.62,
+            anchor: envelope.activeFile?.path,
+            tokenCost: estimateTokens(content),
+            required: true,
+        };
+    }
+    async _buildLocalConventionEvidence(excerpt, envelope) {
+        const activePath = envelope.activeFile?.path ?? '';
+        const workspaceRoot = envelope.workspaceRoot ?? '';
+        // Resolve the directory of the active file to find siblings.
+        const activeDir = activePath.includes('/') || activePath.includes('\\')
+            ? activePath.replace(/[/\\][^/\\]+$/, '')
+            : '';
+        if (!activeDir || !workspaceRoot)
+            return null;
+        const conventions = [];
+        // Scan sibling TS/JS files for shared response patterns.
+        const siblingPatterns = [
+            { pattern: /\berror\s*\(/, label: 'failure responses use error(...)' },
+            { pattern: /\bsuccess\s*\(/, label: 'success responses use success(...)' },
+            { pattern: /\bToolResponse\s*</, label: 'return type is ToolResponse<T>' },
+            { pattern: /\bthrow\s+new\s+Error/, label: 'errors thrown as new Error(...)' },
+            { pattern: /\breturn\s+\{\s*ok\s*:/, label: 'result shape is { ok, ... }' },
+            { pattern: /\breturn\s+\{\s*success\s*:/, label: 'result shape is { success, ... }' },
+        ];
+        try {
+            const fs = await import('fs');
+            const nodePath = await import('path');
+            // Resolve absolute directory path.
+            const absoluteDir = nodePath.default.isAbsolute(activeDir)
+                ? activeDir
+                : nodePath.default.join(workspaceRoot, activeDir);
+            if (!fs.default.existsSync(absoluteDir))
+                return null;
+            const siblingFiles = fs.default.readdirSync(absoluteDir)
+                .filter((f) => /\.(ts|js|tsx|jsx)$/.test(f) && nodePath.default.join(absoluteDir, f) !== activePath)
+                .slice(0, 6);
+            const patternHits = new Map();
+            for (const file of siblingFiles) {
+                try {
+                    const siblingPath = nodePath.default.join(absoluteDir, file);
+                    const content = fs.default.readFileSync(siblingPath, 'utf-8').slice(0, 8000);
+                    for (const { pattern, label } of siblingPatterns) {
+                        if (pattern.test(content)) {
+                            patternHits.set(label, (patternHits.get(label) ?? 0) + 1);
+                        }
+                    }
+                }
+                catch {
+                    // Skip unreadable files
+                }
+            }
+            // Only report patterns observed in at least 2 siblings (strong convention).
+            for (const [label, count] of patternHits.entries()) {
+                if (count >= 2 || siblingFiles.length <= 2) {
+                    conventions.push(`- ${label} (seen in ${count}/${siblingFiles.length} siblings)`);
+                }
+            }
+        }
+        catch {
+            return null;
+        }
+        // Also extract patterns from the excerpt itself as baseline.
+        if (conventions.length === 0) {
+            for (const { pattern, label } of [
+                { pattern: /\berror\s*\(/, label: 'failure responses appear to use error(...)' },
+                { pattern: /\bsuccess\s*\(/, label: 'success responses appear to use success(...)' },
+            ]) {
+                if (pattern.test(excerpt))
+                    conventions.push(`- ${label} (observed in current file)`);
+            }
+        }
+        if (conventions.length === 0)
+            return null;
+        const moduleFamily = activePath.replace(workspaceRoot, '').replace(/\\/g, '/').replace(/^\//, '');
+        const content = [
+            '## Local Conventions',
+            `Conventions observed in sibling implementations near ${moduleFamily}:`,
+            ...conventions,
+            'Prefer these patterns over introducing new ones.',
+        ].join('\n');
+        return {
+            kind: 'local_convention',
+            title: 'Local conventions',
+            content,
+            relevance: 0.82,
+            confidence: 0.75,
+            anchor: activePath,
+            tokenCost: estimateTokens(content),
+            required: false,
+        };
+    }
+    async _resolveImportContractSummary(modulePath, envelope) {
+        const activePath = envelope.activeFile?.path;
+        if (!activePath) {
+            return null;
+        }
+        const resolvedPath = this._resolveImportPath(activePath, modulePath);
+        if (!resolvedPath) {
+            return null;
+        }
+        const exportedSymbols = await this._collectModuleExportSymbols(resolvedPath);
+        if (exportedSymbols.length === 0) {
+            return `${modulePath} → ${resolvedPath}: module located, but no verified exports were extracted`;
+        }
+        return `${modulePath} → ${resolvedPath}: verified exports {${exportedSymbols.slice(0, 10).join(', ')}}`;
+    }
+    async _resolveTypeContractSummary(typeName, envelope) {
+        const activePath = envelope.activeFile?.path;
+        if (!activePath) {
+            return null;
+        }
+        const candidateFiles = await this._candidateTypeFiles(activePath, typeName);
+        for (const filePath of candidateFiles) {
+            const summary = await this._extractTypeContractFromFile(filePath, typeName);
+            if (summary) {
+                return `${typeName} @ ${filePath}: ${summary}`;
+            }
+        }
+        return null;
+    }
+    _resolveImportPath(activePath, modulePath) {
+        if (!modulePath.startsWith('.')) {
+            return null;
+        }
+        const normalizedActive = activePath.replace(/\\/g, '/');
+        const segments = normalizedActive.split('/');
+        segments.pop();
+        for (const segment of modulePath.split('/')) {
+            if (!segment || segment === '.') {
+                continue;
+            }
+            if (segment === '..') {
+                if (segments.length === 0) {
+                    return null;
+                }
+                segments.pop();
+            }
+            else {
+                segments.push(segment);
+            }
+        }
+        return segments.join('/');
+    }
+    async _collectModuleExportSymbols(resolvedPath) {
+        const candidatePaths = this._moduleCandidatePaths(resolvedPath);
+        for (const candidatePath of candidatePaths) {
+            const content = await this.readFile(candidatePath);
+            if (!content) {
+                continue;
+            }
+            const exports = new Set();
+            for (const match of content.matchAll(/export\s+(?:async\s+)?(?:class|function|const|let|var|type|interface|enum)\s+([A-Za-z_$][\w$]*)/g)) {
+                exports.add(match[1]);
+            }
+            for (const match of content.matchAll(/export\s*\{([^}]+)\}/g)) {
+                for (const piece of match[1].split(',')) {
+                    const cleaned = piece.trim();
+                    if (!cleaned) {
+                        continue;
+                    }
+                    const aliased = cleaned.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+                    if (aliased) {
+                        exports.add(aliased[2] ?? aliased[1]);
+                    }
+                }
+            }
+            if (/export\s+default\s+/m.test(content)) {
+                exports.add('default');
+            }
+            if (exports.size > 0) {
+                return Array.from(exports);
+            }
+        }
+        return [];
+    }
+    _moduleCandidatePaths(resolvedPath) {
+        const normalized = resolvedPath.replace(/\\/g, '/');
+        const hasExtension = /\.[A-Za-z0-9]+$/.test(normalized);
+        if (hasExtension) {
+            return [normalized];
+        }
+        const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+        const candidates = extensions.map((ext) => `${normalized}${ext}`);
+        for (const ext of extensions) {
+            candidates.push(`${normalized}/index${ext}`);
+        }
+        return candidates;
+    }
+    async _candidateTypeFiles(activePath, typeName) {
+        const candidates = new Set();
+        const activeContent = await this.readFile(activePath);
+        if (activeContent) {
+            for (const match of activeContent.matchAll(/import\s+[^\n]*\b(?:type\s+)?[^\n]*\bfrom\s+["']([^"']+)["']/g)) {
+                const resolved = this._resolveImportPath(activePath, match[1]);
+                if (resolved) {
+                    for (const candidate of this._moduleCandidatePaths(resolved)) {
+                        candidates.add(candidate);
+                    }
+                }
+            }
+        }
+        candidates.add(activePath);
+        return Array.from(candidates).slice(0, 12);
+    }
+    async _extractTypeContractFromFile(filePath, typeName) {
+        const content = await this.readFile(filePath);
+        if (!content) {
+            return null;
+        }
+        const interfaceRegex = new RegExp(`export\\s+interface\\s+${typeName}\\s*\\{([\\s\\S]*?)\\n\\}`, 'm');
+        const typeRegex = new RegExp(`export\\s+type\\s+${typeName}\\s*=\\s*([\\s\\S]*?);`, 'm');
+        const enumRegex = new RegExp(`export\\s+enum\\s+${typeName}\\s*\\{([\\s\\S]*?)\\n\\}`, 'm');
+        const interfaceMatch = content.match(interfaceRegex);
+        if (interfaceMatch) {
+            const fields = interfaceMatch[1]
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .slice(0, 6)
+                .join('; ');
+            return `interface fields ${fields}`;
+        }
+        const typeMatch = content.match(typeRegex);
+        if (typeMatch) {
+            return `type alias ${typeMatch[1].replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+        }
+        const enumMatch = content.match(enumRegex);
+        if (enumMatch) {
+            const members = enumMatch[1]
+                .split('\n')
+                .map((line) => line.trim().replace(/,$/, ''))
+                .filter(Boolean)
+                .slice(0, 10)
+                .join(', ');
+            return `enum members ${members}`;
+        }
+        return null;
+    }
+    async resolveGraphContext(envelope, plan, coordinator) {
+        return this._resolveGraphContext(envelope, plan, coordinator);
     }
     /**
      * Shared budget-allocation loop (§3.7).
@@ -205,7 +681,37 @@ class ContextBuilder {
      * code item that would bust the budget gets a `_trimActiveFile` retry before being
      * marked omitted — this preserves the `assembleContextBlock` behaviour.
      */
-    _applyBudget(evidence, usableBudget, codeRetryOptions) {
+    _applyBudget(evidence, usableBudget, codeRetryOptions, graphReserve) {
+        // ADR-097: when a positive graph reserve is supplied, partition graph evidence
+        // out of the general pool so it cannot be squeezed by code/environment items.
+        if (graphReserve && graphReserve > 0) {
+            const graphItems = evidence.filter((e) => isGraphEvidenceKind(e.kind));
+            const otherItems = evidence.filter((e) => !isGraphEvidenceKind(e.kind));
+            const graphRes = this._runBudgetLoop(graphItems, graphReserve);
+            const generalBudget = Math.max(200, usableBudget - graphReserve);
+            const generalRes = this._runBudgetLoop(otherItems, generalBudget, codeRetryOptions);
+            // Re-order included items by their position in the original evidence list so
+            // downstream rendering preserves the planner's priority ordering.
+            const indexById = new Map();
+            evidence.forEach((item, idx) => indexById.set(item, idx));
+            const combined = [...graphRes.included, ...generalRes.included].sort((a, b) => (indexById.get(a) ?? 0) - (indexById.get(b) ?? 0));
+            return {
+                included: combined,
+                omitted: [...graphRes.omitted, ...generalRes.omitted],
+                used: graphRes.used + generalRes.used,
+                usedGraph: graphRes.used,
+            };
+        }
+        const result = this._runBudgetLoop(evidence, usableBudget, codeRetryOptions);
+        return { ...result, usedGraph: 0 };
+    }
+    /**
+     * Inner budget-allocation loop. Iterates a pre-sorted evidence list and partitions
+     * items into included vs omitted without exceeding `usableBudget` tokens. When
+     * `codeRetryOptions` is provided, a code item that would bust the budget gets a
+     * `_trimActiveFile` retry before being marked omitted.
+     */
+    _runBudgetLoop(evidence, usableBudget, codeRetryOptions) {
         const included = [];
         const omitted = [];
         let used = 0;
@@ -215,7 +721,6 @@ class ContextBuilder {
                 used += item.tokenCost;
             }
             else if (codeRetryOptions && item.kind === "code") {
-                // Attempt a narrower trim before giving up on code evidence.
                 const trimmed = this._trimActiveFile(codeRetryOptions.fileContent, codeRetryOptions.envelope, usableBudget - used);
                 if (trimmed) {
                     const trimmedCost = estimateTokens(trimmed);
@@ -223,7 +728,12 @@ class ContextBuilder {
                     used += trimmedCost;
                 }
                 else {
-                    omitted.push({ title: item.title, reason: "code excerpt could not be trimmed within remaining budget", required: item.required });
+                    omitted.push({
+                        title: item.title,
+                        reason: "code excerpt could not be trimmed within remaining budget",
+                        required: item.required,
+                        kind: item.kind,
+                    });
                 }
             }
             else {
@@ -233,6 +743,7 @@ class ContextBuilder {
                         ? "required evidence exceeded the current usable budget and needs a narrower retrieval plan"
                         : "omitted to preserve minimum sufficient context within budget",
                     required: item.required,
+                    kind: item.kind,
                 });
             }
         }
@@ -240,22 +751,81 @@ class ContextBuilder {
     }
     async buildReasoningPacket(envelope, options) {
         const plan = await this.createContextPlan(envelope, options?.prompt, options?.commandSource);
-        const graphContext = envelope.graphContext ?? await this.resolveGraphContext(envelope, plan);
+        const graphContext = envelope.graphContext ?? await this.resolveGraphContext(envelope, plan, options?.coordinator);
         const hydratedEnvelope = {
             ...envelope,
             graphContext,
         };
         const fileContent = this._readPlannedCode(hydratedEnvelope, plan);
-        const evidence = this._collectEvidenceItems(hydratedEnvelope, fileContent, options?.additionalSections ?? new Map(), plan);
+        const evidence = await this._collectEvidenceItems(hydratedEnvelope, fileContent, options?.additionalSections ?? new Map(), plan);
         const budget = plan.budgetPolicy.maxTokens;
         const reserved = plan.budgetPolicy.reserveTokens;
+        const reservedGraph = plan.budgetPolicy.reserveGraphTokens;
         const usableBudget = Math.max(200, budget - reserved);
-        const { included, omitted, used } = this._applyBudget(evidence, usableBudget);
+        // Plan §4.4 / ADR-097 — emergency-trim trigger. The graph slice is
+        // normally hard-reserved, but when the coordinator says (a) pressure is
+        // 'high' and (b) the remaining adaptive target cannot even cover the
+        // reserved slice, we drop the reserve for this turn rather than blow
+        // the soft target. The breach is flagged so the audit trail records it.
+        let effectiveReservedGraph = reservedGraph;
+        if (reservedGraph > 0 &&
+            options?.coordinator?.getContextPressureLabel?.() === 'high' &&
+            typeof options.coordinator.getRemainingTargetTokens === 'function') {
+            try {
+                const remaining = options.coordinator.getRemainingTargetTokens();
+                if (Number.isFinite(remaining) && remaining < reservedGraph) {
+                    effectiveReservedGraph = 0;
+                    options.coordinator.flagGraphSliceEmergencyTrim?.();
+                }
+            }
+            catch {
+                // Reading remaining must never break context assembly.
+            }
+        }
+        const { included, omitted, used, usedGraph } = this._applyBudget(evidence, usableBudget, undefined, effectiveReservedGraph);
+        const instrumentationResult = await import("./context-builder.instrumentation.js").then((m) => m.buildContextInstrumentation(included, omitted, this._environmentMetrics, this._previousStablePrefixHash));
+        this._previousStablePrefixHash = instrumentationResult.stablePrefixHash;
+        const evidenceParts = included.map((item) => item.content);
+        const warningLines = omitted
+            .filter((entry) => entry.required && (entry.kind === 'import_contract' || entry.kind === 'type_contract'))
+            .map((entry) => `- Missing required ${entry.kind}: ${entry.reason}`);
+        const safetyWarnings = warningLines.length > 0
+            ? ['Patch safety warning: required contract evidence was omitted by budget or retrieval limits.', ...warningLines]
+            : [];
+        if (safetyWarnings.length > 0) {
+            evidenceParts.unshift(['## Patch Safety', ...safetyWarnings].join('\n'));
+        }
+        const contextText = evidenceParts.join('\n\n');
+        // Phase 1 NEVER_FAIL_BUDGET_DEBT_PLAN — report context tier component
+        // actuals to the optional turn-scoped coordinator. Read-only path; no
+        // back-pressure is applied here.
+        if (options?.coordinator) {
+            try {
+                options.coordinator.recordComponentActual('context:graph', usedGraph);
+                options.coordinator.recordComponentActual('context:evidence', Math.max(0, used - usedGraph));
+            }
+            catch {
+                // Reporting must never break context assembly.
+            }
+        }
+        // Phase 2 — read-only pressure label sourced from the coordinator only
+        // (Plan §4.0). Gated by pressureSignalEnabled (default on).
+        let contextPressure;
+        const signalEnabled = options?.pressureSignalEnabled !== false;
+        if (signalEnabled && options?.coordinator?.getContextPressureLabel) {
+            try {
+                contextPressure = options.coordinator.getContextPressureLabel();
+            }
+            catch {
+                contextPressure = undefined;
+            }
+        }
         return {
             task: {
                 intentMode: plan.intentMode,
                 summary: plan.taskSummary,
                 commandSource: options?.commandSource,
+                lens: plan.lens,
             },
             primaryAnchor: plan.primaryAnchor,
             secondaryAnchors: plan.secondaryAnchors,
@@ -266,12 +836,18 @@ class ContextBuilder {
                 used,
                 budget,
                 reserved,
+                reservedGraph,
+                usedGraph,
             },
+            contextText,
+            safetyWarnings,
+            instrumentation: instrumentationResult.instrumentation,
+            contextPressure,
         };
     }
-    assembleContextBlock(envelope, fileContent, additionalSections) {
+    async assembleContextBlock(envelope, fileContent, additionalSections) {
         const plan = this._createFallbackPlan(envelope);
-        const evidence = this._collectEvidenceItems(envelope, fileContent, additionalSections, plan);
+        const evidence = await this._collectEvidenceItems(envelope, fileContent, additionalSections, plan);
         const budget = plan.budgetPolicy.maxTokens;
         const { included, omitted, used: usedTokens } = this._applyBudget(evidence, budget, fileContent && envelope.activeFile
             ? { fileContent, envelope }
@@ -344,7 +920,9 @@ class ContextBuilder {
         }
         if (preferredScope === "focused_excerpt") {
             const fileContent = editor.document.getText();
-            const excerptBudget = Math.floor(plan.budgetPolicy.maxTokens * 0.4);
+            // ADR-097: subtract the hard-reserved graph slice before allocating to the file excerpt.
+            const codePool = Math.max(0, plan.budgetPolicy.maxTokens - plan.budgetPolicy.reserveGraphTokens);
+            const excerptBudget = Math.floor(codePool * 0.4);
             return this._trimActiveFile(fileContent, envelope, excerptBudget);
         }
         if (preferredScope === "active_file" && plan.budgetPolicy.allowFullActiveFile) {
@@ -355,117 +933,75 @@ class ContextBuilder {
         }
         return null;
     }
-    async _createContextPlan(envelope, prompt, commandSource) {
-        const promptLower = (prompt ?? "").toLowerCase();
-        const filePath = envelope.activeFile?.path ?? "current file";
+    _createContextPlan(envelope, prompt, commandSource) {
+        const normalizedPrompt = (prompt ?? "").toLowerCase();
+        const filePath = envelope.activeFile?.path ?? "current workspace";
+        const languageId = envelope.activeFile?.languageId ?? "";
         const primaryAnchor = this._resolvePrimaryAnchor(envelope);
         const secondaryAnchors = this._resolveSecondaryAnchors(envelope, primaryAnchor);
-        const isAdr = commandSource === "checkAdrCompliance" || promptLower.includes("adr");
-        const isExplain = commandSource === "explainFile" || promptLower.includes("explain");
-        const isBug = promptLower.includes("bug") ||
-            promptLower.includes("error") ||
-            promptLower.includes("failing") ||
-            promptLower.includes("fix");
-        const isUi = promptLower.includes("ui") ||
-            promptLower.includes("component") ||
-            promptLower.includes("view") ||
-            promptLower.includes("panel");
-        const isModify = promptLower.includes("change") ||
-            promptLower.includes("update") ||
-            promptLower.includes("modify") ||
-            promptLower.includes("refactor") ||
-            promptLower.includes("implement");
-        const isArchitecture = envelope.intentMode === "ask_dreamgraph" ||
-            promptLower.includes("architecture") ||
-            promptLower.includes("workflow") ||
-            promptLower.includes("system");
         const requiredEvidence = new Set();
         const optionalEvidence = new Set();
         const codeReadPlan = [];
-        if (envelope.activeFile?.selection?.text) {
+        const isAdr = /adr|architecture decision|guard.?rail/.test(normalizedPrompt);
+        const isExplain = /explain|inspect|understand|how does|what does/.test(normalizedPrompt);
+        const isBug = /bug|broken|error|failing|fails|failure|regression/.test(normalizedPrompt);
+        const isUi = /ui|component|view|panel|webview|render/.test(normalizedPrompt);
+        const isModify = /fix|patch|edit|change|modify|update|refactor|implement|rewrite|rename|remove|replace/.test(normalizedPrompt);
+        const isBuildFix = /compile|build pass|make it compile|make build pass|type error/.test(normalizedPrompt);
+        const isArchitecture = /architecture|system|design|workflow|feature/.test(normalizedPrompt);
+        const isPatchLike = isModify || isBug || isBuildFix || ["applyPatch", "modifyCurrentFile", "fixCurrentFile"].includes(commandSource ?? "");
+        const supportsContracts = languageId === "typescript" || languageId === "javascript" || languageId === "typescriptreact" || languageId === "javascriptreact";
+        const selectedText = envelope.activeFile?.selection?.text ?? "";
+        const anchorText = `${selectedText} ${primaryAnchor?.label ?? ""}`;
+        const touchesImports = /\bimport\b|\bfrom\b/.test(selectedText) || /import|from/.test(normalizedPrompt);
+        const touchesTypes = /\b[A-Z][A-Za-z0-9_]+\b/.test(anchorText) || /type|interface|union|enum|literal/.test(normalizedPrompt) || isBuildFix;
+        requiredEvidence.add("task");
+        if (envelope.activeFile) {
             codeReadPlan.push({
-                scope: "selection",
-                reason: "User selection is the most immediate semantic anchor.",
-                anchorLabel: envelope.activeFile.selection.anchor?.label ?? envelope.activeFile.selection.summary,
+                scope: envelope.activeFile.selection ? "selection" : "focused_excerpt",
+                reason: envelope.activeFile.selection
+                    ? "Selection is the most trustworthy local anchor for this request."
+                    : "Use a focused excerpt around the active symbol to keep code context small and local.",
+                anchorLabel: primaryAnchor?.label,
                 required: true,
             });
             requiredEvidence.add("code");
         }
+        if (isPatchLike && supportsContracts) {
+            if (touchesImports || selectedText.length === 0) {
+                requiredEvidence.add("import_contract");
+            }
+            if (touchesTypes) {
+                requiredEvidence.add("type_contract");
+            }
+            optionalEvidence.add("api");
+            // Convention-heavy paths get local_convention to ground the model in sibling patterns.
+            const conventionHeavyPath = /src[/\\]tools[/\\]|src[/\\]server[/\\]|extensions[/\\]vscode[/\\]src[/\\]/.test(filePath ?? "");
+            if (conventionHeavyPath) {
+                optionalEvidence.add("local_convention");
+            }
+        }
         if (isAdr) {
             requiredEvidence.add("adr");
-            requiredEvidence.add("api");
-            optionalEvidence.add("tension");
+        }
+        if (isUi) {
+            optionalEvidence.add("ui");
+        }
+        if (isArchitecture || isExplain || isModify) {
             optionalEvidence.add("feature");
-            codeReadPlan.push({
-                scope: envelope.activeFile?.selection ? "selection" : "focused_excerpt",
-                reason: "ADR validation needs the local implementation surface, not the full file.",
-                anchorLabel: primaryAnchor?.label,
-                required: true,
-            });
-        }
-        else if (isBug) {
-            requiredEvidence.add("tension");
-            requiredEvidence.add("causal");
-            optionalEvidence.add("temporal");
-            optionalEvidence.add("api");
-            codeReadPlan.push({
-                scope: envelope.activeFile?.selection ? "selection" : "focused_excerpt",
-                reason: "Bug diagnosis should stay near the failing symbol or current working region.",
-                anchorLabel: primaryAnchor?.label,
-                required: true,
-            });
-        }
-        else if (isUi) {
-            requiredEvidence.add("ui");
             optionalEvidence.add("workflow");
-            optionalEvidence.add("tension");
-            codeReadPlan.push({
-                scope: envelope.activeFile?.selection ? "selection" : "focused_excerpt",
-                reason: "UI work should be grounded in the active UI anchor without dumping the whole file.",
-                anchorLabel: primaryAnchor?.label,
-                required: Boolean(envelope.activeFile),
-            });
         }
-        else if (isModify) {
-            requiredEvidence.add("api");
-            requiredEvidence.add("adr");
+        if (isBug || isBuildFix) {
             optionalEvidence.add("tension");
-            optionalEvidence.add("feature");
-            codeReadPlan.push({
-                scope: envelope.activeFile?.selection ? "selection" : "focused_excerpt",
-                reason: "Modification work needs the contract surface and the nearest implementation anchor.",
-                anchorLabel: primaryAnchor?.label,
-                required: Boolean(envelope.activeFile),
-            });
-        }
-        else if (isArchitecture || isExplain) {
-            requiredEvidence.add("feature");
-            requiredEvidence.add("workflow");
-            optionalEvidence.add("adr");
-            optionalEvidence.add("tension");
-            optionalEvidence.add("cognitive_status");
-            if (isArchitecture) {
-                optionalEvidence.add("causal");
-            }
-            if (isExplain && envelope.activeFile) {
-                codeReadPlan.push({
-                    scope: envelope.activeFile.selection ? "selection" : "focused_excerpt",
-                    reason: "Explanation should use the nearest anchored code slice, not the whole file.",
-                    anchorLabel: primaryAnchor?.label,
-                    required: true,
-                });
-                requiredEvidence.add("code");
-            }
-        }
-        else if (envelope.activeFile) {
-            optionalEvidence.add("feature");
             optionalEvidence.add("api");
-            codeReadPlan.push({
-                scope: envelope.activeFile.selection ? "selection" : "focused_excerpt",
-                reason: "Fallback plan uses a focused local anchor only.",
-                anchorLabel: primaryAnchor?.label,
-                required: false,
-            });
+        }
+        const forceEnvironment = envelope.intentMode === "active_file" || isBuildFix;
+        if (forceEnvironment) {
+            optionalEvidence.add("environment");
+        }
+        if (!isAdr && !isUi && !isArchitecture && !isExplain && !isModify && !isBug) {
+            optionalEvidence.add("feature");
+            optionalEvidence.add("workflow");
         }
         return {
             intentMode: envelope.intentMode,
@@ -480,17 +1016,30 @@ class ContextBuilder {
             budgetPolicy: {
                 maxTokens: this._options.maxContextTokens,
                 reserveTokens: Math.min(1200, Math.floor(this._options.maxContextTokens * 0.2)),
+                reserveGraphTokens: computeGraphReserve(this._options.maxContextTokens),
                 allowFullActiveFile: false,
                 includeOptionalEvidence: envelope.intentConfidence >= 0.5,
+            },
+            lens: (0, architect_lens_js_1.detectArchitectLens)({
+                prompt: prompt ?? "",
+                intentMode: envelope.intentMode,
+                commandSource,
+            }),
+            environmentPolicy: {
+                forceInclude: forceEnvironment,
+                softTokenCeiling: 220,
+                hardTokenCeiling: 320,
+                scopeLimit: 2,
             },
         };
     }
     _createFallbackPlan(envelope) {
+        const primaryAnchor = this._resolvePrimaryAnchor(envelope);
         return {
             intentMode: envelope.intentMode,
             taskSummary: envelope.activeFile?.path ?? "current context",
-            primaryAnchor: this._resolvePrimaryAnchor(envelope),
-            secondaryAnchors: this._resolveSecondaryAnchors(envelope, this._resolvePrimaryAnchor(envelope)),
+            primaryAnchor,
+            secondaryAnchors: this._resolveSecondaryAnchors(envelope, primaryAnchor),
             requiredEvidence: envelope.activeFile?.selection?.text ? ["code"] : [],
             optionalEvidence: ["feature", "workflow", "adr", "api", "ui", "tension"],
             codeReadPlan: envelope.activeFile
@@ -509,12 +1058,19 @@ class ContextBuilder {
             budgetPolicy: {
                 maxTokens: this._options.maxContextTokens,
                 reserveTokens: Math.min(1200, Math.floor(this._options.maxContextTokens * 0.2)),
+                reserveGraphTokens: computeGraphReserve(this._options.maxContextTokens),
                 allowFullActiveFile: false,
                 includeOptionalEvidence: true,
             },
+            environmentPolicy: {
+                forceInclude: envelope.intentMode === "active_file",
+                softTokenCeiling: 220,
+                hardTokenCeiling: 320,
+                scopeLimit: 2,
+            },
         };
     }
-    async _resolveGraphContext(envelope, plan) {
+    async _resolveGraphContext(envelope, plan, coordinator) {
         const graphCtx = {
             relatedFeatures: [],
             relatedWorkflows: [],
@@ -645,24 +1201,32 @@ class ContextBuilder {
         }
         const deepFetches = [];
         const deepKinds = [];
-        if (needs.has("causal")) {
-            deepFetches.push(this._fetchCausalInsights());
+        // Phase 3 — pressure-driven deep-insights trim (Plan §3.1 tier 1).
+        // Under 'high' pressure we drop optional deep-insights tiers but keep
+        // anything in `requiredEvidence`. The ADR-097 graph slice is unaffected
+        // (it's curated graph evidence above; this only skips optional MCP fetches).
+        const deepPressure = coordinator?.getContextPressureLabel?.() ?? 'low';
+        const requiredKinds = new Set(plan.requiredEvidence);
+        const allow = (k) => (0, budget_coordinator_reader_js_2.shouldFetchDeepInsight)(k, requiredKinds, deepPressure);
+        if (needs.has("causal") && allow("causal")) {
+            deepFetches.push((0, deep_insights_js_1.fetchCausalInsights)(this._cache, this._mcpClient));
             deepKinds.push("causal");
         }
-        if (needs.has("temporal")) {
-            deepFetches.push(this._fetchTemporalInsights());
+        if (needs.has("temporal") && allow("temporal")) {
+            deepFetches.push((0, deep_insights_js_1.fetchTemporalInsights)(this._cache, this._mcpClient));
             deepKinds.push("temporal");
         }
-        if (needs.has("data_model")) {
-            deepFetches.push(this._fetchDataModelEntities(envelope));
+        if (needs.has("data_model") && allow("data_model")) {
+            deepFetches.push((0, deep_insights_js_1.fetchDataModelEntities)(envelope, this._mcpClient));
             deepKinds.push("data_model");
         }
-        if (needs.has("cognitive_status")) {
-            deepFetches.push(this._fetchCognitiveStatus());
+        if (needs.has("cognitive_status") && allow("cognitive_status")) {
+            deepFetches.push((0, deep_insights_js_1.fetchCognitiveStatus)(this._cache, this._mcpClient));
             deepKinds.push("cognitive_status");
         }
-        if (needs.has("feature") || needs.has("workflow")) {
-            deepFetches.push(this._fetchDreamInsights());
+        if ((needs.has("feature") || needs.has("workflow")) &&
+            (allow("feature") || allow("workflow"))) {
+            deepFetches.push((0, deep_insights_js_1.fetchDreamInsights)(this._cache, this._mcpClient));
             deepKinds.push("feature");
         }
         const settled = await Promise.allSettled(deepFetches);
@@ -686,108 +1250,55 @@ class ContextBuilder {
                 graphCtx.dreamInsights = result.value;
             }
         });
+        // Phase 3 — report deep-insights tier actuals (chars/4 over fetched JSON)
+        // to the coordinator. Read-only; aggregated under `context:deep`.
+        if (coordinator?.recordComponentActual) {
+            try {
+                let deepChars = 0;
+                for (const r of settled) {
+                    if (r.status !== 'fulfilled' || r.value == null)
+                        continue;
+                    try {
+                        deepChars += JSON.stringify(r.value).length;
+                    }
+                    catch {
+                        // non-serializable values (cycles) — skip without throwing
+                    }
+                }
+                coordinator.recordComponentActual('context:deep', Math.ceil(deepChars / 4));
+            }
+            catch {
+                // Reporting must never break context resolution.
+            }
+        }
         return graphCtx;
     }
-    async _fetchDreamInsights() {
-        try {
-            const result = await this._mcpClient.callTool("get_dream_insights", {});
-            const data = typeof result === "string" ? JSON.parse(result) : result;
-            const raw = data?.ok ? data.data?.insights : data?.insights;
-            if (!Array.isArray(raw))
-                return [];
-            return raw.slice(0, 8).map((i) => ({
-                type: String(i.type ?? "insight"),
-                insight: String(i.insight ?? i.description ?? i.text ?? ""),
-                confidence: Number(i.confidence ?? 0.5),
-                source: i.source ? String(i.source) : undefined,
-                relevance: Number(i.relevance ?? 0.7),
-            }));
-        }
-        catch {
-            return [];
-        }
+    async _getCachedEnvironmentSnapshot(workspaceRoot, environmentModule) {
+        const cached = this._cache.getEnvSnapshot(workspaceRoot);
+        if (cached !== undefined)
+            return cached;
+        const snapshot = await environmentModule.buildEnvironmentContextSnapshot(workspaceRoot);
+        this._cache.setEnvSnapshot(workspaceRoot, snapshot);
+        return snapshot;
     }
-    async _fetchCausalInsights() {
-        try {
-            const result = await this._mcpClient.callTool("get_causal_insights", {});
-            const data = typeof result === "string" ? JSON.parse(result) : result;
-            const chains = data?.ok
-                ? data.data?.chains ?? data.data?.insights
-                : data?.chains ?? data?.insights;
-            if (!Array.isArray(chains))
-                return [];
-            return chains.slice(0, 12).map((c) => ({
-                from: String(c.from ?? c.source ?? ""),
-                to: String(c.to ?? c.target ?? ""),
-                relationship: String(c.relationship ?? c.type ?? "influences"),
-                confidence: Number(c.confidence ?? 0.5),
-                relevance: Number(c.relevance ?? 0.75),
-            }));
-        }
-        catch {
-            return [];
-        }
+    /**
+     * Invalidate the deep-insights cache so the next `buildEnvelope` re-fetches
+     * dreams / causal / temporal / cognitive_status. Call after a graph-mutating
+     * action so the chat panel does not assert "Verified" against stale state.
+     */
+    invalidateDeepInsights(reason) {
+        this._cache.invalidateDeepInsights(reason);
     }
-    async _fetchTemporalInsights() {
-        try {
-            const result = await this._mcpClient.callTool("get_temporal_insights", {});
-            const data = typeof result === "string" ? JSON.parse(result) : result;
-            const patterns = data?.ok
-                ? data.data?.patterns ?? data.data?.insights
-                : data?.patterns ?? data?.insights;
-            if (!Array.isArray(patterns))
-                return [];
-            return patterns.slice(0, 8).map((p) => ({
-                pattern: String(p.pattern ?? p.description ?? ""),
-                frequency: String(p.frequency ?? p.recurrence ?? "unknown"),
-                last_seen: p.last_seen ? String(p.last_seen) : undefined,
-                relevance: Number(p.relevance ?? 0.65),
-            }));
-        }
-        catch {
-            return [];
-        }
+    /**
+     * Convenience: invalidate when a tool name is known to mutate cognitive state.
+     * Returns true if the cache was invalidated.
+     */
+    maybeInvalidateForTool(toolName) {
+        return this._cache.maybeInvalidateForTool(toolName);
     }
-    async _fetchDataModelEntities(envelope) {
-        try {
-            const anchor = envelope.activeFile?.selection?.anchor?.symbolPath ??
-                envelope.activeFile?.selection?.anchor?.label ??
-                envelope.activeFile?.cursorAnchor?.symbolPath ??
-                envelope.activeFile?.cursorAnchor?.label ??
-                envelope.activeFile?.path ??
-                envelope.visibleFiles[0] ??
-                "";
-            const result = await this._mcpClient.callTool("search_data_model", {
-                entity_name: anchor,
-            });
-            const data = typeof result === "string" ? JSON.parse(result) : result;
-            const entities = data?.ok
-                ? data.data?.matches ?? data.data?.entities
-                : data?.matches ?? data?.entities;
-            if (!Array.isArray(entities))
-                return [];
-            return entities.slice(0, 8).map((e) => ({
-                id: String(e.id ?? ""),
-                name: String(e.name ?? ""),
-                storage: String(e.storage ?? e.store ?? "unknown"),
-                relevance: Number(e.relevance ?? 0.7),
-            }));
-        }
-        catch {
-            return [];
-        }
-    }
-    async _fetchCognitiveStatus() {
-        try {
-            const status = await this._mcpClient.getCognitiveStatus();
-            if (status && typeof status === "object" && "current_state" in status) {
-                return status.current_state;
-            }
-            return null;
-        }
-        catch {
-            return null;
-        }
+    /** Drop every cached slot. Useful on workspace change or daemon reconnect. */
+    clearAllCaches() {
+        this._cache.clearAll();
     }
     /**
      * Pre-scores anchor identity against the Pass-1 daemon feature list using the
@@ -804,9 +1315,11 @@ class ContextBuilder {
         const symbolName = symbolPath.includes(".")
             ? symbolPath.split(".").pop()
             : symbolPath;
-        const nameLower = symbolName.toLowerCase();
+        const nameLower = (symbolName ?? "").toLowerCase();
         const matchScore = (candidate) => {
-            const c = candidate.toLowerCase();
+            const c = (candidate ?? "").toLowerCase();
+            if (!c || !nameLower)
+                return 0;
             if (c === nameLower)
                 return 1.0;
             if (c.startsWith(nameLower) || nameLower.startsWith(c))
@@ -901,191 +1414,75 @@ class ContextBuilder {
         }
         return anchors;
     }
-    _collectEvidenceItems(envelope, fileContent, additionalSections, plan) {
-        const items = [];
-        /** Aggregate relevance from a list of graph entities that each carry a relevance score.
-         *  Returns the max score, falling back to a supplied default when the list is empty. */
-        const aggregateRelevance = (entities, fallback) => entities.length > 0
-            ? Math.max(...entities.map((e) => e.relevance ?? fallback))
-            : fallback;
-        const taskContent = `## Task Framing\nIntent mode: ${plan.intentMode}\nTask: ${plan.taskSummary}\nPrimary anchor: ${plan.primaryAnchor?.label ?? "none"}`;
-        items.push({
-            kind: "task",
-            title: "Task Framing",
-            content: taskContent,
+    async _collectEvidenceItems(envelope, fileContent, additionalSections, plan) {
+        const evidence = [];
+        const excerpt = fileContent ?? envelope.activeFile?.selection?.text ?? '';
+        evidence.push({
+            kind: 'task',
+            title: 'Task summary',
+            content: `## Task\n${plan.taskSummary}`,
             relevance: 1,
-            confidence: envelope.intentConfidence,
-            anchor: plan.primaryAnchor?.label,
-            tokenCost: estimateTokens(taskContent),
+            tokenCost: estimateTokens(plan.taskSummary),
             required: true,
         });
-        if (envelope.activeFile?.selection?.text) {
-            const anchorLabel = envelope.activeFile.selection.anchor?.label ?? envelope.activeFile.selection.summary;
-            const content = `## Verified Code Anchor\nAnchor: ${anchorLabel}\n\`\`\`${envelope.activeFile.languageId}\n${envelope.activeFile.selection.text}\n\`\`\``;
-            items.push({
-                kind: "code",
-                title: "Verified Code Anchor",
-                content,
-                relevance: 1,
-                anchor: anchorLabel,
-                tokenCost: estimateTokens(content),
-                required: true,
+        if (excerpt) {
+            evidence.push({
+                kind: 'code',
+                title: 'Code context',
+                content: `## Code\n${excerpt}`,
+                relevance: 0.98,
+                anchor: envelope.activeFile?.path,
+                tokenCost: estimateTokens(excerpt) + 3,
+                required: plan.requiredEvidence.includes('code'),
             });
-        }
-        else if (fileContent && envelope.activeFile) {
-            const excerpt = this._trimActiveFile(fileContent, envelope, Math.floor(plan.budgetPolicy.maxTokens * 0.35));
-            if (excerpt) {
-                items.push({
-                    kind: "code",
-                    title: "Focused Code Excerpt",
-                    content: excerpt,
-                    relevance: 0.85,
-                    anchor: envelope.activeFile.cursorAnchor?.label ?? envelope.activeFile.cursorSummary,
-                    tokenCost: estimateTokens(excerpt),
-                    required: plan.codeReadPlan.some((p) => p.required),
-                });
+            const importEvidence = await this._buildImportContractEvidence(excerpt, envelope, plan);
+            if (importEvidence && plan.requiredEvidence.includes('import_contract')) {
+                evidence.push(importEvidence);
+            }
+            const typeEvidence = await this._buildTypeContractEvidence(excerpt, envelope, plan);
+            if (typeEvidence && plan.requiredEvidence.includes('type_contract')) {
+                evidence.push(typeEvidence);
+            }
+            if (plan.optionalEvidence.includes('local_convention') || plan.requiredEvidence.includes('local_convention')) {
+                const conventionEvidence = await this._buildLocalConventionEvidence(excerpt, envelope);
+                if (conventionEvidence)
+                    evidence.push(conventionEvidence);
             }
         }
-        if (envelope.graphContext?.applicableAdrs.length) {
-            const entities = envelope.graphContext.applicableAdrs;
-            const content = `## Relevant ADRs\n${entities
-                .map((a) => `- ${a.id}: ${a.title}`)
-                .join("\n")}`;
-            items.push({
-                kind: "adr",
-                title: "Relevant ADRs",
+        for (const [title, content] of additionalSections.entries()) {
+            evidence.push({
+                kind: 'note',
+                title,
                 content,
-                relevance: aggregateRelevance(entities, 0.95),
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("adr"),
-            });
-        }
-        if (envelope.graphContext?.apiSurface) {
-            const content = `## Relevant API Surface\n${JSON.stringify(envelope.graphContext.apiSurface, null, 2)}`;
-            items.push({
-                kind: "api",
-                title: "Relevant API Surface",
-                content,
-                relevance: 0.9,
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("api"),
-            });
-        }
-        if (envelope.graphContext?.relatedFeatures.length ||
-            envelope.graphContext?.relatedWorkflows.length) {
-            const features = envelope.graphContext?.relatedFeatures ?? [];
-            const workflows = envelope.graphContext?.relatedWorkflows ?? [];
-            const featureLines = features.map((f) => `- feature ${f.id}: ${f.name}`);
-            const workflowLines = workflows.map((w) => `- workflow ${w.id}: ${w.name}`);
-            const content = `## Related Graph Contracts\n${[
-                ...featureLines,
-                ...workflowLines,
-            ].join("\n")}`;
-            items.push({
-                kind: "feature",
-                title: "Related Graph Contracts",
-                content,
-                relevance: aggregateRelevance([...features, ...workflows], 0.82),
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("feature") ||
-                    plan.requiredEvidence.includes("workflow"),
-            });
-        }
-        if (envelope.graphContext?.uiPatterns.length) {
-            const entities = envelope.graphContext.uiPatterns;
-            const content = `## UI Registry Matches\n${entities
-                .map((u) => `- ${u.id ? `${u.id}: ` : ""}${u.name}`)
-                .join("\n")}`;
-            items.push({
-                kind: "ui",
-                title: "UI Registry Matches",
-                content,
-                relevance: aggregateRelevance(entities, 0.8),
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("ui"),
-            });
-        }
-        if (envelope.graphContext?.tensions.length) {
-            const entities = envelope.graphContext.tensions;
-            const content = `## Active Tensions\n${entities
-                .map((t) => `- [${t.severity}] ${t.description}`)
-                .join("\n")}`;
-            items.push({
-                kind: "tension",
-                title: "Active Tensions",
-                content,
-                relevance: aggregateRelevance(entities, 0.88),
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("tension"),
-            });
-        }
-        if (envelope.graphContext?.causalChains.length) {
-            const content = `## Causal Signals\n${envelope.graphContext.causalChains
-                .map((c) => `- ${c.from} -> ${c.to} (${c.relationship})`)
-                .join("\n")}`;
-            items.push({
-                kind: "causal",
-                title: "Causal Signals",
-                content,
-                relevance: 0.78,
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("causal"),
-            });
-        }
-        if (envelope.graphContext?.temporalPatterns.length) {
-            const content = `## Temporal Signals\n${envelope.graphContext.temporalPatterns
-                .map((p) => `- ${p.pattern} (${p.frequency})`)
-                .join("\n")}`;
-            items.push({
-                kind: "temporal",
-                title: "Temporal Signals",
-                content,
-                relevance: 0.7,
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("temporal"),
-            });
-        }
-        if (envelope.graphContext?.dataModelEntities.length) {
-            const entities = envelope.graphContext.dataModelEntities;
-            const content = `## Data Model Matches\n${entities
-                .map((d) => `- ${d.id}: ${d.name} [${d.storage}]`)
-                .join("\n")}`;
-            items.push({
-                kind: "data_model",
-                title: "Data Model Matches",
-                content,
-                relevance: aggregateRelevance(entities, 0.7),
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("data_model"),
-            });
-        }
-        if (envelope.graphContext?.cognitiveState) {
-            const content = `## Cognitive State\nCurrent state: ${envelope.graphContext.cognitiveState}`;
-            items.push({
-                kind: "cognitive_status",
-                title: "Cognitive State",
-                content,
-                relevance: 0.55,
-                tokenCost: estimateTokens(content),
-                required: plan.requiredEvidence.includes("cognitive_status"),
-            });
-        }
-        for (const [name, content] of additionalSections.entries()) {
-            items.push({
-                kind: "note",
-                title: name,
-                content,
-                relevance: 0.4,
+                relevance: 0.5,
                 tokenCost: estimateTokens(content),
                 required: false,
             });
         }
-        return items.sort((a, b) => {
-            if (a.required !== b.required)
-                return a.required ? -1 : 1;
-            if (b.relevance !== a.relevance)
-                return b.relevance - a.relevance;
-            return (b.confidence ?? 0) - (a.confidence ?? 0);
+        return evidence.sort((a, b) => {
+            const priority = (kind) => {
+                switch (kind) {
+                    case 'task': return 0;
+                    case 'code': return 1;
+                    case 'import_contract':
+                    case 'type_contract':
+                    case 'local_convention':
+                    case 'adr':
+                    case 'api': return 2;
+                    case 'environment': return 3;
+                    case 'feature':
+                    case 'workflow':
+                    case 'ui': return 4;
+                    case 'tension':
+                    case 'causal':
+                    case 'temporal':
+                    case 'data_model':
+                    case 'cognitive_status': return 5;
+                    case 'note':
+                    default: return 6;
+                }
+            };
+            return priority(a.kind) - priority(b.kind) || b.relevance - a.relevance;
         });
     }
     _trimActiveFile(fileContent, envelope, remainingBudget) {
@@ -1262,11 +1659,15 @@ class ContextBuilder {
         const symbolName = symbolPath.includes(".")
             ? symbolPath.split(".").pop()
             : symbolPath;
-        const nameLower = symbolName.toLowerCase();
+        const nameLower = (symbolName ?? "").toLowerCase();
         /** Score a candidate string against the symbol name.
-         *  Returns 0 (no match) → 1 (exact) with intermediate values for prefix / substring. */
+         *  Returns 0 (no match) → 1 (exact) with intermediate values for prefix / substring.
+         *  Defensive: graph entities occasionally arrive with missing id/name/title fields
+         *  (legacy data, partial scans). Coerce to '' instead of crashing the continuation pass. */
         const matchScore = (candidate) => {
-            const c = candidate.toLowerCase();
+            const c = (candidate ?? "").toLowerCase();
+            if (!c || !nameLower)
+                return 0;
             if (c === nameLower)
                 return 1.0; // exact
             if (c.startsWith(nameLower) || nameLower.startsWith(c))
@@ -1404,9 +1805,15 @@ class ContextBuilder {
                 historical: false,
             };
         }
-        // Partial / fuzzy match → heavy drift, lower confidence
-        const fuzzyMatch = currentSymbols.some((s) => s.name.toLowerCase().includes(leafName.toLowerCase()) ||
-            leafName.toLowerCase().includes(s.name.toLowerCase()));
+        // Partial / fuzzy match → heavy drift, lower confidence. Defensive: tolerate
+        // symbols whose name field is missing or non-string (legacy graph data).
+        const leafLower = (leafName ?? "").toLowerCase();
+        const fuzzyMatch = leafLower.length > 0 && currentSymbols.some((s) => {
+            const sn = (s.name ?? "").toLowerCase();
+            if (!sn)
+                return false;
+            return sn.includes(leafLower) || leafLower.includes(sn);
+        });
         if (fuzzyMatch) {
             return {
                 ...anchor,

@@ -34,7 +34,7 @@ class McpClient {
     async connect() {
         await this.disconnect();
         this._transport = new streamableHttp_js_1.StreamableHTTPClientTransport(new URL(`${this._baseUrl}/mcp`));
-        this._client = new index_js_1.Client({ name: "dreamgraph-vscode", version: "8.1.0" }, { capabilities: {} });
+        this._client = new index_js_1.Client({ name: "dreamgraph-vscode", version: "9.0.0" }, { capabilities: {} });
         await this._client.connect(this._transport);
         // Subscribe to server log notifications and forward to the external listener
         this._client.setNotificationHandler(types_js_1.LoggingMessageNotificationSchema, (notification) => {
@@ -141,10 +141,17 @@ class McpClient {
         return this.callTool("cognitive_status");
     }
     /**
-     * Query a DreamGraph resource by type (feature, workflow, etc.)
+     * Query a DreamGraph resource by URI and optional top-level field filter.
+     *
+     * Examples:
+     * - queryResource("system://features")
+     * - queryResource("dream://adrs", { status: "accepted" })
      */
-    async queryResource(type, name) {
-        return this.callTool("query_resource", { type, name });
+    async queryResource(uri, filter) {
+        return this.callTool("query_resource", {
+            uri,
+            ...(filter && Object.keys(filter).length > 0 ? { filter } : {}),
+        });
     }
     /**
      * Query architecture decisions.
