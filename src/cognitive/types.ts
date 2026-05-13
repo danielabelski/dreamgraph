@@ -1593,6 +1593,25 @@ export interface ThreatEdge {
   mitigation: string;
   discovered_at: string;
   dream_cycle: number;
+  /** Lifecycle status. Used by the nightmare emitter to suppress
+   * re-emission of findings that have been acknowledged or parked
+   * behind an external dependency (e.g. "deferred-until-auth"). */
+  lifecycle?: string;
+  /** External dependency that gates resolution of this threat. */
+  blocked_by?: string;
+  /** True when a human/system has reviewed this finding and chosen to
+   * keep it in the log without further re-emission. */
+  acknowledged?: boolean;
+  /** Free-form note from the acknowledgement. */
+  ack_note?: string;
+  /** Number of times the same canonical key (from|to|category|cwe) has
+   * been re-detected since the entry was first recorded. The emitter
+   * bumps this counter instead of appending duplicate rows. */
+  duplicate_count?: number;
+  /** ISO timestamp of the most recent re-detection. */
+  last_seen_at?: string;
+  /** Dream cycle of the most recent re-detection. */
+  last_seen_cycle?: number;
 }
 
 /** Output of a nightmare cycle */

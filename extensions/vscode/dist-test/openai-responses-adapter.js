@@ -9,6 +9,7 @@ exports.translateRawToOpenAIResponses = translateRawToOpenAIResponses;
 exports.extractOpenAIResponsesText = extractOpenAIResponsesText;
 exports.extractOpenAIResponsesToolCalls = extractOpenAIResponsesToolCalls;
 const request_compaction_1 = require("./request-compaction");
+const architect_pass_schema_js_1 = require("./architect-pass-schema.js");
 function usesOpenAIResponsesApi(model) {
     return model.trim().toLowerCase().startsWith("gpt-5.5");
 }
@@ -25,7 +26,17 @@ function buildOpenAIResponsesRequest(messages, options) {
             ? translateRawToOpenAIResponses(compactedRawMessages)
             : compactedMessages.map((m) => ({ role: m.role, content: toOpenAIResponsesContent(m.content) })),
         reasoning: { effort: options.reasoningEffort },
-        text: { verbosity: options.textVerbosity },
+        text: options.structuredOutput
+            ? {
+                verbosity: options.textVerbosity,
+                format: {
+                    type: "json_schema",
+                    name: architect_pass_schema_js_1.ARCHITECT_PASS_SCHEMA_NAME,
+                    schema: architect_pass_schema_js_1.ARCHITECT_PASS_JSON_SCHEMA,
+                    strict: true,
+                },
+            }
+            : { verbosity: options.textVerbosity },
         // Stateless multi-turn tool loops on gpt-5.5/o-series require these:
         //   * store=false: opt out of server-side state retention (we replay).
         //   * include reasoning.encrypted_content: the only way to get the

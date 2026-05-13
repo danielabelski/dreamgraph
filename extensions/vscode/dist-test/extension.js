@@ -63,8 +63,6 @@ const changed_files_view_js_1 = require("./changed-files-view.js");
 const graph_signal_js_1 = require("./graph-signal.js");
 const chat_memory_js_1 = require("./chat-memory.js");
 const local_tools_js_1 = require("./local-tools.js");
-// architect-v2 (M7): parallel surface — does NOT touch v1 ChatPanel.
-const index_js_1 = require("./architect-v2/host/index.js");
 const commands_js_1 = require("./commands.js");
 /* ------------------------------------------------------------------ */
 /*  State                                                             */
@@ -78,7 +76,7 @@ function activate(context) {
     // VS Code may move views out of their declared container on reinstall,
     // hiding the activity bar icon. Reset once per version to fix this.
     const versionKey = "dreamgraph.lastActivatedVersion";
-    const currentVersion = "9.0.0";
+    const currentVersion = "10.0.0";
     const lastVersion = context.globalState.get(versionKey);
     if (lastVersion !== currentVersion) {
         void vscode.commands.executeCommand("workbench.action.resetViewLocations");
@@ -216,17 +214,10 @@ function activate(context) {
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(chat_panel_js_1.ChatPanel.viewType, chatPanel, {
         webviewOptions: { retainContextWhenHidden: true },
     }), vscode.window.registerWebviewViewProvider(dashboard_view_js_1.DashboardViewProvider.viewType, dashboardView), changedFilesTreeView);
-    // ---- architect-v2 panel (M7 parallel surface) ----
-    // Registered alongside v1 so users can smoke-test the new chat without
-    // losing v1. v9.x keeps both; v10 cutover (M9-M11) removes v1.
-    const architectV2Panel = new index_js_1.ArchitectV2Panel({
-        context,
-        mcpClient,
-    });
-    context.subscriptions.push(vscode.window.registerWebviewViewProvider(index_js_1.ArchitectV2Panel.viewType, architectV2Panel, { webviewOptions: { retainContextWhenHidden: true } }), architectV2Panel, vscode.commands.registerCommand("dreamgraph.openArchitectV2", async () => {
-        await vscode.commands.executeCommand("workbench.view.extension.dreamgraph-sidebar");
-        await vscode.commands.executeCommand(`${index_js_1.ArchitectV2Panel.viewType}.focus`);
-    }));
+    // ---- architect-v2 QUARANTINED (v10.0.0 "Renata") ----
+    // Panel registration intentionally removed. v1 hybrid is now the canonical
+    // surface. The architect-v2/ folder is retained for historical reference
+    // but is not loaded.
     // ---- Register disposables ----
     context.subscriptions.push(daemonClient, mcpClient, healthMonitor, statusBar, contextInspector, architectLlm, chatPanel, dashboardView, changedFiles, graphSignal);
     // ---- Listen for configuration changes ----

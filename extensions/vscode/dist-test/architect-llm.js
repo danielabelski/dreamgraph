@@ -44,15 +44,17 @@ exports.setRequestBudgetSink = setRequestBudgetSink;
 const vscode = __importStar(require("vscode"));
 const openai_responses_adapter_1 = require("./openai-responses-adapter");
 const request_compaction_1 = require("./request-compaction");
+const architect_pass_schema_js_1 = require("./architect-pass-schema.js");
+const architect_pass_projection_js_1 = require("./architect-pass-projection.js");
 exports.ANTHROPIC_MODELS = [
-    "claude-opus-4-6",
     "claude-opus-4-7",
+    "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
 ];
 exports.OPENAI_MODELS = [
-    "gpt-5",
     "gpt-5.5",
+    "gpt-5",
     "gpt-5.4",
     "gpt-4.1",
     "gpt-4.1-mini",
@@ -223,7 +225,8 @@ class ArchitectLlm {
     async loadConfig() {
         const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
         const provider = (cfg.get("provider") ?? "anthropic");
-        const model = cfg.get("model") ?? "claude-opus-4-6";
+        const configuredModel = (cfg.get("model") ?? "").trim();
+        const model = configuredModel || this._defaultModel(provider);
         const baseUrl = cfg.get("baseUrl") || this._defaultBaseUrl(provider);
         let apiKey = "";
         if (provider === "lmstudio") {
@@ -507,7 +510,81 @@ class ArchitectLlm {
             textVerbosity: this._getOpenAITextVerbosity(),
             rawMessages,
             tools,
+            structuredOutput: this._isStructuredOutputEnabled(config.provider),
         });
+    }
+    /**
+     * Whether to attach the canonical architect-pass JSON schema to outbound
+     * requests for the given provider. Today only OpenAI's first-party API
+     * (Chat Completions + Responses) is supported \u2014 LM Studio's openai-compat
+     * endpoint accepts `response_format` but its model-side enforcement varies
+     * by loaded model, so we keep it opt-in via the same setting.
+     *
+     * Setting: `dreamgraph.architect.structuredOutput` (boolean, default true
+     * for `openai`, false otherwise). User can disable to fall back to the
+     * legacy fenced-JSON contract if a specific snapshot rejects schemas.
+     */
+    _isStructuredOutputEnabled(provider) {
+        const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
+        const explicit = cfg.get("structuredOutput");
+        if (typeof explicit === "boolean")
+            return explicit;
+        // Default ON for OpenAI (strict json_schema is grammar-constrained server-side).
+        // Default OFF for ollama and lmstudio: schema support exists in recent Ollama
+        // (>=0.5) and via OpenAI-compat in LM Studio, but enforcement quality depends
+        // on the loaded model, so users opt in. Default OFF for anthropic: forced
+        // tool-use is the only API-level enforcement and it conflicts with the
+        // agentic tool loop, so we keep Anthropic on its prompt-driven envelope.
+        return provider === "openai";
+    }
+    /**
+     * Build the `format` body field for the Ollama /api/chat request. Recent
+     * Ollama (>=0.5) accepts a JSON Schema object here and grammar-constrains
+     * the response server-side, mirroring OpenAI's strict json_schema mode.
+     * Returns an empty object when structured output is disabled — callers
+     * spread the result so the field simply doesn't appear on the wire for
+     * older Ollama versions that wouldn't recognize it.
+     */
+    _ollamaFormatField(provider) {
+        if (!this._isStructuredOutputEnabled(provider))
+            return {};
+        return { format: architect_pass_schema_js_1.ARCHITECT_PASS_JSON_SCHEMA };
+    }
+    /**
+     * Build the `response_format` body field for OpenAI Chat Completions.
+     * Strict json_schema mode is grammar-constrained server-side: the model
+     * physically cannot emit text outside the schema. Returns an empty object
+     * when structured output is disabled — callers spread the result into the
+     * request body so the field simply doesn't appear.
+     */
+    _openAIChatResponseFormat(provider) {
+        if (!this._isStructuredOutputEnabled(provider))
+            return {};
+        return {
+            response_format: {
+                type: "json_schema",
+                json_schema: {
+                    name: architect_pass_schema_js_1.ARCHITECT_PASS_SCHEMA_NAME,
+                    schema: architect_pass_schema_js_1.ARCHITECT_PASS_JSON_SCHEMA,
+                    strict: true,
+                },
+            },
+        };
+    }
+    /**
+     * When structured-output mode is on, the wire content is a strict
+     * `architect_pass_envelope` JSON object. Project it back to the legacy
+     * "prose markdown + fenced ```json envelope" shape so every existing
+     * downstream parser (autonomy, summary card, webview body renderer)
+     * keeps working without needing to learn the new shape. When projection
+     * fails or structured output is off, the original content is returned
+     * unchanged.
+     */
+    _maybeProjectStructuredContent(config, content) {
+        if (!this._isStructuredOutputEnabled(config.provider))
+            return content;
+        const projection = (0, architect_pass_projection_js_1.projectStrictEnvelopeToLegacy)(content);
+        return projection ? projection.legacyContent : content;
     }
     _extractOpenAIResponsesText(data) {
         return (0, openai_responses_adapter_1.extractOpenAIResponsesText)(data);
@@ -530,7 +607,7 @@ class ArchitectLlm {
             throw new Error(`OpenAI Responses API error (${res.status}): ${await res.text()}`);
         const data = (await res.json());
         return {
-            content: this._extractOpenAIResponsesText(data),
+            content: this._maybeProjectStructuredContent(config, this._extractOpenAIResponsesText(data)),
             promptTokens: data.usage?.input_tokens ?? 0,
             completionTokens: data.usage?.output_tokens ?? 0,
             durationMs: Date.now() - start,
@@ -552,7 +629,7 @@ class ArchitectLlm {
         const data = (await res.json());
         const toolCalls = this._extractOpenAIResponsesToolCalls(data);
         return {
-            content: this._extractOpenAIResponsesText(data),
+            content: this._maybeProjectStructuredContent(config, this._extractOpenAIResponsesText(data)),
             promptTokens: data.usage?.input_tokens ?? 0,
             completionTokens: data.usage?.output_tokens ?? 0,
             durationMs: Date.now() - start,
@@ -596,6 +673,7 @@ class ArchitectLlm {
                 max_completion_tokens: 16384,
                 messages: apiMessages,
                 tools: openaiTools,
+                ...this._openAIChatResponseFormat(config.provider),
             }),
             signal,
         });
@@ -604,7 +682,7 @@ class ArchitectLlm {
         const data = (await res.json());
         const choice = data.choices[0];
         return {
-            content: choice?.message?.content ?? "",
+            content: this._maybeProjectStructuredContent(config, choice?.message?.content ?? ""),
             promptTokens: data.usage?.prompt_tokens ?? 0,
             completionTokens: data.usage?.completion_tokens ?? 0,
             durationMs: Date.now() - start,
@@ -647,14 +725,19 @@ class ArchitectLlm {
                 model: config.model,
                 max_completion_tokens: 16384,
                 messages: messages.map((m) => ({ role: m.role, content: this._toOpenAIContent(m.content) })),
+                ...this._openAIChatResponseFormat(config.provider),
             }),
             signal,
         });
         if (!res.ok)
             throw new Error(`OpenAI API error (${res.status}): ${await res.text()}`);
         const data = (await res.json());
+        const rawContent = data.choices[0]?.message?.content ?? "";
+        const projectedContent = this._isStructuredOutputEnabled(config.provider)
+            ? ((0, architect_pass_projection_js_1.projectStrictEnvelopeToLegacy)(rawContent)?.legacyContent ?? rawContent)
+            : rawContent;
         return {
-            content: data.choices[0]?.message?.content ?? "",
+            content: projectedContent,
             promptTokens: data.usage?.prompt_tokens ?? 0,
             completionTokens: data.usage?.completion_tokens ?? 0,
             durationMs: Date.now() - start,
@@ -672,11 +755,32 @@ class ArchitectLlm {
                 max_completion_tokens: 16384,
                 stream: true,
                 messages: messages.map((m) => ({ role: m.role, content: this._toOpenAIContent(m.content) })),
+                ...this._openAIChatResponseFormat(config.provider),
             }),
             signal,
         });
         if (!res.ok)
             throw new Error(`OpenAI API error (${res.status}): ${await res.text()}`);
+        // When strict structured-output is on, the wire content is a single JSON
+        // object that begins with `{`. Stream the unescaped `narrative` field to
+        // the live UI (so the user sees clean prose, not raw JSON), buffer the
+        // rest, and project to the legacy fenced-envelope shape on completion so
+        // every downstream parser keeps working untouched.
+        if (this._isStructuredOutputEnabled(config.provider)) {
+            const extractor = new architect_pass_projection_js_1.StrictNarrativeStreamExtractor();
+            const wrapped = (chunk) => {
+                const visible = extractor.feed(chunk);
+                if (visible)
+                    onChunk(visible);
+            };
+            const raw = await this._readSSEStream(res, wrapped, start, "openai");
+            // Replay the full raw text into the extractor so finalize sees
+            // everything (the wrapper above only forwarded narrative chars). The
+            // SSE reader assembled the full content from deltas; feed any unfed
+            // tail by replacing the buffer wholesale via finalize on raw content.
+            const projection = (0, architect_pass_projection_js_1.projectStrictEnvelopeToLegacy)(raw.content);
+            return projection ? { ...raw, content: projection.legacyContent } : raw;
+        }
         return this._readSSEStream(res, onChunk, start, "openai");
     }
     async _callOllama(config, messages, start, signal) {
@@ -687,6 +791,7 @@ class ArchitectLlm {
                 model: config.model,
                 messages: messages.map((m) => ({ role: m.role, content: this._toOllamaContent(m.content) })),
                 stream: false,
+                ...this._ollamaFormatField(config.provider),
             }),
             signal,
         });
@@ -694,7 +799,7 @@ class ArchitectLlm {
             throw new Error(`Ollama API error (${res.status}): ${await res.text()}`);
         const data = (await res.json());
         return {
-            content: data.message?.content ?? "",
+            content: this._maybeProjectStructuredContent(config, data.message?.content ?? ""),
             promptTokens: data.prompt_eval_count ?? 0,
             completionTokens: data.eval_count ?? 0,
             durationMs: Date.now() - start,
@@ -708,6 +813,7 @@ class ArchitectLlm {
                 model: config.model,
                 messages: messages.map((m) => ({ role: m.role, content: this._toOllamaContent(m.content) })),
                 stream: true,
+                ...this._ollamaFormatField(config.provider),
             }),
             signal,
         });
@@ -720,6 +826,12 @@ class ArchitectLlm {
         let fullContent = "";
         let promptTokens = 0;
         let completionTokens = 0;
+        // When structured-output mode is on the wire content is a strict JSON
+        // envelope; stream the unescaped narrative to the live UI and project
+        // to the legacy fenced shape on completion. Mirrors the OpenAI Chat
+        // Completions streaming path so downstream consumers see one shape.
+        const structuredOn = this._isStructuredOutputEnabled(config.provider);
+        const extractor = structuredOn ? new architect_pass_projection_js_1.StrictNarrativeStreamExtractor() : null;
         while (true) {
             const { done, value } = await reader.read();
             if (done)
@@ -732,7 +844,14 @@ class ArchitectLlm {
                 const chunk = parsed.message?.content ?? "";
                 if (chunk) {
                     fullContent += chunk;
-                    onChunk(chunk);
+                    if (extractor) {
+                        const visible = extractor.feed(chunk);
+                        if (visible)
+                            onChunk(visible);
+                    }
+                    else {
+                        onChunk(chunk);
+                    }
                 }
                 if (parsed.done) {
                     promptTokens = parsed.prompt_eval_count ?? promptTokens;
@@ -743,8 +862,11 @@ class ArchitectLlm {
                 // skip malformed lines
             }
         }
+        const projectedContent = structuredOn
+            ? ((0, architect_pass_projection_js_1.projectStrictEnvelopeToLegacy)(fullContent)?.legacyContent ?? fullContent)
+            : fullContent;
         return {
-            content: fullContent,
+            content: projectedContent,
             promptTokens,
             completionTokens,
             durationMs: Date.now() - start,
@@ -826,6 +948,20 @@ class ArchitectLlm {
                 return "http://localhost:11434";
             case "lmstudio":
                 return "http://localhost:1234/v1";
+            default:
+                return "";
+        }
+    }
+    _defaultModel(provider) {
+        switch (provider) {
+            case "anthropic":
+                return exports.ANTHROPIC_MODELS[0];
+            case "openai":
+                return exports.OPENAI_MODELS[0];
+            case "ollama":
+                return "llama3.1";
+            case "lmstudio":
+                return "";
             default:
                 return "";
         }

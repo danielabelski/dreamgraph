@@ -130,6 +130,45 @@ export declare class ArchitectLlm implements vscode.Disposable {
     private _toOpenAIResponsesContent;
     private _translateRawToOpenAIResponses;
     private _buildOpenAIResponsesRequest;
+    /**
+     * Whether to attach the canonical architect-pass JSON schema to outbound
+     * requests for the given provider. Today only OpenAI's first-party API
+     * (Chat Completions + Responses) is supported \u2014 LM Studio's openai-compat
+     * endpoint accepts `response_format` but its model-side enforcement varies
+     * by loaded model, so we keep it opt-in via the same setting.
+     *
+     * Setting: `dreamgraph.architect.structuredOutput` (boolean, default true
+     * for `openai`, false otherwise). User can disable to fall back to the
+     * legacy fenced-JSON contract if a specific snapshot rejects schemas.
+     */
+    private _isStructuredOutputEnabled;
+    /**
+     * Build the `format` body field for the Ollama /api/chat request. Recent
+     * Ollama (>=0.5) accepts a JSON Schema object here and grammar-constrains
+     * the response server-side, mirroring OpenAI's strict json_schema mode.
+     * Returns an empty object when structured output is disabled — callers
+     * spread the result so the field simply doesn't appear on the wire for
+     * older Ollama versions that wouldn't recognize it.
+     */
+    private _ollamaFormatField;
+    /**
+     * Build the `response_format` body field for OpenAI Chat Completions.
+     * Strict json_schema mode is grammar-constrained server-side: the model
+     * physically cannot emit text outside the schema. Returns an empty object
+     * when structured output is disabled — callers spread the result into the
+     * request body so the field simply doesn't appear.
+     */
+    private _openAIChatResponseFormat;
+    /**
+     * When structured-output mode is on, the wire content is a strict
+     * `architect_pass_envelope` JSON object. Project it back to the legacy
+     * "prose markdown + fenced ```json envelope" shape so every existing
+     * downstream parser (autonomy, summary card, webview body renderer)
+     * keeps working without needing to learn the new shape. When projection
+     * fails or structured output is off, the original content is returned
+     * unchanged.
+     */
+    private _maybeProjectStructuredContent;
     private _extractOpenAIResponsesText;
     private _extractOpenAIResponsesToolCalls;
     private _callOpenAIResponses;
@@ -143,6 +182,7 @@ export declare class ArchitectLlm implements vscode.Disposable {
     private _readSSEStream;
     private _splitSystem;
     private _defaultBaseUrl;
+    private _defaultModel;
     private _ensureConfigured;
     dispose(): void;
 }

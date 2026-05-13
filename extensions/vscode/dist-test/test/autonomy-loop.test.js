@@ -40,4 +40,46 @@ const autonomy_loop_js_1 = require("../autonomy-loop.js");
     strict_1.default.equal(paused.completedAutoPasses, 0);
     strict_1.default.equal(paused.remainingAutoPasses, 4);
 });
+(0, node_test_1.default)('analyzePass marks pure-read pass as empty once patch anchor is established', () => {
+    // First pass: model writes a file → anchor established.
+    const state0 = (0, autonomy_js_1.createAutonomyState)('autonomous', 8);
+    const writePass = (0, autonomy_loop_js_1.analyzePass)(state0, {
+        content: 'Applied patch.',
+        toolCallCount: 1,
+        fileEditCount: 1,
+        toolNames: ['edit_file'],
+    });
+    strict_1.default.equal(writePass.patchAnchorEstablished, true);
+    const state1 = (0, autonomy_loop_js_1.advanceAutonomyStateIfContinued)(state0, writePass.decision, writePass.signal, writePass.patchAnchorEstablished);
+    strict_1.default.equal(state1.patchAnchorEstablished, true);
+    // Second pass: only read tools, no edits → must register as empty.
+    const readPass = (0, autonomy_loop_js_1.analyzePass)(state1, {
+        content: 'Re-confirming the anchor by reading source again.',
+        toolCallCount: 2,
+        fileEditCount: 0,
+        toolNames: ['read_file', 'grep_search'],
+    });
+    strict_1.default.equal(readPass.signal.isEmptyPass, true);
+    // Third consecutive pure-read pass should trip the empty-pass guard and stop.
+    const state2 = (0, autonomy_loop_js_1.advanceAutonomyStateIfContinued)(state1, readPass.decision, readPass.signal, readPass.patchAnchorEstablished);
+    const readPass2 = (0, autonomy_loop_js_1.analyzePass)(state2, {
+        content: 'Reading more.',
+        toolCallCount: 1,
+        fileEditCount: 0,
+        toolNames: ['read_file'],
+    });
+    strict_1.default.equal(readPass2.signal.isEmptyPass, true);
+    strict_1.default.equal(readPass2.decision.shouldContinue, false);
+});
+(0, node_test_1.default)('analyzePass does not mark read-only pass as empty before any anchor', () => {
+    const state = (0, autonomy_js_1.createAutonomyState)('autonomous', 8);
+    const result = (0, autonomy_loop_js_1.analyzePass)(state, {
+        content: 'Initial exploration to find the patch site.',
+        toolCallCount: 2,
+        fileEditCount: 0,
+        toolNames: ['grep_search', 'read_file'],
+    });
+    strict_1.default.equal(result.patchAnchorEstablished, false);
+    strict_1.default.equal(result.signal.isEmptyPass, false);
+});
 //# sourceMappingURL=autonomy-loop.test.js.map

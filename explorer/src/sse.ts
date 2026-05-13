@@ -59,7 +59,7 @@ export interface UseEventStreamResult {
   connected: boolean;
 }
 
-const RING_LIMIT = 50;
+const RING_LIMIT = 100;
 const PULSE_TTL_MS = 1200;
 
 /**

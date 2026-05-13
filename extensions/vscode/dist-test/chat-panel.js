@@ -59,6 +59,7 @@ const runner_js_1 = require("./architect-core/runner.js");
 const autonomy_js_1 = require("./autonomy.js");
 const autonomy_loop_js_1 = require("./autonomy-loop.js");
 const autonomy_structured_js_1 = require("./autonomy-structured.js");
+const envelope_utils_js_1 = require("./envelope-utils.js");
 const reporting_js_1 = require("./reporting.js");
 const autonomy_js_2 = require("./autonomy.js");
 /**
@@ -97,36 +98,41 @@ function _truncateHistoryMessage(content, cap) {
     const head = content.slice(0, cap);
     return `${head}\n\n[... ${(content.length - cap).toLocaleString()} chars omitted from history to bound LLM input ...]`;
 }
-function buildBoundedConversationMessages(messages, maxRecent = 20, options) {
+function buildBoundedConversationMessages(messages, maxRecent = 20) {
     const filtered = messages.filter((m) => m.role === 'user' || m.role === 'assistant');
     const sliced = filtered.slice(-maxRecent);
     const recentStart = sliced.length - HISTORY_RECENT_KEEP;
-    const allowImages = options?.imageAttachments !== false;
     return sliced.map((m, i) => {
         const cap = i >= recentStart ? HISTORY_RECENT_MAX_CHARS : HISTORY_OLDER_MAX_CHARS;
         const text = _truncateHistoryMessage(m.content, cap);
-        // History-bound attachments: when a user message has an `attachments`
-        // snapshot containing image bytes, replay those bytes as canonical
-        // ArchitectContent image blocks so subsequent turns (and follow-up
-        // questions about the picture) can still see them. Each provider
-        // adapter serializes the canonical shape into its own wire format.
-        if (m.role === 'user' && allowImages && m.attachments && m.attachments.length > 0) {
-            const imageBlocks = [];
+        // CRITICAL — DO NOT REPLAY ATTACHMENT BYTES IN HISTORY.
+        //
+        // An earlier iteration of this function inlined image base64 from each
+        // user message's `attachments` snapshot as canonical content blocks so
+        // the model could "see" prior pictures on follow-up turns. That created
+        // an O(turns × image_bytes) wire-cost bomb: a single 1.8 MB attached
+        // image was re-serialized on every subsequent prompt — observed live
+        // as 5.4 MB / ~1.36 M tokens per request to a chat-completions model.
+        //
+        // The attachment snapshot persists ONLY for two reasons:
+        //   (1) the user-bubble thumbnail / file-info chip in the chat panel,
+        //   (2) record-keeping so the user can see what they sent.
+        // The model received the image bytes ONCE, on the originating turn, via
+        // the live `_buildUserContentBlocks` path. Subsequent turns must NOT
+        // re-send them; if the user wants the model to look again they can
+        // re-attach (cheap, explicit, observable in token telemetry).
+        //
+        // We DO surface a tiny text marker so the model knows an image was
+        // attached at that point in the conversation — but only as a name/type
+        // mention, never bytes.
+        const markers = [];
+        if (m.role === 'user' && m.attachments && m.attachments.length > 0) {
             for (const a of m.attachments) {
-                if (a.kind === 'image' && a.dataBase64) {
-                    imageBlocks.push({
-                        type: 'image',
-                        mimeType: a.mimeType,
-                        dataBase64: a.dataBase64,
-                        fileName: a.name,
-                    });
-                }
-            }
-            if (imageBlocks.length > 0) {
-                return { role: m.role, content: [{ type: 'text', text }, ...imageBlocks] };
+                markers.push(`[attachment: ${a.name} · ${a.kind} · ${a.mimeType}]`);
             }
         }
-        return { role: m.role, content: text };
+        const composed = markers.length > 0 ? `${text}\n\n${markers.join('\n')}` : text;
+        return { role: m.role, content: composed };
     });
 }
 /**
@@ -608,12 +614,11 @@ class ChatPanel {
             // truncate per-message content (most-recent 2 keep up to 16KB, older capped at 4KB).
             // Without these caps a single prompt can pull in 200-600KB of prior assistant
             // envelopes + tool-trace text and tip the request into long-context pricing.
-            // History also replays per-message image attachments as canonical content
-            // blocks (when the active model supports images) so prior pictures remain
-            // visible to follow-up questions.
-            ...buildBoundedConversationMessages(this.messages, 20, {
-                imageAttachments: this.architectLlm?.getModelCapabilities()?.imageAttachments === true,
-            }).map((message) => ({ role: message.role, content: message.content })),
+            // Image attachment BYTES are intentionally NOT replayed across turns —
+            // see `buildBoundedConversationMessages`. Each user message carries a
+            // tiny `[attachment: name · kind · mime]` text marker for context only.
+            ...buildBoundedConversationMessages(this.messages, 20)
+                .map((message) => ({ role: message.role, content: message.content })),
         ];
         // ADR-089 Phase 3b — capture per-turn attachment state into outer-scope
         // vars so the seam path (`_buildCorePassHost`) can hand the SAME blocks /
@@ -1716,7 +1721,8 @@ class ChatPanel {
             const models = provider === 'anthropic' ? architect_llm_1.ANTHROPIC_MODELS
                 : provider === 'openai' ? architect_llm_1.OPENAI_MODELS
                     : [];
-            const defaultModel = models[0] ?? '';
+            const previousModel = this.architectLlm.currentConfig?.model ?? '';
+            const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
             // ollama uses no API key; lmstudio uses a fixed literal placeholder
             // (LM Studio ignores the auth header but the OpenAI-compat code path
             // sends one regardless).
@@ -1864,6 +1870,7 @@ class ChatPanel {
             envelope,
             toolCallCount,
             fileEditCount,
+            toolNames: this._lastToolTrace.map((t) => t.tool),
         });
         // Patch #3: TimeBudget enforcement (ADR-153). Even when analyzePass
         // says continue, stop the run if the wall-clock budget is exhausted.
@@ -1897,7 +1904,7 @@ class ChatPanel {
         // it would duplicate the buttons below the assistant message.
         if (result.decision.shouldContinue && !this.abortController?.signal.aborted) {
             // Advance state and continue
-            this._autonomyState = (0, autonomy_loop_js_1.advanceAutonomyStateIfContinued)(this._autonomyState, result.decision, result.signal);
+            this._autonomyState = (0, autonomy_loop_js_1.advanceAutonomyStateIfContinued)(this._autonomyState, result.decision, result.signal, result.patchAnchorEstablished);
             this._broadcastAutonomyStatus();
             // Safety: cap autonomous continuation
             if (this._autonomyState.completedAutoPasses >= ChatPanel.MAX_AUTONOMY_PASSES) {
@@ -1911,6 +1918,8 @@ class ChatPanel {
                 this.messages.push(stopMsg);
                 await this.persistMessages();
                 await this.postMessage({ type: 'addMessage', message: stopMsg, actions: [], roleMeta: this._roleMetaFor(stopMsg), contextFooter: undefined });
+                if (stopMsg.id)
+                    this._broadcastSignOffActions(stopMsg.id, envelope, result.actionSet.actions);
                 return;
             }
             // Post continuation notice
@@ -1973,7 +1982,8 @@ class ChatPanel {
             this._broadcastAutonomyStatus();
             if (result.decision.reason) {
                 const statusView = (0, autonomy_js_1.deriveAutonomyStatusView)(this._autonomyState);
-                const stopText = `${result.decision.reason}${statusView.countingActive ? ` [${statusView.summary}]` : ''}`;
+                const hasActionable = result.actionSet.actions.length > 0;
+                const stopText = `${result.decision.reason}${statusView.countingActive ? ` [${statusView.summary}]` : ''}${hasActionable ? ' — click an action below to resume.' : ''}`;
                 const stopMsg = {
                     id: this._createMessageId(),
                     role: 'system',
@@ -1984,6 +1994,8 @@ class ChatPanel {
                 this.messages.push(stopMsg);
                 await this.persistMessages();
                 await this.postMessage({ type: 'addMessage', message: stopMsg, actions: [], roleMeta: this._roleMetaFor(stopMsg), contextFooter: undefined });
+                if (stopMsg.id)
+                    this._broadcastSignOffActions(stopMsg.id, envelope, result.actionSet.actions);
             }
         }
     }
@@ -2032,12 +2044,9 @@ class ChatPanel {
             const { system } = (0, index_js_1.assemblePrompt)(task, envelope, contextResult.assembledContext || undefined, undefined, autonomyInstruction, provider, contextResult.reasoningPacket?.task?.lens);
             const llmMessages = [{ role: 'system', content: system }];
             // Bounded history: same caps as handleUserMessage (last 20 turns, per-message char caps).
-            // Replays attachment images from the persisted message snapshot when the
-            // active model supports them, so the autonomy loop continues to see any
-            // pictures the user shared earlier in the conversation.
-            for (const msg of buildBoundedConversationMessages(this.messages, 20, {
-                imageAttachments: this.architectLlm?.getModelCapabilities()?.imageAttachments === true,
-            })) {
+            // Attachment image bytes are NOT replayed — only a text marker survives;
+            // re-attach explicitly if the model needs to look at the picture again.
+            for (const msg of buildBoundedConversationMessages(this.messages, 20)) {
                 llmMessages.push({ role: msg.role, content: msg.content });
             }
             await this.postMessage({ type: 'stream-start' });
@@ -2196,8 +2205,57 @@ class ChatPanel {
      * The host-side prose extractor synthesizes status + nextSteps when the
      * model didn't emit a JSON envelope, so the card always has data to render.
      */
+    /**
+     * Sign-off chip emitter. When the autonomy loop stops (budget exhausted,
+     * safety cap, decided to pause) we still know what the next concrete
+     * actions would have been. Surface them as clickable chips bound to the
+     * stop/system message so the user can resume continuation with one click.
+     *
+     * The chips reuse the same envelope the SUMMARY card emits, so the
+     * existing webview chip renderer + `_executeRecommendedAction` resolver
+     * (which keys off `_lastRecommendedActions`) work end-to-end without
+     * additional wiring. The recommended-action set is also persisted here
+     * so chip clicks survive the stop transition.
+     */
+    _broadcastSignOffActions(messageId, envelope, actions) {
+        if (!actions || actions.length === 0)
+            return;
+        // Persist so chip clicks resolve via `_executeRecommendedAction`.
+        this._lastRecommendedActions = actions;
+        const eligibleCount = actions.filter((a) => a.eligible && a.withinScope).length;
+        void this.postMessage({
+            type: 'summaryCard',
+            messageId,
+            envelope: {
+                summary: envelope.summary ?? '',
+                goal_status: envelope.goalStatus,
+                progress_status: envelope.progressStatus,
+                uncertainty: envelope.uncertainty,
+                recommended_next_steps: actions.map((a) => ({ id: a.id, label: a.label, rationale: a.rationale })),
+                doAllEligible: eligibleCount > 1,
+            },
+        });
+    }
     _broadcastSummaryCard(content, messageId) {
         try {
+            // Duplicate-card guard: when the assistant content embeds a parseable
+            // structured envelope (fenced ```json or bare {…"summary":…}), the
+            // assistant bubble's body renderer (`renderAssistantBody`, webview)
+            // already replaces the markdown with `window.renderEnvelope(...)`.
+            // Broadcasting `summaryCard` in that case would append a SECOND,
+            // visually identical card under the same bubble (the webview handler
+            // only de-dupes prior `.dg-envelope-card-host` siblings, not the
+            // body-embedded card). Detect the same envelope shape the body uses
+            // and short-circuit; the broadcast remains active for prose-only
+            // turns where the body falls back to plain markdown and the
+            // host-side prose extractor synthesises the only visible card.
+            // Still persist the recommended-action set so chip clicks in the
+            // body-rendered card resolve via `_executeRecommendedAction`.
+            if ((0, envelope_utils_js_1.extractPrimaryEnvelope)(content)) {
+                const env = (0, autonomy_structured_js_1.extractStructuredPassEnvelope)(content);
+                this._lastRecommendedActions = env.nextSteps;
+                return;
+            }
             const env = (0, autonomy_structured_js_1.extractStructuredPassEnvelope)(content);
             // Skip when there is genuinely nothing to show (no summary AND no
             // status differentiation AND no actions). Avoids drawing an empty

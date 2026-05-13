@@ -167,6 +167,16 @@ function threatId(): string {
 }
 
 /**
+ * Canonical identity of a threat finding. Two findings with the same
+ * (from, to, threat_category, cwe_id) tuple are treated as the same
+ * finding for dedup purposes — re-running the same heuristic against
+ * the same graph topology must not grow the log indefinitely.
+ */
+function canonicalThreatKey(t: Pick<ThreatEdge, "from" | "to" | "threat_category" | "cwe_id">): string {
+  return `${t.from}|${t.to}|${t.threat_category}|${t.cwe_id ?? ""}`;
+}
+
+/**
  * Privilege Escalation: find paths where non-auth entities connect
  * to auth-protected entities without going through auth middleware.
  */
@@ -433,7 +443,7 @@ function emptyThreatLog(): ThreatLogFile {
   return {
     metadata: {
       description: "Threat Log — adversarial findings from NIGHTMARE dream cycles.",
-      schema_version: "1.0.0",
+      schema_version: "1.1.0",
       total_threats: 0,
       last_nightmare_cycle: null,
       total_nightmare_cycles: 0,
@@ -495,19 +505,57 @@ export async function nightmare(
     allThreats.push(...threats);
   }
 
-  // Deduplicate by from+to+category
+  // Deduplicate within this batch by canonical key (from|to|category|cwe).
   const seen = new Set<string>();
   allThreats = allThreats.filter((t) => {
-    const key = `${t.from}|${t.to}|${t.threat_category}`;
+    const key = canonicalThreatKey(t);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
-  // Persist to threat log
+  // Cross-batch dedupe + lifecycle gate.
+  // For every threat already present in the persisted log under the same
+  // canonical key (from|to|category|cwe_id):
+  //   - bump duplicate_count and refresh last_seen_at/last_seen_cycle
+  //   - drop the new copy from the append set
+  //   - extra: if the canonical entry is acknowledged or carries a
+  //     "deferred-*" / "needs-verification" lifecycle, suppress entirely
+  //     (we still bump last_seen_* so the user can see it's still firing,
+  //     but we never grow the threats array with redundant rows).
+  // This stops the emitter from re-emitting the same 4 findings every
+  // 5 minutes the way cycle 676 did (20 rows from 4 unique findings).
   const log = await loadThreatLog();
+  const canonicalIndex = new Map<string, ThreatEdge>();
+  for (const existing of log.threats) {
+    canonicalIndex.set(canonicalThreatKey(existing), existing);
+  }
+  const nowIso = new Date().toISOString();
+  const freshThreats: ThreatEdge[] = [];
+  let suppressedCount = 0;
+  for (const t of allThreats) {
+    const key = canonicalThreatKey(t);
+    const existing = canonicalIndex.get(key);
+    if (existing) {
+      existing.duplicate_count = (existing.duplicate_count ?? 1) + 1;
+      existing.last_seen_at = nowIso;
+      existing.last_seen_cycle = cycle;
+      suppressedCount++;
+      continue;
+    }
+    freshThreats.push(t);
+    canonicalIndex.set(key, t);
+  }
+  if (suppressedCount > 0) {
+    logger.debug(
+      `  dedupe: suppressed ${suppressedCount} re-emission(s); appending ${freshThreats.length} new finding(s)`
+    );
+  }
+  allThreats = freshThreats;
+
+  // Persist to threat log
   log.threats.push(...allThreats);
-  log.metadata.last_nightmare_cycle = new Date().toISOString();
+  log.metadata.last_nightmare_cycle = nowIso;
   log.metadata.total_nightmare_cycles++;
   await saveThreatLog(log);
 

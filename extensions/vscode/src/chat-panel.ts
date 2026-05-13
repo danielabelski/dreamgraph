@@ -44,7 +44,7 @@ import {
   type RecommendedAction,
 } from './autonomy.js';
 import { analyzePass, advanceAutonomyStateIfContinued, buildContinuationPrompt } from './autonomy-loop.js';
-import { extractStructuredPassEnvelope } from './autonomy-structured.js';
+import { extractStructuredPassEnvelope, type StructuredPassEnvelope } from './autonomy-structured.js';
 import { extractPrimaryEnvelope } from './envelope-utils.js';
 import { getAutonomyMode, getAutonomyPassBudget, parseAutonomyRequest } from './reporting.js';
 import { applyModeProfileToState, getModeProfile, type AutonomyMode } from './autonomy.js';
@@ -2222,6 +2222,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       envelope,
       toolCallCount,
       fileEditCount,
+      toolNames: this._lastToolTrace.map((t) => t.tool),
     });
 
     // Patch #3: TimeBudget enforcement (ADR-153). Even when analyzePass
@@ -2256,7 +2257,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
     if (result.decision.shouldContinue && !this.abortController?.signal.aborted) {
       // Advance state and continue
-      this._autonomyState = advanceAutonomyStateIfContinued(this._autonomyState, result.decision, result.signal);
+      this._autonomyState = advanceAutonomyStateIfContinued(this._autonomyState, result.decision, result.signal, result.patchAnchorEstablished);
       this._broadcastAutonomyStatus();
 
       // Safety: cap autonomous continuation
@@ -2271,6 +2272,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         this.messages.push(stopMsg);
         await this.persistMessages();
         await this.postMessage({ type: 'addMessage', message: stopMsg, actions: [], roleMeta: this._roleMetaFor(stopMsg), contextFooter: undefined });
+        if (stopMsg.id) this._broadcastSignOffActions(stopMsg.id, envelope, result.actionSet.actions);
         return;
       }
 
@@ -2291,7 +2293,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
       // Trigger next pass
       const continuationPrompt = result.nextPrompt ?? buildContinuationPrompt(selectedAction);
-      await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools);
+      await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools, result.actionSet.actions);
     } else {
       // ──────────────────────────────────────────────────────────────────
       // Report-required guard: never let the Architect sign off silently.
@@ -2335,7 +2337,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       this._broadcastAutonomyStatus();
       if (result.decision.reason) {
         const statusView = deriveAutonomyStatusView(this._autonomyState);
-        const stopText = `${result.decision.reason}${statusView.countingActive ? ` [${statusView.summary}]` : ''}`;
+        const hasActionable = result.actionSet.actions.length > 0;
+        const stopText = `${result.decision.reason}${statusView.countingActive ? ` [${statusView.summary}]` : ''}${hasActionable ? ' — click an action below to resume.' : ''}`;
         const stopMsg: ChatMessage = {
           id: this._createMessageId(),
           role: 'system',
@@ -2346,6 +2349,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         this.messages.push(stopMsg);
         await this.persistMessages();
         await this.postMessage({ type: 'addMessage', message: stopMsg, actions: [], roleMeta: this._roleMetaFor(stopMsg), contextFooter: undefined });
+        if (stopMsg.id) this._broadcastSignOffActions(stopMsg.id, envelope, result.actionSet.actions);
       }
     }
   }
@@ -2354,6 +2358,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     prompt: string,
     baseLlmMessages: ArchitectMessage[],
     tools: ToolDefinition[],
+    nextStepActions: RecommendedAction[] = [],
   ): Promise<void> {
     if (this._autonomyContinuing) {
       console.warn('[DreamGraph] _runAutonomyContinuationPass: re-entrant call dropped — a continuation is already in progress.');
@@ -2400,6 +2405,62 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         ? await this._buildPromptContext(task, envelope, prompt, 'continuation')
         : { assembledContext: '', reasoningPacket: null };
       const { system } = assemblePrompt(task, envelope, contextResult.assembledContext || undefined, undefined, autonomyInstruction, provider, contextResult.reasoningPacket?.task?.lens);
+
+      // Re-derive the tool subset for this continuation pass from scratch.
+      // The previous turn's whitelist is intentionally discarded: the next
+      // step has its own intent (e.g. "run build:server" needs `run_command`
+      // even when the original prompt was a UI question), and carrying the
+      // prior selection forward both wastes schema budget on tools that are
+      // no longer relevant and can mask a missing next-step tool. Selection
+      // is grounded in: (a) the continuation prompt, (b) the tools bound to
+      // the recommended next steps for this pass.
+      const primedFromActions: string[] = [];
+      for (const a of nextStepActions) {
+        if (typeof a.tool === 'string' && a.tool.length > 0) primedFromActions.push(a.tool);
+      }
+      // Stale primed-tools from earlier turns are explicitly dropped so the
+      // continuation reflects only what this step needs.
+      this._primedTools.clear();
+      const mcpToolsForCont = await this._listMcpToolsLazy();
+      const allToolsForCont: ToolDefinition[] = [
+        ...mcpToolsForCont.map((t) => ({
+          name: t.name,
+          description: t.description ?? '',
+          inputSchema: (t.inputSchema ?? {}) as Record<string, unknown>,
+        })),
+        ...LOCAL_TOOL_DEFINITIONS.map((t) => ({
+          name: t.name,
+          description: t.description ?? '',
+          inputSchema: t.inputSchema as Record<string, unknown>,
+        })),
+      ];
+      const decision = selectToolGroups({
+        task,
+        intentMode: envelope?.intentMode,
+        prompt,
+        autonomy: true,
+        availableToolNames: allToolsForCont.map((t) => t.name),
+        primedTools: Array.from(new Set(primedFromActions)),
+      });
+      this._lastAvailableToolNames = allToolsForCont.map((t) => t.name);
+      const selectedSet = new Set(decision.selected);
+      tools = allToolsForCont.filter((t) => selectedSet.has(t.name));
+      // Guard: every tool bound to a next-step action MUST be exposed. If
+      // selection somehow dropped one (e.g. cap truncation), force it back
+      // in — a continuation that suggests a tool the LM cannot call is the
+      // exact failure mode this rebuild is meant to prevent.
+      for (const toolName of primedFromActions) {
+        if (!selectedSet.has(toolName)) {
+          const def = allToolsForCont.find((t) => t.name === toolName);
+          if (def) {
+            tools.unshift(def);
+            selectedSet.add(toolName);
+          }
+        }
+      }
+      this.contextInspector?.appendContextLine(
+        `Tool selection (continuation): ${tools.length}/${allToolsForCont.length} tools — groups=[${decision.groups.join(', ')}] mutating=${decision.mutating} autonomy=${decision.autonomy}; primed-from-actions=[${primedFromActions.join(', ')}]; ${decision.rationale}`,
+      );
 
       const llmMessages: ArchitectMessage[] = [{ role: 'system', content: system }];
       // Bounded history: same caps as handleUserMessage (last 20 turns, per-message char caps).
@@ -2577,6 +2638,41 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
    * The host-side prose extractor synthesizes status + nextSteps when the
    * model didn't emit a JSON envelope, so the card always has data to render.
    */
+  /**
+   * Sign-off chip emitter. When the autonomy loop stops (budget exhausted,
+   * safety cap, decided to pause) we still know what the next concrete
+   * actions would have been. Surface them as clickable chips bound to the
+   * stop/system message so the user can resume continuation with one click.
+   *
+   * The chips reuse the same envelope the SUMMARY card emits, so the
+   * existing webview chip renderer + `_executeRecommendedAction` resolver
+   * (which keys off `_lastRecommendedActions`) work end-to-end without
+   * additional wiring. The recommended-action set is also persisted here
+   * so chip clicks survive the stop transition.
+   */
+  private _broadcastSignOffActions(
+    messageId: string,
+    envelope: StructuredPassEnvelope,
+    actions: RecommendedAction[],
+  ): void {
+    if (!actions || actions.length === 0) return;
+    // Persist so chip clicks resolve via `_executeRecommendedAction`.
+    this._lastRecommendedActions = actions;
+    const eligibleCount = actions.filter((a) => a.eligible && a.withinScope).length;
+    void this.postMessage({
+      type: 'summaryCard',
+      messageId,
+      envelope: {
+        summary: envelope.summary ?? '',
+        goal_status: envelope.goalStatus,
+        progress_status: envelope.progressStatus,
+        uncertainty: envelope.uncertainty,
+        recommended_next_steps: actions.map((a) => ({ id: a.id, label: a.label, rationale: a.rationale })),
+        doAllEligible: eligibleCount > 1,
+      },
+    });
+  }
+
   private _broadcastSummaryCard(content: string, messageId: string): void {
     try {
       // Duplicate-card guard: when the assistant content embeds a parseable

@@ -168,6 +168,22 @@ For **building, testing, linting, running scripts**:
 4. **Verify builds, not reads.** After code changes, run \`run_command("npm run build")\`
    (or the appropriate build command) to confirm the change compiles. This is more
    valuable than re-reading the file.
+5. **Complete a logical step in ONE turn.** A pass is a step, not a single tool call.
+   When a step needs read → edit → build, batch all of those tool calls in the same
+   turn. Never burn a turn on a single 20-line read followed by "next pass". The
+   autonomy loop will not reward fragmentation; it will run out of budget.
+6. **Read wide, once.** When inspecting an unfamiliar file, fetch a 200+ line range
+   in the first call rather than 20-line probes. Re-read narrowly only after a write.
+7. **Try the tool before reverse-engineering it.** If a tool's behaviour is in doubt
+   (e.g. "does enrich_seed_data accept system_overview?"), call it once with the
+   candidate args and read the actual error. Do not infer rejection from source
+   inspection — historical assumptions about tool shape are often stale.
+8. **\`search_source_code\` \`pathPrefix\` is a DIRECTORY prefix.** Passing a file path
+   matches zero files. Use the parent directory and let \`includeExtensions\` narrow
+   the result set.
+9. **Trust prior pass results.** If an earlier pass in this conversation already
+   confirmed a fact (schema present, target supported, edit applied), do not
+   re-confirm it. Move forward.
 
 ### Retry Protocol — EDIT FAILURES
 
@@ -209,7 +225,7 @@ Do NOT report success without a passing build.
 ## enrich_seed_data Quick Reference
 
 This is the primary tool for populating the knowledge graph. It has 3 parameters:
-- \`target\`: one of "features", "workflows", "data_model", "capabilities"
+- \`target\`: one of "features", "workflows", "data_model", "capabilities", "system_overview"
 - \`entries\`: array of objects, each must have \`id\` and \`name\` at minimum
 - \`mode\`: "merge" (default, upsert) or "replace" (clean slate)
 
@@ -219,7 +235,16 @@ This is the primary tool for populating the knowledge graph. It has 3 parameters
 2. \`enrich_seed_data({ target: "workflows", entries: [{id: "dream-cycle", name: "Dream Cycle", trigger: "scheduled", steps: ["gather data", "analyze", "produce insights"]}] })\`
 3. \`enrich_seed_data({ target: "data_model", entries: [{id: "dream-graph", name: "Dream Graph", storage: "json", key_fields: ["nodes", "edges"]}] })\`
 
+**Singleton target — \`system_overview\`:** \`system_overview.json\` is a single object,
+not an array. Pass exactly one entry shaped as
+\`{ id, name, description, source_repo, source_files, repositories: [...] }\`. Each
+repository requires \`{ id, name, description, technology, local_path, source_repo, source_files }\`.
+
 You never need "specific input" beyond what \`scan_project\` or \`init_graph\` already told you. Use the scan results to construct entity entries and push them.
+
+**Tool-shape doubt rule:** if you are unsure whether a tool accepts a target, schema,
+or argument, call it ONCE with the candidate args and read the actual error before
+reverse-engineering it from source. Do not infer rejection from prompt history.
 
 ## Constraint Hierarchy (STRICT ORDER)
 

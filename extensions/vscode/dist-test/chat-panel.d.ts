@@ -231,6 +231,19 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      * The host-side prose extractor synthesizes status + nextSteps when the
      * model didn't emit a JSON envelope, so the card always has data to render.
      */
+    /**
+     * Sign-off chip emitter. When the autonomy loop stops (budget exhausted,
+     * safety cap, decided to pause) we still know what the next concrete
+     * actions would have been. Surface them as clickable chips bound to the
+     * stop/system message so the user can resume continuation with one click.
+     *
+     * The chips reuse the same envelope the SUMMARY card emits, so the
+     * existing webview chip renderer + `_executeRecommendedAction` resolver
+     * (which keys off `_lastRecommendedActions`) work end-to-end without
+     * additional wiring. The recommended-action set is also persisted here
+     * so chip clicks survive the stop transition.
+     */
+    private _broadcastSignOffActions;
     private _broadcastSummaryCard;
     /**
      * Strip the structured pass envelope JSON fence from content before displaying.

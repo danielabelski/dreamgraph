@@ -17,6 +17,12 @@ export interface AutonomyState {
    * break out of pathological counter-spam loops where the model keeps
    * "continuing" without ever doing anything. */
   consecutiveEmptyPasses?: number;
+  /** True once the architect has identified a concrete patch anchor or
+   * actually performed a write — i.e. the "what to change" question is
+   * answered. After this point, additional pure-read passes count as
+   * non-progress (see analyzePass). Cleared whenever a write tool runs
+   * successfully so a follow-up edit cycle can re-discover its own anchor. */
+  patchAnchorEstablished?: boolean;
 }
 
 export interface PassOutcomeSignal {

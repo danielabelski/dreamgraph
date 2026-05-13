@@ -13,16 +13,26 @@ export interface PassAnalysisInput {
     toolCallCount?: number;
     /** Number of files actually edited/created during this pass. */
     fileEditCount?: number;
+    /** Names of every tool invoked this pass (in call order). Used to detect
+     * "pure read" passes that should count as non-progress once a patch
+     * anchor has already been established. */
+    toolNames?: string[];
 }
+export declare function isReadOnlyTool(toolName: string): boolean;
 export interface PassAnalysisResult {
     signal: PassOutcomeSignal;
     actionSet: RecommendedActionSet;
     selectedActionId?: string;
     decision: ContinuationDecision;
     nextPrompt?: string;
+    /** Sticky flag carried into the next pass: once the architect has a
+     * concrete patch anchor (write tool ran, file edited, or next-step bound
+     * to a write tool), pure-read passes after this point count as
+     * non-progress. Persisted via advanceAutonomyStateIfContinued. */
+    patchAnchorEstablished?: boolean;
 }
 export declare function inferPassOutcomeSignal(content: string | undefined): PassOutcomeSignal;
 export declare function buildContinuationPrompt(selectedAction?: RecommendedAction): string;
 export declare function analyzePass(state: AutonomyState, input: PassAnalysisInput): PassAnalysisResult;
-export declare function advanceAutonomyStateIfContinued(state: AutonomyState, decision: ContinuationDecision, signal?: PassOutcomeSignal): AutonomyState;
+export declare function advanceAutonomyStateIfContinued(state: AutonomyState, decision: ContinuationDecision, signal?: PassOutcomeSignal, patchAnchorEstablished?: boolean): AutonomyState;
 //# sourceMappingURL=autonomy-loop.d.ts.map

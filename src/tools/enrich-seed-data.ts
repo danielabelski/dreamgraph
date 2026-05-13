@@ -9,9 +9,11 @@
  * never touches the files directly — this is the write interface.
  *
  * Supported targets:
- *   "features"     → features.json
- *   "workflows"    → workflows.json
- *   "data_model"   → data_model.json
+ *   "features"        → features.json
+ *   "workflows"       → workflows.json
+ *   "data_model"      → data_model.json
+ *   "capabilities"    → capabilities.json
+ *   "system_overview" → system_overview.json
  *
  * Modes:
  *   "merge"   (default) — upsert by id; existing entries are preserved,
@@ -42,6 +44,7 @@ import type {
   Workflow,
   DataModelEntity,
   CapabilityEntity,
+  SystemOverview,
   IndexEntry,
   ResourceIndex,
   GraphLink,
@@ -188,17 +191,37 @@ const CapabilityEntrySchema = z.object({
   links: z.array(GraphLinkLenient).default([]),
 }).passthrough();
 
+const RepositoryEntrySchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().default(""),
+  technology: z.string().default(""),
+  local_path: z.string().default(""),
+  source_repo: z.string().default(""),
+  source_files: z.array(SourceFileItem).default([]),
+}).passthrough();
+
+const SystemOverviewEntrySchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().default(""),
+  source_repo: z.string().default(""),
+  source_files: z.array(SourceFileItem).default([]),
+  repositories: z.array(RepositoryEntrySchema).default([]),
+}).passthrough();
+
 // ---------------------------------------------------------------------------
 // Target file mapping
 // ---------------------------------------------------------------------------
 
-type SeedTarget = "features" | "workflows" | "data_model" | "capabilities";
+type SeedTarget = "features" | "workflows" | "data_model" | "capabilities" | "system_overview";
 
 const TARGET_FILES: Record<SeedTarget, string> = {
   features: "features.json",
   workflows: "workflows.json",
   data_model: "data_model.json",
   capabilities: "capabilities.json",
+  system_overview: "system_overview.json",
 };
 
 // ---------------------------------------------------------------------------
@@ -215,6 +238,7 @@ type FeatureEntry = z.infer<typeof FeatureEntrySchema>;
 type WorkflowEntry = z.infer<typeof WorkflowEntrySchema>;
 type DataModelEntry = z.infer<typeof DataModelEntrySchema>;
 type CapabilityEntry = z.infer<typeof CapabilityEntrySchema>;
+type SystemOverviewEntry = z.infer<typeof SystemOverviewEntrySchema>;
 
 function toGraphLink(raw: FeatureEntry["links"][number]): GraphLink {
   // Both branches of GraphLinkLenient already produce the GraphLink shape,
@@ -327,6 +351,27 @@ function entryToCapability(entry: CapabilityEntry): CapabilityEntity {
     keywords: entry.keywords,
     links: toGraphLinkArray(entry.links),
   } as CapabilityEntity;
+}
+
+function entryToSystemOverview(entry: SystemOverviewEntry): SystemOverview {
+  const passthrough = entry as unknown as Record<string, unknown>;
+  return {
+    ...passthrough,
+    id: entry.id,
+    name: entry.name,
+    description: entry.description,
+    source_repo: entry.source_repo,
+    source_files: entry.source_files,
+    repositories: entry.repositories.map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      description: repo.description,
+      technology: repo.technology,
+      local_path: repo.local_path,
+      source_repo: repo.source_repo,
+      source_files: repo.source_files,
+    })),
+  } as SystemOverview;
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +530,7 @@ export async function executeEnrichSeedData(
   const filename = TARGET_FILES[target as SeedTarget];
   const validationErrors: string[] = [];
 
-  let validated: Array<Feature | Workflow | DataModelEntity | CapabilityEntity>;
+  let validated: Array<Feature | Workflow | DataModelEntity | CapabilityEntity | SystemOverview>;
   switch (target) {
     case "features": {
       validated = [];
@@ -539,6 +584,17 @@ export async function executeEnrichSeedData(
       }
       break;
     }
+    case "system_overview": {
+      validated = [];
+      for (const raw of entries) {
+        const parsed = SystemOverviewEntrySchema.safeParse(raw);
+        if (parsed.success) validated.push(entryToSystemOverview(parsed.data));
+        else validationErrors.push(
+          `System overview entry '${(raw as Record<string, unknown>).id ?? "?"}': ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        );
+      }
+      break;
+    }
     default:
       validated = [];
   }
@@ -560,27 +616,42 @@ export async function executeEnrichSeedData(
 
   type SeedEntity = Feature | Workflow | DataModelEntity | CapabilityEntity;
 
-  let merged: SeedEntity[];
+  let merged: SeedEntity[] = [];
   let inserted: number;
   let updated: number;
+  let totalEntries: number;
 
-  if (mode === "replace") {
-    merged = validated;
+  if (target === "system_overview") {
+    const overview = validated[validated.length - 1] as SystemOverview;
+    await writeSeed(filename, overview);
+    inserted = 1;
+    updated = 0;
+    totalEntries = 1;
+    logger.info(
+      `enrich_seed_data: wrote ${filename} — singleton system overview '${overview.id}'`,
+    );
+  } else if (mode === "replace") {
+    merged = validated as SeedEntity[];
     inserted = validated.length;
     updated = 0;
+    totalEntries = merged.length;
     logger.info(`enrich_seed_data: replace mode — discarding existing ${filename} data`);
+    await writeSeed(filename, merged);
+    logger.info(
+      `enrich_seed_data: wrote ${filename} — ${inserted} new, ${updated} updated, ${totalEntries} total`,
+    );
   } else {
     const existing = stripTemplateStubs(await loadJsonArray<SeedEntity>(filename));
-    const mergeResult = mergeById<SeedEntity>(existing, validated);
+    const mergeResult = mergeById<SeedEntity>(existing, validated as SeedEntity[]);
     merged = mergeResult.merged;
     inserted = mergeResult.inserted;
     updated = mergeResult.updated;
+    totalEntries = merged.length;
+    await writeSeed(filename, merged);
+    logger.info(
+      `enrich_seed_data: wrote ${filename} — ${inserted} new, ${updated} updated, ${totalEntries} total`,
+    );
   }
-
-  await writeSeed(filename, merged);
-  logger.info(
-    `enrich_seed_data: wrote ${filename} — ${inserted} new, ${updated} updated, ${merged.length} total`,
-  );
 
   const indexEntries = await rebuildIndex();
   logger.info(`enrich_seed_data: index rebuilt with ${indexEntries} entries`);
@@ -604,7 +675,7 @@ export async function executeEnrichSeedData(
 
   const modeLabel = mode === "replace" ? "Replaced" : "Enriched";
   const summary =
-    `${modeLabel} ${target}: ${inserted} inserted, ${updated} updated, ${merged.length} total entries. ` +
+    `${modeLabel} ${target}: ${inserted} inserted, ${updated} updated, ${totalEntries} total entries. ` +
     `Index: ${indexEntries} entries.` +
     (validationErrors.length > 0
       ? ` ${validationErrors.length} entries skipped (validation errors).`
@@ -617,7 +688,7 @@ export async function executeEnrichSeedData(
     entries_received: entries.length,
     entries_inserted: inserted,
     entries_updated: updated,
-    total_entries: merged.length,
+    total_entries: totalEntries,
     index_entries: indexEntries,
     validation_errors: validationErrors,
     message: summary,
@@ -632,7 +703,7 @@ export function registerEnrichSeedDataTool(server: McpServer): void {
   server.tool(
     "enrich_seed_data",
     "Feed curated knowledge into the fact graph. Use this after reading source code " +
-    "to populate features, workflows, data model, and capability entities. The server validates " +
+    "to populate features, workflows, data model, capability entities, and the system overview. The server validates " +
     "structure, merges by ID (upsert), strips template stubs, and rebuilds the " +
     "resource index. Pass structured entity data — the server manages persistence. " +
     "Call once per target or batch multiple entities in a single call. " +
@@ -646,7 +717,7 @@ export function registerEnrichSeedDataTool(server: McpServer): void {
         .string()
         .describe(
           "Which seed data file to enrich. " +
-          "Must be one of: features, workflows, data_model, capabilities.",
+          "Must be one of: features, workflows, data_model, capabilities, system_overview.",
         ),
       entries: z
         .array(z.record(z.string(), z.unknown()))
@@ -662,6 +733,7 @@ export function registerEnrichSeedDataTool(server: McpServer): void {
           "Data model additionally: table_name, storage, " +
           "key_fields (array of {name, type, description} — or plain field-name strings), " +
           "relationships (array of {type, target, via} — or plain target strings). " +
+          "System overview additionally: repositories (array of {id, name, description, technology, local_path, source_repo, source_files}). " +
           "Simple string values are auto-coerced to full objects where possible.",
         ),
       mode: z

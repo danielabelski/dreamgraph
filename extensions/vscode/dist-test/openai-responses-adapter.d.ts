@@ -7,6 +7,15 @@ export interface OpenAIResponsesOptions {
     textVerbosity: OpenAIResponsesTextVerbosity;
     rawMessages?: unknown[];
     tools?: ToolDefinition[];
+    /**
+     * When true, attach the canonical `architect_pass_envelope` JSON schema
+     * to the request via `text.format = { type: 'json_schema', strict: true }`.
+     * The Responses API enforces the schema server-side: model output is
+     * grammar-constrained to the schema and parses cleanly with JSON.parse.
+     * When the model decides to call a tool instead, it emits a `function_call`
+     * output item and no text — strict mode does not interfere with tool use.
+     */
+    structuredOutput?: boolean;
 }
 export interface OpenAIResponsesData {
     output_text?: string;

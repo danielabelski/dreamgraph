@@ -19,6 +19,7 @@
 
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
 import { engine } from "./engine.js";
@@ -41,6 +42,18 @@ import { DEFAULT_FEDERATION_CONFIG } from "./types.js";
 // ---------------------------------------------------------------------------
 
 const archetypesPath = () => dataPath("dream_archetypes.json");
+
+/**
+ * Resolve an export target. Absolute paths are used as-is; relative paths
+ * resolve against the instance's data directory. If `exportPath` is
+ * undefined or empty, the canonical archetypes file is used.
+ */
+function resolveExportPath(exportPath?: string): string {
+  const trimmed = exportPath?.trim();
+  if (!trimmed) return archetypesPath();
+  if (path.isAbsolute(trimmed)) return trimmed;
+  return dataPath(trimmed);
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -146,8 +159,11 @@ async function loadArchetypes(): Promise<FederatedExchangeFile> {
   }
 }
 
-async function saveArchetypes(data: FederatedExchangeFile): Promise<void> {
-  await atomicWriteFile(archetypesPath(), JSON.stringify(data, null, 2));
+async function saveArchetypes(
+  data: FederatedExchangeFile,
+  targetPath?: string,
+): Promise<void> {
+  await atomicWriteFile(targetPath ?? archetypesPath(), JSON.stringify(data, null, 2));
 }
 
 function emptyExchangeFile(): FederatedExchangeFile {
@@ -170,12 +186,21 @@ function emptyExchangeFile(): FederatedExchangeFile {
 /**
  * Export validated edges as anonymized archetypes.
  * These can be shared with other DreamGraph instances.
+ *
+ * @param exportPath Optional override for the destination file. Absolute
+ *   paths are used as-is; relative paths resolve against the instance data
+ *   directory. When omitted, the canonical `dream_archetypes.json` path is
+ *   used (back-compat with existing callers).
  */
-export async function exportArchetypes(): Promise<ExportArchetypesOutput> {
+export async function exportArchetypes(
+  exportPath?: string,
+): Promise<ExportArchetypesOutput> {
   const config = getFederationConfig();
   if (!config.allow_export) {
     throw new Error("Federation export is disabled for this instance.");
   }
+
+  const outputPath = resolveExportPath(exportPath);
 
   const validated = await engine.loadValidatedEdges();
   const archetypes: DreamArchetype[] = [];
@@ -208,16 +233,18 @@ export async function exportArchetypes(): Promise<ExportArchetypesOutput> {
     archetypes: unique,
   };
 
-  await saveArchetypes(exchange);
+  await saveArchetypes(exchange, outputPath);
 
-  logger.info(`Exported ${unique.length} archetypes from ${validated.edges.length} validated edges`);
+  logger.info(
+    `Exported ${unique.length} archetypes from ${validated.edges.length} validated edges → ${outputPath}`,
+  );
 
   const timestamp = new Date().toISOString();
   graphEventBus.emit("archetype.exported", {
     affected_ids: unique.map((a) => a.id),
     payload: {
       archetypes_exported: unique.length,
-      file_path: archetypesPath(),
+      file_path: outputPath,
       instance_id: config.instance_id,
       timestamp,
     },
@@ -225,7 +252,7 @@ export async function exportArchetypes(): Promise<ExportArchetypesOutput> {
 
   return {
     archetypes_exported: unique.length,
-    file_path: archetypesPath(),
+    file_path: outputPath,
     instance_id: config.instance_id,
     timestamp,
   };

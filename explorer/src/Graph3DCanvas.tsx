@@ -858,6 +858,21 @@ export default function Graph3DCanvas({
       shotBtn.addEventListener("mouseleave", () => {
         shotBtn.style.opacity = "0.45";
       });
+      // Stop pointer/click propagation so the container-level
+      // pointerdown/pointerup listeners (which raycast for node
+      // selection on short, low-movement clicks) don't interpret
+      // a click on this overlay button as a click on empty world
+      // space — that would deselect the currently selected node
+      // right before the snapshot is captured. Other listeners on
+      // shotBtn itself still fire; stopPropagation only blocks
+      // bubbling to the parent container.
+      const swallow = (e: Event): void => {
+        e.stopPropagation();
+      };
+      shotBtn.addEventListener("pointerdown", swallow);
+      shotBtn.addEventListener("pointerup", swallow);
+      shotBtn.addEventListener("click", swallow);
+      shotBtn.addEventListener("dblclick", swallow);
       shotBtn.addEventListener("click", () => {
         // ———— Photo mode ————
         // Force the highest-quality settings for the capture so the

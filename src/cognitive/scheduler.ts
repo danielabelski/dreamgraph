@@ -101,6 +101,11 @@ const MetacognitiveParamsSchema = z.object({
   auto_apply: z.boolean().default(false),
 });
 
+const FederationExportParamsSchema = z.object({
+  /** Optional destination override. Absolute or relative to the instance data dir. */
+  export_path: z.string().trim().min(1).optional(),
+});
+
 const DispatchEventParamsSchema = z.object({
   source: z
     .enum([
@@ -634,8 +639,9 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
     }
 
     case "federation_export": {
-      const result = await exportArchetypes();
-      return `federation export: ${result.archetypes_exported} archetypes exported`;
+      const params = parseScheduleParams(schedule, FederationExportParamsSchema);
+      const result = await exportArchetypes(params.export_path);
+      return `federation export: ${result.archetypes_exported} archetypes → ${result.file_path}`;
     }
 
     case "graph_maintenance": {

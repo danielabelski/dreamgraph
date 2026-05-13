@@ -613,7 +613,7 @@ const TRIGGER_TYPES: ScheduleTriggerType[] = [
   "interval", "cron_like", "after_cycles", "on_idle",
 ];
 
-/** Selectable dream strategies (used for dream_cycle & nightmare has its own enum) */
+/** Selectable dream strategies (used for dream_cycle) */
 const DREAM_STRATEGIES: string[] = [
   "all",
   "gap_detection",
@@ -629,6 +629,199 @@ const DREAM_STRATEGIES: string[] = [
   "orphan_bridging",
   "schema_grounding",
 ];
+
+/** Selectable adversarial (nightmare) strategies */
+const ADVERSARIAL_STRATEGIES: string[] = [
+  "all_threats",
+  "privilege_escalation",
+  "data_leak_path",
+  "injection_surface",
+  "missing_validation",
+  "broken_access_control",
+];
+
+/** Cognitive event sources */
+const EVENT_SOURCES: string[] = [
+  "manual",
+  "git_webhook",
+  "ci_cd",
+  "runtime_anomaly",
+  "tension_threshold",
+  "federation_import",
+];
+
+/** Cognitive event severities */
+const EVENT_SEVERITIES: string[] = [
+  "info",
+  "low",
+  "medium",
+  "high",
+  "critical",
+];
+
+/**
+ * Build the `parameters` object for a new schedule based on the selected
+ * action. Each branch reads only the fields rendered by the matching
+ * panel in {@link renderActionParamPanels} and produces a shape that
+ * matches the corresponding zod schema in `cognitive/scheduler.ts`.
+ *
+ * Unknown / unsupported actions fall back to an empty object — the
+ * scheduler's `parseScheduleParams` will then apply schema defaults.
+ */
+function buildScheduleParameters(
+  action: ScheduleAction,
+  body: Record<string, string>,
+): Record<string, unknown> {
+  switch (action) {
+    case "dream_cycle": {
+      const maxDreams = parseInt(body.dream_max_dreams ?? "100", 10);
+      return {
+        strategy: body.dream_strategy ?? "all",
+        max_dreams: Number.isFinite(maxDreams) && maxDreams > 0 ? maxDreams : 100,
+      };
+    }
+    case "nightmare_cycle":
+      return { strategy: body.nightmare_strategy ?? "all_threats" };
+    case "metacognitive_analysis": {
+      const windowSize = parseInt(body.meta_window_size ?? "50", 10);
+      return {
+        window_size: Number.isFinite(windowSize) && windowSize > 0 ? windowSize : 50,
+        auto_apply: body.meta_auto_apply === "on" || body.meta_auto_apply === "true",
+      };
+    }
+    case "dispatch_cognitive_event": {
+      const affected = (body.evt_affected_entities ?? "")
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      let payload: Record<string, unknown> = {};
+      const raw = (body.evt_payload ?? "").trim();
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            payload = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Invalid JSON falls back to empty payload; scheduler validation
+          // will still allow the event to fire with the other fields.
+        }
+      }
+      return {
+        source: body.evt_source ?? "manual",
+        severity: body.evt_severity ?? "info",
+        description: body.evt_description ?? "",
+        affected_entities: affected,
+        payload,
+      };
+    }
+    case "federation_export": {
+      const exportPath = (body.export_path ?? "").trim();
+      return exportPath ? { export_path: exportPath } : {};
+    }
+    case "narrative_chapter":
+    case "graph_maintenance":
+    default:
+      return {};
+  }
+}
+
+/**
+ * Render per-action parameter panels for the Create Schedule form.
+ * Each panel uses unique input names (prefixed by action) so all fields
+ * round-trip through the form regardless of which panel is visible; the
+ * POST handler branches on `action` to pick the right set.
+ *
+ * Only the `dream_cycle` panel is visible initially; the action <select>
+ * `onchange` handler toggles `display` per panel.
+ */
+function renderActionParamPanels(): string {
+  return `
+    <div id="params_dream_cycle" class="action-params">
+      <div class="form-row">
+        <label>Strategy</label>
+        <select name="dream_strategy">
+          ${DREAM_STRATEGIES.map(s =>
+            `<option value="${s}" ${s === "all" ? "selected" : ""}>${s.replace(/_/g, " ")}</option>`
+          ).join("")}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Max Dreams</label>
+        <input name="dream_max_dreams" type="number" min="1" value="100">
+      </div>
+    </div>
+    <div id="params_nightmare_cycle" class="action-params" style="display:none">
+      <div class="form-row">
+        <label>Adversarial Strategy</label>
+        <select name="nightmare_strategy">
+          ${ADVERSARIAL_STRATEGIES.map(s =>
+            `<option value="${s}" ${s === "all_threats" ? "selected" : ""}>${s.replace(/_/g, " ")}</option>`
+          ).join("")}
+        </select>
+      </div>
+    </div>
+    <div id="params_metacognitive_analysis" class="action-params" style="display:none">
+      <div class="form-row">
+        <label>Window Size</label>
+        <input name="meta_window_size" type="number" min="5" max="500" value="50">
+      </div>
+      <div class="form-row">
+        <label>Auto-apply</label>
+        <input name="meta_auto_apply" type="checkbox">
+        <span class="unit">apply recommendations automatically</span>
+      </div>
+    </div>
+    <div id="params_dispatch_cognitive_event" class="action-params" style="display:none">
+      <div class="form-row">
+        <label>Source</label>
+        <select name="evt_source">
+          ${EVENT_SOURCES.map(s =>
+            `<option value="${s}" ${s === "manual" ? "selected" : ""}>${s.replace(/_/g, " ")}</option>`
+          ).join("")}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Severity</label>
+        <select name="evt_severity">
+          ${EVENT_SEVERITIES.map(s =>
+            `<option value="${s}" ${s === "info" ? "selected" : ""}>${s}</option>`
+          ).join("")}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Description</label>
+        <input name="evt_description" placeholder="Optional human-readable description">
+      </div>
+      <div class="form-row">
+        <label>Affected Entities</label>
+        <input name="evt_affected_entities" placeholder="comma-separated ids (e.g. feature_a, workflow_b)">
+      </div>
+      <div class="form-row">
+        <label>Payload (JSON)</label>
+        <textarea name="evt_payload" rows="4" placeholder='{"reason":"..."}' style="font-family:monospace"></textarea>
+      </div>
+    </div>
+    <div id="params_narrative_chapter" class="action-params" style="display:none">
+      <div class="form-row">
+        <label></label>
+        <span class="unit">No parameters — generates a diff chapter from recent changes.</span>
+      </div>
+    </div>
+    <div id="params_federation_export" class="action-params" style="display:none">
+      <div class="form-row">
+        <label>Export Path</label>
+        <input name="export_path" placeholder="e.g. exports/archetypes-nightly.json">
+        <span class="unit">absolute or relative to data dir; blank = default dream_archetypes.json</span>
+      </div>
+    </div>
+    <div id="params_graph_maintenance" class="action-params" style="display:none">
+      <div class="form-row">
+        <label></label>
+        <span class="unit">No parameters — runs decay + tension decay pass.</span>
+      </div>
+    </div>`;
+}
 
 async function renderSchedules(toast?: string): Promise<string> {
   const schedules = await safeAsync(() => getSchedules(), []);
@@ -728,7 +921,13 @@ async function renderSchedules(toast?: string): Promise<string> {
       </div>
       <div class="form-row">
         <label>Action</label>
-        <select name="action">
+        <select name="action" id="schedule_action" onchange="
+          var sel = this.value;
+          ['dream_cycle','nightmare_cycle','metacognitive_analysis','dispatch_cognitive_event','narrative_chapter','federation_export','graph_maintenance'].forEach(function(a){
+            var el = document.getElementById('params_' + a);
+            if (el) el.style.display = (a === sel) ? '' : 'none';
+          });
+        ">
           ${SCHEDULE_ACTIONS.map(a =>
             `<option value="${a}">${a}</option>`
           ).join("")}
@@ -765,14 +964,7 @@ async function renderSchedules(toast?: string): Promise<string> {
         <input name="idle_ms" type="number" min="10000" value="120000" placeholder="ms">
         <span class="unit">ms</span>
       </div>
-      <div class="form-row">
-        <label>Strategy</label>
-        <select name="strategy">
-          ${DREAM_STRATEGIES.map(s =>
-            `<option value="${s}" ${s === "all" ? "selected" : ""}>${s.replace(/_/g, " ")}</option>`
-          ).join("")}
-        </select>
-      </div>
+      ${renderActionParamPanels()}
       <div class="form-row">
         <label>Max Runs</label>
         <input name="max_runs" type="number" min="0" value="0" placeholder="0 = unlimited">
@@ -859,11 +1051,12 @@ async function handleSchedulePost(
       case "create": {
         const triggerType = (body.trigger_type ?? "interval") as ScheduleTriggerType;
         const maxRuns = parseInt(body.max_runs ?? "0", 10);
-        const strategy = body.strategy ?? "all";
+        const actionType = (body.action ?? "dream_cycle") as ScheduleAction;
+        const parameters = buildScheduleParameters(actionType, body);
         const created = await createSchedule({
           name: body.name ?? "Untitled",
-          action: (body.action ?? "dream_cycle") as ScheduleAction,
-          parameters: { strategy },
+          action: actionType,
+          parameters,
           trigger_type: triggerType,
           interval_ms: triggerType === "interval" ? parseInt(body.interval_ms ?? "3600000", 10) : undefined,
           cron: triggerType === "cron_like" ? body.cron : undefined,
