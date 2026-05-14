@@ -132,9 +132,20 @@ function extractMainContent($: cheerio.CheerioAPI): string {
 interface FetchWebPageResult {
   url: string;
   title: string;
-  /** Content length in characters */
+  /** Length of the returned `markdown` slice (characters). */
   content_length: number;
-  /** The page content as Markdown */
+  /** Full markdown length for the page (characters), pre-slicing. */
+  total_length: number;
+  /** Character offset into the full markdown that this slice starts at. */
+  offset: number;
+  /** True when the returned slice does not reach the end of the document. */
+  truncated: boolean;
+  /**
+   * Offset to pass back as `offset` on the next call to read the remainder.
+   * Absent when `truncated` is false.
+   */
+  next_offset?: number;
+  /** The page content as Markdown (the slice [offset, offset+content_length)). */
   markdown: string;
 }
 
@@ -169,15 +180,26 @@ export function registerWebSensesTools(server: McpServer): void {
         .number()
         .int()
         .min(500)
-        .max(100_000)
+        .max(500_000)
         .optional()
         .describe(
-          "Maximum length of returned Markdown in characters (default: 30000). " +
-            "Longer text is truncated."
+          "Maximum length of returned Markdown in characters (default: 60000, max: 500000). " +
+            "When the page is longer, use `offset` to page through the remainder; " +
+            "the response carries `total_length` and `next_offset` for that purpose."
+        ),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "Character offset into the page's Markdown to start the slice at (default: 0). " +
+            "Use the `next_offset` returned by a previous call to continue reading a long page."
         ),
     },
-    async ({ url: rawUrl, selector, maxLength }) => {
-      const limit = maxLength ?? 30_000;
+    async ({ url: rawUrl, selector, maxLength, offset }) => {
+      const limit = maxLength ?? 60_000;
+      const startOffset = offset ?? 0;
 
       logger.info("fetch_web_page called: url=" + rawUrl + ", selector=" + (selector ?? "(auto)"));
 
@@ -289,24 +311,49 @@ export function registerWebSensesTools(server: McpServer): void {
             .replace(/[ \t]+\n/g, "\n")
             .trim();
 
-          // Truncate if needed
-          const truncated = markdown.length > limit;
+          const totalLength = markdown.length;
+
+          if (startOffset >= totalLength && totalLength > 0) {
+            return error(
+              "OFFSET_OUT_OF_RANGE",
+              "offset " + startOffset + " is past end of document (total_length=" + totalLength + ")."
+            );
+          }
+
+          const sliceEnd = Math.min(startOffset + limit, totalLength);
+          let slice = markdown.slice(startOffset, sliceEnd);
+          const truncated = sliceEnd < totalLength;
+          const nextOffset = truncated ? sliceEnd : undefined;
+
           if (truncated) {
-            markdown =
-              markdown.slice(0, limit) +
-              "\n\n---\n*[Truncated: showing " + limit.toLocaleString() + " / " + markdown.length.toLocaleString() + " chars]*";
+            slice +=
+              "\n\n---\n*[Showing chars " + startOffset.toLocaleString() +
+              "\u2013" + sliceEnd.toLocaleString() +
+              " of " + totalLength.toLocaleString() +
+              ". Re-call fetch_web_page with offset=" + sliceEnd +
+              " to continue.]*";
+          } else if (startOffset > 0) {
+            slice +=
+              "\n\n---\n*[End of document. Showing chars " + startOffset.toLocaleString() +
+              "\u2013" + sliceEnd.toLocaleString() +
+              " of " + totalLength.toLocaleString() + ".]*";
           }
 
           logger.debug(
-            "fetch_web_page: " + title + " - " + markdown.length + " chars" +
-              (truncated ? " (truncated)" : "")
+            "fetch_web_page: " + title + " - offset=" + startOffset +
+              ", returned " + slice.length + " / total " + totalLength + " chars" +
+              (truncated ? " (more available; next_offset=" + nextOffset + ")" : "")
           );
 
           return success<FetchWebPageResult>({
             url: url.href,
             title,
-            content_length: markdown.length,
-            markdown,
+            content_length: slice.length,
+            total_length: totalLength,
+            offset: startOffset,
+            truncated,
+            ...(nextOffset !== undefined ? { next_offset: nextOffset } : {}),
+            markdown: slice,
           });
         }
       );
