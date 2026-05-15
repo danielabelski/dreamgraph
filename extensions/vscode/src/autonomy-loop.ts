@@ -50,6 +50,80 @@ export function isReadOnlyTool(toolName: string): boolean {
   return READ_TOOL_PREFIXES.some((p) => lower.startsWith(p));
 }
 
+// Verbs that, when found in the same line as a concrete file path, indicate
+// the architect has named a patch site even without binding a write tool to a
+// recommended_next_step. This is the prose-anchor signal that complements the
+// write-tool / file-edit / next-step-write anchor sources.
+const EDIT_VERB_RE = /\b(patch|patche[ds]|replace[ds]?|insert[ed]?|append[ed]?|delete[ds]?|edit[ed]?|writ(?:e|es|ten)|add[s]?|chang(?:e|ed|es)|modif(?:y|ies|ied)|fix(?:es|ed)?|update[ds]?|apply|implement(?:s|ed|ing)?)\b/i;
+
+// Concrete file path heuristic. Requires a slash or backslash and a 1–6 char
+// extension to avoid catching prose words like "config.something" that aren't
+// real paths. Keeps a list of common code/text/config extensions.
+const FILE_PATH_RE = /(?<![\w./\\-])((?:[\w.-]+[\\/])+[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|css|html|py|java|cs|rs|go|rb|sh|ps1|yaml|yml|toml|sql|test\.ts))(?![\w./\\-])/gi;
+
+// Inline-quoted file path heuristic. Catches `chat-panel.ts` / "autonomy.ts" /
+// 'something.json' even without a directory prefix. The architect commonly
+// reports anchors as bare filenames in backticks, e.g. "Patch `chat-panel.ts`
+// at line 2944." A directory prefix is not required because the model is
+// already constraining via the verb on the same line.
+const QUOTED_FILE_PATH_RE = /[`'"]([\w./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|css|html|py|java|cs|rs|go|rb|sh|ps1|yaml|yml|toml|sql))[`'"]/gi;
+
+/**
+ * Extract concrete file paths the architect named on the same line as an
+ * edit verb. Empty array means no prose anchor was detected. The result is
+ * deduplicated, lower-cased only for paths that look case-insensitive (we
+ * preserve original casing in the returned set so equality comparison across
+ * passes is exact). Order is the order of first occurrence.
+ */
+export function extractProseAnchorPaths(content: string | undefined): string[] {
+  if (!content) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawLine of content.split(/\r?\n/)) {
+    if (!EDIT_VERB_RE.test(rawLine)) continue;
+    // Sentence-level scope inside the line: prefer same-sentence co-occurrence
+    // by splitting on `.`, `!`, `?`, `;` (keeping the verb test per-fragment).
+    const fragments = rawLine.split(/(?<=[.!?;])\s+/);
+    for (const fragment of fragments) {
+      if (!EDIT_VERB_RE.test(fragment)) continue;
+      const matchers: RegExp[] = [
+        new RegExp(FILE_PATH_RE.source, FILE_PATH_RE.flags),
+        new RegExp(QUOTED_FILE_PATH_RE.source, QUOTED_FILE_PATH_RE.flags),
+      ];
+      for (const re of matchers) {
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(fragment)) !== null) {
+          const path = m[1];
+          if (!path) continue;
+          if (seen.has(path)) continue;
+          seen.add(path);
+          out.push(path);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function setEqualsPaths(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  // Reserved for prose-anchor comparison helpers in this module. Used by
+  // tests and by future call sites that want to do the same set-equality
+  // check without depending on autonomy.ts internals.
+  const aa = a ?? [];
+  const bb = b ?? [];
+  if (aa.length !== bb.length) return false;
+  if (aa.length === 0) return true;
+  const sa = new Set(aa);
+  for (const x of bb) {
+    if (!sa.has(x)) return false;
+  }
+  return true;
+}
+
+// Re-export so the comparison rule used inside `shouldContinueAfterPass` can
+// be exercised directly in unit tests without duplicating the implementation.
+export { setEqualsPaths };
+
 export interface PassAnalysisResult {
   signal: PassOutcomeSignal;
   actionSet: RecommendedActionSet;
@@ -57,10 +131,23 @@ export interface PassAnalysisResult {
   decision: ContinuationDecision;
   nextPrompt?: string;
   /** Sticky flag carried into the next pass: once the architect has a
-   * concrete patch anchor (write tool ran, file edited, or next-step bound
-   * to a write tool), pure-read passes after this point count as
-   * non-progress. Persisted via advanceAutonomyStateIfContinued. */
+   * concrete patch anchor (write tool ran, file edited, next-step bound
+   * to a write tool, or a prose anchor — concrete file path co-occurring
+   * with an edit verb in the assistant text), pure-read passes after
+   * this point count as non-progress. Persisted via
+   * advanceAutonomyStateIfContinued. */
   patchAnchorEstablished?: boolean;
+  /** Concrete file paths the architect named on the same line as an edit
+   * verb during this pass. Empty when no prose anchor was detected.
+   * Persisted into AutonomyState.lastAnchorPaths and compared by the
+   * two-strike token-economy stop rule to distinguish legitimate
+   * re-anchoring (anchor moved → continue) from waste (same anchor twice
+   * with no writes → stop). */
+  anchorPaths?: readonly string[];
+  /** True when this pass executed only read tool calls and made no file
+   * edits. Persisted into AutonomyState.lastPassWasLocateOnly so the
+   * next pass's two-strike rule can compare locate-only history. */
+  isLocateOnlyThisPass?: boolean;
 }
 
 export function inferPassOutcomeSignal(content: string | undefined): PassOutcomeSignal {
@@ -96,14 +183,42 @@ export function inferPassOutcomeSignal(content: string | undefined): PassOutcome
   };
 }
 
-export function buildContinuationPrompt(selectedAction?: RecommendedAction): string {
+/**
+ * Options for the continuation prompt builder.
+ *
+ * `patchAnchorEstablished` is the sticky autonomy-state flag carried into the
+ * about-to-start pass. When true, the model has already named a concrete patch
+ * site in a prior pass; the prompt grows a hard "do NOT re-locate" line so the
+ * next pass writes or stops, rather than re-reading the same files.
+ */
+export interface ContinuationPromptOptions {
+  readonly patchAnchorEstablished?: boolean;
+}
+
+export function buildContinuationPrompt(
+  selectedAction?: RecommendedAction,
+  options: ContinuationPromptOptions = {},
+): string {
   // A pass is a logical step, not a single tool call. The model is expected to
   // batch every tool call the step requires (parallel reads, sequential edits,
   // then a verification call) into the same turn. Pre-bound arguments are a
   // suggestion, not a prescription — the model may add, reorder, or replace
   // calls as long as the step is genuinely advanced.
+  const anchorPreamble = options.patchAnchorEstablished
+    ? [
+        'The patch site is already known from the previous pass. Do NOT re-locate it.',
+        'This pass MUST either issue the edit tool calls (e.g. `replace_string_in_file`,',
+        '`multi_replace_string_in_file`, `create_file`, `patch_file`, `edit_file`,',
+        '`edit_entity`) or set `goal_status` to `blocked` with the concrete missing',
+        'prerequisite. Re-reading already-located files counts as no progress and will',
+        'end the autonomy loop on token-economy grounds.',
+        '',
+      ]
+    : [];
+
   if (!selectedAction) {
     return [
+      ...anchorPreamble,
       'Continue with your strongest in-scope recommended next step.',
       '',
       'Continuation contract:',
@@ -126,6 +241,7 @@ export function buildContinuationPrompt(selectedAction?: RecommendedAction): str
     ? JSON.stringify(selectedAction.toolArgs)
     : null;
   const lines = [
+    ...anchorPreamble,
     `Continue with the recommended next step: ${selectedAction.label}.`,
     '',
     'Continuation contract:',
@@ -173,12 +289,21 @@ export function analyzePass(state: AutonomyState, input: PassAnalysisInput): Pas
   //  - a previous pass already established it (sticky), OR
   //  - this pass actually wrote something, OR
   //  - the model produced a recommended next step bound to a write tool
-  //    (i.e. it knows exactly what to change next).
+  //    (i.e. it knows exactly what to change next), OR
+  //  - the assistant prose names a concrete file path on the same line
+  //    as an edit verb (prose anchor — DreamGraph's natural reporting
+  //    style, e.g. "Patch `chat-panel.ts` to add the optimistic state").
   const nextStepIsWrite = (input.actions ?? []).some(
     (a) => typeof a.tool === 'string' && a.tool.length > 0 && !isReadOnlyTool(a.tool),
   );
+  const proseAnchorPaths = extractProseAnchorPaths(input.content);
+  const hasProseAnchor = proseAnchorPaths.length > 0;
   const patchAnchorEstablished =
-    !!state.patchAnchorEstablished || writeToolCalls > 0 || fileEdits > 0 || nextStepIsWrite;
+    !!state.patchAnchorEstablished
+    || writeToolCalls > 0
+    || fileEdits > 0
+    || nextStepIsWrite
+    || hasProseAnchor;
 
   // Once the anchor is known, additional pure-read passes are non-progress.
   // They are the read-loop pattern that burns pass budget without advancing
@@ -218,6 +343,7 @@ export function analyzePass(state: AutonomyState, input: PassAnalysisInput): Pas
   };
 
   const actionSet = rankRecommendedActions(input.actions ?? []);
+  const isLocateOnlyThisPass = readOnlyPass; // tool calls > 0, all reads, no edits.
   const decision = shouldContinueAfterPass(stateForDecision, signal, actionSet);
   const selectedActionId = decision.selectionMode === 'self' ? actionSet.topActionId : undefined;
   const selectedAction = actionSet.actions.find((a) => a.id === selectedActionId);
@@ -226,8 +352,12 @@ export function analyzePass(state: AutonomyState, input: PassAnalysisInput): Pas
     actionSet,
     selectedActionId,
     decision,
-    nextPrompt: decision.shouldContinue ? buildContinuationPrompt(selectedAction) : undefined,
+    nextPrompt: decision.shouldContinue
+      ? buildContinuationPrompt(selectedAction, { patchAnchorEstablished })
+      : undefined,
     patchAnchorEstablished,
+    anchorPaths: proseAnchorPaths,
+    isLocateOnlyThisPass,
   };
 }
 
@@ -236,9 +366,24 @@ export function advanceAutonomyStateIfContinued(
   decision: ContinuationDecision,
   signal?: PassOutcomeSignal,
   patchAnchorEstablished?: boolean,
+  anchorPaths?: readonly string[],
+  isLocateOnlyThisPass?: boolean,
 ): AutonomyState {
   const next = decision.shouldContinue ? decrementPassBudget(state) : state;
   const anchor = patchAnchorEstablished ?? state.patchAnchorEstablished;
+  // Carry forward the anchor-path set only when the current pass actually
+  // produced one. An empty array on the current pass MUST NOT erase a
+  // sticky prior anchor — the sticky anchor is what makes the two-strike
+  // rule work across a follow-up locate-only pass that produced no new
+  // prose anchor of its own.
+  const carriedAnchorPaths = (anchorPaths && anchorPaths.length > 0)
+    ? anchorPaths
+    : state.lastAnchorPaths;
+  // lastPassWasLocateOnly is per-pass and must reflect the just-completed
+  // pass exactly. Default to existing state when not supplied.
+  const carriedLocateOnly = typeof isLocateOnlyThisPass === 'boolean'
+    ? isLocateOnlyThisPass
+    : state.lastPassWasLocateOnly;
   if (signal) {
     return {
       ...next,
@@ -247,7 +392,14 @@ export function advanceAutonomyStateIfContinued(
       // architect knows what to change, that knowledge does not expire just
       // because a later pass happened to be read-only.
       patchAnchorEstablished: anchor,
+      lastAnchorPaths: carriedAnchorPaths,
+      lastPassWasLocateOnly: carriedLocateOnly,
     };
   }
-  return { ...next, patchAnchorEstablished: anchor };
+  return {
+    ...next,
+    patchAnchorEstablished: anchor,
+    lastAnchorPaths: carriedAnchorPaths,
+    lastPassWasLocateOnly: carriedLocateOnly,
+  };
 }

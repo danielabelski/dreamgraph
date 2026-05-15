@@ -22,6 +22,18 @@ export interface AutonomyState {
      * non-progress (see analyzePass). Cleared whenever a write tool runs
      * successfully so a follow-up edit cycle can re-discover its own anchor. */
     patchAnchorEstablished?: boolean;
+    /** Concrete file paths the architect named as the patch site in the
+     * most recent pass that established or re-confirmed the anchor.
+     * Compared across passes by the two-strike token-economy stop rule:
+     * if a follow-up locate-only pass names a *different* set of paths,
+     * that counts as legitimate re-anchoring (anchor moved) and the loop
+     * is allowed to continue; same-set re-locates count as waste. */
+    lastAnchorPaths?: readonly string[];
+    /** True when the previous pass executed only read tool calls and made
+     * no file edits. Together with the same flag for the current pass and
+     * the lastAnchorPaths comparison, this drives the two-strike
+     * token-economy stop rule in `shouldContinueAfterPass`. */
+    lastPassWasLocateOnly?: boolean;
 }
 export interface PassOutcomeSignal {
     hasClearNextStep: boolean;
@@ -99,6 +111,20 @@ export declare function applyModeProfileToState(mode: AutonomyMode, nowEpochMs?:
 export declare function rankRecommendedActions(actions: RecommendedAction[]): RecommendedActionSet;
 export declare function computeDoAllEligibility(actions: RecommendedAction[]): boolean;
 export declare function chooseActionForMode(mode: AutonomyMode, actionSet: RecommendedActionSet, signal: PassOutcomeSignal): string | undefined;
-export declare function shouldContinueAfterPass(state: AutonomyState, signal: PassOutcomeSignal, actionSet?: RecommendedActionSet): ContinuationDecision;
+export interface PassContextSnapshot {
+    /** Number of write tool calls executed during the just-completed pass. */
+    writeToolCalls: number;
+    /** Number of files actually edited/created during the just-completed pass. */
+    fileEdits: number;
+    /** Concrete file paths the architect named as the patch site during this
+     * pass (prose anchors). Empty when no prose anchor was detected. */
+    currentAnchorPaths?: readonly string[];
+    /** Set true when the structured envelope (or prose) explicitly reports a
+     * NEW blocker that the prior pass did not have. The two-strike
+     * token-economy stop will allow continuation when a new blocker is
+     * present even if all other waste conditions hold. */
+    newBlockerReported?: boolean;
+}
+export declare function shouldContinueAfterPass(state: AutonomyState, signal: PassOutcomeSignal, actionSet?: RecommendedActionSet, passContext?: PassContextSnapshot): ContinuationDecision;
 export declare function getAutonomyInstructionBlock(state?: AutonomyInstructionState): string;
 //# sourceMappingURL=autonomy.d.ts.map

@@ -107,7 +107,7 @@ function chooseActionForMode(mode, actionSet, signal) {
         return signal.uncertainty === 'high' ? undefined : actionSet.topActionId;
     return signal.uncertainty === 'high' ? undefined : actionSet.topActionId;
 }
-function shouldContinueAfterPass(state, signal, actionSet) {
+function shouldContinueAfterPass(state, signal, actionSet, passContext) {
     if (signal.goalSufficientlyReached) {
         return { shouldContinue: false, reason: 'Stopped: original goal sufficiently reached.', selectionMode: 'none' };
     }
@@ -116,6 +116,46 @@ function shouldContinueAfterPass(state, signal, actionSet) {
     }
     if (signal.hasBlockingFailure) {
         return { shouldContinue: false, reason: 'Stopped: blocking failure encountered.', selectionMode: 'none' };
+    }
+    // Token-economy stop (task-level): two consecutive locate-only passes
+    // (read tools only, no file edits) AFTER a sticky patch anchor, with no
+    // new blocker reported and no materially different anchor in the second
+    // pass. This is the canonical post-anchor re-reading pathology — the
+    // model already knows what to change but keeps re-confirming. Token
+    // economy must apply at task level, not just inside a single pass.
+    // Legitimate re-anchoring (anchor moved to a different file, or a real
+    // new blocker surfaced) bypasses this guard and the loop continues.
+    if (passContext
+        && state.patchAnchorEstablished
+        && state.lastPassWasLocateOnly === true
+        && passContext.writeToolCalls === 0
+        && passContext.fileEdits === 0
+        && !passContext.newBlockerReported) {
+        const prev = state.lastAnchorPaths ?? [];
+        const curr = passContext.currentAnchorPaths ?? [];
+        // "Same anchor" semantics:
+        //  - If the current pass produced NO new prose anchor at all, the
+        //    sticky anchor is inherited from the prior pass — that's the
+        //    canonical "still re-reading the same site" pathology.
+        //  - If the current pass produced a prose anchor, it must be a
+        //    set-equal match against the prior pass's anchor to count as
+        //    waste. A different set means the architect re-anchored on a
+        //    different file (legitimate progress; let it continue).
+        const sameAnchor = curr.length === 0
+            || (prev.length === curr.length && prev.length > 0 && (() => {
+                const sp = new Set(prev);
+                for (const x of curr)
+                    if (!sp.has(x))
+                        return false;
+                return true;
+            })());
+        if (sameAnchor) {
+            return {
+                shouldContinue: false,
+                reason: 'Stopped: two consecutive locate-only passes after an unchanged patch anchor with no new blocker — token-economy stop. Click an action below to resume.',
+                selectionMode: 'user',
+            };
+        }
     }
     // Counter-spam guard: two passes in a row that produced no tool calls,
     // no file edits, and no real report — force user confirmation rather

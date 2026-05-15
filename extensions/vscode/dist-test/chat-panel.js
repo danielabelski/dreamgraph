@@ -56,6 +56,7 @@ const local_tools_js_1 = require("./local-tools.js");
 const index_js_1 = require("./prompts/index.js");
 const tool_groups_js_1 = require("./tool-groups.js");
 const runner_js_1 = require("./architect-core/runner.js");
+const index_js_2 = require("./architect-core/adapters/copilot-cli/index.js");
 const autonomy_js_1 = require("./autonomy.js");
 const autonomy_loop_js_1 = require("./autonomy-loop.js");
 const autonomy_structured_js_1 = require("./autonomy-structured.js");
@@ -635,6 +636,13 @@ class ChatPanel {
         // owns the attachment clear (false) or defers it to `host.clearAttachments`
         // inside `runPass` step 7 (true).
         const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get('useCorePass') === true;
+        // The copilot-cli provider always routes through the architect-core
+        // seam (`runPassViaCopilotCli`), so attachment lifecycle, host
+        // persistence, and tool clearing all flow through `runPass` step 7
+        // exactly like the `useCorePass` path. Treat the two routes
+        // identically for any pre-seam state mutation guards.
+        const copilotCliPreRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
+        const seamLifecycle = useCorePass || copilotCliPreRoute;
         // D3 — multi-modal: if the user attached files, replace the last user
         // message's content with typed content blocks so architect-llm's per-provider
         // serializers (`_toAnthropicContent` → `image`, `_toOpenAIContent` →
@@ -674,7 +682,7 @@ class ChatPanel {
             // network call so the user can immediately attach something new for the
             // next prompt. On the seam path the driver clears via `host.clearAttachments`
             // inside `runPass` step 7 (same lifecycle, just owned by the seam).
-            if (!useCorePass) {
+            if (!seamLifecycle) {
                 this.attachments = [];
                 // Broadcast the cleared attachment list so the prompt-bar chips
                 // disappear immediately. `postState()` only carries `messages`; the
@@ -723,8 +731,16 @@ class ChatPanel {
             const selectedSet = new Set(toolDecision.selected);
             const tools = allTools.filter((t) => selectedSet.has(t.name));
             this.contextInspector?.appendContextLine(`Tool selection: ${tools.length}/${allTools.length} tools — groups=[${toolDecision.groups.join(', ')}] mutating=${toolDecision.mutating} autonomy=${toolDecision.autonomy}; ${toolDecision.rationale}`);
-            if (tools.length > 0) {
-                fullContent = await this.runAgenticLoop(conversation, tools);
+            // Copilot CLI executes its tool calls in-process via the
+            // DreamGraph stdio MCP bridge, so we MUST NOT also drive an
+            // agentic loop in this process — that would attempt to dispatch
+            // tools twice and the CLI doesn't return ToolUseRequests anyway.
+            // Force the no-tools branch and let `runPassViaCopilotCli` own
+            // the turn end-to-end.
+            const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
+            const effectiveTools = copilotCliRoute ? [] : tools;
+            if (effectiveTools.length > 0) {
+                fullContent = await this.runAgenticLoop(conversation, effectiveTools);
             }
             else {
                 // ADR-089 Phase 3a — text-only seam route. When the user enables
@@ -737,7 +753,7 @@ class ChatPanel {
                 // `capturedDroppedAttachmentNames`, `capturedAttachmentSummary`,
                 // `capturedStopContextBlock`) is threaded into the host so the seam
                 // sees the SAME multi-modal blocks the inline path would have shipped.
-                if (useCorePass) {
+                if (useCorePass || copilotCliRoute) {
                     const host = this._buildCorePassHost(envelope, task, contextResult, conversation, conversation, {
                         contentBlocks: capturedTurnBlocks,
                         droppedAttachmentNames: capturedDroppedAttachmentNames,
@@ -746,18 +762,32 @@ class ChatPanel {
                     });
                     const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
                     try {
-                        const passResult = await (0, runner_js_1.runPassViaCore)({
-                            host,
-                            text: trimmed,
-                            tools: [],
-                            onStreamChunk: (chunk) => {
-                                const safeChunk = this._redactSecrets(chunk);
-                                fullContent += safeChunk;
-                                this.streamingContent += safeChunk;
-                                void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                            },
-                            abortSignal: req.signal,
-                        });
+                        const passResult = copilotCliRoute
+                            ? await (0, runner_js_1.runPassViaCopilotCli)({
+                                host,
+                                text: trimmed,
+                                tools: [],
+                                providerOptions: this._buildCopilotCliProviderOptions(),
+                                onStreamChunk: (chunk) => {
+                                    const safeChunk = this._redactSecrets(chunk);
+                                    fullContent += safeChunk;
+                                    this.streamingContent += safeChunk;
+                                    void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                                },
+                                abortSignal: req.signal,
+                            })
+                            : await (0, runner_js_1.runPassViaCore)({
+                                host,
+                                text: trimmed,
+                                tools: [],
+                                onStreamChunk: (chunk) => {
+                                    const safeChunk = this._redactSecrets(chunk);
+                                    fullContent += safeChunk;
+                                    this.streamingContent += safeChunk;
+                                    void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                                },
+                                abortSignal: req.signal,
+                            });
                         if (!fullContent && passResult.assistantMessage.content) {
                             fullContent = passResult.assistantMessage.content;
                         }
@@ -882,7 +912,72 @@ class ChatPanel {
         };
     }
     /**
-     * ADR-089 Phase 3a — build the narrow `ChatPanelHost` accessor surface
+     * Build the per-turn `CopilotCliProviderPortOptions` used by
+     * `runPassViaCopilotCli`. Reads three settings (binary name,
+     * dreamgraph stdio command, hard timeout), points the bridge audit
+     * sink at the extension's globalStorage so transcripts survive
+     * window reloads, and threads the active workspace folder as the
+     * CLI's invocation cwd so file tools resolve relative paths the
+     * way the user expects.
+     */
+    _buildCopilotCliProviderOptions() {
+        if (!this.architectLlm) {
+            throw new Error('Cannot build Copilot CLI provider options: architectLlm is not initialized.');
+        }
+        const llm = this.architectLlm;
+        const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+        const binaryName = (cfg.get('copilotCli.command') ?? '').trim() || 'copilot';
+        const dreamgraphCommand = (cfg.get('copilotCli.dreamgraphCommand') ?? '').trim() || 'dreamgraph';
+        const timeoutMsRaw = cfg.get('copilotCli.timeoutMs');
+        const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+            ? timeoutMsRaw
+            : 180_000;
+        const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+        const auditDirAbsPath = vscode.Uri.joinPath(this.context.globalStorageUri, 'copilot-cli-audit').fsPath;
+        const bridgeEntryPath = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'copilot-cli-bridge.js').fsPath;
+        const registry = (0, index_js_2.createHostRegistry)({
+            dreamgraphCommand,
+            bridgeEntryPath,
+            nodeExecPath: process.execPath,
+            auditDirAbsPath,
+        });
+        const mcpAudit = (0, index_js_2.createHostAudit)({ auditDirAbsPath });
+        const model = llm.currentConfig?.model;
+        return {
+            hostLlm: llm,
+            invocationCwd: workspaceCwd,
+            timeoutMs,
+            baseEnv: process.env,
+            // Skip the `--model` flag when the user picked `auto` so the
+            // CLI applies its own routing heuristic.
+            model: model && model !== 'auto' ? model : undefined,
+            binaryName,
+            deps: {
+                fs: index_js_2.HOST_FS,
+                process: index_js_2.HOST_PROCESS,
+                crypto: index_js_2.HOST_CRYPTO,
+                clock: index_js_2.HOST_CLOCK,
+                registry,
+                mcpAudit,
+            },
+            onRunResult: (result) => {
+                // Surface failures into the existing tool-trace channel so
+                // the user sees them next to MCP tool entries. Best-effort:
+                // never let observer code break the turn.
+                try {
+                    if (!result.ok) {
+                        const code = result.failure?.code ?? 'COPILOT_CLI_UNKNOWN_FAILURE';
+                        const message = result.failure?.message ?? 'Copilot CLI run failed';
+                        console.warn(`[DreamGraph][copilot-cli] ${code}: ${message}`);
+                    }
+                }
+                catch {
+                    // ignore
+                }
+            },
+        };
+    }
+    /**
      * that the architect-core adapters bind to. The host projects the
      * already-constructed envelope, context, autonomy state, and bounded
      * conversation, and provides the REAL persistence + state-broadcast
@@ -1702,11 +1797,12 @@ class ChatPanel {
         const model = this.architectLlm?.currentConfig?.model ?? '';
         const models = provider === 'anthropic' ? architect_llm_1.ANTHROPIC_MODELS
             : provider === 'openai' ? architect_llm_1.OPENAI_MODELS
-                : [];
+                : provider === 'copilot-cli' ? architect_llm_1.COPILOT_CLI_MODELS
+                    : [];
         const capabilities = this.architectLlm?.getModelCapabilities(provider, model) ?? { textAttachments: false, imageAttachments: false };
         void this.postMessage({
             type: 'updateModels',
-            providers: ['anthropic', 'openai', 'ollama', 'lmstudio'],
+            providers: ['anthropic', 'openai', 'ollama', 'lmstudio', 'copilot-cli'],
             models,
             current: { provider, model },
             capabilities,
@@ -1720,17 +1816,20 @@ class ChatPanel {
         if (this.architectLlm) {
             const models = provider === 'anthropic' ? architect_llm_1.ANTHROPIC_MODELS
                 : provider === 'openai' ? architect_llm_1.OPENAI_MODELS
-                    : [];
+                    : provider === 'copilot-cli' ? architect_llm_1.COPILOT_CLI_MODELS
+                        : [];
             const previousModel = this.architectLlm.currentConfig?.model ?? '';
             const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
-            // ollama uses no API key; lmstudio uses a fixed literal placeholder
-            // (LM Studio ignores the auth header but the OpenAI-compat code path
-            // sends one regardless).
+            // Keyless providers: ollama (no auth), lmstudio (fixed literal
+            // placeholder; the LM Studio server ignores the auth header but
+            // the OpenAI-compat code path sends one regardless), and
+            // copilot-cli (the CLI uses its own local GitHub authentication
+            // and never sees a key from this extension).
             let apiKey = '';
             if (provider === 'lmstudio') {
                 apiKey = 'lm-studio';
             }
-            else if (provider !== 'ollama') {
+            else if (provider !== 'ollama' && provider !== 'copilot-cli') {
                 apiKey = (await this.architectLlm.getApiKey(provider) ?? '');
             }
             this.architectLlm.applyConfig({
@@ -1904,7 +2003,7 @@ class ChatPanel {
         // it would duplicate the buttons below the assistant message.
         if (result.decision.shouldContinue && !this.abortController?.signal.aborted) {
             // Advance state and continue
-            this._autonomyState = (0, autonomy_loop_js_1.advanceAutonomyStateIfContinued)(this._autonomyState, result.decision, result.signal, result.patchAnchorEstablished);
+            this._autonomyState = (0, autonomy_loop_js_1.advanceAutonomyStateIfContinued)(this._autonomyState, result.decision, result.signal, result.patchAnchorEstablished, result.anchorPaths, result.isLocateOnlyThisPass);
             this._broadcastAutonomyStatus();
             // Safety: cap autonomous continuation
             if (this._autonomyState.completedAutoPasses >= ChatPanel.MAX_AUTONOMY_PASSES) {
@@ -1937,8 +2036,9 @@ class ChatPanel {
             await this.persistMessages();
             await this.postMessage({ type: 'addMessage', message: notice, actions: [], roleMeta: this._roleMetaFor(notice), contextFooter: undefined });
             // Trigger next pass
-            const continuationPrompt = result.nextPrompt ?? (0, autonomy_loop_js_1.buildContinuationPrompt)(selectedAction);
-            await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools);
+            const continuationPrompt = result.nextPrompt
+                ?? (0, autonomy_loop_js_1.buildContinuationPrompt)(selectedAction, { patchAnchorEstablished: result.patchAnchorEstablished });
+            await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools, result.actionSet.actions);
         }
         else {
             // ──────────────────────────────────────────────────────────────────
@@ -1999,7 +2099,7 @@ class ChatPanel {
             }
         }
     }
-    async _runAutonomyContinuationPass(prompt, baseLlmMessages, tools) {
+    async _runAutonomyContinuationPass(prompt, baseLlmMessages, tools, nextStepActions = []) {
         if (this._autonomyContinuing) {
             console.warn('[DreamGraph] _runAutonomyContinuationPass: re-entrant call dropped — a continuation is already in progress.');
             // F-08: surface the dropped re-entrant call so the user knows their
@@ -2042,6 +2142,60 @@ class ChatPanel {
                 ? await this._buildPromptContext(task, envelope, prompt, 'continuation')
                 : { assembledContext: '', reasoningPacket: null };
             const { system } = (0, index_js_1.assemblePrompt)(task, envelope, contextResult.assembledContext || undefined, undefined, autonomyInstruction, provider, contextResult.reasoningPacket?.task?.lens);
+            // Re-derive the tool subset for this continuation pass from scratch.
+            // The previous turn's whitelist is intentionally discarded: the next
+            // step has its own intent (e.g. "run build:server" needs `run_command`
+            // even when the original prompt was a UI question), and carrying the
+            // prior selection forward both wastes schema budget on tools that are
+            // no longer relevant and can mask a missing next-step tool. Selection
+            // is grounded in: (a) the continuation prompt, (b) the tools bound to
+            // the recommended next steps for this pass.
+            const primedFromActions = [];
+            for (const a of nextStepActions) {
+                if (typeof a.tool === 'string' && a.tool.length > 0)
+                    primedFromActions.push(a.tool);
+            }
+            // Stale primed-tools from earlier turns are explicitly dropped so the
+            // continuation reflects only what this step needs.
+            this._primedTools.clear();
+            const mcpToolsForCont = await this._listMcpToolsLazy();
+            const allToolsForCont = [
+                ...mcpToolsForCont.map((t) => ({
+                    name: t.name,
+                    description: t.description ?? '',
+                    inputSchema: (t.inputSchema ?? {}),
+                })),
+                ...local_tools_js_1.LOCAL_TOOL_DEFINITIONS.map((t) => ({
+                    name: t.name,
+                    description: t.description ?? '',
+                    inputSchema: t.inputSchema,
+                })),
+            ];
+            const decision = (0, tool_groups_js_1.selectToolGroups)({
+                task,
+                intentMode: envelope?.intentMode,
+                prompt,
+                autonomy: true,
+                availableToolNames: allToolsForCont.map((t) => t.name),
+                primedTools: Array.from(new Set(primedFromActions)),
+            });
+            this._lastAvailableToolNames = allToolsForCont.map((t) => t.name);
+            const selectedSet = new Set(decision.selected);
+            tools = allToolsForCont.filter((t) => selectedSet.has(t.name));
+            // Guard: every tool bound to a next-step action MUST be exposed. If
+            // selection somehow dropped one (e.g. cap truncation), force it back
+            // in — a continuation that suggests a tool the LM cannot call is the
+            // exact failure mode this rebuild is meant to prevent.
+            for (const toolName of primedFromActions) {
+                if (!selectedSet.has(toolName)) {
+                    const def = allToolsForCont.find((t) => t.name === toolName);
+                    if (def) {
+                        tools.unshift(def);
+                        selectedSet.add(toolName);
+                    }
+                }
+            }
+            this.contextInspector?.appendContextLine(`Tool selection (continuation): ${tools.length}/${allToolsForCont.length} tools — groups=[${decision.groups.join(', ')}] mutating=${decision.mutating} autonomy=${decision.autonomy}; primed-from-actions=[${primedFromActions.join(', ')}]; ${decision.rationale}`);
             const llmMessages = [{ role: 'system', content: system }];
             // Bounded history: same caps as handleUserMessage (last 20 turns, per-message char caps).
             // Attachment image bytes are NOT replayed — only a text marker survives;
@@ -2383,6 +2537,18 @@ class ChatPanel {
         let finalText = '';
         let pass = 0;
         const maxPasses = 12;
+        // Phase A — task-level token-economy: track read vs write tool calls inside
+        // this single agentic loop. Once the model has spent WRITE_RESERVATION_READ_THRESHOLD
+        // reads with zero writes, inject a synthetic user message that reserves the
+        // remaining iterations of this loop for write/verification calls only. The
+        // canonical anti-pattern this guards against is post-anchor re-reading: the
+        // model has already located the patch site but keeps re-confirming instead
+        // of editing, burning tokens at task level even when each individual call
+        // stays under the per-pass BudgetCoordinator ceiling.
+        const WRITE_RESERVATION_READ_THRESHOLD = 8;
+        let totalReadToolCalls = 0;
+        let totalWriteToolCalls = 0;
+        let writeReservationInjected = false;
         while (pass < maxPasses) {
             pass += 1;
             const timeoutMs = this._getLlmTimeoutMs({ mode: 'tool', toolCount: tools.length });
@@ -2486,6 +2652,36 @@ class ChatPanel {
                 // content with a short stub. This prevents quadratic growth when the loop
                 // runs many passes (each pass otherwise re-sends every prior tool_result in full).
                 _elideStaleToolResults(rawMessages, /*keepLastPairs*/ 6);
+                // Phase A — tally read/write split for THIS iteration's tool batch and,
+                // if the threshold has been crossed with zero writes, inject the
+                // write-reservation nudge as a synthetic user message before the next
+                // iteration. Fired at most once per loop.
+                for (const tc of response.toolCalls) {
+                    if ((0, autonomy_loop_js_1.isReadOnlyTool)(tc.name)) {
+                        totalReadToolCalls += 1;
+                    }
+                    else {
+                        totalWriteToolCalls += 1;
+                    }
+                }
+                if (!writeReservationInjected
+                    && totalReadToolCalls >= WRITE_RESERVATION_READ_THRESHOLD
+                    && totalWriteToolCalls === 0
+                    && pass < maxPasses) {
+                    writeReservationInjected = true;
+                    const remaining = maxPasses - pass;
+                    const reservationText = `You have spent ${totalReadToolCalls} read tool calls locating the change with zero writes. `
+                        + `The remaining ${remaining} iteration${remaining === 1 ? '' : 's'} of this turn `
+                        + `${remaining === 1 ? 'is' : 'are'} reserved for write + verification tool calls only `
+                        + `(e.g. replace_string_in_file, multi_replace_string_in_file, create_file, patch_file, `
+                        + `edit_file, edit_entity, then a build/test/read-back verification). `
+                        + `If you cannot write yet, state the missing prerequisite explicitly and stop. `
+                        + `Re-reading already-located files is token-economy waste at task level and will end this turn.`;
+                    rawMessages.push({
+                        role: 'user',
+                        content: [{ type: 'text', text: reservationText }],
+                    });
+                }
             }
             catch (err) {
                 const errorMessage = err instanceof Error ? err.message : String(err);
@@ -2542,8 +2738,17 @@ class ChatPanel {
                 const wrapNote = '\n\n_(Wrapping up: agentic loop hit pass limit — requesting summary…)_\n';
                 this.streamingContent += wrapNote;
                 await this.postMessage({ type: 'stream-chunk', chunk: wrapNote });
+                // Phase A — when the loop ended with the write-reservation already
+                // tripped (heavy reads, zero writes), the wrap-up text changes from the
+                // generic "summarize what you did" to an explicit token-economy stop
+                // notice. The model is asked to either name the patch it WOULD have
+                // applied or the missing prerequisite — never to keep proposing more
+                // reads as a next step.
+                const wrapText = (writeReservationInjected && totalWriteToolCalls === 0)
+                    ? 'You have used the available tool budget for this turn AND spent it entirely on reads (' + totalReadToolCalls + ' read calls, 0 writes). Stop calling tools. In your reply: (1) name the exact patch you WOULD have applied (file path + change in one sentence) OR the concrete missing prerequisite that prevented the write; (2) set goal_status to either "partial" with a write-bound recommended_next_step, or "blocked" with the missing prerequisite. Re-reading is no longer a valid next step. Emit the structured JSON envelope as instructed by the system prompt.'
+                    : 'You have used the available tool budget for this turn. Stop calling tools. In your reply, briefly summarize what you discovered, what you changed (if anything), the current state, and one clear recommended next step. If autonomy is enabled, emit the structured JSON envelope as instructed by the system prompt.';
                 const wrapPrompt = [
-                    { type: 'text', text: 'You have used the available tool budget for this turn. Stop calling tools. In your reply, briefly summarize what you discovered, what you changed (if anything), the current state, and one clear recommended next step. If autonomy is enabled, emit the structured JSON envelope as instructed by the system prompt.' },
+                    { type: 'text', text: wrapText },
                 ];
                 const wrapMessages = [...rawMessages, { role: 'user', content: wrapPrompt }];
                 const wrapTimeout = this._getLlmTimeoutMs({ mode: 'stream' });
@@ -2942,6 +3147,7 @@ class ChatPanel {
     const clearBtn = document.getElementById('clear-btn');
     const attachBtn = document.getElementById('attach-btn');
     const attachmentsEl = document.getElementById('attachments');
+    const composerEl = document.getElementById('composer');
     const providerSelect = document.getElementById('provider-select');
     const modelSelect = document.getElementById('model-select');
     const setApiKeyBtn = document.getElementById('set-api-key-btn');
@@ -2955,6 +3161,8 @@ class ChatPanel {
     let streamingBubble = null;
     let streamingMarkdownEl = null;
     let streamingRaw = '';
+    let optimisticSubmitBubble = null;
+    let optimisticSubmitMarkdownEl = null;
     let verifyTimer = null;
     const pendingVerification = new Map();
     const actionStates = new Map();
@@ -2984,6 +3192,49 @@ class ChatPanel {
     function autoresize() {
       promptEl.style.height = 'auto';
       promptEl.style.height = Math.min(promptEl.scrollHeight, 200) + 'px';
+    }
+
+    function clearImmediateSubmitFeedback(options) {
+      const keepBusy = !!(options && options.keepBusy);
+      if (composerEl) composerEl.classList.remove('submit-pending');
+      if (optimisticSubmitBubble) optimisticSubmitBubble.remove();
+      optimisticSubmitBubble = null;
+      optimisticSubmitMarkdownEl = null;
+      if (!keepBusy && !streamingBubble) {
+        sendBtn.style.display = 'inline-flex';
+        stopBtn.style.display = 'none';
+        thinkingEl.style.display = 'none';
+      }
+    }
+
+    function beginImmediateSubmitFeedback() {
+      clearImmediateSubmitFeedback({ keepBusy: true });
+      setEmptyStateVisible(false);
+      if (composerEl) composerEl.classList.add('submit-pending');
+
+      optimisticSubmitBubble = document.createElement('div');
+      optimisticSubmitBubble.className = 'message assistant optimistic-submit';
+      optimisticSubmitBubble.setAttribute('aria-live', 'polite');
+      optimisticSubmitMarkdownEl = document.createElement('div');
+      optimisticSubmitMarkdownEl.className = 'markdown-body immediate-submit-feedback';
+      optimisticSubmitMarkdownEl.innerHTML = '<span class="immediate-submit-pulse" aria-hidden="true"></span><span>Assessing the shape of the request…</span>';
+      optimisticSubmitBubble.appendChild(optimisticSubmitMarkdownEl);
+      messagesEl.appendChild(optimisticSubmitBubble);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      sendBtn.style.display = 'none';
+      stopBtn.style.display = 'inline-flex';
+      thinkingEl.style.display = 'flex';
+    }
+
+    function submitPrompt() {
+      const text = promptEl.value.trim();
+      if (!text) return;
+      beginImmediateSubmitFeedback();
+      vscode.postMessage({ type: 'send', text });
+      promptEl.value = '';
+      autoresize();
+      queueDraftSave();
     }
 
     function queueDraftSave() {
@@ -3420,6 +3671,7 @@ class ChatPanel {
     }
 
     function startStreaming() {
+      clearImmediateSubmitFeedback({ keepBusy: true });
       setEmptyStateVisible(false);
       streamingRaw = '';
       streamingBubble = document.createElement('div');
@@ -3538,6 +3790,7 @@ class ChatPanel {
       streamingBubble = null;
       streamingMarkdownEl = null;
       streamingRaw = '';
+      clearImmediateSubmitFeedback();
       sendBtn.style.display = 'inline-flex';
       stopBtn.style.display = 'none';
       thinkingEl.style.display = 'none';
@@ -3545,7 +3798,8 @@ class ChatPanel {
     }
 
     function restoreState(payload) {
-      const entries = (payload?.messages || []).map((message) => ({
+      clearImmediateSubmitFeedback();
+      const entries = (payload?.messages || []).map((message) => ({ 
         message,
         actions: [],
         roleMeta: message.role === 'assistant'
@@ -3599,24 +3853,18 @@ class ChatPanel {
     promptEl.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
-        const text = promptEl.value.trim();
-        if (!text) return;
-        vscode.postMessage({ type: 'send', text });
-        promptEl.value = '';
-        autoresize();
-        queueDraftSave();
+        submitPrompt();
       }
     });
-    sendBtn.addEventListener('click', () => {
-      const text = promptEl.value.trim();
-      if (!text) return;
-      vscode.postMessage({ type: 'send', text });
-      promptEl.value = '';
-      autoresize();
-      queueDraftSave();
+    sendBtn.addEventListener('click', submitPrompt);
+    stopBtn.addEventListener('click', () => {
+      clearImmediateSubmitFeedback();
+      vscode.postMessage({ type: 'stop' });
     });
-    stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'stop' }));
-    clearBtn.addEventListener('click', () => vscode.postMessage({ type: 'clear' }));
+    clearBtn.addEventListener('click', () => {
+      clearImmediateSubmitFeedback();
+      vscode.postMessage({ type: 'clear' });
+    });
     attachBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickAttachments' }));
     const autonomyResetBtn = document.getElementById('autonomy-reset-btn');
     if (autonomyResetBtn) autonomyResetBtn.addEventListener('click', () => vscode.postMessage({ type: 'resetAutonomy' }));
@@ -3714,6 +3962,7 @@ class ChatPanel {
           updateStreaming(msg.chunk || '');
           break;
         case 'stream-thinking':
+          if (msg.active) clearImmediateSubmitFeedback({ keepBusy: true });
           thinkingEl.style.display = msg.active ? 'flex' : 'none';
           break;
         case 'stream-end':
@@ -3755,6 +4004,9 @@ class ChatPanel {
           break;
         }
         case 'addMessage': {
+          if (msg.message && msg.message.role === 'assistant') {
+            clearImmediateSubmitFeedback();
+          }
           const uiState = { toolTrace: [...lastToolTrace], verdict: lastVerdict };
           const state = vscode.getState() || {};
           const entries = [...(state.messages || []), {
@@ -3826,6 +4078,7 @@ class ChatPanel {
           break;
         }
         case 'error':
+          clearImmediateSubmitFeedback();
           console.error(msg.error);
           break;
         case 'autonomyStatus': {

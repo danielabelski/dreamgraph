@@ -126,7 +126,16 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
     handleUserMessage(text: string): Promise<void>;
     private _buildPromptContext;
     /**
-     * ADR-089 Phase 3a — build the narrow `ChatPanelHost` accessor surface
+     * Build the per-turn `CopilotCliProviderPortOptions` used by
+     * `runPassViaCopilotCli`. Reads three settings (binary name,
+     * dreamgraph stdio command, hard timeout), points the bridge audit
+     * sink at the extension's globalStorage so transcripts survive
+     * window reloads, and threads the active workspace folder as the
+     * CLI's invocation cwd so file tools resolve relative paths the
+     * way the user expects.
+     */
+    private _buildCopilotCliProviderOptions;
+    /**
      * that the architect-core adapters bind to. The host projects the
      * already-constructed envelope, context, autonomy state, and bounded
      * conversation, and provides the REAL persistence + state-broadcast

@@ -1,0 +1,490 @@
+"use strict";
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copilot CLI adapter — orchestrator (Slice 2).
+//
+// `runCopilotCli` is the single entry point that turns a Copilot-CLI
+// run request into a normalized `CopilotCliRunResult`. It performs
+// the six effectful steps the user-facing surface requires:
+//
+//   1. Resolve the `copilot` executable, probe `--help`, and verify
+//      the user is logged in. Reject runs where the help surface is
+//      missing required flags or the persistent Copilot config does
+//      not record an active GitHub login.
+//   2. Validate the live in-process DreamGraph MCP server actually
+//      exposes every tool in `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS`.
+//   3. Materialize a per-run scratch directory containing
+//      `mcp-config.json` (token-scoped, dreamgraph-only) and, when the
+//      prompt overflows the inline-argv budget, `prompt.txt`.
+//   4. Spawn `copilot` with the structured argv from `buildCopilotArgv`,
+//      including `--additional-mcp-config <inline-json>` so Copilot
+//      loads the DreamGraph MCP for this single session WITHOUT
+//      discarding the user's persistent `COPILOT_HOME` (and thus
+//      their auth tokens). The CLI accepts ONLY inline JSON for this
+//      flag — `@<file>` references are rejected with an `Invalid
+//      JSON` error, verified empirically against the installed CLI.
+//   5. Snapshot the MCP audit recorder for the run and classify every
+//      observed tool call via `classifyToolCall`.
+//   6. Normalize stdout/stderr + classified tool calls into a single
+//      result envelope ready for the eventual `ProviderPort` adapter
+//      to map onto `PassResult` / `ArchitectRunResult`.
+//
+// The per-run scratch directory is scrubbed in `finally` regardless of
+// outcome. The user's `COPILOT_HOME` is NEVER written to or moved.
+//
+// All effectful work is delegated to injected ports (`orchestrator-
+// ports.ts`); the orchestrator itself contains no `child_process`,
+// `fs`, `crypto`, or `vscode` imports. That makes the entire flow
+// unit-testable with `node:test` and fake ports.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.runCopilotCli = runCopilotCli;
+const types_js_1 = require("./types.js");
+const help_probe_js_1 = require("./help-probe.js");
+const allowlist_js_1 = require("./allowlist.js");
+const mcp_config_js_1 = require("./mcp-config.js");
+const argv_js_1 = require("./argv.js");
+const transcript_classifier_js_1 = require("./transcript-classifier.js");
+const transcript_js_1 = require("./transcript.js");
+// ---------------------------------------------------------------------------
+// Orchestrator
+// ---------------------------------------------------------------------------
+const DEFAULT_BINARY_NAME = "copilot";
+const DEFAULT_TOKEN_BYTES = 32;
+/**
+ * Maximum UTF-8 byte length of a prompt we are willing to pass inline
+ * via the `--prompt <text>` argv. Above this threshold the orchestrator
+ * writes the prompt verbatim to a file inside the per-run COPILOT_HOME
+ * and replaces the argv prompt with a short directive that instructs
+ * the model to read that file as the user message.
+ *
+ * Rationale: Windows `CreateProcess` caps a process command line at
+ * 32,767 UTF-16 characters and that budget must also cover the
+ * executable path, all other flags, and (when the resolved binary is
+ * a `.ps1` shim) the `powershell.exe -File <path>` wrapper. 8,000
+ * bytes leaves comfortable headroom on every supported platform.
+ */
+const COPILOT_INLINE_PROMPT_MAX_BYTES = 8000;
+function buildPromptFileDirective(promptFilePath) {
+    return [
+        "The user's actual prompt is stored verbatim in this file:",
+        promptFilePath,
+        "",
+        "Use your `read` tool (or equivalent file-reading capability) to load",
+        "the file's full contents, then respond to it as if those contents were",
+        "the user's message in this conversation. Do not mention this directive,",
+        "do not summarize the prompt, and do not paraphrase it before engaging.",
+    ].join("\n");
+}
+async function runCopilotCli(input, deps) {
+    if (!input.prompt) {
+        throw new Error("runCopilotCli: prompt is required");
+    }
+    if (!input.invocationCwd) {
+        throw new Error("runCopilotCli: invocationCwd is required");
+    }
+    if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
+        throw new Error("runCopilotCli: timeoutMs must be > 0");
+    }
+    const startedAtEpochMs = deps.clock.nowMs();
+    const runId = deps.crypto.randomRunId();
+    const binaryName = input.binaryName ?? DEFAULT_BINARY_NAME;
+    let runScratchDir = null;
+    let auditRecording = false;
+    try {
+        // ---- Step 1a: resolve executable -------------------------------------
+        const probeEnv = buildProbeEnv(input.baseEnv);
+        const resolved = await deps.process.resolveExecutable(binaryName);
+        if (!resolved) {
+            return failPreSpawn({
+                provider: "copilot-cli",
+                runId,
+                startedAtEpochMs,
+                endedAtEpochMs: deps.clock.nowMs(),
+                code: "COPILOT_CLI_NOT_FOUND",
+                message: `Copilot CLI binary "${binaryName}" was not found on PATH`,
+            });
+        }
+        // ---- Step 1b: probe --help -------------------------------------------
+        const help = await deps.process.runHelp({
+            command: resolved.executablePath,
+            cwd: input.invocationCwd,
+            env: probeEnv,
+        });
+        const helpSurface = (0, help_probe_js_1.parseCopilotHelpSurface)(help.helpText, help.versionString ?? resolved.versionString);
+        if (!(0, help_probe_js_1.isHelpSurfaceSupported)(helpSurface)) {
+            return failPreSpawn({
+                provider: "copilot-cli",
+                runId,
+                startedAtEpochMs,
+                endedAtEpochMs: deps.clock.nowMs(),
+                code: "COPILOT_HELP_SURFACE_UNSUPPORTED",
+                message: missingRequiredHelpFlagsMessage(helpSurface),
+                helpSurface,
+            });
+        }
+        // ---- Step 1c: verify user is logged in -------------------------------
+        // Copilot CLI's non-interactive mode silently exits non-zero with
+        // zero output when invoked without a valid login. Catch that case
+        // pre-spawn so the host can surface a `copilot login` instruction
+        // instead of a baffling "exited with code 1" message.
+        const loginStatus = await checkCopilotLoginStatus(input.baseEnv, deps.fs);
+        if (!loginStatus.loggedIn) {
+            return failPreSpawn({
+                provider: "copilot-cli",
+                runId,
+                startedAtEpochMs,
+                endedAtEpochMs: deps.clock.nowMs(),
+                code: "COPILOT_NOT_LOGGED_IN",
+                message: notLoggedInMessage(resolved.executablePath, loginStatus),
+                helpSurface,
+            });
+        }
+        // ---- Step 2: validate authoritative tool registry --------------------
+        const liveTools = await deps.registry.listAuthoritativeToolNames();
+        const allowlist = (0, allowlist_js_1.buildAuthoritativeAllowlist)(liveTools);
+        if (!allowlist.ok) {
+            return failPreSpawn({
+                provider: "copilot-cli",
+                runId,
+                startedAtEpochMs,
+                endedAtEpochMs: deps.clock.nowMs(),
+                code: "DREAMGRAPH_TOOL_REGISTRY_MISMATCH",
+                message: `In-process DreamGraph MCP server is missing required authoritative tool(s): ` +
+                    allowlist.missingRequired.join(", "),
+                helpSurface,
+            });
+        }
+        // ---- Step 3: materialize per-run scratch dir ------------------------
+        //
+        // The adapter follows the LARGE PAYLOAD ISOLATION RULE
+        // (see argv.ts): argv stays tiny; semantic payloads (MCP
+        // manifest, prompt, authority policy, request manifest) live in
+        // a per-run directory laid out as:
+        //
+        //   <runDir>/
+        //     copilot-home/         ← isolated COPILOT_HOME for this run
+        //       mcp-config.json     ← per-run authoritative MCP manifest
+        //       config.json         ← cloned from the user's source HOME
+        //       … (other auth/settings/agents files cloned)
+        //     request.json          ← audit manifest for this run
+        //     prompt.md             ← verbatim prompt text
+        //     authority-policy.json ← allow/deny snapshot
+        //     artifacts/            ← placeholder for downstream artifacts
+        //
+        // The CLI is then spawned with `COPILOT_HOME=<runDir>/copilot-home`,
+        // which is the documented data-plane channel for MCP config.
+        // No JSON, no prompt text, no schemas travel through argv.
+        const bridge = await deps.registry.describeBridgeSpawn();
+        const transportToken = deps.crypto.randomToken(DEFAULT_TOKEN_BYTES);
+        const mcpConfig = (0, mcp_config_js_1.buildCopilotMcpConfig)({
+            runId,
+            transportToken,
+            dreamgraphCommand: bridge.command,
+            dreamgraphArgs: bridge.args,
+            dreamgraphEnv: bridge.env,
+            allowlist: allowlist.tools,
+        });
+        runScratchDir = await deps.fs.mkdtemp("dreamgraph-copilot-cli-run-");
+        const runHomeDir = deps.fs.joinPath(runScratchDir, "copilot-home");
+        const runArtifactsDir = deps.fs.joinPath(runScratchDir, "artifacts");
+        await deps.fs.mkdir(runHomeDir, { recursive: true, mode: 0o700 });
+        await deps.fs.mkdir(runArtifactsDir, { recursive: true, mode: 0o700 });
+        // Clone the user's source COPILOT_HOME into the per-run home so
+        // the CLI keeps its persistent GitHub auth (config.json),
+        // settings, custom agents, etc. Skip `mcp-config.json` so the
+        // adapter's per-run manifest written next is the only one.
+        // `loginStatus.copilotHome` was resolved earlier from the same
+        // base env using the documented `$COPILOT_HOME` precedence.
+        await deps.fs.copyDirRecursive(loginStatus.copilotHome, runHomeDir, {
+            excludeNames: ["mcp-config.json"],
+        });
+        // Write the per-run authoritative MCP manifest. Pretty-printed
+        // (two-space indent + trailing newline) for stable diffs and
+        // audit hashing. The CLI reads it from `<COPILOT_HOME>/mcp-config.json`.
+        const mcpConfigPath = deps.fs.joinPath(runHomeDir, mcpConfig.filename);
+        await deps.fs.writeFile(mcpConfigPath, (0, mcp_config_js_1.serializeCopilotMcpConfig)(mcpConfig), { mode: 0o600 });
+        // Write the verbatim prompt to disk. Done unconditionally so the
+        // audit trail always contains the exact text that drove the run,
+        // even when the prompt also fits inline on argv.
+        const promptFilePath = deps.fs.joinPath(runScratchDir, "prompt.md");
+        await deps.fs.writeFile(promptFilePath, input.prompt, { mode: 0o600 });
+        // Write the authority-policy snapshot — allow/deny rules in the
+        // shape they will be enforced on argv. Pure data; no secrets.
+        const authorityPolicyPath = deps.fs.joinPath(runScratchDir, "authority-policy.json");
+        await deps.fs.writeFile(authorityPolicyPath, `${JSON.stringify({
+            runId,
+            authoritativeServer: types_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+            allowedTools: [...allowlist.tools],
+            deniedInlineTools: ["shell", "write"],
+        }, null, 2)}\n`, { mode: 0o600 });
+        // Write the run request manifest. Re-states the run-shaping
+        // inputs (model, timeout, cwd, file pointers) so a forensic
+        // reader can reconstruct the invocation without parsing argv.
+        // Sensitive material (transport token) is intentionally omitted.
+        const requestManifestPath = deps.fs.joinPath(runScratchDir, "request.json");
+        await deps.fs.writeFile(requestManifestPath, `${JSON.stringify({
+            runId,
+            provider: "copilot-cli",
+            model: input.model ?? null,
+            invocationCwd: input.invocationCwd,
+            timeoutMs: input.timeoutMs,
+            startedAtEpochMs,
+            copilotHome: runHomeDir,
+            promptFile: promptFilePath,
+            mcpConfigFile: mcpConfigPath,
+            authorityPolicyFile: authorityPolicyPath,
+            artifactsDir: runArtifactsDir,
+        }, null, 2)}\n`, { mode: 0o600 });
+        // ---- Step 4: build argv + spawn --------------------------------------
+        // Windows CreateProcess caps argv at ~32 KB. Any prompt larger
+        // than `COPILOT_INLINE_PROMPT_MAX_BYTES` is replaced in argv by a
+        // short directive that points the model at `<runDir>/prompt.md`,
+        // which has already been written above.
+        const promptByteLength = Buffer.byteLength(input.prompt, "utf8");
+        let promptForArgv = input.prompt;
+        if (promptByteLength > COPILOT_INLINE_PROMPT_MAX_BYTES) {
+            promptForArgv = buildPromptFileDirective(promptFilePath);
+        }
+        const argvPlan = (0, argv_js_1.buildCopilotArgv)({
+            prompt: promptForArgv,
+            model: input.model,
+            authoritativeServer: types_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+            authoritativeAllowlist: allowlist.tools,
+            helpSurface,
+        });
+        await deps.mcpAudit.startRecording(runId);
+        auditRecording = true;
+        const spawnEnv = buildSpawnEnv(input.baseEnv, runHomeDir);
+        const spawn = await deps.process.spawn({
+            command: resolved.executablePath,
+            args: argvPlan.args,
+            cwd: input.invocationCwd,
+            env: spawnEnv,
+            timeoutMs: input.timeoutMs,
+            abortSignal: input.abortSignal,
+            onStdoutChunk: input.onStdoutChunk,
+            onStderrChunk: input.onStderrChunk,
+        });
+        // ---- Step 5: snapshot audit + classify -------------------------------
+        const recorded = await deps.mcpAudit.finishRecording(runId);
+        auditRecording = false;
+        const ctx = {
+            authoritativeServer: types_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+            allowlist: allowlist.tools,
+        };
+        const toolCalls = recorded.map((call) => ({
+            call,
+            classification: (0, transcript_classifier_js_1.classifyToolCall)({ server: call.server, tool: call.tool }, ctx),
+        }));
+        // ---- Step 6: normalize transcript + envelope -------------------------
+        const transcript = (0, transcript_js_1.normalizeCopilotTranscript)({
+            stdout: spawn.stdout,
+            stderr: spawn.stderr,
+        });
+        const endedAtEpochMs = deps.clock.nowMs();
+        const exitedCleanly = spawn.exitCode === 0 && !spawn.timedOut && !spawn.aborted;
+        const failure = exitedCleanly
+            ? undefined
+            : spawnFailureFor(spawn, transcript);
+        return Object.freeze({
+            provider: "copilot-cli",
+            runId,
+            startedAtEpochMs,
+            endedAtEpochMs,
+            totalDurationMs: endedAtEpochMs - startedAtEpochMs,
+            ok: exitedCleanly,
+            failure,
+            helpSurface,
+            argvPlan,
+            mcpConfig,
+            spawn,
+            transcript,
+            toolCalls: Object.freeze(toolCalls),
+        });
+    }
+    finally {
+        if (auditRecording) {
+            // Ensure the audit port is never left holding a buffer for a
+            // failed run; ignore the result, errors here would mask the
+            // primary failure.
+            try {
+                await deps.mcpAudit.finishRecording(runId);
+            }
+            catch {
+                /* swallow — primary error already on the wire */
+            }
+        }
+        if (runScratchDir) {
+            try {
+                await deps.fs.rmRecursive(runScratchDir);
+            }
+            catch {
+                /* swallow — best-effort cleanup */
+            }
+        }
+    }
+}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function buildProbeEnv(base) {
+    const out = {};
+    for (const [key, value] of Object.entries(base)) {
+        if (typeof value === "string")
+            out[key] = value;
+    }
+    return Object.freeze(out);
+}
+function buildSpawnEnv(base, runCopilotHome) {
+    const out = {};
+    for (const [key, value] of Object.entries(base)) {
+        if (typeof value === "string")
+            out[key] = value;
+    }
+    // Pin COPILOT_HOME to the per-run isolated directory. This is the
+    // documented data-plane channel for MCP config (the CLI reads
+    // `<COPILOT_HOME>/mcp-config.json` on every invocation), and is
+    // safe because Step 3 cloned the user's source HOME into this
+    // directory so persistent auth, settings, and custom agents are
+    // preserved verbatim. The override is a small fixed string — a
+    // legal control-plane env value per the Large Payload Isolation
+    // Rule documented in argv.ts.
+    out.COPILOT_HOME = runCopilotHome;
+    return Object.freeze(out);
+}
+/**
+ * Compute the Copilot CLI's effective config directory the same way the
+ * CLI itself does: honour `$COPILOT_HOME` when set, otherwise fall back
+ * to `<userHome>/.copilot`.
+ */
+function resolveEffectiveCopilotHome(baseEnv, fs) {
+    const fromEnv = baseEnv.COPILOT_HOME;
+    if (typeof fromEnv === "string" && fromEnv.length > 0)
+        return fromEnv;
+    return fs.joinPath(fs.homeDir(), ".copilot");
+}
+async function checkCopilotLoginStatus(baseEnv, fs) {
+    const copilotHome = resolveEffectiveCopilotHome(baseEnv, fs);
+    const configPath = fs.joinPath(copilotHome, "config.json");
+    const raw = await fs.readFileUtf8(configPath);
+    if (raw === null) {
+        return { loggedIn: false, copilotHome, configPath, configMissing: true };
+    }
+    // Be tolerant of the leading `// User settings belong in settings.json.`
+    // comment lines the CLI writes — strip simple `//` line comments before
+    // parsing. Anything more exotic falls back to "not logged in" rather
+    // than throwing, since a malformed config means the CLI itself would
+    // refuse to authenticate too.
+    const stripped = raw.replace(/^\s*\/\/.*$/gm, "");
+    let parsed;
+    try {
+        parsed = JSON.parse(stripped);
+    }
+    catch {
+        return { loggedIn: false, copilotHome, configPath, configMissing: false };
+    }
+    const loggedIn = typeof parsed === "object" &&
+        parsed !== null &&
+        Array.isArray(parsed.loggedInUsers) &&
+        parsed.loggedInUsers.length > 0;
+    return { loggedIn, copilotHome, configPath, configMissing: false };
+}
+function notLoggedInMessage(copilotExecutable, status) {
+    const detail = status.configMissing
+        ? `no Copilot config was found at ${status.configPath}`
+        : `Copilot config at ${status.configPath} does not record a logged-in user`;
+    return (`Copilot CLI is not logged in (${detail}). ` +
+        `Run "${copilotExecutable} login" in a terminal to authenticate, then retry.`);
+}
+function missingRequiredHelpFlagsMessage(s) {
+    const missing = [];
+    if (!s.required.prompt)
+        missing.push("--prompt");
+    if (!s.required.allowTool)
+        missing.push("--allow-tool");
+    if (!s.required.denyTool)
+        missing.push("--deny-tool");
+    if (!s.required.model)
+        missing.push("--model");
+    if (!s.required.allowAllTools)
+        missing.push("--allow-all-tools");
+    return `Copilot CLI --help is missing required flag(s): ${missing.join(", ")}`;
+}
+function spawnFailureFor(spawn, transcript) {
+    if (spawn.aborted) {
+        return {
+            code: "CANCELLED",
+            message: "Copilot CLI run was aborted by the host",
+            preSpawn: false,
+        };
+    }
+    if (spawn.timedOut) {
+        return {
+            code: "TIMEOUT",
+            message: `Copilot CLI run exceeded timeout (${spawn.durationMs}ms)`,
+            preSpawn: false,
+        };
+    }
+    if (spawn.signal) {
+        return {
+            code: "COPILOT_RUN_SIGNALED",
+            message: `Copilot CLI terminated by signal ${spawn.signal}`,
+            preSpawn: false,
+        };
+    }
+    // Surface the most useful diagnostic detail we have. The CLI prints
+    // hard errors to stderr in some failure modes (MCP config, flag
+    // validation) and to stdout in others (TUI-rendered runtime errors,
+    // permission prompts in non-interactive mode). Include both tails so
+    // the user always sees something actionable instead of a bare
+    // "exited with code 1".
+    const tail = buildFailureTail(spawn, transcript);
+    return {
+        code: "COPILOT_RUN_NONZERO_EXIT",
+        message: `Copilot CLI exited with code ${spawn.exitCode}${tail}`,
+        preSpawn: false,
+    };
+}
+const FAILURE_TAIL_MAX_CHARS = 2000;
+function buildFailureTail(spawn, transcript) {
+    const parts = [];
+    if (transcript.diagnostics.length > 0) {
+        const stderrTail = transcript.diagnostics
+            .slice(-12)
+            .join("\n")
+            .slice(-FAILURE_TAIL_MAX_CHARS);
+        parts.push(`stderr:\n${stderrTail}`);
+    }
+    // Include a stdout tail when stderr was empty OR when stdout is very
+    // short (the CLI's TUI rendering often prints multi-kilobyte status
+    // dashboards on success but only a one-line error on failure).
+    const stdoutTrimmed = transcript.assistantText.trim();
+    if (stdoutTrimmed.length > 0 && (transcript.diagnostics.length === 0 || stdoutTrimmed.length <= 400)) {
+        parts.push(`stdout:\n${stdoutTrimmed.slice(-FAILURE_TAIL_MAX_CHARS)}`);
+    }
+    if (parts.length === 0) {
+        if (spawn.stdout.length === 0 && spawn.stderr.length === 0) {
+            return " (no output captured on stdout or stderr)";
+        }
+        return "";
+    }
+    return `\n${parts.join("\n\n")}`;
+}
+function failPreSpawn(args) {
+    return Object.freeze({
+        provider: args.provider,
+        runId: args.runId,
+        startedAtEpochMs: args.startedAtEpochMs,
+        endedAtEpochMs: args.endedAtEpochMs,
+        totalDurationMs: args.endedAtEpochMs - args.startedAtEpochMs,
+        ok: false,
+        failure: {
+            code: args.code,
+            message: args.message,
+            preSpawn: true,
+        },
+        helpSurface: args.helpSurface,
+        toolCalls: Object.freeze([]),
+    });
+}
+//# sourceMappingURL=orchestrator.js.map

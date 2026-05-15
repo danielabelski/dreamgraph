@@ -299,6 +299,22 @@ function getStyles() {
       border-top: 1px solid var(--vscode-panel-border);
       background: var(--vscode-sideBar-background, var(--vscode-editor-background));
       flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    #composer.submit-pending::after {
+      content: '';
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 4px;
+      height: 2px;
+      border-radius: 999px;
+      pointer-events: none;
+      background: linear-gradient(90deg, transparent 0%, rgba(0, 183, 255, 0.15) 25%, rgba(43, 214, 255, 0.95) 50%, rgba(142, 241, 255, 0.95) 58%, rgba(0, 183, 255, 0.15) 75%, transparent 100%);
+      filter: drop-shadow(0 0 8px rgba(0, 183, 255, 0.9));
+      animation: dg-submit-beam 1.05s ease-in-out infinite alternate;
+      transform-origin: center;
     }
     #prompt {
       flex: 1;
@@ -318,6 +334,46 @@ function getStyles() {
     }
     #prompt:focus { border-color: var(--vscode-focusBorder); }
     #prompt::placeholder { color: var(--vscode-input-placeholderForeground); }
+    #composer.submit-pending #prompt {
+      border-color: rgba(43, 214, 255, 0.9);
+      box-shadow: 0 0 0 1px rgba(43, 214, 255, 0.28), 0 0 16px rgba(0, 183, 255, 0.18) inset;
+      background-image: linear-gradient(90deg, transparent 0%, rgba(0, 183, 255, 0.08) 42%, rgba(142, 241, 255, 0.16) 50%, rgba(0, 183, 255, 0.08) 58%, transparent 100%);
+      background-size: 220% 100%;
+      animation: dg-prompt-sheen 1.35s linear infinite;
+    }
+    .message.assistant.optimistic-submit {
+      border-color: rgba(43, 214, 255, 0.25);
+    }
+    .immediate-submit-feedback {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--vscode-descriptionForeground);
+      font-style: italic;
+    }
+    .immediate-submit-pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgb(43, 214, 255);
+      box-shadow: 0 0 0 0 rgba(43, 214, 255, 0.65), 0 0 12px rgba(43, 214, 255, 0.9);
+      animation: dg-submit-pulse 1s ease-out infinite;
+      flex: 0 0 auto;
+    }
+    @keyframes dg-submit-beam {
+      0% { transform: translateX(-38%) scaleX(0.34); opacity: 0.45; }
+      45% { opacity: 1; }
+      100% { transform: translateX(38%) scaleX(0.34); opacity: 0.85; }
+    }
+    @keyframes dg-prompt-sheen {
+      0% { background-position: 180% 0; }
+      100% { background-position: -80% 0; }
+    }
+    @keyframes dg-submit-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(43, 214, 255, 0.65), 0 0 12px rgba(43, 214, 255, 0.9); }
+      70% { box-shadow: 0 0 0 8px rgba(43, 214, 255, 0), 0 0 12px rgba(43, 214, 255, 0.9); }
+      100% { box-shadow: 0 0 0 0 rgba(43, 214, 255, 0), 0 0 12px rgba(43, 214, 255, 0.9); }
+    }
 
     /* ── Buttons (shared) ── */
     .icon-btn {

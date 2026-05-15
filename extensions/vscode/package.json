@@ -226,10 +226,26 @@
             "openai",
             "anthropic",
             "ollama",
-            "lmstudio"
+            "lmstudio",
+            "copilot-cli"
           ],
           "default": "anthropic",
-          "description": "LLM provider for the Architect model. Local options: ollama (default :11434), lmstudio (default :1234/v1)."
+          "description": "LLM provider for the Architect model. Local options: ollama (default :11434), lmstudio (default :1234/v1), copilot-cli (spawns the GitHub Copilot CLI; uses your local copilot login, no API key)."
+        },
+        "dreamgraph.architect.copilotCli.command": {
+          "type": "string",
+          "default": "copilot",
+          "description": "Executable name (or absolute path) for the GitHub Copilot CLI binary. Must be runnable in PATH or given as an absolute path."
+        },
+        "dreamgraph.architect.copilotCli.dreamgraphCommand": {
+          "type": "string",
+          "default": "dreamgraph",
+          "description": "Command used to spawn the DreamGraph MCP server in stdio mode (the bridge runs `<command> --transport stdio`)."
+        },
+        "dreamgraph.architect.copilotCli.timeoutMs": {
+          "type": "number",
+          "default": 180000,
+          "description": "Hard wall-clock cap (ms) for a single Copilot CLI invocation."
         },
         "dreamgraph.architect.useCorePass": {
           "type": "boolean",
@@ -340,9 +356,10 @@
     }
   },
   "scripts": {
-    "build": "npm run lint:isolation && npm run build:webview && tsc -p ./tsconfig.json && npm run build:extension && npm run build:vendor",
+    "build": "npm run lint:isolation && npm run build:webview && tsc -p ./tsconfig.json && npm run build:extension && npm run build:bridge && npm run build:vendor",
     "build:webview": "esbuild src/webview/index.ts --bundle --outfile=dist/webview.js --format=iife --platform=browser",
     "build:extension": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --format=cjs --platform=node --target=node18 --external:vscode --minify",
+    "build:bridge": "esbuild src/architect-core/adapters/copilot-cli/host/bridge-entry.ts --bundle --outfile=dist/copilot-cli-bridge.js --format=cjs --platform=node --target=node18",
     "build:vendor": "node -e \"const fs=require('fs'),path=require('path');const out=path.join('dist','vendor');fs.mkdirSync(out,{recursive:true});for(const [src,dst] of [['node_modules/markdown-it/dist/markdown-it.min.js','markdown-it.min.js'],['node_modules/dompurify/dist/purify.min.js','purify.min.js']]){let s=fs.readFileSync(src,'utf8');s=s.replace(/[\\n\\r]*\\/\\/[#@]\\s*sourceMappingURL=.*$/m,'');fs.writeFileSync(path.join(out,dst),s);console.log('vendored',src,'->',path.join(out,dst));}\"",
     "watch": "tsc -watch -p ./tsconfig.json",
     "package": "vsce package",

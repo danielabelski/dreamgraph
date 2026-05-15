@@ -20,6 +20,7 @@ import { getCardRendererScript } from './webview/card-renderer.js';
 import type { GraphSignalProvider } from './graph-signal';
 import {
   ANTHROPIC_MODELS,
+  COPILOT_CLI_MODELS,
   OPENAI_MODELS,
   type ArchitectContentBlock,
   type ArchitectLlm,
@@ -34,7 +35,17 @@ import type { ChangedFilesView, ChangeType } from './changed-files-view';
 import { LOCAL_TOOL_DEFINITIONS, isLocalTool, executeLocalTool } from './local-tools.js';
 import { assemblePrompt, inferTask } from './prompts/index.js';
 import { selectToolGroups } from './tool-groups.js';
-import { runPassViaCore } from './architect-core/runner.js';
+import { runPassViaCore, runPassViaCopilotCli } from './architect-core/runner.js';
+import {
+  HOST_CLOCK,
+  HOST_CRYPTO,
+  HOST_FS,
+  HOST_PROCESS,
+  createHostAudit,
+  createHostRegistry,
+  type CopilotCliProviderPortOptions,
+  type CopilotCliRunResult,
+} from './architect-core/adapters/copilot-cli/index.js';
 import type { ChatPanelHost } from './architect-core/adapters/host.js';
 import {
   createAutonomyState,
@@ -43,7 +54,8 @@ import {
   type AutonomyInstructionState,
   type RecommendedAction,
 } from './autonomy.js';
-import { analyzePass, advanceAutonomyStateIfContinued, buildContinuationPrompt } from './autonomy-loop.js';
+import { analyzePass, advanceAutonomyStateIfContinued, buildContinuationPrompt, isReadOnlyTool } from './autonomy-loop.js';
+import { isWriteToolName, narrowToWriteAndVerify, pickPreferredWriteTool, APPLY_LABEL_PATTERN } from './tool-classification.js';
 import { extractStructuredPassEnvelope, type StructuredPassEnvelope } from './autonomy-structured.js';
 import { extractPrimaryEnvelope } from './envelope-utils.js';
 import { getAutonomyMode, getAutonomyPassBudget, parseAutonomyRequest } from './reporting.js';
@@ -861,6 +873,13 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   // owns the attachment clear (false) or defers it to `host.clearAttachments`
   // inside `runPass` step 7 (true).
   const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get<boolean>('useCorePass') === true;
+  // The copilot-cli provider always routes through the architect-core
+  // seam (`runPassViaCopilotCli`), so attachment lifecycle, host
+  // persistence, and tool clearing all flow through `runPass` step 7
+  // exactly like the `useCorePass` path. Treat the two routes
+  // identically for any pre-seam state mutation guards.
+  const copilotCliPreRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
+  const seamLifecycle = useCorePass || copilotCliPreRoute;
 
   // D3 — multi-modal: if the user attached files, replace the last user
   // message's content with typed content blocks so architect-llm's per-provider
@@ -901,7 +920,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // network call so the user can immediately attach something new for the
     // next prompt. On the seam path the driver clears via `host.clearAttachments`
     // inside `runPass` step 7 (same lifecycle, just owned by the seam).
-    if (!useCorePass) {
+    if (!seamLifecycle) {
       this.attachments = [];
       // Broadcast the cleared attachment list so the prompt-bar chips
       // disappear immediately. `postState()` only carries `messages`; the
@@ -957,8 +976,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       `Tool selection: ${tools.length}/${allTools.length} tools — groups=[${toolDecision.groups.join(', ')}] mutating=${toolDecision.mutating} autonomy=${toolDecision.autonomy}; ${toolDecision.rationale}`,
     );
 
-    if (tools.length > 0) {
-      fullContent = await this.runAgenticLoop(conversation, tools);
+    // Copilot CLI executes its tool calls in-process via the
+    // DreamGraph stdio MCP bridge, so we MUST NOT also drive an
+    // agentic loop in this process — that would attempt to dispatch
+    // tools twice and the CLI doesn't return ToolUseRequests anyway.
+    // Force the no-tools branch and let `runPassViaCopilotCli` own
+    // the turn end-to-end.
+    const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
+    const effectiveTools: ToolDefinition[] = copilotCliRoute ? [] : tools;
+
+    if (effectiveTools.length > 0) {
+      fullContent = await this.runAgenticLoop(conversation, effectiveTools);
     } else {
       // ADR-089 Phase 3a — text-only seam route. When the user enables
       // `dreamgraph.architect.useCorePass`, the no-tools branch goes
@@ -970,7 +998,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // `capturedDroppedAttachmentNames`, `capturedAttachmentSummary`,
       // `capturedStopContextBlock`) is threaded into the host so the seam
       // sees the SAME multi-modal blocks the inline path would have shipped.
-      if (useCorePass) {
+      if (useCorePass || copilotCliRoute) {
         const host = this._buildCorePassHost(
           envelope,
           task,
@@ -986,18 +1014,32 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         );
         const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
         try {
-          const passResult = await runPassViaCore({
-            host,
-            text: trimmed,
-            tools: [],
-            onStreamChunk: (chunk: string) => {
-              const safeChunk = this._redactSecrets(chunk);
-              fullContent += safeChunk;
-              this.streamingContent += safeChunk;
-              void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-            },
-            abortSignal: req.signal,
-          });
+          const passResult = copilotCliRoute
+            ? await runPassViaCopilotCli({
+                host,
+                text: trimmed,
+                tools: [],
+                providerOptions: this._buildCopilotCliProviderOptions(),
+                onStreamChunk: (chunk: string) => {
+                  const safeChunk = this._redactSecrets(chunk);
+                  fullContent += safeChunk;
+                  this.streamingContent += safeChunk;
+                  void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                },
+                abortSignal: req.signal,
+              })
+            : await runPassViaCore({
+                host,
+                text: trimmed,
+                tools: [],
+                onStreamChunk: (chunk: string) => {
+                  const safeChunk = this._redactSecrets(chunk);
+                  fullContent += safeChunk;
+                  this.streamingContent += safeChunk;
+                  void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                },
+                abortSignal: req.signal,
+              });
           if (!fullContent && passResult.assistantMessage.content) {
             fullContent = passResult.assistantMessage.content;
           }
@@ -1134,7 +1176,75 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 }
 
   /**
-   * ADR-089 Phase 3a — build the narrow `ChatPanelHost` accessor surface
+   * Build the per-turn `CopilotCliProviderPortOptions` used by
+   * `runPassViaCopilotCli`. Reads three settings (binary name,
+   * dreamgraph stdio command, hard timeout), points the bridge audit
+   * sink at the extension's globalStorage so transcripts survive
+   * window reloads, and threads the active workspace folder as the
+   * CLI's invocation cwd so file tools resolve relative paths the
+   * way the user expects.
+   */
+  private _buildCopilotCliProviderOptions(): CopilotCliProviderPortOptions {
+    if (!this.architectLlm) {
+      throw new Error('Cannot build Copilot CLI provider options: architectLlm is not initialized.');
+    }
+    const llm = this.architectLlm;
+    const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+    const binaryName = (cfg.get<string>('copilotCli.command') ?? '').trim() || 'copilot';
+    const dreamgraphCommand = (cfg.get<string>('copilotCli.dreamgraphCommand') ?? '').trim() || 'dreamgraph';
+    const timeoutMsRaw = cfg.get<number>('copilotCli.timeoutMs');
+    const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+      ? timeoutMsRaw
+      : 180_000;
+
+    const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const auditDirAbsPath = vscode.Uri.joinPath(this.context.globalStorageUri, 'copilot-cli-audit').fsPath;
+    const bridgeEntryPath = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'copilot-cli-bridge.js').fsPath;
+
+    const registry = createHostRegistry({
+      dreamgraphCommand,
+      bridgeEntryPath,
+      nodeExecPath: process.execPath,
+      auditDirAbsPath,
+    });
+    const mcpAudit = createHostAudit({ auditDirAbsPath });
+
+    const model = llm.currentConfig?.model;
+    return {
+      hostLlm: llm,
+      invocationCwd: workspaceCwd,
+      timeoutMs,
+      baseEnv: process.env,
+      // Skip the `--model` flag when the user picked `auto` so the
+      // CLI applies its own routing heuristic.
+      model: model && model !== 'auto' ? model : undefined,
+      binaryName,
+      deps: {
+        fs: HOST_FS,
+        process: HOST_PROCESS,
+        crypto: HOST_CRYPTO,
+        clock: HOST_CLOCK,
+        registry,
+        mcpAudit,
+      },
+      onRunResult: (result: CopilotCliRunResult): void => {
+        // Surface failures into the existing tool-trace channel so
+        // the user sees them next to MCP tool entries. Best-effort:
+        // never let observer code break the turn.
+        try {
+          if (!result.ok) {
+            const code = result.failure?.code ?? 'COPILOT_CLI_UNKNOWN_FAILURE';
+            const message = result.failure?.message ?? 'Copilot CLI run failed';
+            console.warn(`[DreamGraph][copilot-cli] ${code}: ${message}`);
+          }
+        } catch {
+          // ignore
+        }
+      },
+    };
+  }
+
+  /**
    * that the architect-core adapters bind to. The host projects the
    * already-constructed envelope, context, autonomy state, and bounded
    * conversation, and provides the REAL persistence + state-broadcast
@@ -2035,11 +2145,12 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const model = this.architectLlm?.currentConfig?.model ?? '';
     const models = provider === 'anthropic' ? ANTHROPIC_MODELS
       : provider === 'openai' ? OPENAI_MODELS
+      : provider === 'copilot-cli' ? COPILOT_CLI_MODELS
       : [];
     const capabilities = this.architectLlm?.getModelCapabilities(provider as ArchitectProvider, model) ?? { textAttachments: false, imageAttachments: false };
     void this.postMessage({
       type: 'updateModels',
-      providers: ['anthropic', 'openai', 'ollama', 'lmstudio'],
+      providers: ['anthropic', 'openai', 'ollama', 'lmstudio', 'copilot-cli'],
       models,
       current: { provider, model },
       capabilities,
@@ -2055,16 +2166,19 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     if (this.architectLlm) {
       const models = provider === 'anthropic' ? ANTHROPIC_MODELS
         : provider === 'openai' ? OPENAI_MODELS
+        : provider === 'copilot-cli' ? COPILOT_CLI_MODELS
         : [];
       const previousModel = this.architectLlm.currentConfig?.model ?? '';
       const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
-      // ollama uses no API key; lmstudio uses a fixed literal placeholder
-      // (LM Studio ignores the auth header but the OpenAI-compat code path
-      // sends one regardless).
+      // Keyless providers: ollama (no auth), lmstudio (fixed literal
+      // placeholder; the LM Studio server ignores the auth header but
+      // the OpenAI-compat code path sends one regardless), and
+      // copilot-cli (the CLI uses its own local GitHub authentication
+      // and never sees a key from this extension).
       let apiKey = '';
       if (provider === 'lmstudio') {
         apiKey = 'lm-studio';
-      } else if (provider !== 'ollama') {
+      } else if (provider !== 'ollama' && provider !== 'copilot-cli') {
         apiKey = (await this.architectLlm.getApiKey(provider) ?? '');
       }
       this.architectLlm.applyConfig({
@@ -2195,15 +2309,48 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     });
   }
 
+  /**
+   * Lever 2 — bind a concrete write tool to apply/patch-style recommended
+   * actions when the model emitted them without a `tool` (or with a
+   * read-only one). Pure: returns a new array; never mutates inputs.
+   * Falls through (no binding) when no write tool is available in the
+   * live catalog so the loop never deadlocks.
+   */
+  private static _bindWriteToolToAnchorActions(
+    actions: readonly RecommendedAction[],
+    tools: readonly ToolDefinition[],
+  ): RecommendedAction[] {
+    const writeTool = pickPreferredWriteTool(tools);
+    if (!writeTool) return actions.map((a) => ({ ...a }));
+    return actions.map((a) => {
+      const isApplyLabel = APPLY_LABEL_PATTERN.test(a.label);
+      const toolMissingOrRead = !a.tool || !isWriteToolName(a.tool);
+      if (isApplyLabel && toolMissingOrRead) {
+        return { ...a, tool: writeTool };
+      }
+      return { ...a };
+    });
+  }
+
   private async _handleAutonomyPassComplete(
     content: string,
     messageId: string,
     llmMessages: ArchitectMessage[],
     tools: ToolDefinition[],
   ): Promise<void> {
-    // Extract structured envelope and build recommended actions
+    // Extract structured envelope and build recommended actions.
     const envelope = extractStructuredPassEnvelope(content);
-    const actions: RecommendedAction[] = envelope.nextSteps;
+    // Lever 2 — bind a concrete write tool to apply/patch-style actions
+    // when the model emitted them with a missing or read-only `tool`
+    // field. The continuation prompt then has a binding to suggest and
+    // the model is far less likely to default back to a search/read tool
+    // on the next pass. This is the soft hint; Lever 1 (catalog
+    // narrowing on the second sticky-anchor locate-only pass) is the
+    // hard fallback. Both layers are token-economy at task level.
+    const actions: RecommendedAction[] = ChatPanel._bindWriteToolToAnchorActions(
+      envelope.nextSteps,
+      tools,
+    );
     this._lastRecommendedActions = actions;
 
     // Tool / file-edit accounting drives the empty-pass detector. Without
@@ -2256,8 +2403,15 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // it would duplicate the buttons below the assistant message.
 
     if (result.decision.shouldContinue && !this.abortController?.signal.aborted) {
+      // Capture the prior locate-only marker BEFORE advancing state — Lever 1
+      // narrows the next pass's tool catalog when the prior pass was already
+      // locate-only AND the just-completed pass was also locate-only AND a
+      // sticky patch anchor is in play. We mechanically eliminate the
+      // ability of the model to spend another turn on pure reads instead of
+      // hard-stopping the loop ("no failure: keep going until done").
+      const priorPassWasLocateOnly = this._autonomyState.lastPassWasLocateOnly === true;
       // Advance state and continue
-      this._autonomyState = advanceAutonomyStateIfContinued(this._autonomyState, result.decision, result.signal, result.patchAnchorEstablished);
+      this._autonomyState = advanceAutonomyStateIfContinued(this._autonomyState, result.decision, result.signal, result.patchAnchorEstablished, result.anchorPaths, result.isLocateOnlyThisPass);
       this._broadcastAutonomyStatus();
 
       // Safety: cap autonomous continuation
@@ -2291,9 +2445,21 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       await this.persistMessages();
       await this.postMessage({ type: 'addMessage', message: notice, actions: [], roleMeta: this._roleMetaFor(notice), contextFooter: undefined });
 
-      // Trigger next pass
-      const continuationPrompt = result.nextPrompt ?? buildContinuationPrompt(selectedAction);
-      await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools, result.actionSet.actions);
+      // Trigger next pass.
+      // Lever 1 — narrow the live tool catalog to write+verify only when
+      // BOTH the prior and the just-completed pass were locate-only AND a
+      // patch anchor is sticky. The narrower keeps the loop alive (it
+      // falls back to the full catalog if it would otherwise empty out)
+      // and applies pressure exactly where the model is wasting tokens
+      // re-reading instead of writing.
+      const shouldNarrow =
+        result.patchAnchorEstablished
+        && priorPassWasLocateOnly
+        && result.isLocateOnlyThisPass;
+      const effectiveTools = shouldNarrow ? narrowToWriteAndVerify(tools) : tools;
+      const continuationPrompt = result.nextPrompt
+        ?? buildContinuationPrompt(selectedAction, { patchAnchorEstablished: result.patchAnchorEstablished });
+      await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, effectiveTools, result.actionSet.actions);
     } else {
       // ──────────────────────────────────────────────────────────────────
       // Report-required guard: never let the Architect sign off silently.
@@ -2829,6 +2995,18 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   let finalText = '';
   let pass = 0;
   const maxPasses = 12;
+  // Phase A — task-level token-economy: track read vs write tool calls inside
+  // this single agentic loop. Once the model has spent WRITE_RESERVATION_READ_THRESHOLD
+  // reads with zero writes, inject a synthetic user message that reserves the
+  // remaining iterations of this loop for write/verification calls only. The
+  // canonical anti-pattern this guards against is post-anchor re-reading: the
+  // model has already located the patch site but keeps re-confirming instead
+  // of editing, burning tokens at task level even when each individual call
+  // stays under the per-pass BudgetCoordinator ceiling.
+  const WRITE_RESERVATION_READ_THRESHOLD = 8;
+  let totalReadToolCalls = 0;
+  let totalWriteToolCalls = 0;
+  let writeReservationInjected = false;
 
   while (pass < maxPasses) {
     pass += 1;
@@ -2945,6 +3123,39 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // content with a short stub. This prevents quadratic growth when the loop
       // runs many passes (each pass otherwise re-sends every prior tool_result in full).
       _elideStaleToolResults(rawMessages, /*keepLastPairs*/ 6);
+
+      // Phase A — tally read/write split for THIS iteration's tool batch and,
+      // if the threshold has been crossed with zero writes, inject the
+      // write-reservation nudge as a synthetic user message before the next
+      // iteration. Fired at most once per loop.
+      for (const tc of response.toolCalls) {
+        if (isReadOnlyTool(tc.name)) {
+          totalReadToolCalls += 1;
+        } else {
+          totalWriteToolCalls += 1;
+        }
+      }
+      if (
+        !writeReservationInjected
+        && totalReadToolCalls >= WRITE_RESERVATION_READ_THRESHOLD
+        && totalWriteToolCalls === 0
+        && pass < maxPasses
+      ) {
+        writeReservationInjected = true;
+        const remaining = maxPasses - pass;
+        const reservationText =
+          `You have spent ${totalReadToolCalls} read tool calls locating the change with zero writes. `
+          + `The remaining ${remaining} iteration${remaining === 1 ? '' : 's'} of this turn `
+          + `${remaining === 1 ? 'is' : 'are'} reserved for write + verification tool calls only `
+          + `(e.g. replace_string_in_file, multi_replace_string_in_file, create_file, patch_file, `
+          + `edit_file, edit_entity, then a build/test/read-back verification). `
+          + `If you cannot write yet, state the missing prerequisite explicitly and stop. `
+          + `Re-reading already-located files is token-economy waste at task level and will end this turn.`;
+        rawMessages.push({
+          role: 'user',
+          content: [{ type: 'text', text: reservationText }],
+        });
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const isTimeout = this._isTimeoutError(err);
@@ -3005,8 +3216,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       this.streamingContent += wrapNote;
       await this.postMessage({ type: 'stream-chunk', chunk: wrapNote });
 
+      // Phase A — when the loop ended with the write-reservation already
+      // tripped (heavy reads, zero writes), the wrap-up text changes from the
+      // generic "summarize what you did" to an explicit token-economy stop
+      // notice. The model is asked to either name the patch it WOULD have
+      // applied or the missing prerequisite — never to keep proposing more
+      // reads as a next step.
+      const wrapText = (writeReservationInjected && totalWriteToolCalls === 0)
+        ? 'You have used the available tool budget for this turn AND spent it entirely on reads (' + totalReadToolCalls + ' read calls, 0 writes). Stop calling tools. In your reply: (1) name the exact patch you WOULD have applied (file path + change in one sentence) OR the concrete missing prerequisite that prevented the write; (2) set goal_status to either "partial" with a write-bound recommended_next_step, or "blocked" with the missing prerequisite. Re-reading is no longer a valid next step. Emit the structured JSON envelope as instructed by the system prompt.'
+        : 'You have used the available tool budget for this turn. Stop calling tools. In your reply, briefly summarize what you discovered, what you changed (if anything), the current state, and one clear recommended next step. If autonomy is enabled, emit the structured JSON envelope as instructed by the system prompt.';
       const wrapPrompt: Array<Record<string, unknown>> = [
-        { type: 'text', text: 'You have used the available tool budget for this turn. Stop calling tools. In your reply, briefly summarize what you discovered, what you changed (if anything), the current state, and one clear recommended next step. If autonomy is enabled, emit the structured JSON envelope as instructed by the system prompt.' },
+        { type: 'text', text: wrapText },
       ];
       const wrapMessages = [...rawMessages, { role: 'user', content: wrapPrompt }];
 
@@ -3416,6 +3636,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const clearBtn = document.getElementById('clear-btn');
     const attachBtn = document.getElementById('attach-btn');
     const attachmentsEl = document.getElementById('attachments');
+    const composerEl = document.getElementById('composer');
     const providerSelect = document.getElementById('provider-select');
     const modelSelect = document.getElementById('model-select');
     const setApiKeyBtn = document.getElementById('set-api-key-btn');
@@ -3429,6 +3650,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     let streamingBubble = null;
     let streamingMarkdownEl = null;
     let streamingRaw = '';
+    let optimisticSubmitBubble = null;
+    let optimisticSubmitMarkdownEl = null;
     let verifyTimer = null;
     const pendingVerification = new Map();
     const actionStates = new Map();
@@ -3458,6 +3681,49 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     function autoresize() {
       promptEl.style.height = 'auto';
       promptEl.style.height = Math.min(promptEl.scrollHeight, 200) + 'px';
+    }
+
+    function clearImmediateSubmitFeedback(options) {
+      const keepBusy = !!(options && options.keepBusy);
+      if (composerEl) composerEl.classList.remove('submit-pending');
+      if (optimisticSubmitBubble) optimisticSubmitBubble.remove();
+      optimisticSubmitBubble = null;
+      optimisticSubmitMarkdownEl = null;
+      if (!keepBusy && !streamingBubble) {
+        sendBtn.style.display = 'inline-flex';
+        stopBtn.style.display = 'none';
+        thinkingEl.style.display = 'none';
+      }
+    }
+
+    function beginImmediateSubmitFeedback() {
+      clearImmediateSubmitFeedback({ keepBusy: true });
+      setEmptyStateVisible(false);
+      if (composerEl) composerEl.classList.add('submit-pending');
+
+      optimisticSubmitBubble = document.createElement('div');
+      optimisticSubmitBubble.className = 'message assistant optimistic-submit';
+      optimisticSubmitBubble.setAttribute('aria-live', 'polite');
+      optimisticSubmitMarkdownEl = document.createElement('div');
+      optimisticSubmitMarkdownEl.className = 'markdown-body immediate-submit-feedback';
+      optimisticSubmitMarkdownEl.innerHTML = '<span class="immediate-submit-pulse" aria-hidden="true"></span><span>Assessing the shape of the request…</span>';
+      optimisticSubmitBubble.appendChild(optimisticSubmitMarkdownEl);
+      messagesEl.appendChild(optimisticSubmitBubble);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      sendBtn.style.display = 'none';
+      stopBtn.style.display = 'inline-flex';
+      thinkingEl.style.display = 'flex';
+    }
+
+    function submitPrompt() {
+      const text = promptEl.value.trim();
+      if (!text) return;
+      beginImmediateSubmitFeedback();
+      vscode.postMessage({ type: 'send', text });
+      promptEl.value = '';
+      autoresize();
+      queueDraftSave();
     }
 
     function queueDraftSave() {
@@ -3894,6 +4160,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     }
 
     function startStreaming() {
+      clearImmediateSubmitFeedback({ keepBusy: true });
       setEmptyStateVisible(false);
       streamingRaw = '';
       streamingBubble = document.createElement('div');
@@ -4012,6 +4279,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       streamingBubble = null;
       streamingMarkdownEl = null;
       streamingRaw = '';
+      clearImmediateSubmitFeedback();
       sendBtn.style.display = 'inline-flex';
       stopBtn.style.display = 'none';
       thinkingEl.style.display = 'none';
@@ -4019,7 +4287,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     }
 
     function restoreState(payload) {
-      const entries = (payload?.messages || []).map((message) => ({
+      clearImmediateSubmitFeedback();
+      const entries = (payload?.messages || []).map((message) => ({ 
         message,
         actions: [],
         roleMeta: message.role === 'assistant'
@@ -4073,24 +4342,18 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     promptEl.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
-        const text = promptEl.value.trim();
-        if (!text) return;
-        vscode.postMessage({ type: 'send', text });
-        promptEl.value = '';
-        autoresize();
-        queueDraftSave();
+        submitPrompt();
       }
     });
-    sendBtn.addEventListener('click', () => {
-      const text = promptEl.value.trim();
-      if (!text) return;
-      vscode.postMessage({ type: 'send', text });
-      promptEl.value = '';
-      autoresize();
-      queueDraftSave();
+    sendBtn.addEventListener('click', submitPrompt);
+    stopBtn.addEventListener('click', () => {
+      clearImmediateSubmitFeedback();
+      vscode.postMessage({ type: 'stop' });
     });
-    stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'stop' }));
-    clearBtn.addEventListener('click', () => vscode.postMessage({ type: 'clear' }));
+    clearBtn.addEventListener('click', () => {
+      clearImmediateSubmitFeedback();
+      vscode.postMessage({ type: 'clear' });
+    });
     attachBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickAttachments' }));
     const autonomyResetBtn = document.getElementById('autonomy-reset-btn');
     if (autonomyResetBtn) autonomyResetBtn.addEventListener('click', () => vscode.postMessage({ type: 'resetAutonomy' }));
@@ -4188,6 +4451,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           updateStreaming(msg.chunk || '');
           break;
         case 'stream-thinking':
+          if (msg.active) clearImmediateSubmitFeedback({ keepBusy: true });
           thinkingEl.style.display = msg.active ? 'flex' : 'none';
           break;
         case 'stream-end':
@@ -4229,6 +4493,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           break;
         }
         case 'addMessage': {
+          if (msg.message && msg.message.role === 'assistant') {
+            clearImmediateSubmitFeedback();
+          }
           const uiState = { toolTrace: [...lastToolTrace], verdict: lastVerdict };
           const state = vscode.getState() || {};
           const entries = [...(state.messages || []), {
@@ -4300,6 +4567,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           break;
         }
         case 'error':
+          clearImmediateSubmitFeedback();
           console.error(msg.error);
           break;
         case 'autonomyStatus': {

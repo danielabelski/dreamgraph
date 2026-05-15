@@ -39,7 +39,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ArchitectLlm = exports.OPENAI_MODELS = exports.ANTHROPIC_MODELS = void 0;
+exports.ArchitectLlm = exports.COPILOT_CLI_MODELS = exports.OPENAI_MODELS = exports.ANTHROPIC_MODELS = void 0;
 exports.setRequestBudgetSink = setRequestBudgetSink;
 const vscode = __importStar(require("vscode"));
 const openai_responses_adapter_1 = require("./openai-responses-adapter");
@@ -62,6 +62,18 @@ exports.OPENAI_MODELS = [
     "gpt-4o-mini",
     "o3",
     "o4-mini",
+];
+// Models the GitHub Copilot CLI accepts on the `--model` flag. The CLI
+// is the source of truth and may add/remove entries between releases;
+// this list reflects the currently-shipping set the user has access to.
+exports.COPILOT_CLI_MODELS = [
+    "claude-opus-4.7",
+    "claude-opus-4.6",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-4o",
+    "claude-sonnet-4.6",
+    "auto",
 ];
 /* ------------------------------------------------------------------ */
 /*  Emergency input-budget brakes                                     */
@@ -163,6 +175,11 @@ class ArchitectLlm {
                 return { textAttachments: true, imageAttachments: false };
             case "lmstudio":
                 return { textAttachments: true, imageAttachments: false };
+            case "copilot-cli":
+                // The CLI takes a single `--prompt` string. The provider port
+                // serializes attachments into placeholder text; no real binary
+                // attachment surface exists.
+                return { textAttachments: false, imageAttachments: false };
             default:
                 return { textAttachments: false, imageAttachments: false };
         }
@@ -948,6 +965,9 @@ class ArchitectLlm {
                 return "http://localhost:11434";
             case "lmstudio":
                 return "http://localhost:1234/v1";
+            case "copilot-cli":
+                // No HTTP transport; the CLI is invoked locally.
+                return "";
             default:
                 return "";
         }
@@ -962,6 +982,8 @@ class ArchitectLlm {
                 return "llama3.1";
             case "lmstudio":
                 return "";
+            case "copilot-cli":
+                return exports.COPILOT_CLI_MODELS[0] ?? "auto";
             default:
                 return "";
         }
@@ -973,8 +995,18 @@ class ArchitectLlm {
         if (!this._config.model) {
             throw new Error('Architect model name not set. Set "dreamgraph.architect.model" in settings.');
         }
-        if (this._config.provider !== "ollama" && this._config.provider !== "lmstudio" && !this._config.apiKey) {
+        if (this._config.provider !== "ollama" &&
+            this._config.provider !== "lmstudio" &&
+            this._config.provider !== "copilot-cli" &&
+            !this._config.apiKey) {
             throw new Error(`No API key stored for ${this._config.provider}. Use "DreamGraph: Set Architect API Key" to store one.`);
+        }
+        if (this._config.provider === "copilot-cli") {
+            // Copilot CLI is not callable through ArchitectLlm. The chat
+            // panel must route turns through `runPassViaCopilotCli` instead
+            // of `architectLlm.stream`/`callWithTools`. Fail loudly if a
+            // call slips through.
+            throw new Error("Copilot CLI provider does not use ArchitectLlm transport. Route this turn through runPassViaCopilotCli instead.");
         }
     }
     dispose() {

@@ -22,4 +22,24 @@ export declare function buildV1Ports(host: ChatPanelHost): ArchitectCorePorts;
  * and projected through `ChatPanelHost`. The runner only orchestrates.
  */
 export declare function runPassViaCore(input: RunPassViaCoreInput): Promise<PassResult>;
+import { type CopilotCliProviderPortOptions } from "./adapters/copilot-cli/index.js";
+export interface CopilotCliPortBundleOptions {
+    readonly host: ChatPanelHost;
+    readonly providerOptions: CopilotCliProviderPortOptions;
+}
+/**
+ * Build a port set where the provider port is the Copilot CLI wrapper.
+ * Every other port is reused from the v1 wiring. Pure construction —
+ * performs no I/O.
+ */
+export declare function buildCopilotCliPorts(options: CopilotCliPortBundleOptions): ArchitectCorePorts;
+export interface RunPassViaCopilotCliInput extends RunPassViaCoreInput {
+    readonly providerOptions: CopilotCliProviderPortOptions;
+}
+/**
+ * Drive one pass through `runPass()` with the Copilot CLI provider
+ * port wired in. Returns the typed `PassResult` to the caller exactly
+ * like `runPassViaCore`.
+ */
+export declare function runPassViaCopilotCli(input: RunPassViaCopilotCliInput): Promise<PassResult>;
 //# sourceMappingURL=runner.d.ts.map

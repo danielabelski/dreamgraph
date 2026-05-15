@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copilot CLI adapter — real `CopilotCliMcpAuditPort` (Slice 3b).
+//
+// The bridge process (see `bridge-entry.ts`) writes one NDJSON line
+// per `tools/call` it observes between Copilot CLI and the in-process
+// DreamGraph MCP server. This adapter reads those lines back into
+// `RecordedMcpToolCall` records and then deletes the file.
+//
+// Wire format (per line, written by the bridge):
+//   {"server":"dreamgraph","tool":"query_resource","inputJson":"{…}",
+//    "resultJson":"{…}","isError":false,"durationMs":12,
+//    "startedAtEpochMs":1763000000000}
+//
+// Two records sharing the same JSON-RPC `id` are NEVER produced — the
+// bridge already paired request and response before writing.
+//
+// Hard rules respected:
+//   - The bridge writes the audit file. The orchestrator passes
+//     `DREAMGRAPH_AUDIT_PATH` to the bridge via the MCP server env in
+//     `mcp-config.json` (Copilot CLI propagates env to MCP child
+//     processes verbatim). This adapter MUST agree with the bridge on
+//     the path, hence the shared `auditFilePathFor(runId)` helper.
+//   - Empty file → empty array (legitimate "run made no MCP calls").
+//   - Missing file → empty array (bridge never started, or run failed
+//     before any tool call). Never throws on absence.
+//   - Malformed lines → skipped silently with a stderr warning. We
+//     never let one bad record poison the rest of the run.
+
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
+
+import type {
+  CopilotCliMcpAuditPort,
+  RecordedMcpToolCall,
+} from "../orchestrator-ports.js";
+
+export interface HostAuditOptions {
+  /**
+   * Absolute path to the directory the bridge writes audit files into.
+   * The orchestrator typically points this at
+   * `<copilotHome>/audit/` so it lands inside the per-run scratch
+   * directory and is scrubbed by the same `rmRecursive` cleanup.
+   */
+  readonly auditDirAbsPath: string;
+}
+
+/**
+ * Compute the audit NDJSON path for a given run. The bridge calls the
+ * same function so adapter and bridge stay in lockstep without sharing
+ * a runtime module.
+ */
+export function auditFilePathFor(auditDirAbsPath: string, runId: string): string {
+  if (!auditDirAbsPath || auditDirAbsPath.length === 0) {
+    throw new Error("auditFilePathFor: auditDirAbsPath is required");
+  }
+  if (!runId || runId.length === 0) {
+    throw new Error("auditFilePathFor: runId is required");
+  }
+  // Sanitize runId for filesystem safety; the orchestrator's runIds
+  // are already URL-safe but we belt-and-brace here.
+  const safeRunId = runId.replace(/[^A-Za-z0-9._-]/g, "_");
+  return join(auditDirAbsPath, `${safeRunId}.ndjson`);
+}
+
+interface RecordingState {
+  readonly path: string;
+  readonly startedAtEpochMs: number;
+}
+
+export function createHostAudit(opts: HostAuditOptions): CopilotCliMcpAuditPort {
+  if (!opts || typeof opts.auditDirAbsPath !== "string" || opts.auditDirAbsPath.length === 0) {
+    throw new Error("createHostAudit: auditDirAbsPath is required");
+  }
+  const recordings = new Map<string, RecordingState>();
+
+  return Object.freeze({
+    async startRecording(runId: string): Promise<void> {
+      if (!runId || runId.length === 0) {
+        throw new Error("startRecording: runId is required");
+      }
+      // Ensure the audit directory exists so the bridge can open the
+      // file in append mode without racing on `mkdir`.
+      await mkdir(opts.auditDirAbsPath, { recursive: true });
+      const path = auditFilePathFor(opts.auditDirAbsPath, runId);
+      // Idempotent: re-recording the same runId resets the start clock
+      // but does NOT delete an existing audit file (the bridge owns
+      // file lifecycle; double-start is a programmer error in the
+      // orchestrator, not this port's responsibility to recover from).
+      recordings.set(runId, { path, startedAtEpochMs: Date.now() });
+    },
+
+    async finishRecording(runId: string): Promise<readonly RecordedMcpToolCall[]> {
+      if (!runId || runId.length === 0) {
+        throw new Error("finishRecording: runId is required");
+      }
+      const state = recordings.get(runId);
+      if (!state) {
+        // Either we already finished (port contract: second call is
+        // empty) or startRecording was never invoked. Both → empty.
+        return Object.freeze([]);
+      }
+      recordings.delete(runId);
+
+      let raw: string;
+      try {
+        await stat(state.path);
+        raw = await readFile(state.path, "utf8");
+      } catch {
+        // No audit file exists → run made zero MCP calls.
+        return Object.freeze([]);
+      }
+      const lines = raw.split(/\r?\n/);
+      const out: RecordedMcpToolCall[] = [];
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i]!.trim();
+        if (line.length === 0) continue;
+        const parsed = parseRecordOrNull(line);
+        if (parsed === null) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[copilot-cli audit] skipped malformed record at ${state.path}:${i + 1}`,
+          );
+          continue;
+        }
+        out.push(parsed);
+      }
+
+      // Best-effort delete: the audit file lives inside COPILOT_HOME,
+      // which the orchestrator scrubs anyway. Failing to delete is
+      // not an audit-correctness problem.
+      try {
+        await rm(state.path, { force: true });
+      } catch {
+        /* ignore */
+      }
+      return Object.freeze(out);
+    },
+  });
+}
+
+function parseRecordOrNull(line: string): RecordedMcpToolCall | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r["server"] !== "string" ||
+    typeof r["tool"] !== "string" ||
+    typeof r["inputJson"] !== "string" ||
+    typeof r["resultJson"] !== "string" ||
+    typeof r["isError"] !== "boolean" ||
+    typeof r["durationMs"] !== "number" ||
+    typeof r["startedAtEpochMs"] !== "number"
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    server: r["server"] as string,
+    tool: r["tool"] as string,
+    inputJson: r["inputJson"] as string,
+    resultJson: r["resultJson"] as string,
+    isError: r["isError"] as boolean,
+    durationMs: r["durationMs"] as number,
+    startedAtEpochMs: r["startedAtEpochMs"] as number,
+  });
+}

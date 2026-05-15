@@ -79,3 +79,79 @@ export async function runPassViaCore(input: RunPassViaCoreInput): Promise<PassRe
   };
   return runPass(driverInput);
 }
+
+// ---------------------------------------------------------------------------
+// Copilot CLI surface — Slice 4 host wiring.
+//
+// Same architect-core seam, but the `provider` port routes the turn to
+// the Copilot CLI orchestrator instead of `ArchitectLlm`. Every other
+// port (context builder, prompt composer, tool executor, memory,
+// attachments, autonomy, clock) reuses the v1 host wiring so the
+// chat-panel persistence, autonomy gates, and tool-trace channel
+// behave identically regardless of which surface produced the
+// assistant turn.
+//
+// The router (chat panel) chooses between `runPassViaCore` and
+// `runPassViaCopilotCli` per turn based on the user's provider
+// selection. This file does NOT implement that selection — it only
+// makes both wirings available behind matching entry points.
+// ---------------------------------------------------------------------------
+
+import {
+  createCopilotCliProviderPort,
+  type CopilotCliProviderPortOptions,
+} from "./adapters/copilot-cli/index.js";
+
+export interface CopilotCliPortBundleOptions {
+  readonly host: ChatPanelHost;
+  readonly providerOptions: CopilotCliProviderPortOptions;
+}
+
+/**
+ * Build a port set where the provider port is the Copilot CLI wrapper.
+ * Every other port is reused from the v1 wiring. Pure construction —
+ * performs no I/O.
+ */
+export function buildCopilotCliPorts(
+  options: CopilotCliPortBundleOptions,
+): ArchitectCorePorts {
+  const v1 = buildV1Ports(options.host);
+  return Object.freeze({
+    ...v1,
+    provider: createCopilotCliProviderPort(options.providerOptions),
+  });
+}
+
+export interface RunPassViaCopilotCliInput extends RunPassViaCoreInput {
+  readonly providerOptions: CopilotCliProviderPortOptions;
+}
+
+/**
+ * Drive one pass through `runPass()` with the Copilot CLI provider
+ * port wired in. Returns the typed `PassResult` to the caller exactly
+ * like `runPassViaCore`.
+ */
+export async function runPassViaCopilotCli(
+  input: RunPassViaCopilotCliInput,
+): Promise<PassResult> {
+  const ports = buildCopilotCliPorts({
+    host: input.host,
+    providerOptions: input.providerOptions,
+  });
+  const driverInput: RunPassInput = {
+    userIntent: {
+      text: input.text,
+      contentBlocks: input.host.contentBlocks,
+      stopContextBlock: input.host.stopContextBlock,
+    },
+    ports,
+    priorMessages: input.host.priorMessages,
+    task: input.host.task,
+    provider: input.host.architectLlm.provider ?? "anthropic",
+    tools: input.tools,
+    budgetCoordinator: input.host.budgetCoordinator,
+    onStreamChunk: input.onStreamChunk,
+    abortSignal: input.abortSignal,
+  };
+  return runPass(driverInput);
+}

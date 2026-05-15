@@ -29,7 +29,7 @@ import {
   projectStrictEnvelopeToLegacy,
 } from "./architect-pass-projection.js";
 
-export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio";
+export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio" | "copilot-cli";
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ArchitectConfig {
@@ -115,6 +115,19 @@ export const OPENAI_MODELS = [
   "gpt-4o-mini",
   "o3",
   "o4-mini",
+];
+
+// Models the GitHub Copilot CLI accepts on the `--model` flag. The CLI
+// is the source of truth and may add/remove entries between releases;
+// this list reflects the currently-shipping set the user has access to.
+export const COPILOT_CLI_MODELS = [
+  "claude-opus-4.7",
+  "claude-opus-4.6",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-4o",
+  "claude-sonnet-4.6",
+  "auto",
 ];
 
 
@@ -243,6 +256,11 @@ export class ArchitectLlm implements vscode.Disposable {
         return { textAttachments: true, imageAttachments: false };
       case "lmstudio":
         return { textAttachments: true, imageAttachments: false };
+      case "copilot-cli":
+        // The CLI takes a single `--prompt` string. The provider port
+        // serializes attachments into placeholder text; no real binary
+        // attachment surface exists.
+        return { textAttachments: false, imageAttachments: false };
       default:
         return { textAttachments: false, imageAttachments: false };
     }
@@ -1243,6 +1261,9 @@ export class ArchitectLlm implements vscode.Disposable {
         return "http://localhost:11434";
       case "lmstudio":
         return "http://localhost:1234/v1";
+      case "copilot-cli":
+        // No HTTP transport; the CLI is invoked locally.
+        return "";
       default:
         return "";
     }
@@ -1258,6 +1279,8 @@ export class ArchitectLlm implements vscode.Disposable {
         return "llama3.1";
       case "lmstudio":
         return "";
+      case "copilot-cli":
+        return COPILOT_CLI_MODELS[0] ?? "auto";
       default:
         return "";
     }
@@ -1270,8 +1293,22 @@ export class ArchitectLlm implements vscode.Disposable {
     if (!this._config.model) {
       throw new Error('Architect model name not set. Set "dreamgraph.architect.model" in settings.');
     }
-    if (this._config.provider !== "ollama" && this._config.provider !== "lmstudio" && !this._config.apiKey) {
+    if (
+      this._config.provider !== "ollama" &&
+      this._config.provider !== "lmstudio" &&
+      this._config.provider !== "copilot-cli" &&
+      !this._config.apiKey
+    ) {
       throw new Error(`No API key stored for ${this._config.provider}. Use "DreamGraph: Set Architect API Key" to store one.`);
+    }
+    if (this._config.provider === "copilot-cli") {
+      // Copilot CLI is not callable through ArchitectLlm. The chat
+      // panel must route turns through `runPassViaCopilotCli` instead
+      // of `architectLlm.stream`/`callWithTools`. Fail loudly if a
+      // call slips through.
+      throw new Error(
+        "Copilot CLI provider does not use ArchitectLlm transport. Route this turn through runPassViaCopilotCli instead.",
+      );
     }
   }
 

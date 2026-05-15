@@ -23,6 +23,18 @@ export interface AutonomyState {
    * non-progress (see analyzePass). Cleared whenever a write tool runs
    * successfully so a follow-up edit cycle can re-discover its own anchor. */
   patchAnchorEstablished?: boolean;
+  /** Concrete file paths the architect named as the patch site in the
+   * most recent pass that established or re-confirmed the anchor.
+   * Compared across passes by the two-strike token-economy stop rule:
+   * if a follow-up locate-only pass names a *different* set of paths,
+   * that counts as legitimate re-anchoring (anchor moved) and the loop
+   * is allowed to continue; same-set re-locates count as waste. */
+  lastAnchorPaths?: readonly string[];
+  /** True when the previous pass executed only read tool calls and made
+   * no file edits. Together with the same flag for the current pass and
+   * the lastAnchorPaths comparison, this drives the two-strike
+   * token-economy stop rule in `shouldContinueAfterPass`. */
+  lastPassWasLocateOnly?: boolean;
 }
 
 export interface PassOutcomeSignal {
@@ -219,6 +231,16 @@ export function shouldContinueAfterPass(
   if (signal.hasBlockingFailure) {
     return { shouldContinue: false, reason: 'Stopped: blocking failure encountered.', selectionMode: 'none' };
   }
+  // NOTE: post-anchor re-reading is NOT a stop condition. The token-economy
+  // remedy at task level is structural pressure (write-reservation prompt in
+  // the inner agentic loop, anchor-aware continuation prompt, write-tool
+  // binding on apply/patch actions, and tool-catalog narrowing toward
+  // write+verify on the second sticky-anchor locate-only pass) — not a hard
+  // halt. The architect's design is "no failure: keep going until done";
+  // stopping the loop just because the model has not yet selected a write
+  // tool would punish the model instead of giving it what it needs to
+  // succeed. See chat-panel.ts (Phase A write reservation, Lever 1 narrowing,
+  // Lever 2 action binding) and autonomy-loop.ts (anchor-aware prompt).
   // Counter-spam guard: two passes in a row that produced no tool calls,
   // no file edits, and no real report — force user confirmation rather
   // than burning more pass budget on a model that is silently failing.
