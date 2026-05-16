@@ -426,7 +426,7 @@ export async function runCopilotCli(
     auditRecording = true;
 
     const spawnEnv = buildSpawnEnv(input.baseEnv, runHomeDir);
-    const spawn = await deps.process.spawn({
+    const spawnInput = {
       command: resolved.executablePath,
       args: argvPlan.args,
       cwd: input.invocationCwd,
@@ -435,7 +435,8 @@ export async function runCopilotCli(
       abortSignal: input.abortSignal,
       onStdoutChunk: input.onStdoutChunk,
       onStderrChunk: input.onStderrChunk,
-    });
+    };
+    const spawn = await deps.process.spawn(spawnInput);
 
     // ---- Step 5: snapshot audit + classify -------------------------------
     const recorded = await deps.mcpAudit.finishRecording(runId);
@@ -462,7 +463,7 @@ export async function runCopilotCli(
     const exitedCleanly = spawn.exitCode === 0 && !spawn.timedOut && !spawn.aborted;
     const failure: CopilotCliFailure | undefined = exitedCleanly
       ? undefined
-      : spawnFailureFor(spawn, transcript);
+      : spawnFailureFor(spawn, transcript, spawnInput);
 
     return Object.freeze({
       provider: "copilot-cli" as const,
@@ -623,6 +624,7 @@ function missingRequiredHelpFlagsMessage(s: CopilotHelpSurface): string {
 function spawnFailureFor(
   spawn: CopilotCliSpawnResult,
   transcript: CopilotCliTranscript,
+  context?: CopilotCliFailureContext,
 ): CopilotCliFailure {
   if (spawn.aborted) {
     return {
@@ -650,8 +652,10 @@ function spawnFailureFor(
   // validation) and to stdout in others (TUI-rendered runtime errors,
   // permission prompts in non-interactive mode). Include both tails so
   // the user always sees something actionable instead of a bare
-  // "exited with code 1".
-  const tail = buildFailureTail(spawn, transcript);
+  // "exited with code 1". When the run failed silently, append spawn
+  // context so the host can see exactly what binary/args/cwd/env shape
+  // was used without guessing.
+  const tail = buildFailureTail(spawn, transcript, context);
   return {
     code: "COPILOT_RUN_NONZERO_EXIT",
     message: `Copilot CLI exited with code ${spawn.exitCode}${tail}`,
@@ -660,10 +664,23 @@ function spawnFailureFor(
 }
 
 const FAILURE_TAIL_MAX_CHARS = 2000;
+const FAILURE_ARG_JOIN_MAX_CHARS = 1200;
+const FAILURE_CWD_MAX_CHARS = 300;
+const FAILURE_COMMAND_MAX_CHARS = 300;
+const FAILURE_ENV_KEYS = ["COPILOT_HOME", "PATH", "HOME", "USERPROFILE", "GITHUB_TOKEN"] as const;
+
+type CopilotCliFailureContext = {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly timeoutMs: number;
+  readonly env: Readonly<Record<string, string>>;
+};
 
 function buildFailureTail(
   spawn: CopilotCliSpawnResult,
   transcript: CopilotCliTranscript,
+  context?: CopilotCliFailureContext,
 ): string {
   const parts: string[] = [];
   if (transcript.diagnostics.length > 0) {
@@ -682,11 +699,57 @@ function buildFailureTail(
   }
   if (parts.length === 0) {
     if (spawn.stdout.length === 0 && spawn.stderr.length === 0) {
-      return " (no output captured on stdout or stderr)";
+      if (!context) {
+        return " (no output captured on stdout or stderr)";
+      }
+      return ` (no output captured on stdout or stderr)\nspawn-context:\n${formatFailureContextBlock(context)}`;
     }
     return "";
   }
+  if (context) {
+    parts.push(`spawn-context:\n${formatFailureContextBlock(context)}`);
+  }
   return `\n${parts.join("\n\n")}`;
+}
+
+function formatFailureContextInline(context: CopilotCliFailureContext): string {
+  return [
+    `command=${JSON.stringify(truncateFailureField(context.command, FAILURE_COMMAND_MAX_CHARS))}`,
+    `args=${JSON.stringify(truncateFailureField(joinFailureArgs(context.args), FAILURE_ARG_JOIN_MAX_CHARS))}`,
+    `cwd=${JSON.stringify(truncateFailureField(context.cwd, FAILURE_CWD_MAX_CHARS))}`,
+    `timeoutMs=${context.timeoutMs}`,
+    `env=${JSON.stringify(pickFailureEnv(context.env))}`,
+  ].join(", ");
+}
+
+function formatFailureContextBlock(context: CopilotCliFailureContext): string {
+  return [
+    `command: ${truncateFailureField(context.command, FAILURE_COMMAND_MAX_CHARS)}`,
+    `args: ${truncateFailureField(joinFailureArgs(context.args), FAILURE_ARG_JOIN_MAX_CHARS)}`,
+    `cwd: ${truncateFailureField(context.cwd, FAILURE_CWD_MAX_CHARS)}`,
+    `timeoutMs: ${context.timeoutMs}`,
+    `env: ${JSON.stringify(pickFailureEnv(context.env))}`,
+  ].join("\n");
+}
+
+function joinFailureArgs(args: readonly string[]): string {
+  return args.map((arg) => JSON.stringify(arg)).join(" ");
+}
+
+function truncateFailureField(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `…${value.slice(-(maxChars - 1))}`;
+}
+
+function pickFailureEnv(env: Readonly<Record<string, string>>): Record<string, string> {
+  const picked: Record<string, string> = {};
+  for (const key of FAILURE_ENV_KEYS) {
+    const value = env[key];
+    if (typeof value === "string" && value.length > 0) {
+      picked[key] = truncateFailureField(value, FAILURE_TAIL_MAX_CHARS);
+    }
+  }
+  return picked;
 }
 
 function failPreSpawn(args: {

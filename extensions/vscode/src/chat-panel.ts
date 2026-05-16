@@ -2995,17 +2995,35 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   let finalText = '';
   let pass = 0;
   const maxPasses = 12;
-  // Phase A — task-level token-economy: track read vs write tool calls inside
-  // this single agentic loop. Once the model has spent WRITE_RESERVATION_READ_THRESHOLD
-  // reads with zero writes, inject a synthetic user message that reserves the
-  // remaining iterations of this loop for write/verification calls only. The
-  // canonical anti-pattern this guards against is post-anchor re-reading: the
-  // model has already located the patch site but keeps re-confirming instead
-  // of editing, burning tokens at task level even when each individual call
-  // stays under the per-pass BudgetCoordinator ceiling.
+  // Phase A — task-level token-economy: nudge the model toward writes when it
+  // is stuck re-reading already-located content. The reservation is a
+  // synthetic user message injected after the model has spent
+  // WRITE_RESERVATION_READ_THRESHOLD CONSECUTIVE reads (no intervening write).
+  // It is **lifted automatically** the next time any write tool runs in this
+  // loop, and may re-arm later if the model returns to read-only spam without
+  // further writes. The counter resets on any write — including
+  // patch_markdown_chapter, edit_markdown_section, edit_entity, create_file,
+  // delete_file, and any other non-read-prefixed tool — so the constraint
+  // never "holds on" after legitimate progress.
+  //
+  // GATE: the reservation only arms when a prior pass established a sticky
+  // patch anchor (`AutonomyState.lastAnchorPaths` non-empty). Fresh user
+  // prompts and read-only / assess tasks never have this set, so they read
+  // freely. The constraint exists to apply write-pressure when a write was
+  // ALREADY IMPLIED AND ANCHORED by the previous pass — not to ban
+  // prerequisite reads on tasks that are inherently read-only. Allowed even
+  // under pressure: exact body required for safe patch, post-write
+  // verification reads, stale-anchor recovery, and reading a newly
+  // identified concrete blocker target. Discouraged: broad search,
+  // re-reading already-inspected files, relocating the same anchor,
+  // "just to be sure" discovery.
+  const hasStickyAnchorFromPriorPass =
+    Array.isArray(this._autonomyState.lastAnchorPaths)
+    && this._autonomyState.lastAnchorPaths.length > 0;
   const WRITE_RESERVATION_READ_THRESHOLD = 8;
   let totalReadToolCalls = 0;
   let totalWriteToolCalls = 0;
+  let readsSinceLastWrite = 0;
   let writeReservationInjected = false;
 
   while (pass < maxPasses) {
@@ -3124,33 +3142,64 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // runs many passes (each pass otherwise re-sends every prior tool_result in full).
       _elideStaleToolResults(rawMessages, /*keepLastPairs*/ 6);
 
-      // Phase A — tally read/write split for THIS iteration's tool batch and,
-      // if the threshold has been crossed with zero writes, inject the
-      // write-reservation nudge as a synthetic user message before the next
-      // iteration. Fired at most once per loop.
+      // Phase A — tally read/write split for THIS iteration's tool batch.
+      // Track reads-since-last-write so the reservation can self-lift the
+      // moment any write tool runs, and re-arm later if the model goes back
+      // to read-only spam without writing. Any non-read-prefixed tool counts
+      // as a write here — patch_markdown_chapter, edit_markdown_section,
+      // create_file, edit_entity, run_command, etc. — which matches the
+      // common-sense "the model is making progress" signal.
+      let writesThisPass = 0;
       for (const tc of response.toolCalls) {
         if (isReadOnlyTool(tc.name)) {
           totalReadToolCalls += 1;
+          readsSinceLastWrite += 1;
         } else {
           totalWriteToolCalls += 1;
+          writesThisPass += 1;
+          readsSinceLastWrite = 0;
         }
+      }
+      // Reset trigger: any write call in this pass lifts an active
+      // reservation and clears the read counter. The next reservation can
+      // only fire if the model spends WRITE_RESERVATION_READ_THRESHOLD
+      // consecutive reads AGAIN without writing.
+      if (writeReservationInjected && writesThisPass > 0) {
+        writeReservationInjected = false;
+        rawMessages.push({
+          role: 'user',
+          content: [{
+            type: 'text',
+            text:
+              `Write observed (${writesThisPass} this pass, ${totalWriteToolCalls} total write call${totalWriteToolCalls === 1 ? '' : 's'} this turn). `
+              + `The earlier write-reservation nudge is LIFTED. `
+              + `You may resume normal read+write cadence — including read-back, `
+              + `verification, and additional discovery as needed for the next change. `
+              + `The constraint will only re-arm if you go back to reading without writing.`,
+          }],
+        });
       }
       if (
         !writeReservationInjected
-        && totalReadToolCalls >= WRITE_RESERVATION_READ_THRESHOLD
-        && totalWriteToolCalls === 0
+        && hasStickyAnchorFromPriorPass
+        && readsSinceLastWrite >= WRITE_RESERVATION_READ_THRESHOLD
         && pass < maxPasses
       ) {
         writeReservationInjected = true;
-        const remaining = maxPasses - pass;
+        const anchorList = this._autonomyState.lastAnchorPaths!.slice(0, 3).join(', ');
         const reservationText =
-          `You have spent ${totalReadToolCalls} read tool calls locating the change with zero writes. `
-          + `The remaining ${remaining} iteration${remaining === 1 ? '' : 's'} of this turn `
-          + `${remaining === 1 ? 'is' : 'are'} reserved for write + verification tool calls only `
-          + `(e.g. replace_string_in_file, multi_replace_string_in_file, create_file, patch_file, `
-          + `edit_file, edit_entity, then a build/test/read-back verification). `
-          + `If you cannot write yet, state the missing prerequisite explicitly and stop. `
-          + `Re-reading already-located files is token-economy waste at task level and will end this turn.`;
+          `A patch anchor was established by the previous pass (${anchorList}) and you have spent `
+          + `${readsSinceLastWrite} consecutive read tool calls in this turn without writing. `
+          + `Token-economy nudge: the next iteration should attempt the implied write `
+          + `(e.g. replace_string_in_file, multi_replace_string_in_file, create_file, `
+          + `patch_file, edit_file, edit_entity, patch_markdown_chapter, edit_markdown_section) `
+          + `OR state the missing prerequisite explicitly. `
+          + `Allowed reads under this nudge: the exact file/function body required for a safe patch, `
+          + `post-write verification, stale-anchor recovery after a failed edit, and reading a newly `
+          + `identified concrete blocker target. Avoid: broad search, re-reading already-inspected `
+          + `files, relocating the same anchor, "just to be sure" discovery. `
+          + `This nudge LIFTS automatically the moment any write tool succeeds — `
+          + `it is not a permanent ban on reads.`;
         rawMessages.push({
           role: 'user',
           content: [{ type: 'text', text: reservationText }],
@@ -3216,13 +3265,18 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       this.streamingContent += wrapNote;
       await this.postMessage({ type: 'stream-chunk', chunk: wrapNote });
 
-      // Phase A — when the loop ended with the write-reservation already
-      // tripped (heavy reads, zero writes), the wrap-up text changes from the
-      // generic "summarize what you did" to an explicit token-economy stop
-      // notice. The model is asked to either name the patch it WOULD have
-      // applied or the missing prerequisite — never to keep proposing more
-      // reads as a next step.
-      const wrapText = (writeReservationInjected && totalWriteToolCalls === 0)
+      // Phase A — strict "you spent the budget on reads" wrap-up only when:
+      // (1) a sticky patch anchor existed from a prior pass (a write was
+      // already implied), AND (2) the loop ended with zero writes AND
+      // heavy reads. Read-only / assess tasks and fresh user prompts get
+      // the generic wrap-up regardless of read volume — reading is the
+      // whole point of those turns. If the model DID write at any point
+      // this turn, the generic wrap-up applies (writes lifted any prior
+      // reservation).
+      const heavyReadsNoWrite = hasStickyAnchorFromPriorPass
+        && totalWriteToolCalls === 0
+        && totalReadToolCalls >= WRITE_RESERVATION_READ_THRESHOLD;
+      const wrapText = heavyReadsNoWrite
         ? 'You have used the available tool budget for this turn AND spent it entirely on reads (' + totalReadToolCalls + ' read calls, 0 writes). Stop calling tools. In your reply: (1) name the exact patch you WOULD have applied (file path + change in one sentence) OR the concrete missing prerequisite that prevented the write; (2) set goal_status to either "partial" with a write-bound recommended_next_step, or "blocked" with the missing prerequisite. Re-reading is no longer a valid next step. Emit the structured JSON envelope as instructed by the system prompt.'
         : 'You have used the available tool budget for this turn. Stop calling tools. In your reply, briefly summarize what you discovered, what you changed (if anything), the current state, and one clear recommended next step. If autonomy is enabled, emit the structured JSON envelope as instructed by the system prompt.';
       const wrapPrompt: Array<Record<string, unknown>> = [

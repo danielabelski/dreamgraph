@@ -523,6 +523,29 @@ test("orchestrator: nonzero exit → COPILOT_RUN_NONZERO_EXIT, transcript captur
   assert.ok(result.transcript?.hasStderrErrors);
 });
 
+test("orchestrator: empty-output nonzero exit includes spawn context", async () => {
+  const { process } = makeFakeProcess({
+    spawnResult: {
+      stdout: "",
+      stderr: "",
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      aborted: false,
+    },
+  });
+  const result = await runCopilotCli(defaultInput(), makeDeps({ process }));
+  assert.equal(result.ok, false);
+  assert.equal(result.failure?.code, "COPILOT_RUN_NONZERO_EXIT");
+  assert.match(result.failure!.message, /code 1/);
+  assert.match(result.failure!.message, /no output captured on stdout or stderr/);
+  assert.match(result.failure!.message, /spawn-context:/);
+  assert.match(result.failure!.message, /command: \/usr\/local\/bin\/copilot/);
+  assert.match(result.failure!.message, /cwd: \/work\/run/);
+  assert.match(result.failure!.message, /timeoutMs: 60000/);
+  assert.match(result.failure!.message, /args:/);
+});
+
 test("orchestrator: timeout → TIMEOUT", async () => {
   const { process } = makeFakeProcess({
     spawnResult: {

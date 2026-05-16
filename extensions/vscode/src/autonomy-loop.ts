@@ -9,6 +9,7 @@ import {
   type RecommendedActionSet,
 } from './autonomy.js';
 import type { StructuredPassEnvelope } from './autonomy-structured.js';
+import { isWriteToolName } from './tool-classification.js';
 
 export interface PassAnalysisInput {
   /** Assistant text from the pass. May be undefined when the model emitted
@@ -240,9 +241,17 @@ export function buildContinuationPrompt(
   const argsJson = selectedAction.toolArgs
     ? JSON.stringify(selectedAction.toolArgs)
     : null;
+  // When the bound next-step tool is a write tool, OR a write tool is bound
+  // and the anchor is already sticky from a prior pass, the model should
+  // apply the change in this single pass — not re-discover the patch site
+  // or split the write across turns. This is the "manual workaround"
+  // ("and apply the patch in 1 step") promoted into the prompt itself so
+  // the autonomy loop reliably binds and executes the write.
+  const boundToolIsWrite = !!toolName && isWriteToolName(toolName);
+  const writePush = boundToolIsWrite || options.patchAnchorEstablished === true;
   const lines = [
     ...anchorPreamble,
-    `Continue with the recommended next step: ${selectedAction.label}.`,
+    `Continue with the recommended next step: ${selectedAction.label}${writePush ? ' — apply the patch in 1 step' : ''}.`,
     '',
     'Continuation contract:',
     '- Complete the entire step this turn. Batch every tool call it requires',
@@ -252,10 +261,28 @@ export function buildContinuationPrompt(
     '  conversation. Re-read only after a write, and prefer wide ranges.',
   ];
   if (toolName) {
-    lines.push(`- Suggested entry tool: \`${toolName}\`. Use additional tools in the same turn as needed to finish the step.`);
-    if (argsJson) {
-      lines.push(`- Suggested args for the entry tool: \`${argsJson}\`. Adjust freely; they are a hint, not a contract.`);
+    if (boundToolIsWrite) {
+      lines.push(
+        `- The next step is a WRITE bound to \`${toolName}\`. Issue the write tool call(s) in THIS pass.`,
+        '  Do not re-locate, re-read, or re-confirm anchors first. If the exact',
+        '  anchor text drifted, do one wide re-read THEN the write in the same pass.',
+      );
+      if (argsJson) {
+        lines.push(`- Suggested args for the write tool: \`${argsJson}\`. Adjust as needed, but do not skip the write.`);
+      }
+    } else {
+      lines.push(`- Suggested entry tool: \`${toolName}\`. Use additional tools in the same turn as needed to finish the step.`);
+      if (argsJson) {
+        lines.push(`- Suggested args for the entry tool: \`${argsJson}\`. Adjust freely; they are a hint, not a contract.`);
+      }
     }
+  } else if (writePush) {
+    lines.push(
+      '- A patch anchor is already known. Issue the edit tool call(s) in THIS pass',
+      '  (e.g. `replace_string_in_file`, `multi_replace_string_in_file`,',
+      '  `create_file`, `patch_file`, `edit_file`, `edit_entity`). Do not split',
+      '  the write across passes.',
+    );
   } else {
     lines.push('- Choose whichever tools advance the step and invoke them in this turn.');
   }
