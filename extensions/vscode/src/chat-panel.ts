@@ -2057,16 +2057,6 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       if (message.content.includes('[Response truncated]')) {
         actions.push({ id: 'show-full', label: 'Show full', kind: 'primary', actionType: 'show_full' });
       }
-      if (this._lastToolTrace.length > 0) {
-        actions.push({
-          id: 'show-trace',
-          label: 'Show tool trace',
-          kind: 'secondary',
-          actionType: 'tool',
-          toolName: 'query_self_metrics',
-          toolArgs: { flush_to_disk: false },
-        });
-      }
     }
     return actions;
   }
