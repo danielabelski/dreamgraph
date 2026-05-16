@@ -39,7 +39,7 @@ export default function activate(ctx) {
 
   // ── tools.register ──────────────────────────────────────────────────
   ctx.tools.register({
-    name: "examples.hello-events.greet",
+    name: "examples_hello_events_greet",
     description: "Return a friendly greeting.",
     inputSchema: {
       type: "object",

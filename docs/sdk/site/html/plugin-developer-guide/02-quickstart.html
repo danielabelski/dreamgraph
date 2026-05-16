@@ -120,7 +120,7 @@ MCP client. The bundled probe script does it via the streamable HTTP
 transport:</p>
 <pre class="pwsh"><code>node scripts/probe-hello-events.mjs</code></pre>
 <p>Expected output:</p>
-<pre><code>tool examples.hello-events.greet  →  { &quot;greeting&quot;: &quot;Hello, world!&quot; }
+<pre><code>tool examples_hello_events_greet  →  { &quot;greeting&quot;: &quot;Hello, world!&quot; }
 resource plugin://examples.hello-events/manifest  →  { id: &quot;...&quot;, version: &quot;0.2.0&quot;, seams: [...] }</code></pre>
 <h2 id="27-verify-the-closure-seam-side-effects">2.7 Verify the
 closure-seam side-effects</h2>
@@ -156,7 +156,7 @@ the bus / SSE stream.</td>
 <tr>
 <td><code>tools.register</code></td>
 <td><code>tools/list</code> over MCP shows
-<code>examples.hello-events.greet</code>.</td>
+<code>examples_hello_events_greet</code>.</td>
 </tr>
 <tr>
 <td><code>resources.register</code></td>

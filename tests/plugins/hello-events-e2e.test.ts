@@ -99,7 +99,7 @@ describe("examples/hello-events full-seam smoke", () => {
       // Tool contribution.
       const tools = getContributedTools().filter((t) => t.pluginId === PLUGIN_ID);
       expect(tools.map((t) => t.definition.name)).toEqual([
-        "examples.hello-events.greet",
+        "examples_hello_events_greet",
       ]);
 
       // Resource contribution.

@@ -29,7 +29,7 @@
     "markdown:register_fence"
   ],
   "tools": [
-    { "name": "examples.hello-events.greet" }
+    { "name": "examples_hello_events_greet" }
   ],
   "resources": [
     { "uriNamespace": "plugin://examples.hello-events/manifest" }

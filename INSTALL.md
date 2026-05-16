@@ -1,4 +1,4 @@
-# Installing DreamGraph v10.0.0 "Renata"
+# Installing DreamGraph v10.0.1 "Renata"
 
 One-command install from source. Builds the MCP server, deploys the `dg` CLI globally, and installs the VS Code extension with DreamGraph Explorer.
 
@@ -10,7 +10,7 @@ One-command install from source. Builds the MCP server, deploys the `dg` CLI glo
 
 | Requirement | Minimum | Check |
 |-------------|---------|-------|
-| **Node.js** | v18+ | `node --version` |
+| **Node.js** | v20+ | `node --version` |
 | **npm** | 8+ | `npm --version` |
 | **Git** | any | `git --version` |
 | **VS Code** | 1.100+ | Optional -- extension install is skipped if `code` is not in PATH |
@@ -38,7 +38,7 @@ bash scripts/install.sh
 That's it. After install, open a **new terminal** and run:
 
 ```bash
-dg --version          # DreamGraph CLI v10.0.0 (Renata)
+dg --version          # DreamGraph CLI v10.0.1 (Renata)
 dg --help             # Show all commands
 ```
 
@@ -46,7 +46,7 @@ dg --help             # Show all commands
 
 ## What the Installer Does
 
-1. **Checks prerequisites** -- Node.js >= 18, npm available
+1. **Checks prerequisites** -- Node.js >= 20, npm available
 2. **Builds** -- Runs `npm install` + `npm run build` (TypeScript compilation)
 3. **Deploys to `~/.dreamgraph/bin/`** -- Copies compiled `dist/`, creates a production-only `package.json`, runs `npm install --omit=dev`
 4. **Copies templates** -- Default instance templates to `~/.dreamgraph/templates/`
@@ -193,7 +193,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 ### Build fails
 
-Make sure you have Node.js 18+ and npm installed. Run manually to see errors:
+Make sure you have Node.js 20+ and npm installed. Run manually to see errors:
 
 ```bash
 npm install

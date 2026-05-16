@@ -33,6 +33,7 @@ import type { McpClient } from './mcp-client';
 import type { ContextBuilder } from './context-builder';
 import type { ChangedFilesView, ChangeType } from './changed-files-view';
 import { LOCAL_TOOL_DEFINITIONS, isLocalTool, executeLocalTool } from './local-tools.js';
+import { changeReviewService, type PendingChangeReview } from './change-review-service';
 import { assemblePrompt, inferTask } from './prompts/index.js';
 import { selectToolGroups } from './tool-groups.js';
 import { runPassViaCore, runPassViaCopilotCli } from './architect-core/runner.js';
@@ -293,6 +294,7 @@ type ExtensionToWebviewMessage =
   | { type: 'stream-end'; done: boolean }
   | { type: 'tool-progress'; tool: string; message: string; progress?: number; total?: number }
   | { type: 'state'; state: { messages: ChatMessage[] } }
+  | { type: 'pendingReviews'; reviews: PendingReviewViewModel[]; collapsed?: boolean }
   | { type: 'updateModels'; providers: string[]; models: string[]; current: { provider: string; model: string }; capabilities: ArchitectModelCapabilities }
   | { type: 'setAttachments'; attachments: AttachmentPreview[] }
   | { type: 'error'; error: string }
@@ -352,6 +354,65 @@ interface RecommendedActionMessage {
   rationale?: string;
 }
 
+interface PendingReviewDiffLineViewModel {
+  kind: 'add' | 'delete';
+  text: string;
+}
+
+interface PendingReviewViewModel {
+  filePath: string;
+  relativePath: string;
+  status: 'pending' | 'conflict';
+  baselineKind: 'existing' | 'missing';
+  currentKind: 'existing' | 'deleted';
+  updatedAt: number;
+  addedLines: number;
+  deletedLines: number;
+  previewLines: PendingReviewDiffLineViewModel[];
+}
+
+function summarizePendingReviewDiff(before: string, after: string): { addedLines: number; deletedLines: number; previewLines: PendingReviewDiffLineViewModel[] } {
+  if (before === after) {
+    return { addedLines: 0, deletedLines: 0, previewLines: [] };
+  }
+
+  const normalizeLines = (text: string): string[] => {
+    if (text.length === 0) return [];
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  };
+
+  const beforeLines = normalizeLines(before);
+  const afterLines = normalizeLines(after);
+  let prefix = 0;
+  while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix++;
+
+  let beforeEnd = beforeLines.length - 1;
+  let afterEnd = afterLines.length - 1;
+  while (beforeEnd >= prefix && afterEnd >= prefix && beforeLines[beforeEnd] === afterLines[afterEnd]) {
+    beforeEnd--;
+    afterEnd--;
+  }
+
+  const deleted = beforeLines.slice(prefix, beforeEnd + 1);
+  const added = afterLines.slice(prefix, afterEnd + 1);
+  const previewLines: PendingReviewDiffLineViewModel[] = [];
+  const maxPreview = 12;
+  for (const line of deleted.slice(0, maxPreview)) {
+    previewLines.push({ kind: 'delete', text: line });
+  }
+  for (const line of added.slice(0, Math.max(0, maxPreview - previewLines.length))) {
+    previewLines.push({ kind: 'add', text: line });
+  }
+
+  return {
+    addedLines: added.length,
+    deletedLines: deleted.length,
+    previewLines,
+  };
+}
+
 type WebviewToExtensionMessage =
   | { type: 'ready' }
   | { type: 'send'; text: string }
@@ -381,7 +442,12 @@ type WebviewToExtensionMessage =
   | { type: 'envelopeAction'; label: string }
   | { type: 'envelopeDoAll'; labels: string[] }
   | { type: 'setAutonomyMode'; mode: string }
-  | { type: 'resetAutonomy' };
+  | { type: 'resetAutonomy' }
+  | { type: 'refreshPendingReviews' }
+  | { type: 'togglePendingReviews' }
+  | { type: 'keepPendingReview'; filePath: string }
+  | { type: 'undoPendingReview'; filePath: string }
+  | { type: 'openPendingReview'; filePath: string };
 
 export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewType = 'dreamgraph.chatView';
@@ -413,6 +479,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   private _domPurifySource: string | null = null;
   /** Cached URI to bundled webview runtime for Slice 3 Option C migration. */
   private _webviewBundleUri: string | null = null;
+  private _pendingReviewsCollapsed = true;
   private _lastToolTrace: ToolTraceEntry[] = [];
   /** Set when the report-required guard has already forced a final report
    * turn for the current run, so we don't loop forever asking for reports. */
@@ -708,6 +775,31 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           this._resetAutonomy();
           break;
         }
+        case 'refreshPendingReviews': {
+          await this._postPendingReviews();
+          break;
+        }
+        case 'togglePendingReviews': {
+          this._pendingReviewsCollapsed = !this._pendingReviewsCollapsed;
+          await this._postPendingReviews();
+          break;
+        }
+        case 'keepPendingReview': {
+          const result = await changeReviewService.keep(message.filePath);
+          void vscode.window.showInformationMessage(result.message);
+          await this._postPendingReviews();
+          break;
+        }
+        case 'undoPendingReview': {
+          const result = await changeReviewService.undo(message.filePath);
+          void vscode.window.showInformationMessage(result.message);
+          await this._postPendingReviews();
+          break;
+        }
+        case 'openPendingReview': {
+          await this._openPendingReviewDiff(message.filePath);
+          break;
+        }
       }
     }, null, this.disposables);
 
@@ -983,7 +1075,36 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // Force the no-tools branch and let `runPassViaCopilotCli` own
     // the turn end-to-end.
     const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
-    const effectiveTools: ToolDefinition[] = copilotCliRoute ? [] : tools;
+    let effectiveTools: ToolDefinition[] = copilotCliRoute ? [] : tools;
+
+    // Cross-turn write-pressure narrowing. The autonomy-continuation path
+    // (see ~line 2459) already narrows the live tool catalog to write+verify
+    // when both the prior and current pass were locate-only with a sticky
+    // anchor. But when the user manually re-clicks a "Patch …" action chip
+    // (or otherwise starts a fresh non-continuation pass) the autonomy
+    // state still carries `lastPassWasLocateOnly === true` and a non-empty
+    // `lastAnchorPaths` from the previous turn, yet the catalog is
+    // rebuilt from intent classification alone — typically full of read
+    // tools. That is exactly the loop the user kept hitting: "Discovered
+    // … no code changes were applied this turn" repeating across manual
+    // re-clicks. Mirror the same narrowing here so the next manual retry
+    // is forced toward the write path. `narrowToWriteAndVerify` already
+    // falls back to the full catalog if narrowing would empty it, so
+    // this is always safe.
+    if (
+      !copilotCliRoute
+      && effectiveTools.length > 0
+      && this._autonomyState.lastPassWasLocateOnly === true
+      && (this._autonomyState.lastAnchorPaths?.length ?? 0) > 0
+    ) {
+      const narrowed = narrowToWriteAndVerify(effectiveTools);
+      if (narrowed.length > 0 && narrowed.length < effectiveTools.length) {
+        this.contextInspector?.appendContextLine(
+          `Tool narrowing (cross-turn write-pressure): ${narrowed.length}/${effectiveTools.length} tools — sticky anchor + prior pass was locate-only.`,
+        );
+        effectiveTools = narrowed;
+      }
+    }
 
     if (effectiveTools.length > 0) {
       fullContent = await this.runAgenticLoop(conversation, effectiveTools);
@@ -1728,6 +1849,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     await this.postState();
     if (this.draftText) await this.postMessage({ type: 'restoreDraft', text: this.draftText });
     await this._syncAttachments();
+    await this._postPendingReviews();
     // Patch #1.5: always broadcast autonomy state so the header dropdown +
     // pass-budget pill stay populated even when the active mode is cautious.
     this._broadcastAutonomyStatus();
@@ -1735,6 +1857,66 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private async postState(): Promise<void> {
     await this.postMessage({ type: 'state', state: { messages: this.messages } });
+    await this._postPendingReviews();
+  }
+
+  private async _postPendingReviews(): Promise<void> {
+    const reviews = await Promise.all(changeReviewService.getPendingReviews().map((review) => this._toPendingReviewViewModel(review)));
+    if (reviews.length === 0) {
+      this._pendingReviewsCollapsed = true;
+    }
+    await this.postMessage({ type: 'pendingReviews', reviews, collapsed: this._pendingReviewsCollapsed });
+  }
+
+  private async _toPendingReviewViewModel(review: PendingChangeReview): Promise<PendingReviewViewModel> {
+    const diff = await this._summarizePendingReviewDiff(review);
+    return {
+      filePath: review.filePath,
+      relativePath: vscode.workspace.asRelativePath(review.filePath),
+      status: review.status === 'conflict' ? 'conflict' : 'pending',
+      baselineKind: review.baselineKind,
+      currentKind: review.currentKind,
+      updatedAt: review.updatedAt,
+      addedLines: diff.addedLines,
+      deletedLines: diff.deletedLines,
+      previewLines: diff.previewLines,
+    };
+  }
+
+  private async _summarizePendingReviewDiff(review: PendingChangeReview): Promise<{ addedLines: number; deletedLines: number; previewLines: PendingReviewDiffLineViewModel[] }> {
+    const decoder = new TextDecoder('utf-8');
+    const before = review.baselineContent ? decoder.decode(review.baselineContent) : '';
+    let after = '';
+    if (review.currentKind !== 'deleted') {
+      try {
+        after = decoder.decode(await vscode.workspace.fs.readFile(vscode.Uri.file(review.filePath)));
+      } catch {
+        after = '';
+      }
+    }
+    return summarizePendingReviewDiff(before, after);
+  }
+
+  private async _openPendingReviewDiff(filePath: string): Promise<void> {
+    const review = changeReviewService.getPendingReview(filePath);
+    const fileUri = vscode.Uri.file(filePath);
+    if (!review) {
+      await vscode.commands.executeCommand('vscode.open', fileUri);
+      return;
+    }
+
+    const currentDoc = await vscode.workspace.openTextDocument(fileUri);
+    const currentText = currentDoc.getText();
+    const baselineText = review.baselineContent ? Buffer.from(review.baselineContent).toString('utf8') : '';
+    const baselineUri = fileUri.with({ scheme: 'untitled', path: `${fileUri.path}.dreamgraph-baseline` });
+    await vscode.workspace.openTextDocument(baselineUri);
+    const baselineEdit = new vscode.WorkspaceEdit();
+    baselineEdit.insert(baselineUri, new vscode.Position(0, 0), baselineText);
+    await vscode.workspace.applyEdit(baselineEdit);
+    await vscode.commands.executeCommand('vscode.diff', baselineUri, fileUri, `Pending Review: ${vscode.workspace.asRelativePath(filePath)}`);
+    if (currentText.length === 0 && review.currentKind === 'deleted') {
+      void vscode.window.showInformationMessage('Current file is deleted; diff shows baseline versus current state.');
+    }
   }
 
   public getActionLogForTest(): ActionExecutionRecord[] {
@@ -3075,10 +3257,21 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         const toolStartedAt = Date.now();
         await this.postMessage({ type: 'tool-progress', tool: toolCall.name, message: `Running ${toolCall.name}…` });
 
+        const reviewSnapshot = isWriteToolName(toolCall.name)
+          ? await changeReviewService.captureWorkspaceSnapshot()
+          : null;
+
         try {
           const result = isLocalTool(toolCall.name)
             ? await executeLocalTool(toolCall.name, toolCall.input ?? {})
             : await this._callMcpToolWithLazyConnect(toolCall.name, toolCall.input ?? {});
+          if (reviewSnapshot) {
+            const changedReviewPaths = await changeReviewService.recordWorkspaceChanges(reviewSnapshot);
+            if (changedReviewPaths.length > 0) {
+              this._pendingReviewsCollapsed = true;
+              await this._postPendingReviews();
+            }
+          }
           const rawString = this._stringifyToolResult(result);
           // Phase 4 — pressure-aware multi-tier compression. The coordinator
           // owns the policy via getPressure()/getRemainingTargetTokens() and
@@ -3117,6 +3310,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           });
           await this.postMessage({ type: 'tool-progress', tool: toolCall.name, message: `${toolCall.name} done` });
         } catch (toolErr) {
+          if (reviewSnapshot) {
+            try {
+              const changedReviewPaths = await changeReviewService.recordWorkspaceChanges(reviewSnapshot);
+              if (changedReviewPaths.length > 0) {
+                this._pendingReviewsCollapsed = true;
+                await this._postPendingReviews();
+              }
+            } catch (reviewErr) {
+              console.warn('[DreamGraph] Failed to record pending review changes after failed write tool:', reviewErr);
+            }
+          }
           const toolError = toolErr instanceof Error ? toolErr.message : String(toolErr);
           toolResultBlocks.push({
             type: 'tool_result',
@@ -3648,6 +3852,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     <span id="budget-pill-components" class="budget-pill-components"></span>
   </div>
 
+  <div id="pending-reviews" class="pending-reviews" style="display:none"></div>
   <div id="messages"></div>
   <div id="empty-state">
     <div class="empty-logo">🌙</div>
@@ -3682,6 +3887,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   ${!this._webviewBundleUri ? entityLinkScript : ''}
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    const pendingReviewsEl = document.getElementById('pending-reviews');
     const messagesEl = document.getElementById('messages');
     const emptyStateEl = document.getElementById('empty-state');
     const promptEl = document.getElementById('prompt');
@@ -3700,6 +3906,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
     let draftSaveTimer = null;
     let lastToolTrace = [];
+    let pendingReviews = [];
+    let pendingReviewsCollapsed = true;
     let lastVerdict = null;
     let streamingBubble = null;
     let streamingMarkdownEl = null;
@@ -3730,6 +3938,128 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     function setEmptyStateVisible(visible) {
       emptyStateEl.style.display = visible ? 'flex' : 'none';
       messagesEl.style.display = visible ? 'none' : 'flex';
+    }
+
+    function formatPendingReviewSummary(review) {
+      const from = review.baselineKind === 'missing' ? 'new file' : 'existing file';
+      const to = review.currentKind === 'deleted' ? 'deleted state' : 'edited state';
+      return from + ' → ' + to;
+    }
+
+    function makePendingReviewButton(label, className, handler) {
+      const button = document.createElement('button');
+      button.className = className;
+      button.textContent = label;
+      button.addEventListener('click', handler);
+      return button;
+    }
+
+    function renderPendingReviews(reviews, collapsed) {
+      pendingReviews = Array.isArray(reviews) ? reviews : [];
+      pendingReviewsCollapsed = collapsed !== false;
+      if (!pendingReviewsEl) return;
+      pendingReviewsEl.innerHTML = '';
+      if (pendingReviews.length === 0) {
+        pendingReviewsEl.style.display = 'none';
+        messagesEl.style.paddingBottom = '24px';
+        messagesEl.style.scrollPaddingBottom = '24px';
+        return;
+      }
+
+      const totalAdded = pendingReviews.reduce((sum, review) => sum + (Number(review.addedLines) || 0), 0);
+      const totalDeleted = pendingReviews.reduce((sum, review) => sum + (Number(review.deletedLines) || 0), 0);
+      pendingReviewsEl.style.display = 'block';
+      pendingReviewsEl.style.border = '1px solid var(--vscode-panel-border)';
+      pendingReviewsEl.style.borderRadius = '8px';
+      pendingReviewsEl.style.margin = '0 10px 8px';
+      pendingReviewsEl.style.padding = '6px 10px';
+      pendingReviewsEl.style.background = 'var(--vscode-sideBar-background)';
+      pendingReviewsEl.style.fontSize = '12px';
+      pendingReviewsEl.style.order = '2';
+      const pendingReviewsHeight = pendingReviewsEl.offsetHeight || 0;
+      const bottomReserve = Math.max(72, pendingReviewsHeight + 16);
+      messagesEl.style.paddingBottom = bottomReserve + 'px';
+      messagesEl.style.scrollPaddingBottom = bottomReserve + 'px';
+
+      const header = document.createElement('div');
+      header.className = 'pending-reviews-title';
+      header.style.display = 'flex';
+      header.style.alignItems = 'center';
+      header.style.justifyContent = 'space-between';
+      header.style.gap = '8px';
+
+      const titleButton = document.createElement('button');
+      titleButton.type = 'button';
+      titleButton.className = 'pending-review-toggle';
+      titleButton.style.all = 'unset';
+      titleButton.style.cursor = 'pointer';
+      titleButton.style.display = 'inline-flex';
+      titleButton.style.alignItems = 'center';
+      titleButton.style.gap = '6px';
+      titleButton.innerHTML = '<span style="font-size:10px;opacity:.8">' + (pendingReviewsCollapsed ? '▶' : '▼') + '</span>'
+        + '<strong>' + (pendingReviews.length === 1 ? '1 file changed' : pendingReviews.length + ' files changed') + '</strong>'
+        + ' <span style="color:var(--vscode-gitDecoration-addedResourceForeground,#3fb950)">+' + totalAdded + '</span>'
+        + ' <span style="color:var(--vscode-gitDecoration-deletedResourceForeground,#f85149)">-' + totalDeleted + '</span>';
+      titleButton.addEventListener('click', () => {
+        pendingReviewsCollapsed = !pendingReviewsCollapsed;
+        vscode.postMessage({ type: 'togglePendingReviews' });
+        renderPendingReviews(pendingReviews, pendingReviewsCollapsed);
+      });
+
+      const bulkActions = document.createElement('div');
+      bulkActions.style.display = 'flex';
+      bulkActions.style.gap = '6px';
+      bulkActions.appendChild(makePendingReviewButton('Keep', 'message-action-btn primary', () => {
+        for (const review of pendingReviews) vscode.postMessage({ type: 'keepPendingReview', filePath: review.filePath });
+      }));
+      bulkActions.appendChild(makePendingReviewButton('Undo', 'message-action-btn', () => {
+        for (const review of pendingReviews) vscode.postMessage({ type: 'undoPendingReview', filePath: review.filePath });
+      }));
+      header.appendChild(titleButton);
+      header.appendChild(bulkActions);
+      pendingReviewsEl.appendChild(header);
+
+      if (pendingReviewsCollapsed) {
+        return;
+      }
+
+      const list = document.createElement('div');
+      list.style.display = 'flex';
+      list.style.flexDirection = 'column';
+      list.style.gap = '4px';
+      list.style.marginTop = '8px';
+
+      for (const review of pendingReviews) {
+        const row = document.createElement('div');
+        row.className = 'pending-review-row';
+        row.style.display = 'grid';
+        row.style.gridTemplateColumns = '1fr auto';
+        row.style.alignItems = 'center';
+        row.style.gap = '8px';
+
+        const pathButton = document.createElement('button');
+        pathButton.type = 'button';
+        pathButton.className = 'pending-review-path';
+        pathButton.style.all = 'unset';
+        pathButton.style.cursor = 'pointer';
+        pathButton.style.color = 'var(--vscode-textLink-foreground)';
+        pathButton.style.overflow = 'hidden';
+        pathButton.style.textOverflow = 'ellipsis';
+        pathButton.style.whiteSpace = 'nowrap';
+        pathButton.textContent = review.relativePath || review.filePath;
+        pathButton.title = 'Open diff';
+        pathButton.addEventListener('click', () => vscode.postMessage({ type: 'openPendingReview', filePath: review.filePath }));
+
+        const stats = document.createElement('div');
+        stats.innerHTML = '<span style="color:var(--vscode-gitDecoration-addedResourceForeground,#3fb950);font-weight:600">+' + (Number(review.addedLines) || 0) + '</span> '
+          + '<span style="color:var(--vscode-gitDecoration-deletedResourceForeground,#f85149);font-weight:600">-' + (Number(review.deletedLines) || 0) + '</span>';
+
+        row.appendChild(pathButton);
+        row.appendChild(stats);
+        list.appendChild(row);
+      }
+
+      pendingReviewsEl.appendChild(list);
     }
 
     function autoresize() {
@@ -3763,6 +4093,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       optimisticSubmitMarkdownEl.innerHTML = '<span class="immediate-submit-pulse" aria-hidden="true"></span><span>Assessing the shape of the request…</span>';
       optimisticSubmitBubble.appendChild(optimisticSubmitMarkdownEl);
       messagesEl.appendChild(optimisticSubmitBubble);
+      const submitReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+      messagesEl.style.paddingBottom = submitReserve + 'px';
+      messagesEl.style.scrollPaddingBottom = submitReserve + 'px';
       messagesEl.scrollTop = messagesEl.scrollHeight;
 
       sendBtn.style.display = 'none';
@@ -4092,6 +4425,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           scheduleVerification(node);
         }
         if (opts.stickToBottom !== false) {
+          const renderReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+          messagesEl.style.paddingBottom = renderReserve + 'px';
+          messagesEl.style.scrollPaddingBottom = renderReserve + 'px';
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
       });
@@ -4184,6 +4520,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       const node = createMessageNode(message, actions, roleMeta, contextFooter, uiState);
       messagesEl.appendChild(node);
       requestAnimationFrame(() => {
+        const messageReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+        messagesEl.style.paddingBottom = messageReserve + 'px';
+        messagesEl.style.scrollPaddingBottom = messageReserve + 'px';
         messagesEl.scrollTop = messagesEl.scrollHeight;
       });
     }
@@ -4488,9 +4827,14 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       }
     });
 
+    vscode.postMessage({ type: 'refreshPendingReviews' });
+
     window.addEventListener('message', (event) => {
       const msg = event.data;
       switch (msg.type) {
+        case 'pendingReviews':
+          renderPendingReviews(msg.reviews, msg.collapsed);
+          break;
         case 'state':
           restoreState(msg.state);
           break;
@@ -4717,6 +5061,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
               wrapper.appendChild(doAll);
             }
             targetBubble.appendChild(wrapper);
+            const actionReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+            messagesEl.style.paddingBottom = actionReserve + 'px';
+            messagesEl.style.scrollPaddingBottom = actionReserve + 'px';
             messagesEl.scrollTop = messagesEl.scrollHeight;
           }
           break;
@@ -4779,6 +5126,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             });
           });
           targetBubble.appendChild(host);
+          const summaryReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+          messagesEl.style.paddingBottom = summaryReserve + 'px';
+          messagesEl.style.scrollPaddingBottom = summaryReserve + 'px';
           messagesEl.scrollTop = messagesEl.scrollHeight;
           break;
         }

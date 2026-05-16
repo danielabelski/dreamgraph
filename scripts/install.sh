@@ -196,7 +196,12 @@ step "Checking prerequisites..."
 NODE_VERSION=$(node --version 2>/dev/null || true)
 [[ -z "$NODE_VERSION" ]] && fail "Node.js is required but not found. Install from https://nodejs.org/"
 MAJOR=$(echo "$NODE_VERSION" | sed 's/^v\([0-9]*\)\..*/\1/')
-[[ "$MAJOR" -lt 18 ]] && fail "Node.js >= 18 required (found $NODE_VERSION)"
+# Node 20+ is required: undici@7, @vscode/vsce@3, cheerio@1.2 and other
+# build/runtime dependencies of the extension and root package use the global
+# `File` constructor and other Node 20 APIs. On Node 18 the extension build
+# completes but `vsce package` crashes with `ReferenceError: File is not
+# defined`, and several optional tools fail at import time.
+[[ "$MAJOR" -lt 20 ]] && fail "Node.js >= 20 required (found $NODE_VERSION). Install Node 20 LTS or newer from https://nodejs.org/"
 ok "Node.js $NODE_VERSION"
 
 NPM_VERSION=$(npm --version 2>/dev/null || true)
@@ -242,12 +247,31 @@ step "Building DreamGraph..."
 ensure_root_build_dependencies
 (
     cd "$SOURCE_DIR"
+    # Force a clean root TypeScript build. `tsc -b` is incremental and
+    # relies on `tsconfig.tsbuildinfo` for up-to-date checks; a stale or
+    # leaked tsbuildinfo (e.g. carried over from a prior install attempt
+    # or a different machine) can short-circuit emit and leave dist/
+    # populated only by the explorer's vite build. Clearing the buildinfo
+    # files makes the next `tsc -b` always emit a full output tree.
+    find . -maxdepth 4 -name 'tsconfig.tsbuildinfo' \
+        -not -path './node_modules/*' \
+        -not -path './extensions/vscode/*' \
+        -delete 2>/dev/null || true
     run_logged -- npm run build
 )
 ok "Build complete"
 
 SOURCE_DIST="$SOURCE_DIR/dist"
 [[ ! -d "$SOURCE_DIST" ]] && fail "dist/ not found after build"
+# Assert the CLI entry was emitted. Catching this here gives a clear
+# error pinned to the build step instead of the verify step at the very
+# end of the script (which previously printed a confusing MODULE_NOT_FOUND
+# stack trace).
+if [[ ! -f "$SOURCE_DIST/cli/dg.js" ]]; then
+    warn "Build did not emit dist/cli/dg.js. Contents of $SOURCE_DIST:"
+    ls -la "$SOURCE_DIST" 2>&1 | while IFS= read -r line; do printf '    %s\n' "$line"; done
+    fail "Root TypeScript build (tsc -b) completed but did not produce dist/cli/dg.js. Try a manual clean build: 'cd $SOURCE_DIR && rm -rf dist && npx tsc -b --verbose'."
+fi
 
 step "Deploying to $BIN_DIR..."
 mkdir -p "$BIN_DIR"
@@ -323,6 +347,11 @@ node -e "
   for (const [name, spec] of Object.entries(overrides)) {
     deps[name] = spec;
   }
+  for (const [name, spec] of Object.entries(pkg.devDependencies || {})) {
+    if (name === '@modelcontextprotocol/sdk') {
+      deps[name] = spec;
+    }
+  }
   const binPkg = {
     name: 'dreamgraph-global',
     version: pkg.version,
@@ -394,6 +423,7 @@ if can_build_vscode_extension; then
         )
         if [[ $RUN_LOGGED_EXIT_CODE -ne 0 ]]; then
             warn "Extension build failed -- skipping VS Code extension install"
+            EXTENSION_INSTALL_FAILED=true
         else
             ok "Extension built"
             rm -f "$VSIX_PATH"
@@ -403,6 +433,7 @@ if can_build_vscode_extension; then
             )
             if [[ $RUN_LOGGED_EXIT_CODE -ne 0 ]] || [[ ! -f "$VSIX_PATH" ]]; then
                 warn "Extension packaging failed -- skipping VS Code extension install"
+                EXTENSION_INSTALL_FAILED=true
             else
                 ok "Packaged extension to $(basename "$VSIX_PATH")"
                 remove_legacy_vscode_extension_artifacts "$EXTENSION_ID" "$LEGACY_EXTENSION_VERSION"
@@ -421,13 +452,15 @@ else
 fi
 
 node -e "
-  require('fs').writeFileSync('$BIN_DIR/version.json', JSON.stringify({
-    version: '$VERSION',
+  const fs = require('fs');
+  const [versionFile, version, source, nodeVersion] = process.argv.slice(1);
+  fs.writeFileSync(versionFile, JSON.stringify({
+    version,
     installed_at: new Date().toISOString(),
-    source: '$SOURCE_DIR',
-    node_version: '$NODE_VERSION'
+    source,
+    node_version: nodeVersion
   }, null, 2));
-"
+" "$BIN_DIR/version.json" "$VERSION" "$SOURCE_DIR" "$NODE_VERSION"
 
 step "Creating command shims..."
 LINK_DIR=""
@@ -508,18 +541,40 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$LINK_DIR"; then
 fi
 
 step "Verifying installation..."
-OUTPUT=$(node "$DIST_TARGET/cli/dg.js" --version 2>&1 || true)
-ok "$OUTPUT"
+# Hard-check the entry script exists before invoking node. A missing
+# `dist/cli/dg.js` means the root `tsc -b` step produced no TypeScript
+# output (the deploy step copies whatever is in `dist/`, including
+# explorer-only builds). Surfacing this here is cheaper than parsing
+# node's MODULE_NOT_FOUND stack trace.
+if [[ ! -f "$DIST_TARGET/cli/dg.js" ]]; then
+    fail "Verification failed: $DIST_TARGET/cli/dg.js does not exist. The root TypeScript build did not produce the CLI entry. Re-run with --force after ensuring 'tsc -b' completes in $SOURCE_DIR."
+fi
+# Capture quietly on success, but if it fails, re-print the captured
+# output before the hard-fail so the user actually sees the stack trace
+# (the previous --quiet path swallowed errors and let the success banner
+# run anyway when run_logged's fail path was bypassed).
+run_logged --allow-failure --quiet -- node "$DIST_TARGET/cli/dg.js" --version
+if [[ $RUN_LOGGED_EXIT_CODE -ne 0 ]]; then
+    echo "$RUN_LOGGED_OUTPUT" | while IFS= read -r line; do printf '  %s\n' "$line"; done
+    fail "Verification failed: 'node $DIST_TARGET/cli/dg.js --version' exited with $RUN_LOGGED_EXIT_CODE"
+fi
+ok "$RUN_LOGGED_OUTPUT"
 
 echo ""
-echo -e "${GREEN}${BOLD}===============================================${NC}"
-echo -e "${GREEN}${BOLD} DreamGraph v$VERSION installed successfully!${NC}"
-echo -e "${GREEN}${BOLD}===============================================${NC}"
+if [[ "${EXTENSION_INSTALL_FAILED:-false}" == "true" ]]; then
+    echo -e "${YELLOW}${BOLD}==================================================${NC}"
+    echo -e "${YELLOW}${BOLD} DreamGraph v$VERSION core installed${NC}"
+    echo -e "${YELLOW}${BOLD} (VS Code extension install FAILED -- see warnings above)${NC}"
+    echo -e "${YELLOW}${BOLD}==================================================${NC}"
+else
+    echo -e "${GREEN}${BOLD}==================================================${NC}"
+    echo -e "${GREEN}${BOLD} DreamGraph v$VERSION installed successfully!${NC}"
+    echo -e "${GREEN}${BOLD}==================================================${NC}"
+fi
 echo ""
-echo " Binary:  $BIN_DIR"
-echo " Links:   $LINK_DIR/dg, $LINK_DIR/dreamgraph"
-echo " Run:     dg --help"
-echo " Start:   dg start <instance-name> --http"
+echo " Binary:   $BIN_DIR"
+echo " Run:      dg --help"
+echo " Start:    dg start <instance> --http"
 echo ""
 echo -e "${YELLOW} Reminder: restart any running DreamGraph and VS Code instances to load the updated installation.${NC}"
 echo ""

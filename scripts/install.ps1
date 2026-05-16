@@ -14,7 +14,7 @@
     - avoids partial extension activation claims unless installation is verified
 
 .PARAMETER SourceDir
-    Path to the DreamGraph source repository (default: current directory)
+    Path to the DreamGraph source repository (default: parent of this script)
 
 .PARAMETER Force
     Overwrite existing installation without prompting
@@ -25,7 +25,7 @@
 #>
 
 param(
-    [string]$SourceDir = (Get-Location).Path,
+    [string]$SourceDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [switch]$Force
 )
 
@@ -230,8 +230,8 @@ if (-not $nodeVersion) {
     Fail-Install "Node.js is required but not found. Install from https://nodejs.org/"
 }
 $major = [int]($nodeVersion -replace '^v(\d+)\..*', '$1')
-if ($major -lt 18) {
-    Fail-Install "Node.js >= 18 required (found $nodeVersion)"
+if ($major -lt 20) {
+    Fail-Install "Node.js >= 20 required (found $nodeVersion). Install Node 20 LTS or newer from https://nodejs.org/"
 }
 Write-Ok "Node.js $nodeVersion"
 
@@ -508,12 +508,8 @@ $env:Path = if ([string]::IsNullOrWhiteSpace($env:Path)) { $BinDir } else { "$Bi
 
 # -- Verify ---------------------------------------------------------
 Write-Step "Verifying installation..."
-try {
-    $output = & node (Join-Path $DistTarget "cli/dg.js") --version 2>&1
-    Write-Ok "$output"
-} catch {
-    Write-Warn "Verification failed: $_"
-}
+$verifyResult = Invoke-LoggedCommand -FilePath "node" -Arguments @((Join-Path $DistTarget "cli/dg.js"), "--version") -WorkingDirectory $BinDir -Quiet
+Write-Ok "$($verifyResult.Output -join [Environment]::NewLine)"
 
 # -- Summary --------------------------------------------------------
 Write-Host ""

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { ReviewableFileFilter } from './reviewable-file-filter';
 
 /**
  * Files Changed View
@@ -101,9 +102,9 @@ export class ChangedFilesView implements vscode.TreeDataProvider<ChangedFileItem
 
   /** Programmatic recording API — call from tool handlers if you want precise types like 'rename'. */
   record(type: ChangeType, filePath: string, previousPath?: string) {
-    // Filter noise: ignore node_modules, .git, build outputs
-    const rel = vscode.workspace.asRelativePath(filePath);
-    if (/^(node_modules|\.git|dist|out)\//.test(rel)) return;
+    if (!ReviewableFileFilter.isReviewablePath(filePath)) {
+      return;
+    }
 
     // Coalesce: if the last entry for this file was very recent and same type, drop it
     const now = Date.now();

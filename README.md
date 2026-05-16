@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v10.0.0 — Renata
+# DreamGraph v10.0.1 — Renata
 
-![Version](https://img.shields.io/badge/version-10.0.0-blue)
+![Version](https://img.shields.io/badge/version-10.0.1-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -220,7 +220,6 @@ dg attach /path/to/your/repo --instance my-project
 ```
 
 ### 6. Bootstrap the knowledge graph
-
 Once the daemon is running and the project is attached:
 
 ```bash
@@ -233,6 +232,8 @@ You can also use:
 dg enrich my-project
 dg curate my-project
 ```
+
+If you need to manually trigger DreamGraph's full bootstrap flow, use `dg bootstrap my-project` (see the [bootstrapping guide](guide/05-bootstrapping-the-graph.md#dg-bootstrap--the-operator-override-v825)). This is mainly the operator escape hatch when `dg scan` / `dg enrich` are not enough.
 
 ## Typical Development Flows
 

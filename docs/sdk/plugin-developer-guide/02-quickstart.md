@@ -82,9 +82,11 @@ node scripts/probe-hello-events.mjs
 Expected output:
 
 ```
-tool examples.hello-events.greet  →  { "greeting": "Hello, world!" }
+tool examples_hello_events_greet  →  { "greeting": "Hello, world!" }
 resource plugin://examples.hello-events/manifest  →  { id: "...", version: "0.2.0", seams: [...] }
 ```
+
+Note: exposed tool names must use model-safe characters. The example tool is `examples_hello_events_greet`, not the older dotted form.
 
 ## 2.7 Verify the closure-seam side-effects
 
@@ -111,7 +113,7 @@ removed automatically.
 | ----------------- | ------------- |
 | `events.subscribe`| `dg plugin inspect` shows declared `events:read` + a subscriber on `snapshot.changed`. |
 | `events.emit`     | The `examples.hello-events.activated` event appears on the bus / SSE stream. |
-| `tools.register`  | `tools/list` over MCP shows `examples.hello-events.greet`. |
+| `tools.register`  | `tools/list` over MCP shows `examples_hello_events_greet`. |
 | `resources.register`| `resources/list` shows `plugin://examples.hello-events/manifest`. |
 | `ui.register`     | `ui_registry.json` gains a tagged entry. |
 | `policies.propose`| `plugin_policy_proposals.json` gains a `source: plugin:examples.hello-events` entry. |

@@ -47,7 +47,7 @@ contribution is dropped without aborting activation.
    dg plugin inspect dreamgraph examples.hello-events
    ```
 
-   The contributed tool (`examples.hello-events.greet`) and resource
+   The contributed tool (`examples_hello_events_greet`) and resource
    (`plugin://examples.hello-events/manifest`) are exposed over MCP and can
    be invoked from any MCP client (the VS Code extension, Claude Desktop,
    `mcp inspector`, etc.) — DreamGraph does not ship a CLI shortcut for

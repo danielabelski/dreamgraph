@@ -28,7 +28,7 @@ import { ChangedFilesView } from "./changed-files-view.js";
 import { GraphSignalProvider } from "./graph-signal.js";
 import { ChatMemory } from "./chat-memory.js";
 import { registerRunnerCommands } from "./local-tools.js";
-// architect-v2 QUARANTINED in v10.0.0 "Renata": v1 hybrid (architect-llm.ts +
+// architect-v2 QUARANTINED in v10.0.1 "Renata": v1 hybrid (architect-llm.ts +
 // architect-pass-projection + cross-provider strict envelope normalization)
 // supersedes the v2 prototype. The architect-v2/ source tree is retained for
 // historical reference but is no longer imported, registered, or built into
@@ -73,7 +73,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // VS Code may move views out of their declared container on reinstall,
   // hiding the activity bar icon. Reset once per version to fix this.
   const versionKey = "dreamgraph.lastActivatedVersion";
-  const currentVersion = "10.0.0";
+  const currentVersion = "10.0.1";
   const lastVersion = context.globalState.get<string>(versionKey);
   if (lastVersion !== currentVersion) {
     void vscode.commands.executeCommand("workbench.action.resetViewLocations");
@@ -245,7 +245,7 @@ export function activate(context: vscode.ExtensionContext): void {
     changedFilesTreeView,
   );
 
-  // ---- architect-v2 QUARANTINED (v10.0.0 "Renata") ----
+  // ---- architect-v2 QUARANTINED (v10.0.1 "Renata") ----
   // Panel registration intentionally removed. v1 hybrid is now the canonical
   // surface. The architect-v2/ folder is retained for historical reference
   // but is not loaded.

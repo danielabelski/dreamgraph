@@ -2,7 +2,7 @@
   "name": "dreamgraph-vscode",
   "displayName": "DreamGraph",
   "description": "DreamGraph-native development agent — intentional context, architectural discipline, knowledge-grounded AI.",
-  "version": "10.0.0",
+  "version": "10.0.1",
   "icon": "media/dreamgraph-icon.png",
   "publisher": "siteledger-solutions",
   "homepage": "https://dreamgraph.nofs.ai/",
@@ -27,6 +27,14 @@
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
+  "files": [
+    "dist/**",
+    "dist/vendor/**",
+    "media/**",
+    "LICENSE",
+    "README.md",
+    "package.json"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [

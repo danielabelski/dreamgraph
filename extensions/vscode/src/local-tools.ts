@@ -18,6 +18,8 @@ import * as cp from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 
+import { changeReviewService } from './change-review-service';
+
 /* ------------------------------------------------------------------ */
 /*  Tool definitions (same shape as MCP ToolDefinition)               */
 /* ------------------------------------------------------------------ */
@@ -527,12 +529,15 @@ async function handleModifyEntity(input: Record<string, unknown>): Promise<strin
           }
         }
 
+        await changeReviewService.captureBeforeWrite(absPath);
+
         // Symbol-based replacement
         const edit = new vscode.WorkspaceEdit();
         edit.replace(uri, target.range, newContent);
         const applied = await vscode.workspace.applyEdit(edit);
         if (!applied) return fail('VS Code rejected the edit');
         await doc.save();
+        await changeReviewService.recordAfterWrite(absPath);
         return ok({
           message: `Modified ${parentEntity ? parentEntity + '.' : ''}${entityName} in ${path.basename(absPath)} (${newContent.split('\n').length} lines)`,
           filePath: absPath,
@@ -603,11 +608,13 @@ async function regexEntityReplace(
     if (endOffset < 0) continue;
 
     const range = new vscode.Range(doc.positionAt(startOffset), doc.positionAt(endOffset));
+    await changeReviewService.captureBeforeWrite(absPath);
     const edit = new vscode.WorkspaceEdit();
     edit.replace(doc.uri, range, newContent);
     const applied = await vscode.workspace.applyEdit(edit);
     if (!applied) return fail('VS Code rejected the edit');
     await doc.save();
+    await changeReviewService.recordAfterWrite(absPath);
     return ok({
       message: `Modified ${entityName} in ${path.basename(absPath)} (regex fallback, ${newContent.split('\n').length} lines)`,
       filePath: absPath,
@@ -699,7 +706,9 @@ async function handleWriteFile(input: Record<string, unknown>): Promise<string> 
     const uri = vscode.Uri.file(absPath);
 
     try {
+      await changeReviewService.captureBeforeWrite(absPath);
       await vscode.workspace.fs.writeFile(uri, encoded);
+      await changeReviewService.recordAfterWrite(absPath);
       return ok({
         message: `Wrote ${path.basename(absPath)} (${content.split('\n').length} lines, ${encoded.length} bytes)`,
         filePath: absPath,

@@ -1,6 +1,6 @@
-# DreamGraph v10.0.0 — Renata
+# DreamGraph v10.0.1 — Renata
 
-**v10.0.0 "Renata"** is a release defined by **convergence** and **discipline**. The v1 architect — long the production surface — absorbed every lesson learned during the v2 prototype work and emerged as the canonical agent. v2 is now formally quarantined.
+**v10.0.1 "Renata"** is a release defined by **convergence** and **discipline**. The v1 architect — long the production surface — absorbed every lesson learned during the v2 prototype work and emerged as the canonical agent. v2 is now formally quarantined.
 
 This is also the release where DreamGraph stops fighting its model providers. A canonical strict envelope is enforced server-side by every provider that supports it, and a single projection seam normalizes their output into the shape downstream parsers already understand. The agent reasons in one shape, regardless of who answered.
 
@@ -46,33 +46,33 @@ The webview body renderer and the host `_broadcastSummaryCard` no longer both re
 
 ---
 
-## Files updated for v10.0.0
+## Files updated for v10.0.1
 
-- Core package (`package.json`) → `10.0.0`
-- VS Code extension (`extensions/vscode/package.json`) → `10.0.0` (also drops the `architect-v2` view + command)
-- Explorer (`explorer/package.json`) → `10.0.0`
-- `@dreamgraph/sdk` (`packages/sdk/package.json`) → `10.0.0`
-- `@dreamgraph/host` (`packages/host/package.json`) → `10.0.0` (sdk dep → `10.0.0`)
-- Lock files (`package-lock.json`, `explorer/package-lock.json`, `extensions/vscode/package-lock.json`) → root `10.0.0`
-- CLI banner (`src/cli/dg.ts`) → `DreamGraph CLI v10.0.0 (Renata)`
-- CLI ↔ daemon MCP client ID (`src/cli/utils/mcp-call.ts`) → `10.0.0`
-- VS Code ↔ daemon MCP client ID (`extensions/vscode/src/mcp-client.ts`) → `10.0.0`
-- Architect core prompt (`extensions/vscode/src/prompts/architect-core.ts` + `extensions/vscode/prompts/architect_core.md`) → `v10.0.0 Renata`
-- VS Code activation `currentVersion` reset key → `10.0.0`
+- Core package (`package.json`) → `10.0.1`
+- VS Code extension (`extensions/vscode/package.json`) → `10.0.1` (also drops the `architect-v2` view + command)
+- Explorer (`explorer/package.json`) → `10.0.1`
+- `@dreamgraph/sdk` (`packages/sdk/package.json`) → `10.0.1`
+- `@dreamgraph/host` (`packages/host/package.json`) → `10.0.1` (sdk dep → `10.0.1`)
+- Lock files (`package-lock.json`, `explorer/package-lock.json`, `extensions/vscode/package-lock.json`) → root `10.0.1`
+- CLI banner (`src/cli/dg.ts`) → `DreamGraph CLI v10.0.1 (Renata)`
+- CLI ↔ daemon MCP client ID (`src/cli/utils/mcp-call.ts`) → `10.0.1`
+- VS Code ↔ daemon MCP client ID (`extensions/vscode/src/mcp-client.ts`) → `10.0.1`
+- Architect core prompt (`extensions/vscode/src/prompts/architect-core.ts` + `extensions/vscode/prompts/architect_core.md`) → `v10.0.1 Renata`
+- VS Code activation `currentVersion` reset key → `10.0.1`
 - `INSTALL.md`, `guide/02-installation.md`, `README.md`, `extensions/vscode/README.md` headers and `dg --version` examples
-- `docs/architecture.md` version line → `10.0.0`
-- `docs/sdk/plugin-developer-guide/00-index.md` and `docs/sdk/plugin-reference/00-index.md` engine baseline → `v10.0.0 "Renata"`
+- `docs/architecture.md` version line → `10.0.1`
+- `docs/sdk/plugin-developer-guide/00-index.md` and `docs/sdk/plugin-reference/00-index.md` engine baseline → `v10.0.1 "Renata"`
 - `scripts/build-plugin-docs.ps1` engine-baseline string and PDF subtitle
 
 ### Plugin engine baseline is intentionally unchanged
 
-The plugin manifest floor stays at `"engine": { "dreamgraph": ">=9.0.0" }`. v10.0.0 retains the M0–M6 plugin SDK contract; plugins authored against the v9 baseline run unchanged on v10.
+The plugin manifest floor stays at `"engine": { "dreamgraph": ">=9.0.0" }`. v10.0.1 retains the M0–M6 plugin SDK contract; plugins authored against the v9 baseline run unchanged on v10.
 
 ---
 
 ## Upgrade
 
-- Run `.\scripts\install.ps1 -Force` (or `./scripts/install.sh`) to refresh CLI, daemon, Explorer, and extension assets. Verify with `dg --version` → `DreamGraph CLI v10.0.0 (Renata)`.
+- Run `.\scripts\install.ps1 -Force` (or `./scripts/install.sh`) to refresh CLI, daemon, Explorer, and extension assets. Verify with `dg --version` → `DreamGraph CLI v10.0.1 (Renata)`.
 - The activation key bump triggers a one-time `workbench.action.resetViewLocations` so the sidebar icons reseat cleanly after the architect-v2 view is removed.
 - Plugin authors: nothing to do. `engine.dreamgraph: ">=9.0.0"` is still the supported floor.
 
@@ -88,4 +88,4 @@ The plugin manifest floor stays at `"engine": { "dreamgraph": ">=9.0.0" }`. v10.
 ## Provenance
 
 - Branch: `main`
-- Release: `v10.0.0 — Renata`
+- Release: `v10.0.1 — Renata`

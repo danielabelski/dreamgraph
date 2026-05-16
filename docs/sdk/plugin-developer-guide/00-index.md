@@ -1,7 +1,7 @@
 # DreamGraph Plugin Developer Guide
 
 **Audience:** Engineers writing third-party plugins against `@dreamgraph/sdk`.
-**Engine baseline:** v10.0.0 "Renata" (M0–M6 implemented; M5 webhooks shipped; M4 schedule actions deferred).
+**Engine baseline:** v10.0.1 "Renata" (M0–M6 implemented; M5 webhooks shipped; M4 schedule actions deferred).
 **Companion:** see the [Plugin Reference Manual](../plugin-reference/00-index.md) for strict, normative tables.
 
 This guide is task-oriented. It walks you from "what is a plugin" through a working
