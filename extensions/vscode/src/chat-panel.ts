@@ -2343,6 +2343,27 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // noop preserved behavior if implemented elsewhere
   }
 
+  private _architectSettingsTarget(): vscode.ConfigurationTarget {
+    return vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+  }
+
+  private _defaultArchitectBaseUrl(provider: ArchitectProvider): string {
+    switch (provider) {
+      case 'anthropic':
+        return 'https://api.anthropic.com/v1';
+      case 'openai':
+        return 'https://api.openai.com/v1';
+      case 'ollama':
+        return 'http://localhost:11434';
+      case 'lmstudio':
+        return 'http://localhost:1234/v1';
+      case 'copilot-cli':
+        return '';
+      default:
+        return '';
+    }
+  }
+
   private async _changeProvider(provider: ArchitectProvider): Promise<void> {
     // Update in-memory config immediately so _sendModelUpdate reads the new value.
     if (this.architectLlm) {
@@ -2352,6 +2373,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         : [];
       const previousModel = this.architectLlm.currentConfig?.model ?? '';
       const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
+      const baseUrl = this._defaultArchitectBaseUrl(provider);
       // Keyless providers: ollama (no auth), lmstudio (fixed literal
       // placeholder; the LM Studio server ignores the auth header but
       // the OpenAI-compat code path sends one regardless), and
@@ -2366,17 +2388,19 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       this.architectLlm.applyConfig({
         provider,
         model: defaultModel,
-        baseUrl: '',
+        baseUrl,
         apiKey,
       });
     }
     this._sendModelUpdate();
     await this._syncAttachments();
-    // Persist to settings in background (do NOT call loadConfig — it would race)
+    // Persist to the workspace when a project is open; workspace settings win over globals on reload.
     const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+    const target = this._architectSettingsTarget();
     const defaultModel = this.architectLlm?.currentConfig?.model ?? '';
-    void cfg.update('provider', provider, vscode.ConfigurationTarget.Global);
-    if (defaultModel) void cfg.update('model', defaultModel, vscode.ConfigurationTarget.Global);
+    void cfg.update('provider', provider, target);
+    if (defaultModel) void cfg.update('model', defaultModel, target);
+    void cfg.update('baseUrl', this._defaultArchitectBaseUrl(provider), target);
   }
 
   private async _changeModel(model: string): Promise<void> {
@@ -2392,8 +2416,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     }
     this._sendModelUpdate();
     await this._syncAttachments();
-    // Persist to settings in background (do NOT call loadConfig — it would race)
-    void vscode.workspace.getConfiguration('dreamgraph.architect').update('model', model, vscode.ConfigurationTarget.Global);
+    // Persist to the workspace when a project is open; workspace settings win over globals on reload.
+    void vscode.workspace.getConfiguration('dreamgraph.architect').update('model', model, this._architectSettingsTarget());
   }
 
   private static readonly MAX_TOOL_ITERATIONS = 32;
