@@ -194,6 +194,98 @@ function baseTypeName(typeNode: SyntaxNode | null | undefined): string {
   return typeNode.text.trim();
 }
 
+// ---------------------------------------------------------------------------
+// CPP-3: smart pointer + STL container shape classification
+// ---------------------------------------------------------------------------
+
+type CppTypeShape =
+  | { kind: "smart"; smart: "unique" | "shared" | "weak"; inner: string }
+  | { kind: "container"; template: string; inner: string }
+  | { kind: "map"; template: string; key: string; value: string };
+
+const SMART_POINTERS = new Map<string, "unique" | "shared" | "weak">([
+  ["unique_ptr", "unique"],
+  ["shared_ptr", "shared"],
+  ["weak_ptr", "weak"],
+]);
+
+// STL containers parameterised by a single element type. `std::array`
+// also takes a non-type size template parameter; the element type is
+// still the first argument so the shape classifier works without
+// special-casing it.
+const STL_CONTAINERS = new Set<string>([
+  "vector", "list", "forward_list", "deque",
+  "set", "multiset", "unordered_set", "unordered_multiset",
+  "array", "stack", "queue", "priority_queue",
+]);
+
+// STL associative containers with key, value template parameters.
+const STL_MAPS = new Set<string>([
+  "map", "multimap", "unordered_map", "unordered_multimap",
+]);
+
+function templateTypeOf(typeNode: SyntaxNode | null): SyntaxNode | null {
+  if (!typeNode) return null;
+  if (typeNode.type === "template_type") return typeNode;
+  if (typeNode.type === "qualified_identifier") {
+    const tail = typeNode.childForFieldName("name");
+    if (tail) return templateTypeOf(tail);
+  }
+  return null;
+}
+
+function typeDescriptorBase(td: SyntaxNode): string {
+  // tree-sitter-cpp's `type_descriptor` wraps the inner type as its
+  // first named child. Fall back to the trimmed text if the structure
+  // is unexpected.
+  if (td.namedChildCount === 0) return td.text.trim();
+  const inner = td.namedChild(0);
+  return baseTypeName(inner);
+}
+
+/**
+ * Classify a field's type as a smart pointer, single-element STL
+ * container, or associative container. Returns null when the type
+ * isn't one of those shapes. Recognises both the bare template name
+ * (`unique_ptr<T>`) and the std-qualified form (`std::unique_ptr<T>`)
+ * so projects with `using std::unique_ptr;` aren't penalised.
+ */
+function classifyTemplateType(typeNode: SyntaxNode | null): CppTypeShape | null {
+  const tt = templateTypeOf(typeNode);
+  if (!tt) return null;
+  const nameNode = tt.childForFieldName("name");
+  const name = nameNode ? nameNode.text.trim() : "";
+  if (!name) return null;
+  const args = tt.childForFieldName("arguments");
+  if (!args) return null;
+  const descriptors: SyntaxNode[] = [];
+  for (let i = 0; i < args.namedChildCount; i++) {
+    const child = args.namedChild(i);
+    if (child && child.type === "type_descriptor") descriptors.push(child);
+  }
+  const smart = SMART_POINTERS.get(name);
+  if (smart) {
+    if (descriptors.length < 1) return null;
+    const inner = typeDescriptorBase(descriptors[0]!);
+    if (!inner) return null;
+    return { kind: "smart", smart, inner };
+  }
+  if (STL_CONTAINERS.has(name)) {
+    if (descriptors.length < 1) return null;
+    const inner = typeDescriptorBase(descriptors[0]!);
+    if (!inner) return null;
+    return { kind: "container", template: name, inner };
+  }
+  if (STL_MAPS.has(name)) {
+    if (descriptors.length < 2) return null;
+    const key = typeDescriptorBase(descriptors[0]!);
+    const value = typeDescriptorBase(descriptors[1]!);
+    if (!key || !value) return null;
+    return { kind: "map", template: name, key, value };
+  }
+  return null;
+}
+
 function analyzePointer(declarator: SyntaxNode | null): {
   depth: number;
   innerName: string;
@@ -611,6 +703,25 @@ function handleField(
   const qn = `${ownerQn}::${fieldName}`;
   const id = entityId(ctx.relPath, CodeEntityKind.Field, qn);
   const baseType = baseTypeName(typeNode);
+  // CPP-3: detect smart-pointer / STL-container shapes so the field's
+  // attributes carry the semantic intent (not just the textual type)
+  // and the orchestrator can route ownership/containment edges to the
+  // right target.
+  const shape = depth === 0 ? classifyTemplateType(typeNode) : null;
+  const shapeAttrs: Record<string, unknown> = {};
+  if (shape) {
+    if (shape.kind === "smart") {
+      shapeAttrs.smart_pointer = shape.smart;
+      shapeAttrs.element_type = shape.inner;
+    } else if (shape.kind === "container") {
+      shapeAttrs.container_template = shape.template;
+      shapeAttrs.element_type = shape.inner;
+    } else {
+      shapeAttrs.container_template = shape.template;
+      shapeAttrs.key_type = shape.key;
+      shapeAttrs.value_type = shape.value;
+    }
+  }
   emitEntity(ctx, {
     id,
     kind: CodeEntityKind.Field,
@@ -626,6 +737,7 @@ function handleField(
       base_type: baseType,
       access,
       is_reference: isReference,
+      ...shapeAttrs,
     },
   }, /* ownedByFile */ false);
   ctx.edges.push({
@@ -652,6 +764,51 @@ function handleField(
         resolved: false,
       },
     });
+  }
+
+  if (shape) {
+    if (shape.kind === "smart") {
+      const rel =
+        shape.smart === "unique" ? Relationship.OWNS
+        : shape.smart === "shared" ? Relationship.OWNS_SHARED
+        : Relationship.BORROWS_WEAK;
+      ctx.edges.push({
+        from: id,
+        to: `${LANGUAGE}:type:${shape.inner}`,
+        relationship: rel,
+        evidence: evidence(node),
+        meta: {
+          smart_pointer: shape.smart,
+          base_type: shape.inner,
+          resolved: false,
+        },
+      });
+    } else if (shape.kind === "container") {
+      ctx.edges.push({
+        from: id,
+        to: `${LANGUAGE}:type:${shape.inner}`,
+        relationship: Relationship.CONTAINS_MANY,
+        evidence: evidence(node),
+        meta: {
+          container_template: shape.template,
+          base_type: shape.inner,
+          resolved: false,
+        },
+      });
+    } else {
+      ctx.edges.push({
+        from: id,
+        to: `${LANGUAGE}:type:${shape.value}`,
+        relationship: Relationship.MAPS_K_TO_V,
+        evidence: evidence(node),
+        meta: {
+          container_template: shape.template,
+          key_type: shape.key,
+          base_type: shape.value,
+          resolved: false,
+        },
+      });
+    }
   }
 }
 

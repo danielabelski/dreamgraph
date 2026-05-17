@@ -150,7 +150,12 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
     }
     if ((edge.relationship === Relationship.POINTS_TO ||
          edge.relationship === Relationship.POINTS_TO_POINTER ||
-         edge.relationship === Relationship.EXTENDS) &&
+         edge.relationship === Relationship.EXTENDS ||
+         edge.relationship === Relationship.OWNS ||
+         edge.relationship === Relationship.OWNS_SHARED ||
+         edge.relationship === Relationship.BORROWS_WEAK ||
+         edge.relationship === Relationship.CONTAINS_MANY ||
+         edge.relationship === Relationship.MAPS_K_TO_V) &&
         (edge.to.startsWith("c:type:") || edge.to.startsWith("cpp:type:"))) {
       resolved.push(resolvePointerTarget(edge, typesByName, diagnostics));
       continue;
