@@ -119,6 +119,7 @@ src/
   src/scanner/types.ts
   src/scanner/extractors/c.ts
   src/scanner/extractors/cpp.ts
+  src/scanner/extractors/java.ts
   src/scanner/extractors/rust.ts
   src/server/dashboard.ts
   src/server/server.ts
