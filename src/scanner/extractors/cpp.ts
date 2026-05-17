@@ -465,6 +465,32 @@ interface WalkCtx {
   fileEntityId: string;
   /** Stack of namespace names currently in scope. */
   namespaceStack: string[];
+  /**
+   * CPP-4: set by `handleTemplate` just before dispatching the inner
+   * declaration so `handleClassLike` / `handleFunctionDefinition` can
+   * pick up template parameters and specialisation args without
+   * threading them through every handler signature. Cleared
+   * immediately by the consumer.
+   */
+  pendingTemplate?: TemplateContext;
+}
+
+interface TemplateParam {
+  /** `"type"` for `typename T` / `class T`; `"non-type"` for `int N`. */
+  kind: "type" | "non-type";
+  name: string;
+  /** Underlying type for non-type params (e.g. `int` for `int N`). */
+  paramType?: string;
+  /** Source text of the default if one is present. */
+  defaultText?: string;
+}
+
+interface TemplateContext {
+  params: readonly TemplateParam[];
+  /** True when this template_declaration introduces a specialisation. */
+  isSpecialization: boolean;
+  /** Source text of each template argument (specialisations only). */
+  specializationArgs?: readonly string[];
 }
 
 function currentQualifier(ctx: WalkCtx): string {
@@ -544,8 +570,31 @@ function handleClassLike(
   if (!node.childForFieldName("body")) return;
   const name = specifierName(node) || nameOverride || "";
   if (!name) return;
-  const qn = qualify(ctx, name);
+  // Consume any pending template context so two templates don't get
+  // mixed up if a template_declaration nests inside another (rare but
+  // legal: template member of a templated class).
+  const tmpl = ctx.pendingTemplate;
+  ctx.pendingTemplate = undefined;
+
+  // For an explicit specialisation, the inner class_specifier's `name`
+  // field is a `template_type` carrying the concrete arguments. Encode
+  // them into the qualifiedName so `Box` and `Box<int>` live as
+  // separate entities.
+  const baseQn = qualify(ctx, name);
+  const qn = tmpl?.isSpecialization && tmpl.specializationArgs?.length
+    ? `${baseQn}<${tmpl.specializationArgs.join(", ")}>`
+    : baseQn;
   const id = entityId(ctx.relPath, kind, qn);
+  const attrs: Record<string, unknown> = { default_access: defaultAccess };
+  if (tmpl) {
+    if (tmpl.isSpecialization) {
+      attrs.is_specialization = true;
+      attrs.specialization_args = tmpl.specializationArgs ?? [];
+    } else {
+      attrs.is_template = true;
+      attrs.template_parameters = tmpl.params;
+    }
+  }
   emitEntity(ctx, {
     id,
     kind,
@@ -555,8 +604,25 @@ function handleClassLike(
     relPath: ctx.relPath,
     line: node.startPosition.row + 1,
     column: node.startPosition.column + 1,
-    attrs: { default_access: defaultAccess },
+    attrs,
   });
+
+  // Specialisations point back at the primary template. Orchestrator
+  // resolves `cpp:type:<name>` to a same-file type entity matching the
+  // unqualified name.
+  if (tmpl?.isSpecialization) {
+    ctx.edges.push({
+      from: id,
+      to: `${LANGUAGE}:type:${name}`,
+      relationship: Relationship.SPECIALIZES,
+      evidence: evidence(node),
+      meta: {
+        base_type: name,
+        specialization_args: tmpl.specializationArgs ?? [],
+        resolved: false,
+      },
+    });
+  }
 
   // Inheritance — `base_class_clause` appears as a direct child of the
   // class_specifier in tree-sitter-cpp.
@@ -900,8 +966,15 @@ function handleFunctionDefinition(node: SyntaxNode, ctx: WalkCtx): void {
   const declarator = node.childForFieldName("declarator");
   const fnName = declaratorName(declarator);
   if (!fnName) return;
+  const tmpl = ctx.pendingTemplate;
+  ctx.pendingTemplate = undefined;
   const qn = qualify(ctx, fnName);
   const id = entityId(ctx.relPath, CodeEntityKind.Function, qn);
+  const attrs: Record<string, unknown> = { is_definition: true };
+  if (tmpl && !tmpl.isSpecialization) {
+    attrs.is_template = true;
+    attrs.template_parameters = tmpl.params;
+  }
   emitEntity(ctx, {
     id,
     kind: CodeEntityKind.Function,
@@ -911,7 +984,7 @@ function handleFunctionDefinition(node: SyntaxNode, ctx: WalkCtx): void {
     relPath: ctx.relPath,
     line: node.startPosition.row + 1,
     column: node.startPosition.column + 1,
-    attrs: { is_definition: true },
+    attrs,
   });
 }
 
@@ -1063,6 +1136,142 @@ function handleClassBodyCallable(
   emitMemberCallable(node, ctx, funcDecl, isDef, enclosingClass);
 }
 
+// ---------------------------------------------------------------------------
+// CPP-4: template_declaration handler
+// ---------------------------------------------------------------------------
+
+function parseTemplateParameters(
+  list: SyntaxNode | null,
+): TemplateParam[] {
+  if (!list) return [];
+  const params: TemplateParam[] = [];
+  for (let i = 0; i < list.namedChildCount; i++) {
+    const child = list.namedChild(i);
+    if (!child) continue;
+    if (child.type === "type_parameter_declaration") {
+      // `typename T` / `class T` — the type_identifier is the last
+      // named child (the keyword itself isn't a named node).
+      const nameNode = child.namedChild(child.namedChildCount - 1);
+      const name = nameNode ? nameNode.text.trim() : "";
+      if (name) params.push({ kind: "type", name });
+    } else if (child.type === "optional_type_parameter_declaration") {
+      // `typename T = int`
+      const name = nodeText(child.childForFieldName("name"));
+      const def = child.childForFieldName("default_type");
+      const param: TemplateParam = { kind: "type", name };
+      if (def) param.defaultText = def.text.trim();
+      if (name) params.push(param);
+    } else if (child.type === "parameter_declaration" ||
+               child.type === "optional_parameter_declaration") {
+      // Non-type template parameter, e.g. `int N` or `int N = 16`.
+      const typeNode = child.childForFieldName("type");
+      const declarator = child.childForFieldName("declarator");
+      const def = child.childForFieldName("default_value");
+      const name = declaratorName(declarator);
+      if (!name) continue;
+      const param: TemplateParam = {
+        kind: "non-type",
+        name,
+        paramType: typeNode ? typeNode.text.trim() : undefined,
+      };
+      if (def) param.defaultText = def.text.trim();
+      params.push(param);
+    } else if (child.type === "variadic_parameter_declaration") {
+      // `typename... Ts`
+      const nameNode = child.namedChild(child.namedChildCount - 1);
+      const name = nameNode ? nameNode.text.trim() : "";
+      if (name) params.push({ kind: "type", name: `${name}...` });
+    }
+  }
+  return params;
+}
+
+function extractSpecializationArgs(inner: SyntaxNode): string[] | undefined {
+  // For an explicit specialisation the `name` field of the inner
+  // class/struct/union is a `template_type` whose `arguments` field
+  // contains the concrete types. Return undefined for primaries.
+  const nameField = inner.childForFieldName("name");
+  if (!nameField || nameField.type !== "template_type") return undefined;
+  const args = nameField.childForFieldName("arguments");
+  if (!args) return [];
+  const out: string[] = [];
+  for (let i = 0; i < args.namedChildCount; i++) {
+    const c = args.namedChild(i);
+    if (!c) continue;
+    out.push(c.text.trim());
+  }
+  return out;
+}
+
+/**
+ * `template <...>` wrappers around class / struct / union / function
+ * declarations or definitions. Stashes the parsed parameter list (or
+ * specialisation args) on the ctx so the inner handler can attach them
+ * to the emitted entity without changing every handler's signature.
+ */
+function handleTemplate(node: SyntaxNode, ctx: WalkCtx): void {
+  const list = findChildOfType(node, "template_parameter_list");
+  const params = parseTemplateParameters(list);
+
+  // Find the first inner declaration node. tree-sitter-cpp may wrap
+  // class/struct/union/function_definition/declaration directly inside
+  // the template_declaration.
+  let inner: SyntaxNode | null = null;
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (!c) continue;
+    if (c.type === "template_parameter_list") continue;
+    inner = c;
+    break;
+  }
+  if (!inner) return;
+
+  const specArgs = (inner.type === "class_specifier" ||
+                    inner.type === "struct_specifier" ||
+                    inner.type === "union_specifier")
+    ? extractSpecializationArgs(inner)
+    : undefined;
+
+  ctx.pendingTemplate = {
+    params,
+    isSpecialization: specArgs !== undefined,
+    specializationArgs: specArgs,
+  };
+  try {
+    switch (inner.type) {
+      case "class_specifier":
+        handleClassLike(inner, ctx, CodeEntityKind.Class, "private");
+        break;
+      case "struct_specifier":
+        handleClassLike(inner, ctx, CodeEntityKind.Struct, "public");
+        break;
+      case "union_specifier":
+        handleClassLike(inner, ctx, CodeEntityKind.Union, "public");
+        break;
+      case "function_definition":
+        handleFunctionDefinition(inner, ctx);
+        break;
+      case "declaration":
+        handleDeclaration(inner, ctx);
+        break;
+      case "template_declaration":
+        // Template-template parameter or nested template — recurse so
+        // the inner-most declaration still receives a (possibly empty)
+        // template context. We deliberately do NOT merge param lists;
+        // only the innermost is recorded.
+        handleTemplate(inner, ctx);
+        break;
+      default:
+        break;
+    }
+  } finally {
+    // Defensive: handlers consume `pendingTemplate` immediately, but
+    // if the dispatch above hit `default` we clear it here so a later
+    // unrelated emission doesn't pick it up.
+    ctx.pendingTemplate = undefined;
+  }
+}
+
 function handleMacro(node: SyntaxNode, ctx: WalkCtx): void {
   const macroName = nodeText(node.childForFieldName("name"));
   if (!macroName) return;
@@ -1182,6 +1391,9 @@ function dispatch(child: SyntaxNode, ctx: WalkCtx): void {
       // extern "C" { ... } and conditional blocks contain nested
       // top-level entities; recurse without changing namespace context.
       walkBody(child, ctx);
+      break;
+    case "template_declaration":
+      handleTemplate(child, ctx);
       break;
     default:
       break;

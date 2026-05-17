@@ -155,7 +155,8 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
          edge.relationship === Relationship.OWNS_SHARED ||
          edge.relationship === Relationship.BORROWS_WEAK ||
          edge.relationship === Relationship.CONTAINS_MANY ||
-         edge.relationship === Relationship.MAPS_K_TO_V) &&
+         edge.relationship === Relationship.MAPS_K_TO_V ||
+         edge.relationship === Relationship.SPECIALIZES) &&
         (edge.to.startsWith("c:type:") || edge.to.startsWith("cpp:type:"))) {
       resolved.push(resolvePointerTarget(edge, typesByName, diagnostics));
       continue;
@@ -304,7 +305,14 @@ function resolvePointerTarget(
   const meta = edge.meta ?? {};
   const baseType = typeof meta.base_type === "string" ? meta.base_type : "";
   if (!baseType) return edge;
-  const candidates = typesByName.get(baseType) ?? [];
+  // Specialisations carry the same `name` as their primary (e.g. both
+  // `Box` and `Box<int>` have `name === "Box"`). For unqualified
+  // `cpp:type:X` lookups we want the primary template only, never the
+  // specialisation, otherwise resolution becomes ambiguous and the edge
+  // is silently dropped.
+  const candidates = (typesByName.get(baseType) ?? []).filter(
+    (c) => c.attrs?.is_specialization !== true,
+  );
   if (candidates.length === 0) return edge;
   if (candidates.length > 1) {
     diagnostics.push({

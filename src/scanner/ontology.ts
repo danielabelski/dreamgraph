@@ -194,6 +194,7 @@ export const Relationship = {
   IMPLEMENTS: "IMPLEMENTS",
   IMPLEMENTS_TRAIT: "IMPLEMENTS_TRAIT",
   USES_TRAIT: "USES_TRAIT",
+  SPECIALIZES: "SPECIALIZES",
 
   // Call / data flow
   CALLS: "CALLS",
