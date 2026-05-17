@@ -75,6 +75,7 @@ const TYPE_KINDS = new Set<string>([
   CodeEntityKind.Trait,
   CodeEntityKind.Interface,
   CodeEntityKind.Record,
+  CodeEntityKind.Annotation,
 ]);
 
 /**
@@ -195,10 +196,28 @@ function indexEntities(entities: readonly ExtractedEntity[]): IndexedEntities {
   for (const e of entities) {
     byId.set(e.id, e);
     if (e.kind === CodeEntityKind.Field) {
-      // Owner qn is everything before the final `::name` segment.
-      const sep = e.qualifiedName.lastIndexOf("::");
-      if (sep <= 0) continue;
-      const ownerQn = e.qualifiedName.slice(0, sep);
+      // Prefer the extractor-supplied owner qualifiedName: it is
+      // language-agnostic and immune to separator drift (`::` in C++,
+      // `.` in Java/Rust fields, plain struct name in C). All current
+      // extractors set this; we fall back to a separator-tolerant
+      // suffix strip only if the attr is missing.
+      let ownerQn = typeof e.attrs?.owner_qualified_name === "string"
+        ? (e.attrs.owner_qualified_name as string)
+        : "";
+      if (!ownerQn) {
+        // Strip the trailing `<sep><name>` segment from the field's
+        // qualifiedName, trying `.` first (Java/Rust fields), then
+        // `::` (C++), then `.` again as last resort.
+        const candidates = [".", "::"];
+        for (const sep of candidates) {
+          const suffix = `${sep}${e.name}`;
+          if (e.qualifiedName.endsWith(suffix)) {
+            ownerQn = e.qualifiedName.slice(0, e.qualifiedName.length - suffix.length);
+            break;
+          }
+        }
+      }
+      if (!ownerQn) continue;
       const bucket = fieldsByOwnerQn.get(ownerQn) ?? [];
       bucket.push(e);
       fieldsByOwnerQn.set(ownerQn, bucket);

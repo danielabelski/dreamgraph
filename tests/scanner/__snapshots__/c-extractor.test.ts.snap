@@ -358,6 +358,7 @@ exports[`C extractor — C-1 basic entities > emits the expected entities and ed
     {
       "attrs": {
         "base_type": "Node",
+        "owner_qualified_name": "Bucket",
         "pointer_depth": 1,
         "type_text": "Node",
       },
@@ -373,6 +374,7 @@ exports[`C extractor — C-1 basic entities > emits the expected entities and ed
     {
       "attrs": {
         "base_type": "unsigned int",
+        "owner_qualified_name": "Bucket",
         "pointer_depth": 0,
         "type_text": "unsigned int",
       },
@@ -388,6 +390,7 @@ exports[`C extractor — C-1 basic entities > emits the expected entities and ed
     {
       "attrs": {
         "base_type": "NodeKind",
+        "owner_qualified_name": "Node",
         "pointer_depth": 0,
         "type_text": "NodeKind",
       },
@@ -403,6 +406,7 @@ exports[`C extractor — C-1 basic entities > emits the expected entities and ed
     {
       "attrs": {
         "base_type": "int",
+        "owner_qualified_name": "Node",
         "pointer_depth": 0,
         "type_text": "int",
       },
@@ -418,6 +422,7 @@ exports[`C extractor — C-1 basic entities > emits the expected entities and ed
     {
       "attrs": {
         "base_type": "float",
+        "owner_qualified_name": "Payload",
         "pointer_depth": 0,
         "type_text": "float",
       },
@@ -433,6 +438,7 @@ exports[`C extractor — C-1 basic entities > emits the expected entities and ed
     {
       "attrs": {
         "base_type": "int",
+        "owner_qualified_name": "Payload",
         "pointer_depth": 0,
         "type_text": "int",
       },
@@ -857,6 +863,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "int",
+        "owner_qualified_name": "Node",
         "pointer_depth": 0,
         "type_text": "int",
       },
@@ -872,6 +879,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "int",
+        "owner_qualified_name": "Node",
         "pointer_depth": 1,
         "type_text": "int",
       },
@@ -887,6 +895,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "char",
+        "owner_qualified_name": "Node",
         "pointer_depth": 1,
         "type_text": "char",
       },
@@ -902,6 +911,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "Node",
+        "owner_qualified_name": "Node",
         "pointer_depth": 1,
         "type_text": "Node",
       },
@@ -917,6 +927,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "Node",
+        "owner_qualified_name": "Node",
         "pointer_depth": 2,
         "type_text": "Node",
       },
@@ -932,6 +943,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "int",
+        "owner_qualified_name": "Node",
         "pointer_depth": 0,
         "type_text": "int",
       },
@@ -947,6 +959,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "Node",
+        "owner_qualified_name": "Pair",
         "pointer_depth": 1,
         "type_text": "Node",
       },
@@ -962,6 +975,7 @@ exports[`C extractor — C-2 pointer modeling > emits the expected entities and 
     {
       "attrs": {
         "base_type": "Node",
+        "owner_qualified_name": "Pair",
         "pointer_depth": 1,
         "type_text": "Node",
       },

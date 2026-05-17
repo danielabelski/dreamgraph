@@ -129,4 +129,100 @@ describe("native data-model bridge", () => {
     expect(quality.totalNativeFiles).toBe(0);
     expect(quality.parserBackedFiles).toBe(0);
   });
+
+  // Coherence regression: every supported language must reach the bridge
+  // through the same code path. Owner-qn separator drift (Java `.`,
+  // Rust `.`, C++ `::`) and the Annotation kind must all resolve.
+  it("aggregates Java fields onto their owning Class entry (owner-qn `.` separator)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dg-native-bridge-java-"));
+    try {
+      await mkdir(join(root, "src"), { recursive: true });
+      const javaPath = join(root, "src", "Pkg.java");
+      await writeFile(javaPath,
+        `package com.example;
+import java.util.List;
+@Component
+public class Holder {
+  private List<Node> children;
+  private Node primary;
+}
+class Node {}
+@interface Component {}
+`, "utf-8");
+      const scan: ProjectScan = {
+        repoName: "demo",
+        repoRoot: root,
+        technology: "Java",
+        files: [{ abs: javaPath, rel: "src/Pkg.java", name: "Pkg.java", ext: ".java", dirParts: ["src"], size: 0 }],
+        manifestContent: {},
+        uiFiles: [],
+        topLevelDirs: ["src"],
+        auxiliaryFiles: { test_suite: [], configuration: [], automation_script: [], mcp_tool: [] },
+      };
+      const { entries } = await extractNativeDataModel(scan);
+      const holder = entries.find((e) => e.name === "Holder") as Record<string, unknown>;
+      expect(holder).toBeDefined();
+      expect(holder.model_kind).toBe("java:class");
+      const keyFields = holder.key_fields as Array<{ name: string }>;
+      const fieldNames = keyFields.map((f) => f.name).sort();
+      expect(fieldNames).toEqual(["children", "primary"]);
+
+      // Annotation kind must surface as its own data-model entry so
+      // HAS_ANNOTATION edges can resolve to it.
+      const component = entries.find((e) => e.name === "Component") as Record<string, unknown>;
+      expect(component).toBeDefined();
+      expect(component.model_kind).toBe("java:annotation");
+
+      // HAS_ANNOTATION on the Class must resolve to the Annotation entry id.
+      const rels = holder.relationships as Array<{ type: string; target: string; via: string }>;
+      const annRel = rels.find((r) => r.type === "HAS_ANNOTATION");
+      expect(annRel).toBeDefined();
+      expect(annRel!.target).toBe(component.id);
+      expect(annRel!.via).toBe("annotation");
+
+      // CONTAINS_MANY on a field must resolve to the Node entry id.
+      const node = entries.find((e) => e.name === "Node") as Record<string, unknown>;
+      const cm = rels.find((r) => r.type === "CONTAINS_MANY");
+      expect(cm).toBeDefined();
+      expect(cm!.target).toBe(node.id);
+      expect(cm!.via).toBe("list");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aggregates Rust struct fields onto their owning entry (mixed `::` + `.` qn)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dg-native-bridge-rust-"));
+    try {
+      await mkdir(join(root, "src"), { recursive: true });
+      const rustPath = join(root, "src", "lib.rs");
+      await writeFile(rustPath,
+        `pub struct Node { pub value: i32 }
+pub struct Holder { pub primary: Node }
+`, "utf-8");
+      const scan: ProjectScan = {
+        repoName: "demo",
+        repoRoot: root,
+        technology: "Rust",
+        files: [{ abs: rustPath, rel: "src/lib.rs", name: "lib.rs", ext: ".rs", dirParts: ["src"], size: 0 }],
+        manifestContent: {},
+        uiFiles: [],
+        topLevelDirs: ["src"],
+        auxiliaryFiles: { test_suite: [], configuration: [], automation_script: [], mcp_tool: [] },
+      };
+      const { entries } = await extractNativeDataModel(scan);
+      const holder = entries.find((e) => e.name === "Holder") as Record<string, unknown>;
+      expect(holder).toBeDefined();
+      const keyFields = holder.key_fields as Array<{ name: string }>;
+      expect(keyFields.map((f) => f.name)).toEqual(["primary"]);
+
+      const node = entries.find((e) => e.name === "Node") as Record<string, unknown>;
+      const rels = holder.relationships as Array<{ type: string; target: string }>;
+      const embeds = rels.find((r) => r.type === "EMBEDS");
+      expect(embeds).toBeDefined();
+      expect(embeds!.target).toBe(node.id);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

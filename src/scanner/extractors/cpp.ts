@@ -803,6 +803,7 @@ function handleField(
       base_type: baseType,
       access,
       is_reference: isReference,
+      owner_qualified_name: ownerQn,
       ...shapeAttrs,
     },
   }, /* ownedByFile */ false);

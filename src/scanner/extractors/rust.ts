@@ -467,7 +467,7 @@ function handleNamedField(
   const typeNode = node.childForFieldName("type");
   const qn = `${ownerQn}.${name}`;
   const id = entityId(ctx.relPath, CodeEntityKind.Field, qn);
-  emitField(ctx, id, name, qn, typeNode, node, ownerId);
+  emitField(ctx, id, name, qn, typeNode, node, ownerId, { owner_qualified_name: ownerQn });
 }
 
 function handleTupleField(
@@ -481,7 +481,7 @@ function handleTupleField(
   const name = String(pos);
   const qn = `${ownerQn}.${name}`;
   const id = entityId(ctx.relPath, CodeEntityKind.Field, qn);
-  emitField(ctx, id, name, qn, typeNode, node, ownerId, { is_tuple_field: true, position: pos });
+  emitField(ctx, id, name, qn, typeNode, node, ownerId, { is_tuple_field: true, position: pos, owner_qualified_name: ownerQn });
 }
 
 function firstTypeChild(node: SyntaxNode): SyntaxNode | null {

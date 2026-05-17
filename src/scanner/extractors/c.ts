@@ -312,6 +312,7 @@ function handleField(
         type_text: nodeText(typeNode),
         pointer_depth: depth,
         base_type: baseType,
+        owner_qualified_name: ownerName,
       },
     },
     /* ownedByFile */ false,

@@ -66,7 +66,7 @@ export interface ProjectGraph {
 // reuse these canonical kinds rather than inventing language-specific
 // variants — semantic binding depends on the kind being the same.
 const TYPE_KINDS = new Set<string>([
-  "Struct", "Union", "Enum", "TypeAlias", "Class", "Trait", "Interface", "Record",
+  "Struct", "Union", "Enum", "TypeAlias", "Class", "Trait", "Interface", "Record", "Annotation",
 ]);
 
 /**
@@ -180,6 +180,7 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
          edge.relationship === Relationship.MAPS_K_TO_V ||
          edge.relationship === Relationship.EMBEDS ||
          edge.relationship === Relationship.REFERENCES_TYPE ||
+         edge.relationship === Relationship.HAS_ANNOTATION ||
          edge.relationship === Relationship.SPECIALIZES) &&
         isPlaceholderTarget(edge.to, "type")) {
       resolved.push(resolvePointerTarget(edge, typesByName, diagnostics));
