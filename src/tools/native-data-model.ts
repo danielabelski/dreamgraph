@@ -22,6 +22,7 @@ import fs from "node:fs/promises";
 import type { Extractor, ExtractedEntity, ExtractorDiagnostic, ExtractorOutput } from "../scanner/types.js";
 import { cExtractor } from "../scanner/extractors/c.js";
 import { cppExtractor } from "../scanner/extractors/cpp.js";
+import { rustExtractor } from "../scanner/extractors/rust.js";
 import { linkProject } from "../scanner/orchestrator.js";
 import { CodeEntityKind, Relationship } from "../scanner/ontology.js";
 import { logger } from "../utils/logger.js";
@@ -37,7 +38,7 @@ import type { ProjectScan, ScannedFile } from "./scan-types.js";
  * wins for any given file; this matters for `.h` (C wins over C++) so
  * mixed projects don't double-parse headers.
  */
-const NATIVE_EXTRACTORS: readonly Extractor[] = [cExtractor, cppExtractor];
+const NATIVE_EXTRACTORS: readonly Extractor[] = [cExtractor, cppExtractor, rustExtractor];
 
 const EXTENSION_TO_EXTRACTOR = new Map<string, Extractor>();
 for (const ext of NATIVE_EXTRACTORS) {
@@ -61,25 +62,40 @@ export function hasNativeCodeFiles(scan: ProjectScan): boolean {
 // Extraction
 // ---------------------------------------------------------------------------
 
+// Mirror of the orchestrator's TYPE_KINDS. Kept language-agnostic so a
+// Rust `Struct`, a C++ `Class`, and a Java `Interface` all surface as
+// data-model entries through the same code path.
 const TYPE_KINDS = new Set<string>([
   CodeEntityKind.Struct,
   CodeEntityKind.Union,
   CodeEntityKind.Enum,
   CodeEntityKind.TypeAlias,
   CodeEntityKind.Class,
+  CodeEntityKind.Trait,
+  CodeEntityKind.Interface,
+  CodeEntityKind.Record,
 ]);
 
-/** Relationships we surface as `EntityRelationship` records. */
+/**
+ * Default `via` label for each canonical relationship. Extractors MAY
+ * override per-edge by setting `edge.meta.via` (e.g. C++ `unique_ptr`
+ * vs Rust `box`, both of which carry the OWNS relationship). The
+ * relationship itself stays language-agnostic.
+ */
 const RELATIONSHIP_VIA: Partial<Record<string, string>> = {
   [Relationship.EXTENDS]: "inheritance",
-  [Relationship.OWNS]: "unique_ptr",
-  [Relationship.OWNS_SHARED]: "shared_ptr",
-  [Relationship.BORROWS_WEAK]: "weak_ptr",
+  [Relationship.IMPLEMENTS_TRAIT]: "trait_impl",
+  [Relationship.OWNS]: "owned",
+  [Relationship.OWNS_SHARED]: "shared",
+  [Relationship.BORROWS]: "borrow",
+  [Relationship.BORROWS_WEAK]: "weak",
   [Relationship.CONTAINS_MANY]: "container",
+  [Relationship.MAY_CONTAIN]: "optional",
   [Relationship.MAPS_K_TO_V]: "map",
+  [Relationship.EMBEDS]: "value",
   [Relationship.POINTS_TO]: "pointer",
   [Relationship.POINTS_TO_POINTER]: "pointer_to_pointer",
-  [Relationship.SPECIALIZES]: "template_specialization",
+  [Relationship.SPECIALIZES]: "specialization",
 };
 
 export interface NativeScanQuality {
@@ -250,7 +266,13 @@ function entitiesToDataModel(
       relationships.push({
         type: edge.relationship,
         target: targetLabel,
-        via: RELATIONSHIP_VIA[edge.relationship] ?? edge.relationship,
+        // Prefer the extractor-supplied per-edge label (Rust `box`, C++
+        // `unique_ptr`, Java `Optional`, …) so consumers can tell which
+        // language construct produced the otherwise-shared semantic
+        // relationship. Fall back to the default label per relationship.
+        via: (typeof edge.meta?.via === "string" && (edge.meta.via as string).length > 0)
+          ? (edge.meta.via as string)
+          : (RELATIONSHIP_VIA[edge.relationship] ?? edge.relationship),
       });
     }
 

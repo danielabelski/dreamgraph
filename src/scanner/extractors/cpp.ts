@@ -838,12 +838,17 @@ function handleField(
         shape.smart === "unique" ? Relationship.OWNS
         : shape.smart === "shared" ? Relationship.OWNS_SHARED
         : Relationship.BORROWS_WEAK;
+      const via =
+        shape.smart === "unique" ? "unique_ptr"
+        : shape.smart === "shared" ? "shared_ptr"
+        : "weak_ptr";
       ctx.edges.push({
         from: id,
         to: `${LANGUAGE}:type:${shape.inner}`,
         relationship: rel,
         evidence: evidence(node),
         meta: {
+          via,
           smart_pointer: shape.smart,
           base_type: shape.inner,
           resolved: false,
@@ -856,6 +861,7 @@ function handleField(
         relationship: Relationship.CONTAINS_MANY,
         evidence: evidence(node),
         meta: {
+          via: shape.template,
           container_template: shape.template,
           base_type: shape.inner,
           resolved: false,
@@ -868,6 +874,7 @@ function handleField(
         relationship: Relationship.MAPS_K_TO_V,
         evidence: evidence(node),
         meta: {
+          via: shape.template,
           container_template: shape.template,
           key_type: shape.key,
           base_type: shape.value,

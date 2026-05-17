@@ -60,7 +60,25 @@ export interface ProjectGraph {
   readonly diagnostics: readonly ExtractorDiagnostic[];
 }
 
-const TYPE_KINDS = new Set<string>(["Struct", "Union", "Enum", "TypeAlias", "Class"]);
+// Language-agnostic set of type-like kinds. Any extractor that emits one
+// of these participates in cross-file `${lang}:type:Name` resolution
+// regardless of which language produced it. Adding a new language MUST
+// reuse these canonical kinds rather than inventing language-specific
+// variants — semantic binding depends on the kind being the same.
+const TYPE_KINDS = new Set<string>([
+  "Struct", "Union", "Enum", "TypeAlias", "Class", "Trait", "Interface", "Record",
+]);
+
+/**
+ * Language-agnostic placeholder check: matches `${lang}:type:Name` or
+ * `${lang}:include:Path` for any language identifier. Used so the
+ * orchestrator doesn't have to enumerate every language extractor.
+ */
+function isPlaceholderTarget(to: string, slot: "type" | "include"): boolean {
+  const first = to.indexOf(":");
+  if (first <= 0) return false;
+  return to.slice(first + 1).startsWith(`${slot}:`);
+}
 
 const ORCHESTRATOR_EVIDENCE = {
   extractor: "orchestrator",
@@ -144,20 +162,24 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
   const resolved: ExtractedEdge[] = [];
   for (const edge of rawEdges) {
     if (edge.relationship === Relationship.INCLUDES &&
-        (edge.to.startsWith("c:include:") || edge.to.startsWith("cpp:include:"))) {
+        isPlaceholderTarget(edge.to, "include")) {
       resolved.push(resolveInclude(edge, filesByBasename, diagnostics));
       continue;
     }
     if ((edge.relationship === Relationship.POINTS_TO ||
          edge.relationship === Relationship.POINTS_TO_POINTER ||
          edge.relationship === Relationship.EXTENDS ||
+         edge.relationship === Relationship.IMPLEMENTS_TRAIT ||
          edge.relationship === Relationship.OWNS ||
          edge.relationship === Relationship.OWNS_SHARED ||
+         edge.relationship === Relationship.BORROWS ||
          edge.relationship === Relationship.BORROWS_WEAK ||
          edge.relationship === Relationship.CONTAINS_MANY ||
+         edge.relationship === Relationship.MAY_CONTAIN ||
          edge.relationship === Relationship.MAPS_K_TO_V ||
+         edge.relationship === Relationship.EMBEDS ||
          edge.relationship === Relationship.SPECIALIZES) &&
-        (edge.to.startsWith("c:type:") || edge.to.startsWith("cpp:type:"))) {
+        isPlaceholderTarget(edge.to, "type")) {
       resolved.push(resolvePointerTarget(edge, typesByName, diagnostics));
       continue;
     }
