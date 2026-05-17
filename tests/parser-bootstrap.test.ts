@@ -31,6 +31,7 @@ describe("parser-bootstrap", () => {
     expect(grammarPath("java")).toMatch(/tree-sitter-java\.wasm$/);
     expect(grammarPath("kotlin")).toMatch(/tree-sitter-kotlin\.wasm$/);
     expect(grammarPath("python")).toMatch(/tree-sitter-python\.wasm$/);
+    expect(grammarPath("csharp")).toMatch(/tree-sitter-c_sharp\.wasm$/);
   });
 
   it("parses a C struct without errors", async () => {
@@ -71,6 +72,15 @@ describe("parser-bootstrap", () => {
     );
     expect(tree.rootNode.hasError()).toBe(false);
     expect(tree.rootNode.type).toBe("module");
+  });
+
+  it("parses a C# class without errors", async () => {
+    const parser = await getParser("csharp");
+    const tree = parser.parse(
+      "namespace ns; public class Foo { public int Id { get; set; } }"
+    );
+    expect(tree.rootNode.hasError()).toBe(false);
+    expect(tree.rootNode.type).toBe("compilation_unit");
   });
 
   it("returns a fresh parser per call but reuses the language", async () => {
