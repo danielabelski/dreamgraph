@@ -49,8 +49,10 @@
     "p-limit": "^6.2.0",
     "pg": "^8.20.0",
     "pino": "^9.7.0",
+    "tree-sitter-wasms": "^0.1.13",
     "tsx": "^4.20.3",
     "turndown": "^7.2.4",
+    "web-tree-sitter": "^0.20.8",
     "zod": "^3.23.8"
   },
   "devDependencies": {
