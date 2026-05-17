@@ -30,6 +30,7 @@ describe("parser-bootstrap", () => {
     expect(grammarPath("rust")).toMatch(/tree-sitter-rust\.wasm$/);
     expect(grammarPath("java")).toMatch(/tree-sitter-java\.wasm$/);
     expect(grammarPath("kotlin")).toMatch(/tree-sitter-kotlin\.wasm$/);
+    expect(grammarPath("python")).toMatch(/tree-sitter-python\.wasm$/);
   });
 
   it("parses a C struct without errors", async () => {
@@ -61,6 +62,15 @@ describe("parser-bootstrap", () => {
       "package com.example; public class Foo implements Runnable { public void run() {} }"
     );
     expect(tree.rootNode.hasError()).toBe(false);
+  });
+
+  it("parses a Python class without errors", async () => {
+    const parser = await getParser("python");
+    const tree = parser.parse(
+      "class Foo:\n    x: int = 0\n    def bar(self) -> None:\n        return None\n"
+    );
+    expect(tree.rootNode.hasError()).toBe(false);
+    expect(tree.rootNode.type).toBe("module");
   });
 
   it("returns a fresh parser per call but reuses the language", async () => {
