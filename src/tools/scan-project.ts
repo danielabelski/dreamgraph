@@ -57,6 +57,7 @@ import { shouldSkipScanDirectory } from "./scanner-artifact-policy.js";
 import { classifyAuxiliaryFile } from "./auxiliary-classifier.js";
 import { generateAuxiliaryEntities } from "./auxiliary-generators.js";
 import { mergeAuxiliaryEntities, loadAuxiliaryEntities } from "./auxiliary-store.js";
+import { extractNativeDataModel, hasNativeCodeFiles } from "./native-data-model.js";
 import type {
   Feature,
   Workflow,
@@ -83,6 +84,7 @@ const MAX_FILE_BYTES = 3072;
 const CODE_EXTENSIONS = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
   ".py", ".rb", ".go", ".rs", ".java", ".kt", ".cs",
+  ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
   ".vue", ".svelte", ".xaml", ".razor",
 ]);
 
@@ -359,59 +361,77 @@ function buildEnrichmentPrompt(
   repoName: string,
 ): LlmMessage[] {
   const targetInstructions: Record<string, string> = {
-    features: `Identify ALL major features and modules in this project.
+    features: `Identify major features and modules that are directly evidenced by this project.
 Each feature should have:
 - id: snake_case unique identifier
 - name: Human-readable feature name
-- description: 2-3 sentences explaining what it does, its purpose, and key behaviors
+- description: 2-3 sentences explaining what the cited source files prove it does
 - source_repo: "${repoName}" 
-- source_files: array of key source file paths (relative to repo root)
+- source_files: array of key source file paths (relative to repo root) that prove this feature exists
 - status: "active"
-- category: logical category (e.g., "core", "ui", "plugin", "cli", "infrastructure")
-- tags: array of relevant tags
-- domain: domain grouping (e.g., "ui", "plugin-system", "data-processing", "infrastructure", "cli")
-- keywords: array of keywords that describe this feature
+- category: logical category inferred only from discovered names/content in this project
+- tags: array of relevant tags inferred only from discovered names/content in this project
+- domain: domain grouping inferred only from discovered names/content in this project
+- keywords: array of keywords from cited file paths, manifests, or source content
 
-Be thorough. Include individual tools/components (not just top-level modules).
-For a UI app include each major screen/tool as its own feature.
-For a plugin system include the plugin API, loader, registry as separate features.
-Aim for at least 20-40 features for a medium-to-large project.`,
+Discovery rules:
+- Do not assume any programming language, framework, platform, datastore, architecture, or directory convention beyond the provided evidence.
+- Do not carry over DreamGraph concepts or any other product architecture unless the cited project files explicitly contain them.
+- Prefer fewer, well-evidenced features over many speculative ones.
+- Every feature must cite source_files that justify the name and description.`,
 
-    workflows: `Identify ALL key processes and workflows in this project.
+    workflows: `Identify workflows that are directly evidenced by this project.
+
+Semantic definition:
+A workflow is a connected, ordered, or causal progression of actions, events, decisions, or state transitions where one step meaningfully influences or enables another and the chain advances a system outcome. It is behavioral progression, not a specific technology.
+
 Each workflow should have:
 - id: snake_case unique identifier
-- name: Human-readable workflow name (usually ends with "Flow" or "Process")
-- description: 2-3 sentences explaining the process
-- trigger: What initiates this workflow
+- name: Human-readable workflow name that reflects the project's own vocabulary
+- description: 2-3 rich sentences explaining the cause/effect chain proven by the cited source files, including the outcome it advances
+- workflow_kind: optional evidence-derived semantic category such as ui_interaction, state_transition_chain, event_flow, command_flow, traversal_flow, parser_flow, game_loop, approval_flow, orchestration_flow, or another project-specific kind; omit if not evidenced
+- trigger: What initiates this workflow, only if evidenced; otherwise use "unknown from discovered source"
 - source_repo: "${repoName}"
-- source_files: array of source file paths involved
-- domain: domain grouping
-- keywords: array of keywords
+- source_files: array of source file paths that prove this workflow exists
+- domain: domain grouping inferred only from discovered names/content in this project
+- keywords: array of keywords from cited file paths, manifests, or source content
 - status: "active"
-- steps: array of { order: number, name: string, description: string }
+- steps: array of { order: number, name: string, description: string } using only observed code/file evidence; each step should describe the action/event/decision/state transition and its causal role
 
-Include: startup/initialization, data loading, user interactions, build/deploy, 
-plugin discovery, settings persistence, navigation, error handling flows.
-Aim for 10-20 workflows.`,
+Discovery rules:
+- Preserve semantic richness: do not suppress valid workflows just because they are not pipelines, jobs, web routes, queues, BPMN, or automation.
+- Do not invent workflows to satisfy a quota.
+- Do not include generic examples such as plugin discovery, navigation, settings, build, error handling, or startup unless this specific project's files prove them.
+- Do not assume UI, backend, CLI, plugin, datastore, routing, queue, microservice, deployment, or framework behavior from directory names alone.
+- Architecture is structural organization; workflow is behavioral progression. Do not confuse the two.
+- Prefer fewer, well-evidenced workflows over many speculative ones, but keep descriptions and steps rich when evidence exists.`,
 
-    data_model: `Identify ALL core data structures and models in this project.
+
+    data_model: `Identify data models that are directly evidenced by this project.
+
+Semantic definition:
+A data model is the structure and relationships of information inside the system. It can be a C struct, linked list, in-memory graph, JSON/XML/protobuf shape, flat-file record, message payload, ECS component layout, binary format, TypeScript interface, Rust enum, serialization schema, parser AST, GPU buffer, or any other explicit information structure. It does not require a datastore.
+
 Each entity should have:
 - id: snake_case unique identifier
 - name: Human-readable entity name
-- description: 2-3 sentences explaining what data it holds and how it's used
-- table_name: identifier (can match id)
-- storage: storage mechanism (e.g., "json", "sqlite", "memory", "file-system", "registry")
+- description: 2-3 rich sentences explaining what information structure the cited source files prove, what fields/parts matter, and how it participates in the system
+- model_kind: optional evidence-derived semantic category such as struct_layout, linked_structure, in_memory_graph, json_shape, protobuf_schema, xml_shape, flat_file_record, message_contract, ecs_component, binary_layout, type_interface, enum_shape, serialization_schema, parser_ast, gpu_buffer, state_shape, domain_entity, api_contract, validation_schema, config_schema, persistence_model, or another project-specific kind; omit if not evidenced
 - source_repo: "${repoName}"
 - source_files: array of source file paths where this is defined
-- domain: domain grouping
-- keywords: array of keywords
+- domain: domain grouping inferred only from discovered names/content in this project
+- keywords: array of keywords from cited file paths, manifests, or source content
 - status: "active"
-- key_fields: array of { name: string, type: string, description: string }
-- relationships: array of { type: string, target: string, via: string }
+- key_fields: array of { name: string, type: string, description: string } using only fields visible in source evidence
+- relationships: array of { type: string, target: string, via: string } using only explicit code references or strongly evidenced relations between information structures
 
-Include: configuration objects, plugin manifests, settings schemas, 
-data transfer objects, API contracts, state models.
-Aim for 10-25 data model entities.`,
+Discovery rules:
+- Preserve semantic richness: a proven information structure is a valid data model even without a database, table, repository, ORM, or persistence layer.
+- Do not assume a datastore exists. Only include table_name, storage, persistence, registry, or database claims when the cited files explicitly prove them.
+- Do not include generic examples such as configuration, plugin manifests, settings schemas, DTOs, API contracts, or state models unless this specific project's files prove them.
+- Persistence is state retention strategy; data model is information structure. Do not confuse the two.
+- Prefer fewer, well-evidenced data entities over many speculative ones, but keep descriptions, fields, and relationships rich when evidence exists.`,
+
   };
 
   return [
@@ -502,6 +522,19 @@ export interface ScanProjectResult {
   features: { inserted: number; updated: number; total: number };
   workflows: { inserted: number; updated: number; total: number };
   data_model: { inserted: number; updated: number; total: number };
+  /**
+   * Wave-1 #4 — parser-backed (tree-sitter) coverage for native code
+   * (C / C++). `parser_backed_files` is the number of C/C++ files the
+   * extractor processed without throwing; `total_native_files` is the
+   * number of C/C++ files discovered overall. Both are zero when the
+   * project has no native source.
+   */
+  scan_quality?: {
+    parser_backed_files: number;
+    total_native_files: number;
+    parser_backed_pct: number;
+    native_diagnostics: number;
+  };
   /** Phase 5 #9 — auxiliary entities (tests/configs/scripts/MCP tools). */
   auxiliary?: {
     inserted: number;
@@ -840,6 +873,59 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     logger.warn(`scan_project: auxiliary merge error: ${msg}`);
   }
 
+  // Phase 2.6 — native (parser-backed) data-model bridge. Augments
+  // `data_model.json` with structs/classes/enums/etc. extracted by
+  // tree-sitter so the seed file reflects evidenced types, not just
+  // path-based heuristics. Non-fatal: bridge errors degrade scan_quality
+  // but never block the rest of the scan.
+  let scanQuality: ScanProjectResult["scan_quality"];
+  if (targetList.includes("data_model")) {
+    const aggregated: { parser_backed_files: number; total_native_files: number; native_diagnostics: number } = {
+      parser_backed_files: 0,
+      total_native_files: 0,
+      native_diagnostics: 0,
+    };
+    for (const scan of scans) {
+      if (!hasNativeCodeFiles(scan)) continue;
+      try {
+        progress(`Native scan (C/C++) — ${scan.repoName}…`);
+        const { entries, quality } = await extractNativeDataModel(scan);
+        aggregated.parser_backed_files += quality.parserBackedFiles;
+        aggregated.total_native_files += quality.totalNativeFiles;
+        aggregated.native_diagnostics += quality.diagnostics.length;
+        if (entries.length > 0) {
+          const existing = stripTemplateStubs(
+            await loadJsonArray<Record<string, unknown>>("data_model.json"),
+          );
+          const merged = mergeById(existing, entries);
+          await writeSeed("data_model.json", merged.merged);
+          dataModelResult.inserted += merged.inserted;
+          dataModelResult.updated += merged.updated;
+          dataModelResult.total = merged.merged.length;
+          logger.info(
+            `scan_project: native data model — ${merged.inserted} inserted, ` +
+            `${merged.updated} updated, ${entries.length} parser-backed entries ` +
+            `(${quality.parserBackedFiles}/${quality.totalNativeFiles} files)`,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`Native data-model bridge failed for ${scan.repoName}: ${msg}`);
+        logger.warn(`scan_project: native bridge error (${scan.repoName}): ${msg}`);
+      }
+    }
+    if (aggregated.total_native_files > 0) {
+      scanQuality = {
+        parser_backed_files: aggregated.parser_backed_files,
+        total_native_files: aggregated.total_native_files,
+        parser_backed_pct: Math.round(
+          (aggregated.parser_backed_files / aggregated.total_native_files) * 1000,
+        ) / 10,
+        native_diagnostics: aggregated.native_diagnostics,
+      };
+    }
+  }
+
   progress("Rebuilding resource index…");
   const indexEntries = await rebuildIndex();
   logger.info(`scan_project: index rebuilt with ${indexEntries} entries`);
@@ -961,6 +1047,10 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
       `(tests=${auxiliaryResult.by_kind.test_suite}, config=${auxiliaryResult.by_kind.configuration}, ` +
       `scripts=${auxiliaryResult.by_kind.automation_script}, mcp_tools=${auxiliaryResult.by_kind.mcp_tool}).`
     : "";
+  const qualitySummary = scanQuality
+    ? ` Native scan: ${scanQuality.parser_backed_files}/${scanQuality.total_native_files} ` +
+      `C/C++ files parsed (${scanQuality.parser_backed_pct}%).`
+    : "";
 
   const summary =
     `Scan complete: ${scans.length} repo(s), ${totalFiles} files. ` +
@@ -970,6 +1060,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     `Data model: ${dataModelResult.inserted} new / ${dataModelResult.total} total. ` +
     `Index: ${indexEntries} entries.` +
     auxSummary +
+    qualitySummary +
     partialSummary +
     dreamSummary +
     adrSummary +
@@ -986,6 +1077,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     features: featureResult,
     workflows: workflowResult,
     data_model: dataModelResult,
+    scan_quality: scanQuality,
     auxiliary: auxiliaryResult,
     index_entries: indexEntries,
     llm_tokens_used: totalTokens,
