@@ -113,6 +113,13 @@ src/
   src/plugins/manager.ts
   src/plugins/contributions.ts
   src/resources/register.ts
+  src/scanner/ontology.ts
+  src/scanner/orchestrator.ts
+  src/scanner/parser-bootstrap.ts
+  src/scanner/types.ts
+  src/scanner/extractors/c.ts
+  src/scanner/extractors/cpp.ts
+  src/scanner/extractors/rust.ts
   src/server/dashboard.ts
   src/server/server.ts
   src/tools/adr-historian.ts
@@ -127,6 +134,7 @@ src/
   src/tools/git-senses.ts
   src/tools/init-graph.ts
   src/tools/living-docs-exporter.ts
+  src/tools/native-data-model.ts
   src/tools/plugin-ops.ts
   src/tools/query-resource.ts
   src/tools/register.ts
