@@ -104,3 +104,58 @@ describe("C extractor — C-3 header ↔ source binding", () => {
     expect(stdio?.meta).toMatchObject({ system: true });
   });
 });
+
+describe("C extractor — C-4 linked-list shape detection", () => {
+  it("detects a singly-linked list from a single self-pointer", async () => {
+    const project = linkProject([
+      await extractFile("c/04-linked-list/singly.c"),
+    ]);
+    const shape = project.shapes.find((s) => s.kind === "LinkedListShape");
+    expect(shape).toBeDefined();
+    expect(shape!.name).toContain("Node");
+    // Must include both the struct and the self-pointer field.
+    expect(shape!.participants).toContain("c:c/04-linked-list/singly.c#Struct:Node");
+    expect(shape!.participants).toContain("c:c/04-linked-list/singly.c#Field:Node.next");
+    // The role of `next` must be "next".
+    const nextId = "c:c/04-linked-list/singly.c#Field:Node.next";
+    expect(shape!.roles?.[nextId]).toBe("next");
+  });
+
+  it("emits PARTICIPATES_IN edges for every participant", async () => {
+    const project = linkProject([
+      await extractFile("c/04-linked-list/singly.c"),
+    ]);
+    const participations = project.edges.filter(
+      (e) => e.relationship === Relationship.PARTICIPATES_IN,
+    );
+    const shape = project.shapes.find((s) => s.kind === "LinkedListShape")!;
+    for (const p of shape.participants) {
+      const edge = participations.find((e) => e.from === p && e.to === shape.id);
+      expect(edge).toBeDefined();
+    }
+  });
+
+  it("does NOT classify ListHead (non-self pointer) as a linked list", async () => {
+    const project = linkProject([
+      await extractFile("c/04-linked-list/singly.c"),
+    ]);
+    // The Node struct should be the only linked list shape; ListHead has
+    // a Node* field (not a self-pointer) and must not produce a shape.
+    const shapes = project.shapes.filter((s) =>
+      s.id.includes("c/04-linked-list/singly.c#Struct:ListHead"),
+    );
+    expect(shapes).toHaveLength(0);
+  });
+
+  it("detects a doubly-linked list with next/prev roles assigned by name", async () => {
+    const project = linkProject([
+      await extractFile("c/05-doubly-linked/doubly.c"),
+    ]);
+    const shape = project.shapes.find((s) => s.kind === "DoublyLinkedListShape");
+    expect(shape).toBeDefined();
+    const nextId = "c:c/05-doubly-linked/doubly.c#Field:DNode.next";
+    const prevId = "c:c/05-doubly-linked/doubly.c#Field:DNode.prev";
+    expect(shape!.roles?.[nextId]).toBe("next");
+    expect(shape!.roles?.[prevId]).toBe("prev");
+  });
+});

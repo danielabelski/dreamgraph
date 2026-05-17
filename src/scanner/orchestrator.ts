@@ -43,7 +43,7 @@
  * orchestrator surfaces a `warning` diagnostic naming the conflict.
  */
 
-import { Confidence, Relationship } from "./ontology.js";
+import { Confidence, DataShapeKind, FieldRole, Relationship } from "./ontology.js";
 import type {
   ExtractedEdge,
   ExtractedEntity,
@@ -176,6 +176,12 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
     }
   }
 
+  // --- C-4: detect linked-list shapes -----------------------------------
+
+  const detected = detectLinkedListShapes(entities);
+  shapes.push(...detected.shapes);
+  resolved.push(...detected.participationEdges);
+
   return { entities, edges: resolved, shapes, diagnostics };
 }
 
@@ -251,5 +257,140 @@ function resolvePointerTarget(
     ...edge,
     to: candidates[0]!.id,
     meta: { ...meta, resolved: true },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// C-4: linked-list shape detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Rule:
+ *   - Singly linked: exactly one Field on the struct whose
+ *     `pointer_depth === 1` and `base_type === struct.name` (self-pointer).
+ *   - Doubly linked: exactly two such self-pointer fields. Field roles
+ *     (next / prev) are assigned by conventional name when available
+ *     ("next", "prev"/"previous", "fwd"/"bwd"); otherwise by source
+ *     order: first declared → next, second declared → prev.
+ *
+ * The detection is intentionally conservative: a self-pointer through a
+ * typedef alias whose name differs from the struct's `name` field will
+ * NOT be matched here. C-5's shape rules pick up the harder cases
+ * (intrusive lists, opaque handles).
+ */
+function detectLinkedListShapes(
+  entities: readonly ExtractedEntity[],
+): { shapes: ExtractedShape[]; participationEdges: ExtractedEdge[] } {
+  const fieldsByOwnerId = new Map<string, ExtractedEntity[]>();
+  const structs: ExtractedEntity[] = [];
+
+  for (const e of entities) {
+    if (e.kind === "Struct") {
+      structs.push(e);
+      continue;
+    }
+    if (e.kind !== "Field") continue;
+    const ownerName = e.qualifiedName.split(".")[0];
+    if (!ownerName) continue;
+    // Reconstruct owner id deterministically using the same convention
+    // the extractor uses (`<lang>:<relPath>#Struct:<name>`). The owner
+    // and field always share the same relPath because fields are
+    // emitted while walking the struct body.
+    const ownerId = `${e.language}:${e.relPath}#Struct:${ownerName}`;
+    const bucket = fieldsByOwnerId.get(ownerId) ?? [];
+    bucket.push(e);
+    fieldsByOwnerId.set(ownerId, bucket);
+  }
+
+  const shapes: ExtractedShape[] = [];
+  const edges: ExtractedEdge[] = [];
+
+  for (const s of structs) {
+    const fields = fieldsByOwnerId.get(s.id) ?? [];
+    const selfPtrs = fields.filter(
+      (f) =>
+        f.attrs?.pointer_depth === 1 &&
+        f.attrs?.base_type === s.name,
+    );
+    if (selfPtrs.length === 1) {
+      const next = selfPtrs[0]!;
+      const shape: ExtractedShape = {
+        id: `${s.language}:shape:LinkedListShape:${s.id}`,
+        kind: DataShapeKind.LinkedListShape,
+        name: `${s.name} (singly linked)`,
+        confidence: Confidence.High,
+        participants: [s.id, next.id],
+        roles: { [next.id]: FieldRole.Next },
+        notes: `Self-pointer field "${next.name}" makes "${s.name}" ` +
+          `a singly-linked list node.`,
+      };
+      shapes.push(shape);
+      edges.push(
+        participation(s.id, shape.id, s.line, s.column),
+        participation(next.id, shape.id, next.line, next.column),
+      );
+      continue;
+    }
+    if (selfPtrs.length === 2) {
+      const { next, prev } = pickDoublyRoles(selfPtrs);
+      const shape: ExtractedShape = {
+        id: `${s.language}:shape:DoublyLinkedListShape:${s.id}`,
+        kind: DataShapeKind.DoublyLinkedListShape,
+        name: `${s.name} (doubly linked)`,
+        confidence: Confidence.High,
+        participants: [s.id, next.id, prev.id],
+        roles: {
+          [next.id]: FieldRole.Next,
+          [prev.id]: FieldRole.Previous,
+        },
+        notes: `Self-pointer fields "${next.name}" and "${prev.name}" ` +
+          `make "${s.name}" a doubly-linked list node.`,
+      };
+      shapes.push(shape);
+      edges.push(
+        participation(s.id, shape.id, s.line, s.column),
+        participation(next.id, shape.id, next.line, next.column),
+        participation(prev.id, shape.id, prev.line, prev.column),
+      );
+    }
+  }
+
+  return { shapes, participationEdges: edges };
+}
+
+function pickDoublyRoles(
+  ptrs: readonly ExtractedEntity[],
+): { next: ExtractedEntity; prev: ExtractedEntity } {
+  const NEXT_NAMES = new Set(["next", "fwd", "forward"]);
+  const PREV_NAMES = new Set(["prev", "previous", "bwd", "back", "backward"]);
+  const a = ptrs[0]!;
+  const b = ptrs[1]!;
+  const aName = a.name.toLowerCase();
+  const bName = b.name.toLowerCase();
+  if (NEXT_NAMES.has(aName) && PREV_NAMES.has(bName)) return { next: a, prev: b };
+  if (NEXT_NAMES.has(bName) && PREV_NAMES.has(aName)) return { next: b, prev: a };
+  if (NEXT_NAMES.has(aName)) return { next: a, prev: b };
+  if (NEXT_NAMES.has(bName)) return { next: b, prev: a };
+  if (PREV_NAMES.has(aName)) return { next: b, prev: a };
+  if (PREV_NAMES.has(bName)) return { next: a, prev: b };
+  // Fall back to declaration order.
+  return { next: a, prev: b };
+}
+
+function participation(
+  from: string,
+  to: string,
+  line?: number,
+  column?: number,
+): ExtractedEdge {
+  return {
+    from,
+    to,
+    relationship: Relationship.PARTICIPATES_IN,
+    evidence: {
+      ...ORCHESTRATOR_EVIDENCE,
+      line,
+      column,
+    },
   };
 }
