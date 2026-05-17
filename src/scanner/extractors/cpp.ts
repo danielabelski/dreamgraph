@@ -1,5 +1,5 @@
 /**
- * DreamGraph — C++ language extractor (wave 1, phase CPP-1).
+ * DreamGraph — C++ language extractor (wave 1, phases CPP-1 + CPP-2).
  *
  * The C++ tree-sitter grammar is a superset of C, so this extractor
  * mirrors many of the same handlers (struct, union, enum, typedef,
@@ -8,7 +8,27 @@
  * grammar evolves on its own cadence and a shared base would invite
  * subtle node-shape regressions when one grammar updates.
  *
- * CPP-1 scope (this commit):
+ * CPP-2 scope (this commit):
+ *   - In-class method declarations (`field_declaration` whose declarator
+ *     is a `function_declarator`) → Method entity, attrs.is_definition=false.
+ *   - In-class constructors (`declaration` whose function_declarator
+ *     name matches the enclosing class) → Constructor entity.
+ *   - In-class destructors (`declaration` whose function_declarator
+ *     declarator is a `destructor_name`) → Destructor entity.
+ *   - Inline definitions inside the class body (`function_definition`)
+ *     → Method/Constructor/Destructor with is_definition=true.
+ *   - Out-of-line member definitions (`function_definition` whose
+ *     function_declarator unwraps a `qualified_identifier`) → emitted
+ *     with the fully-qualified owner chain so the orchestrator can
+ *     bind declaration ↔ definition by qualifiedName.
+ *   - Entity ids for Method/Constructor/Destructor include the source
+ *     line so overloads don't collide on identity.
+ *
+ * Out of scope for CPP-2 (next commits):
+ *   - CPP-3: smart-pointer / STL container ownership semantics.
+ *   - CPP-4: templates and partial specialisations.
+ *
+ * CPP-1 scope (previous commit):
  *   - Namespace entities (with `ns1::ns2` qualified-name nesting).
  *   - Class and Struct entities (Class for `class`, Struct for `struct`).
  *   - Access modifiers tracked per field (`public` / `private` /
@@ -21,11 +41,8 @@
  *   - Includes (resolved later by the orchestrator).
  *   - Macros (`#define`).
  *
- * Out of scope for CPP-1 (next commits):
- *   - CPP-2: member methods, ctors/dtors, out-of-line definitions
- *     bound via BINDS_DECLARATION_TO_DEFINITION.
- *   - CPP-3: smart-pointer / STL container ownership semantics.
- *   - CPP-4: templates and partial specialisations.
+ * Out of scope for CPP-1 (handled in later phases):
+ *   - CPP-2..CPP-4 — see top of file.
  */
 
 import type { SyntaxNode } from "web-tree-sitter";
@@ -229,6 +246,118 @@ function descendantOfType(node: SyntaxNode, type: string): SyntaxNode | null {
   return null;
 }
 
+/**
+ * True when a `declaration` / `field_declaration` is shaped like a
+ * function (member method, constructor, or destructor). Used to
+ * separate data-member field_declarations from method-like ones.
+ */
+function isFieldFunctionLike(node: SyntaxNode): boolean {
+  const declarator = node.childForFieldName("declarator");
+  if (!declarator) return false;
+  if (declarator.type === "function_declarator") return true;
+  return descendantOfType(declarator, "function_declarator") !== null;
+}
+
+// ---------------------------------------------------------------------------
+// CPP-2: qualified-name unfolding for out-of-line definitions
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk a `function_declarator` and return the inner declarator that
+ * carries the function name. Strips pointer/reference declarators that
+ * appear on the return-type chain (rare for member fns but harmless).
+ */
+function unwrapFunctionDeclarator(node: SyntaxNode | null): SyntaxNode | null {
+  let cur = node;
+  while (cur) {
+    if (cur.type === "function_declarator") {
+      return cur.childForFieldName("declarator") ?? null;
+    }
+    if (cur.type === "pointer_declarator" || cur.type === "reference_declarator") {
+      cur = cur.childForFieldName("declarator");
+      continue;
+    }
+    if (cur.type === "parenthesized_declarator") {
+      cur = cur.namedChildCount > 0 ? cur.namedChild(0) : null;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Unfold a (possibly nested) qualified_identifier into its segments.
+ * `engine::Circle::Circle` \u2192 ["engine", "Circle", "Circle"].
+ * `engine::Circle::~Circle` \u2192 ["engine", "Circle", "~Circle"].
+ * A bare identifier \u2192 [identifier_text].
+ */
+function unfoldName(node: SyntaxNode): string[] {
+  const out: string[] = [];
+  let cur: SyntaxNode | null = node;
+  while (cur) {
+    if (cur.type === "qualified_identifier") {
+      const scope = cur.childForFieldName("scope");
+      if (scope) out.push(scope.text);
+      const name = cur.childForFieldName("name");
+      if (!name) break;
+      cur = name;
+      continue;
+    }
+    if (cur.type === "destructor_name") {
+      // destructor_name has a `~` token + identifier as named child.
+      const id = cur.namedChildCount > 0 ? cur.namedChild(cur.namedChildCount - 1) : null;
+      out.push("~" + (id ? id.text : cur.text.replace(/^~/, "")));
+      break;
+    }
+    if (cur.type === "identifier" ||
+        cur.type === "type_identifier" ||
+        cur.type === "field_identifier" ||
+        cur.type === "namespace_identifier") {
+      out.push(cur.text);
+      break;
+    }
+    if (cur.type === "template_function") {
+      const tname = cur.childForFieldName("name");
+      if (tname) {
+        cur = tname;
+        continue;
+      }
+    }
+    break;
+  }
+  return out;
+}
+
+type MemberKind =
+  | typeof CodeEntityKind.Method
+  | typeof CodeEntityKind.Constructor
+  | typeof CodeEntityKind.Destructor;
+
+/**
+ * Classify a member callable based on its name chain and (optionally)
+ * the enclosing class. `chain` is the unfolded qualified name with the
+ * final segment being the callable's own name.
+ */
+function classifyMember(
+  chain: string[],
+  enclosingClass: string | undefined,
+): { kind: MemberKind; methodName: string } {
+  const tail = chain[chain.length - 1] ?? "";
+  if (tail.startsWith("~")) {
+    return { kind: CodeEntityKind.Destructor, methodName: tail };
+  }
+  // Out-of-line: tail === penultimate segment (e.g. ["engine","Circle","Circle"]).
+  if (chain.length >= 2 && tail === chain[chain.length - 2]) {
+    return { kind: CodeEntityKind.Constructor, methodName: tail };
+  }
+  // In-class: enclosing class matches tail.
+  if (enclosingClass && tail === enclosingClass) {
+    return { kind: CodeEntityKind.Constructor, methodName: tail };
+  }
+  return { kind: CodeEntityKind.Method, methodName: tail };
+}
+
 // ---------------------------------------------------------------------------
 // Walk context — extends the C variant with a namespace stack so nested
 // entities carry their fully-qualified C++ name.
@@ -364,7 +493,27 @@ function handleClassLike(
           break;
         }
         case "field_declaration":
-          handleField(child, ctx, qn, id, access);
+          // tree-sitter-cpp uses field_declaration for both data
+          // members AND in-class method declarations. Route methods
+          // through the member-callable path; handleField filters them
+          // out so we don't double-emit.
+          if (isFieldFunctionLike(child)) {
+            handleClassBodyCallable(child, ctx, name);
+          } else {
+            handleField(child, ctx, qn, id, access);
+          }
+          break;
+        case "declaration":
+          // In a class body, declarations are ctors/dtors (or static
+          // member variable declarations, which we defer). Route the
+          // function-shaped ones through the member-callable path.
+          if (isFieldFunctionLike(child)) {
+            handleClassBodyCallable(child, ctx, name);
+          }
+          break;
+        case "function_definition":
+          // Inline definition inside the class body.
+          handleClassBodyCallable(child, ctx, name);
           break;
         case "class_specifier":
           handleClassLike(child, ctx, CodeEntityKind.Class, "private");
@@ -585,6 +734,12 @@ function handleTypedef(node: SyntaxNode, ctx: WalkCtx): void {
 }
 
 function handleFunctionDefinition(node: SyntaxNode, ctx: WalkCtx): void {
+  // CPP-2: an out-of-line member definition has a function_declarator
+  // whose inner declarator is a qualified_identifier. Detect that first
+  // so we route it through the member-callable path instead of the
+  // free-function path (which would lose the owner chain).
+  if (tryEmitOutOfLineMember(node, ctx, /* is_definition */ true)) return;
+
   const declarator = node.childForFieldName("declarator");
   const fnName = declaratorName(declarator);
   if (!fnName) return;
@@ -604,6 +759,10 @@ function handleFunctionDefinition(node: SyntaxNode, ctx: WalkCtx): void {
 }
 
 function handleDeclaration(node: SyntaxNode, ctx: WalkCtx): void {
+  // CPP-2: an out-of-line member declaration (a forward declaration of
+  // a member with qualifier) routes through the member-callable path.
+  if (tryEmitOutOfLineMember(node, ctx, /* is_definition */ false)) return;
+
   const declarator = node.childForFieldName("declarator");
   if (!declarator) return;
   const isFunction =
@@ -625,6 +784,126 @@ function handleDeclaration(node: SyntaxNode, ctx: WalkCtx): void {
     column: node.startPosition.column + 1,
     attrs: { is_definition: false },
   });
+}
+
+/**
+ * Emit a Method/Constructor/Destructor entity for a class member
+ * callable. Used by three call sites: in-class field_declaration
+ * (declaration form for ctors/dtors), inline definitions in the class
+ * body, and out-of-line definitions whose declarator is a
+ * `qualified_identifier`.
+ *
+ * `enclosingClass` is the unqualified class name when we're inside a
+ * class body; undefined when we're emitting an out-of-line definition
+ * and the owner is read from the declarator chain.
+ *
+ * Entity ids include the source line so overloaded ctors / methods
+ * don't collide on identity.
+ */
+function emitMemberCallable(
+  node: SyntaxNode,
+  ctx: WalkCtx,
+  funcDecl: SyntaxNode,
+  isDefinition: boolean,
+  enclosingClass: string | undefined,
+): void {
+  const inner = funcDecl.childForFieldName("declarator");
+  if (!inner) return;
+  const chain = unfoldName(inner);
+  if (chain.length === 0) return;
+  const { kind, methodName } = classifyMember(chain, enclosingClass);
+
+  // Build the fully-qualified method name. If the declarator chain
+  // already carries the owner path (out-of-line case), use it verbatim
+  // \u2014 it may be either "Class::method" (when the def lives inside the
+  // namespace block) or "ns::Class::method" (when fully qualified
+  // outside any namespace). Otherwise (in-class case) we qualify with
+  // the current namespace stack which includes the class.
+  let qn: string;
+  if (chain.length > 1) {
+    qn = chain.join("::");
+    // If the chain is relative (e.g. ["Shape", "Shape"]) and we're
+    // inside a namespace block, prepend the namespace stack minus the
+    // segments that already appear at the head of the chain.
+    const nsPrefix = ctx.namespaceStack.join("::");
+    if (nsPrefix && !qn.startsWith(nsPrefix + "::") && qn !== nsPrefix) {
+      // Only prepend the namespace prefix if the chain isn't already
+      // anchored at a namespace we know about. Cheap heuristic: if the
+      // first chain segment is the same as the deepest namespace, we
+      // assume the chain is already absolute.
+      const top = ctx.namespaceStack[ctx.namespaceStack.length - 1];
+      if (top !== chain[0]) {
+        qn = `${nsPrefix}::${qn}`;
+      } else {
+        // chain head equals deepest namespace \u2014 prepend the rest.
+        const rest = ctx.namespaceStack.slice(0, -1).join("::");
+        qn = rest ? `${rest}::${qn}` : qn;
+      }
+    }
+  } else {
+    qn = qualify(ctx, chain[0]!);
+  }
+
+  const line = node.startPosition.row + 1;
+  const column = node.startPosition.column + 1;
+  const id = `${LANGUAGE}:${ctx.relPath}#${kind}:${qn}@${line}`;
+  emitEntity(ctx, {
+    id,
+    kind,
+    name: methodName,
+    qualifiedName: qn,
+    language: LANGUAGE,
+    relPath: ctx.relPath,
+    line,
+    column,
+    attrs: { is_definition: isDefinition },
+  });
+}
+
+/**
+ * Detect an out-of-line member definition or declaration. Returns true
+ * if the node was handled as a member, in which case the free-function
+ * path must NOT also emit it. Returns false otherwise.
+ */
+function tryEmitOutOfLineMember(
+  node: SyntaxNode,
+  ctx: WalkCtx,
+  isDefinition: boolean,
+): boolean {
+  const declarator = node.childForFieldName("declarator");
+  if (!declarator) return false;
+  const funcDecl = declarator.type === "function_declarator"
+    ? declarator
+    : descendantOfType(declarator, "function_declarator");
+  if (!funcDecl) return false;
+  const inner = funcDecl.childForFieldName("declarator");
+  if (!inner) return false;
+  if (inner.type !== "qualified_identifier") return false;
+  emitMemberCallable(node, ctx, funcDecl, isDefinition, undefined);
+  return true;
+}
+
+/**
+ * Class-body member callable. Handles three node shapes:
+ *   - `field_declaration` with function_declarator \u2192 in-class method
+ *     declaration (no body) or pure-virtual.
+ *   - `declaration` with function_declarator named after the enclosing
+ *     class \u2192 constructor; or with destructor_name \u2192 destructor.
+ *   - `function_definition` \u2192 inline body, is_definition=true.
+ */
+function handleClassBodyCallable(
+  node: SyntaxNode,
+  ctx: WalkCtx,
+  enclosingClass: string,
+): void {
+  const declarator = node.childForFieldName("declarator");
+  if (!declarator) return;
+  const funcDecl = declarator.type === "function_declarator"
+    ? declarator
+    : descendantOfType(declarator, "function_declarator");
+  if (!funcDecl) return;
+  const isDef = node.type === "function_definition";
+  emitMemberCallable(node, ctx, funcDecl, isDef, enclosingClass);
 }
 
 function handleMacro(node: SyntaxNode, ctx: WalkCtx): void {

@@ -60,7 +60,7 @@ export interface ProjectGraph {
   readonly diagnostics: readonly ExtractorDiagnostic[];
 }
 
-const TYPE_KINDS = new Set<string>(["Struct", "Union", "Enum", "TypeAlias"]);
+const TYPE_KINDS = new Set<string>(["Struct", "Union", "Enum", "TypeAlias", "Class"]);
 
 const ORCHESTRATOR_EVIDENCE = {
   extractor: "orchestrator",
@@ -100,6 +100,11 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
   // function entities by name, partitioned by definition vs declaration
   const fnDefsByName = new Map<string, ExtractedEntity[]>();
   const fnDeclsByName = new Map<string, ExtractedEntity[]>();
+  // C++ member callables (Method / Constructor / Destructor), keyed by
+  // language-prefixed qualifiedName so binding doesn't accidentally
+  // mix unrelated `do()` methods from different classes.
+  const memberDefsByQn = new Map<string, ExtractedEntity[]>();
+  const memberDeclsByQn = new Map<string, ExtractedEntity[]>();
 
   for (const e of entities) {
     if (e.kind === "SourceFile" || e.kind === "HeaderFile") {
@@ -122,6 +127,15 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
       const bucket = target.get(e.name) ?? [];
       bucket.push(e);
       target.set(e.name, bucket);
+      continue;
+    }
+    if (e.kind === "Method" || e.kind === "Constructor" || e.kind === "Destructor") {
+      const isDef = e.attrs?.is_definition === true;
+      const key = `${e.language}:${e.kind}:${e.qualifiedName}`;
+      const target = isDef ? memberDefsByQn : memberDeclsByQn;
+      const bucket = target.get(key) ?? [];
+      bucket.push(e);
+      target.set(key, bucket);
     }
   }
 
@@ -130,13 +144,14 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
   const resolved: ExtractedEdge[] = [];
   for (const edge of rawEdges) {
     if (edge.relationship === Relationship.INCLUDES &&
-        edge.to.startsWith("c:include:")) {
+        (edge.to.startsWith("c:include:") || edge.to.startsWith("cpp:include:"))) {
       resolved.push(resolveInclude(edge, filesByBasename, diagnostics));
       continue;
     }
     if ((edge.relationship === Relationship.POINTS_TO ||
-         edge.relationship === Relationship.POINTS_TO_POINTER) &&
-        edge.to.startsWith("c:type:")) {
+         edge.relationship === Relationship.POINTS_TO_POINTER ||
+         edge.relationship === Relationship.EXTENDS) &&
+        (edge.to.startsWith("c:type:") || edge.to.startsWith("cpp:type:"))) {
       resolved.push(resolvePointerTarget(edge, typesByName, diagnostics));
       continue;
     }
@@ -159,9 +174,42 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
     }
     const def = defs[0]!;
     for (const decl of decls) {
-      // Skip self-binding: if a decl and def share the same file/line,
-      // they're the same entity emitted twice (shouldn't happen, but be
-      // safe).
+      if (decl.id === def.id) continue;
+      resolved.push({
+        from: decl.id,
+        to: def.id,
+        relationship: Relationship.BINDS_DECLARATION_TO_DEFINITION,
+        evidence: {
+          ...ORCHESTRATOR_EVIDENCE,
+          line: decl.line,
+          column: decl.column,
+        },
+      });
+    }
+  }
+
+  // C++ member callables: same algorithm, keyed by language-qualified
+  // name + kind so a Method and a Constructor on the same class don't
+  // collide. Overloaded ctors / methods still produce one def-bucket
+  // per overload's qualifiedName, which is identical across overloads
+  // \u2014 the diagnostic mirrors C's "multiple definitions" message.
+  for (const [key, decls] of memberDeclsByQn) {
+    const defs = memberDefsByQn.get(key);
+    if (!defs || defs.length === 0) continue;
+    if (defs.length > 1) {
+      // Strip the "language:kind:" prefix for a friendlier message.
+      const [, kindStr, ...rest] = key.split(":");
+      const qn = rest.join(":");
+      diagnostics.push({
+        severity: "warning",
+        relPath: "<project>",
+        message: `${kindStr} "${qn}" has ${defs.length} definitions; ` +
+          `cannot bind declarations unambiguously (likely overloads).`,
+      });
+      continue;
+    }
+    const def = defs[0]!;
+    for (const decl of decls) {
       if (decl.id === def.id) continue;
       resolved.push({
         from: decl.id,
