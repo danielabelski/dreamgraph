@@ -182,6 +182,15 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
   shapes.push(...detected.shapes);
   resolved.push(...detected.participationEdges);
 
+  // --- C-5: intrusive lists, array-with-count, opaque handles -----------
+
+  const linkedListAnchors = new Set<string>(
+    detected.shapes.map((s) => s.participants[0]!),
+  );
+  const c5 = detectC5Shapes(entities, linkedListAnchors);
+  shapes.push(...c5.shapes);
+  resolved.push(...c5.participationEdges);
+
   return { entities, edges: resolved, shapes, diagnostics };
 }
 
@@ -393,4 +402,198 @@ function participation(
       column,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// C-5: intrusive list, array-with-count, opaque handle
+// ---------------------------------------------------------------------------
+
+const COUNT_NAME = /^(count|len|length|size|num|n|n_.*|nb_.*|num_.*|nelem|nelements|nitems|nitem|elem_count|item_count)$/i;
+const CAPACITY_NAME = /^(cap|capacity|alloc|allocated|reserved)$/i;
+const INTEGER_TYPES = new Set([
+  "int", "unsigned", "unsigned int", "signed int", "long", "long int",
+  "unsigned long", "long long", "unsigned long long", "short",
+  "unsigned short", "size_t", "ssize_t", "ptrdiff_t",
+  "int8_t", "int16_t", "int32_t", "int64_t",
+  "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+]);
+
+/**
+ * Detection rules, in evaluation order:
+ *
+ *   1. IntrusiveListShape — a struct contains a field, BY VALUE
+ *      (pointer_depth === 0), whose `base_type` names another struct
+ *      that itself was already classified as a LinkedListShape /
+ *      DoublyLinkedListShape anchor. Typical Linux-kernel pattern:
+ *      `struct list_head` embedded inside a payload struct.
+ *
+ *   2. ArrayWithCountShape — a struct has at least one pointer field
+ *      AND at least one integer-typed field whose name matches the
+ *      conventional count/capacity vocabulary. The pointer is tagged
+ *      with role `pointer`; the integer with role `count` or
+ *      `capacity` based on its name.
+ *
+ *   3. HandleTableShape (opaque handle) — a TypeAlias whose aliased
+ *      text reduces to `struct X *` AND no Struct named `X` exists in
+ *      the project graph. The TypeAlias is the sole participant.
+ */
+function detectC5Shapes(
+  entities: readonly ExtractedEntity[],
+  linkedListAnchors: ReadonlySet<string>,
+): { shapes: ExtractedShape[]; participationEdges: ExtractedEdge[] } {
+  const shapes: ExtractedShape[] = [];
+  const edges: ExtractedEdge[] = [];
+
+  // Index Struct entities by name → list of ids. A name may map to
+  // multiple structs across files; we keep all of them.
+  const structIdsByName = new Map<string, string[]>();
+  for (const e of entities) {
+    if (e.kind !== "Struct") continue;
+    const bucket = structIdsByName.get(e.name) ?? [];
+    bucket.push(e.id);
+    structIdsByName.set(e.name, bucket);
+  }
+
+  // Group fields by owner struct id (same key reconstruction trick as C-4).
+  const fieldsByOwnerId = new Map<string, ExtractedEntity[]>();
+  for (const e of entities) {
+    if (e.kind !== "Field") continue;
+    const ownerName = e.qualifiedName.split(".")[0];
+    if (!ownerName) continue;
+    const ownerId = `${e.language}:${e.relPath}#Struct:${ownerName}`;
+    const bucket = fieldsByOwnerId.get(ownerId) ?? [];
+    bucket.push(e);
+    fieldsByOwnerId.set(ownerId, bucket);
+  }
+
+  // --- 1. IntrusiveListShape ---------------------------------------------
+  for (const struct of entities) {
+    if (struct.kind !== "Struct") continue;
+    const fields = fieldsByOwnerId.get(struct.id) ?? [];
+    for (const f of fields) {
+      const depth = (f.attrs?.pointer_depth as number | undefined) ?? 0;
+      if (depth !== 0) continue;
+      const baseType = (f.attrs?.base_type as string | undefined) ?? "";
+      if (!baseType) continue;
+      const candidateIds = structIdsByName.get(baseType) ?? [];
+      const anchorId = candidateIds.find((id) => linkedListAnchors.has(id));
+      if (!anchorId) continue;
+      // Don't classify the list-node anchor itself as intrusive.
+      if (struct.id === anchorId) continue;
+      const shape: ExtractedShape = {
+        id: `${struct.language}:shape:IntrusiveListShape:${struct.id}#${f.name}`,
+        kind: DataShapeKind.IntrusiveListShape,
+        name: `${struct.name} embeds list node "${baseType}" via "${f.name}"`,
+        confidence: Confidence.Medium,
+        participants: [struct.id, f.id, anchorId],
+        roles: { [f.id]: FieldRole.Next },
+        notes: `Struct "${struct.name}" embeds linked-list anchor ` +
+          `"${baseType}" as field "${f.name}" by value.`,
+      };
+      shapes.push(shape);
+      edges.push(
+        participation(struct.id, shape.id, struct.line, struct.column),
+        participation(f.id, shape.id, f.line, f.column),
+      );
+    }
+  }
+
+  // --- 2. ArrayWithCountShape --------------------------------------------
+  for (const struct of entities) {
+    if (struct.kind !== "Struct") continue;
+    const fields = fieldsByOwnerId.get(struct.id) ?? [];
+    const pointers = fields.filter(
+      (f) => ((f.attrs?.pointer_depth as number | undefined) ?? 0) >= 1,
+    );
+    if (pointers.length === 0) continue;
+    const countField = fields.find(
+      (f) =>
+        ((f.attrs?.pointer_depth as number | undefined) ?? 0) === 0 &&
+        COUNT_NAME.test(f.name) &&
+        isIntegerType(f.attrs?.type_text as string | undefined),
+    );
+    const capacityField = fields.find(
+      (f) =>
+        ((f.attrs?.pointer_depth as number | undefined) ?? 0) === 0 &&
+        CAPACITY_NAME.test(f.name) &&
+        isIntegerType(f.attrs?.type_text as string | undefined),
+    );
+    if (!countField && !capacityField) continue;
+    // Choose the most likely "data pointer": prefer a depth-1 pointer
+    // whose name isn't `next`/`prev`/`first` (those belong to lists).
+    const dataPtr =
+      pointers.find(
+        (p) =>
+          ((p.attrs?.pointer_depth as number | undefined) ?? 0) === 1 &&
+          !LIST_NAMES.has(p.name.toLowerCase()),
+      ) ?? pointers[0]!;
+    const roles: Record<string, FieldRole> = {
+      [dataPtr.id]: FieldRole.Pointer,
+    };
+    const participants = [struct.id, dataPtr.id];
+    if (countField) {
+      roles[countField.id] = FieldRole.Count;
+      participants.push(countField.id);
+    }
+    if (capacityField) {
+      roles[capacityField.id] = FieldRole.Capacity;
+      participants.push(capacityField.id);
+    }
+    const shape: ExtractedShape = {
+      id: `${struct.language}:shape:ArrayWithCountShape:${struct.id}`,
+      kind: DataShapeKind.ArrayWithCountShape,
+      name: `${struct.name} (array + count)`,
+      confidence: Confidence.Medium,
+      participants,
+      roles,
+      notes: `Struct "${struct.name}" pairs pointer field "${dataPtr.name}" ` +
+        `with ${countField ? `count "${countField.name}"` : ""}` +
+        `${countField && capacityField ? " and " : ""}` +
+        `${capacityField ? `capacity "${capacityField.name}"` : ""}.`,
+    };
+    shapes.push(shape);
+    edges.push(
+      participation(struct.id, shape.id, struct.line, struct.column),
+      participation(dataPtr.id, shape.id, dataPtr.line, dataPtr.column),
+    );
+    if (countField) {
+      edges.push(participation(countField.id, shape.id, countField.line, countField.column));
+    }
+    if (capacityField) {
+      edges.push(participation(capacityField.id, shape.id, capacityField.line, capacityField.column));
+    }
+  }
+
+  // --- 3. HandleTableShape (opaque handle) -------------------------------
+  for (const alias of entities) {
+    if (alias.kind !== "TypeAlias") continue;
+    const aliased = (alias.attrs?.aliased_text as string | undefined) ?? "";
+    const m = /typedef\s+struct\s+(\w+)\s*\*\s*\w+\s*;/.exec(aliased);
+    if (!m) continue;
+    const targetName = m[1]!;
+    // Opaque iff there is NO Struct named `targetName` defined anywhere
+    // in the scanned project — i.e. the implementation is hidden.
+    if ((structIdsByName.get(targetName) ?? []).length > 0) continue;
+    const shape: ExtractedShape = {
+      id: `${alias.language}:shape:HandleTableShape:${alias.id}`,
+      kind: DataShapeKind.HandleTableShape,
+      name: `${alias.name} (opaque handle to struct ${targetName})`,
+      confidence: Confidence.Medium,
+      participants: [alias.id],
+      notes: `Typedef "${alias.name}" exposes "struct ${targetName} *" but ` +
+        `the struct definition is not visible in this project.`,
+    };
+    shapes.push(shape);
+    edges.push(participation(alias.id, shape.id, alias.line, alias.column));
+  }
+
+  return { shapes, participationEdges: edges };
+}
+
+const LIST_NAMES = new Set(["next", "prev", "previous", "first", "tail", "head"]);
+
+function isIntegerType(text: string | undefined): boolean {
+  if (!text) return false;
+  const norm = text.replace(/\s+/g, " ").replace(/^const\s+/, "").trim();
+  return INTEGER_TYPES.has(norm);
 }

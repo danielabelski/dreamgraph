@@ -159,3 +159,88 @@ describe("C extractor — C-4 linked-list shape detection", () => {
     expect(shape!.roles?.[prevId]).toBe("prev");
   });
 });
+
+describe("C extractor — C-5 intrusive / array-with-count / opaque handle", () => {
+  it("detects an IntrusiveListShape when a struct embeds a list-node anchor", async () => {
+    const project = linkProject([
+      await extractFile("c/06-intrusive-list/intrusive.c"),
+    ]);
+    // list_head itself must be classified as a DoublyLinkedListShape
+    // (it has next + prev self-pointers).
+    const anchorShape = project.shapes.find(
+      (s) => s.kind === "DoublyLinkedListShape" && s.name.includes("list_head"),
+    );
+    expect(anchorShape).toBeDefined();
+    // Task must be classified as IntrusiveListShape because it embeds
+    // list_head by value.
+    const intrusive = project.shapes.find((s) => s.kind === "IntrusiveListShape");
+    expect(intrusive).toBeDefined();
+    expect(intrusive!.participants).toContain(
+      "c:c/06-intrusive-list/intrusive.c#Struct:Task",
+    );
+    expect(intrusive!.participants).toContain(
+      "c:c/06-intrusive-list/intrusive.c#Field:Task.tasks",
+    );
+  });
+
+  it("detects ArrayWithCountShape with count + capacity roles", async () => {
+    const project = linkProject([
+      await extractFile("c/07-array-with-count/arrayc.c"),
+    ]);
+    const buffer = project.shapes.find(
+      (s) =>
+        s.kind === "ArrayWithCountShape" &&
+        s.id.includes("Struct:Buffer"),
+    );
+    expect(buffer).toBeDefined();
+    expect(buffer!.roles?.[
+      "c:c/07-array-with-count/arrayc.c#Field:Buffer.data"
+    ]).toBe("pointer");
+    expect(buffer!.roles?.[
+      "c:c/07-array-with-count/arrayc.c#Field:Buffer.length"
+    ]).toBe("count");
+    expect(buffer!.roles?.[
+      "c:c/07-array-with-count/arrayc.c#Field:Buffer.capacity"
+    ]).toBe("capacity");
+  });
+
+  it("detects ArrayWithCountShape with just a count field", async () => {
+    const project = linkProject([
+      await extractFile("c/07-array-with-count/arrayc.c"),
+    ]);
+    const vec = project.shapes.find(
+      (s) =>
+        s.kind === "ArrayWithCountShape" &&
+        s.id.includes("Struct:IntVec"),
+    );
+    expect(vec).toBeDefined();
+    expect(vec!.roles?.[
+      "c:c/07-array-with-count/arrayc.c#Field:IntVec.items"
+    ]).toBe("pointer");
+    expect(vec!.roles?.[
+      "c:c/07-array-with-count/arrayc.c#Field:IntVec.count"
+    ]).toBe("count");
+  });
+
+  it("detects HandleTableShape when typedef exposes pointer-to-undefined-struct", async () => {
+    const project = linkProject([
+      await extractFile("c/08-opaque-handle/handle.c"),
+    ]);
+    const handle = project.shapes.find((s) => s.kind === "HandleTableShape");
+    expect(handle).toBeDefined();
+    expect(handle!.name).toContain("Database");
+    expect(handle!.name).toContain("Db");
+    expect(handle!.participants).toEqual([
+      "c:c/08-opaque-handle/handle.c#TypeAlias:Database",
+    ]);
+  });
+
+  it("does NOT classify a typedef as a handle when the struct is defined", async () => {
+    // basic.c has `typedef struct Node { ... } Node;` — fully defined.
+    const project = linkProject([
+      await extractFile("c/01-basic-structs/basic.c"),
+    ]);
+    const handles = project.shapes.filter((s) => s.kind === "HandleTableShape");
+    expect(handles).toHaveLength(0);
+  });
+});
