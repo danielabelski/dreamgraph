@@ -196,6 +196,9 @@ export const Relationship = {
   USES_TRAIT: "USES_TRAIT",
   SPECIALIZES: "SPECIALIZES",
 
+  // Annotations / attributes
+  HAS_ANNOTATION: "HAS_ANNOTATION",
+
   // Call / data flow
   CALLS: "CALLS",
   READS_FIELD: "READS_FIELD",

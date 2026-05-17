@@ -169,6 +169,7 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
     if ((edge.relationship === Relationship.POINTS_TO ||
          edge.relationship === Relationship.POINTS_TO_POINTER ||
          edge.relationship === Relationship.EXTENDS ||
+         edge.relationship === Relationship.IMPLEMENTS ||
          edge.relationship === Relationship.IMPLEMENTS_TRAIT ||
          edge.relationship === Relationship.OWNS ||
          edge.relationship === Relationship.OWNS_SHARED ||
@@ -178,6 +179,7 @@ export function linkProject(outputs: readonly ExtractorOutput[]): ProjectGraph {
          edge.relationship === Relationship.MAY_CONTAIN ||
          edge.relationship === Relationship.MAPS_K_TO_V ||
          edge.relationship === Relationship.EMBEDS ||
+         edge.relationship === Relationship.REFERENCES_TYPE ||
          edge.relationship === Relationship.SPECIALIZES) &&
         isPlaceholderTarget(edge.to, "type")) {
       resolved.push(resolvePointerTarget(edge, typesByName, diagnostics));

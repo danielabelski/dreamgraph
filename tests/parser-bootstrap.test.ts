@@ -28,6 +28,8 @@ describe("parser-bootstrap", () => {
     expect(grammarPath("c")).toMatch(/tree-sitter-c\.wasm$/);
     expect(grammarPath("cpp")).toMatch(/tree-sitter-cpp\.wasm$/);
     expect(grammarPath("rust")).toMatch(/tree-sitter-rust\.wasm$/);
+    expect(grammarPath("java")).toMatch(/tree-sitter-java\.wasm$/);
+    expect(grammarPath("kotlin")).toMatch(/tree-sitter-kotlin\.wasm$/);
   });
 
   it("parses a C struct without errors", async () => {
@@ -49,6 +51,14 @@ describe("parser-bootstrap", () => {
     const parser = await getParser("rust");
     const tree = parser.parse(
       "struct Node { next: Option<Box<Node>> }"
+    );
+    expect(tree.rootNode.hasError()).toBe(false);
+  });
+
+  it("parses a Java class without errors", async () => {
+    const parser = await getParser("java");
+    const tree = parser.parse(
+      "package com.example; public class Foo implements Runnable { public void run() {} }"
     );
     expect(tree.rootNode.hasError()).toBe(false);
   });

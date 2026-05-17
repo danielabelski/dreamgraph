@@ -44,7 +44,7 @@ type Language = InstanceType<typeof Parser.Language>;
  * sufficient to make that grammar loadable; the actual WASM lookup is
  * driven by `wasmFileFor`.
  */
-export type ParserLanguage = "c" | "cpp" | "rust";
+export type ParserLanguage = "c" | "cpp" | "rust" | "java" | "kotlin";
 
 /**
  * File-name (under `tree-sitter-wasms/out/`) for each supported grammar.
@@ -53,6 +53,8 @@ const GRAMMAR_FILE: Record<ParserLanguage, string> = {
   c: "tree-sitter-c.wasm",
   cpp: "tree-sitter-cpp.wasm",
   rust: "tree-sitter-rust.wasm",
+  java: "tree-sitter-java.wasm",
+  kotlin: "tree-sitter-kotlin.wasm",
 };
 
 // ---------------------------------------------------------------------------
