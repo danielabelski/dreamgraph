@@ -108,3 +108,52 @@ describe("C extractor — C-1 basic entities", () => {
     expect(macros).toEqual(["LIST_FOREACH", "MAX_NODES"]);
   });
 });
+
+describe("C extractor — C-2 pointer modeling", () => {
+  it("emits the expected entities and edges for the pointer fixture", async () => {
+    const out = await runOn("c/02-pointers/pointers.c");
+    expect(normalise(out)).toMatchSnapshot();
+  });
+
+  it("emits POINTS_TO at depth 1 and POINTS_TO_POINTER at depth >=2", async () => {
+    const out = await runOn("c/02-pointers/pointers.c");
+    const ptr = out.edges.filter((e) =>
+      e.relationship === "POINTS_TO" ||
+      e.relationship === "POINTS_TO_POINTER",
+    );
+    const next = ptr.find((e) => e.from.endsWith("Field:Node.next"));
+    const owner = ptr.find((e) => e.from.endsWith("Field:Node.owner_slot"));
+    expect(next?.relationship).toBe("POINTS_TO");
+    expect(next?.to).toBe("c:type:Node");
+    expect(next?.meta).toMatchObject({ depth: 1, base_type: "Node", resolved: false });
+    expect(owner?.relationship).toBe("POINTS_TO_POINTER");
+    expect(owner?.meta).toMatchObject({ depth: 2, base_type: "Node" });
+  });
+
+  it("captures const and volatile qualifiers on the pointee", async () => {
+    const out = await runOn("c/02-pointers/pointers.c");
+    const name = out.edges.find((e) => e.from.endsWith("Field:Node.name"));
+    const flag = out.edges.find((e) => e.from.endsWith("Field:Node.flag"));
+    expect(name?.meta).toMatchObject({ is_const: true, is_volatile: false });
+    expect(flag?.meta).toMatchObject({ is_const: false, is_volatile: true });
+  });
+
+  it("does NOT emit POINTS_TO for non-pointer fields", async () => {
+    const out = await runOn("c/02-pointers/pointers.c");
+    const count = out.edges.find(
+      (e) =>
+        e.from.endsWith("Field:Node.count") &&
+        (e.relationship === "POINTS_TO" ||
+          e.relationship === "POINTS_TO_POINTER"),
+    );
+    expect(count).toBeUndefined();
+  });
+
+  it("records pointer_depth and base_type on the Field entity itself", async () => {
+    const out = await runOn("c/02-pointers/pointers.c");
+    const next = out.entities.find((e) => e.id.endsWith("Field:Node.next"));
+    const count = out.entities.find((e) => e.id.endsWith("Field:Node.count"));
+    expect(next?.attrs).toMatchObject({ pointer_depth: 1, base_type: "Node" });
+    expect(count?.attrs).toMatchObject({ pointer_depth: 0 });
+  });
+});

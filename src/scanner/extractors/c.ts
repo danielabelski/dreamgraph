@@ -1,14 +1,16 @@
 /**
- * DreamGraph — C language extractor (wave 1, phase C-1).
+ * DreamGraph — C language extractor (wave 1, phases C-1 + C-2).
  *
- * Walks a tree-sitter-c parse tree and emits the basic entity set:
- * struct, union, enum, typedef, function declarations, function
- * definitions, `#define` macros, and `#include` directives (with edges
- * to the included header path).
+ * Walks a tree-sitter-c parse tree and emits:
+ *   - Entities: struct, union, enum, enum members, typedef, function
+ *     declarations, function definitions, fields, `#define` macros.
+ *   - Edges: DECLARES (file → entity), DECLARES_FIELD (composite →
+ *     field), DECLARES_ENUM_MEMBER, INCLUDES, and pointer edges
+ *     (POINTS_TO / POINTS_TO_POINTER with depth + const/volatile meta).
  *
- * Pointer modeling (C-2), header↔source binding (C-3), linked-list
- * shape detection (C-4), and intrusive/array-with-count/opaque-handle
- * shapes (C-5) ship in subsequent commits per
+ * Header↔source binding (C-3), linked-list shape detection (C-4), and
+ * intrusive/array-with-count/opaque-handle shapes (C-5) ship in
+ * subsequent commits per
  * plans/polyglot-graph-scanning-implementation-plan.md §5.
  *
  * Design notes:
@@ -102,6 +104,83 @@ function specifierName(node: SyntaxNode): string {
   // as a `type_identifier` child via the `name` field.
   const named = node.childForFieldName("name");
   return named ? named.text : "";
+}
+
+/**
+ * Extract the base type name from a field/parameter `type` node.
+ * Handles plain `type_identifier`, `primitive_type`, and struct/union/
+ * enum specifiers that reference (rather than declare) a type.
+ *
+ * Returns the bare type name (e.g. `"Node"`, `"int"`, `"Bucket"` for
+ * `struct Bucket`). Used as the symbolic POINTS_TO target. The
+ * orchestrator (C-3) is responsible for resolving these names to real
+ * entity ids once cross-file binding lands.
+ */
+function baseTypeName(typeNode: SyntaxNode | null | undefined): string {
+  if (!typeNode) return "";
+  if (typeNode.type === "type_identifier" ||
+      typeNode.type === "primitive_type" ||
+      typeNode.type === "sized_type_specifier") {
+    return typeNode.text.trim();
+  }
+  if (typeNode.type === "struct_specifier" ||
+      typeNode.type === "union_specifier" ||
+      typeNode.type === "enum_specifier") {
+    const named = typeNode.childForFieldName("name");
+    if (named) return named.text;
+    // Anonymous specifier (e.g. inline struct in a field) — no usable
+    // target name. Leaving this empty makes the caller skip the edge.
+    return "";
+  }
+  return typeNode.text.trim();
+}
+
+/**
+ * Walk a declarator chain counting `pointer_declarator` wrappers and
+ * extract the innermost identifier. Returns:
+ *  - `depth`: number of `*` levels (0 for non-pointer fields/params).
+ *  - `innerName`: leaf identifier name (empty if abstract / unnamed).
+ *
+ * Tree-sitter-c shape:
+ *   pointer_declarator
+ *     └─ declarator: pointer_declarator
+ *         └─ declarator: field_identifier
+ */
+function analyzePointer(declarator: SyntaxNode | null): {
+  depth: number;
+  innerName: string;
+} {
+  let cur: SyntaxNode | null = declarator;
+  let depth = 0;
+  while (cur && cur.type === "pointer_declarator") {
+    depth += 1;
+    cur = cur.childForFieldName("declarator");
+  }
+  return { depth, innerName: declaratorName(cur) };
+}
+
+/**
+ * Collect type qualifiers that apply to the pointee. In tree-sitter-c
+ * these appear as `type_qualifier` named children of the enclosing
+ * `field_declaration` / `parameter_declaration` alongside the `type`
+ * and `declarator` fields. We only surface `const` and `volatile`
+ * because those are the C qualifiers that affect graph semantics
+ * (read-only borrow, observable side effects).
+ */
+function pointeeQualifiers(declNode: SyntaxNode): {
+  isConst: boolean;
+  isVolatile: boolean;
+} {
+  let isConst = false;
+  let isVolatile = false;
+  for (let i = 0; i < declNode.namedChildCount; i++) {
+    const child = declNode.namedChild(i);
+    if (!child || child.type !== "type_qualifier") continue;
+    const t = child.text;
+    if (t === "const") isConst = true;
+    else if (t === "volatile") isVolatile = true;
+  }
+  return { isConst, isVolatile };
 }
 
 /**
@@ -212,10 +291,12 @@ function handleField(
 ): void {
   const declarator = node.childForFieldName("declarator");
   const typeNode = node.childForFieldName("type");
-  const fieldName = declaratorName(declarator);
+  const { depth, innerName } = analyzePointer(declarator);
+  const fieldName = innerName || declaratorName(declarator);
   if (!fieldName) return;
   const qn = `${ownerName}.${fieldName}`;
   const id = entityId(ctx.relPath, CodeEntityKind.Field, qn);
+  const baseType = baseTypeName(typeNode);
   emitEntity(
     ctx,
     {
@@ -229,6 +310,8 @@ function handleField(
       column: node.startPosition.column + 1,
       attrs: {
         type_text: nodeText(typeNode),
+        pointer_depth: depth,
+        base_type: baseType,
       },
     },
     /* ownedByFile */ false,
@@ -239,6 +322,34 @@ function handleField(
     relationship: Relationship.DECLARES_FIELD,
     evidence: evidence(node),
   });
+
+  // C-2: emit POINTS_TO / POINTS_TO_POINTER for pointer fields.
+  // Target id is a symbolic `c:type:<name>` placeholder; the
+  // orchestrator (C-3) will rewrite these to real entity ids when it
+  // joins headers and sources. Self-typed pointers (e.g. `Node *next`
+  // inside `Node`) are still emitted — they're the structural signal
+  // C-4 uses to detect linked lists.
+  if (depth >= 1 && baseType) {
+    const { isConst, isVolatile } = pointeeQualifiers(node);
+    const target = `${LANGUAGE}:type:${baseType}`;
+    const rel =
+      depth === 1
+        ? Relationship.POINTS_TO
+        : Relationship.POINTS_TO_POINTER;
+    ctx.edges.push({
+      from: id,
+      to: target,
+      relationship: rel,
+      evidence: evidence(node),
+      meta: {
+        depth,
+        base_type: baseType,
+        is_const: isConst,
+        is_volatile: isVolatile,
+        resolved: false,
+      },
+    });
+  }
 }
 
 function handleEnum(
