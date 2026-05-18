@@ -44,7 +44,7 @@ type Language = InstanceType<typeof Parser.Language>;
  * sufficient to make that grammar loadable; the actual WASM lookup is
  * driven by `wasmFileFor`.
  */
-export type ParserLanguage = "c" | "cpp" | "rust" | "java" | "kotlin" | "python" | "csharp" | "go";
+export type ParserLanguage = "c" | "cpp" | "rust" | "java" | "kotlin" | "python" | "csharp" | "go" | "swift";
 
 /**
  * File-name (under `tree-sitter-wasms/out/`) for each supported grammar.
@@ -58,6 +58,7 @@ const GRAMMAR_FILE: Record<ParserLanguage, string> = {
   python: "tree-sitter-python.wasm",
   csharp: "tree-sitter-c_sharp.wasm",
   go: "tree-sitter-go.wasm",
+  swift: "tree-sitter-swift.wasm",
 };
 
 // ---------------------------------------------------------------------------
