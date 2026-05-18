@@ -256,18 +256,26 @@ Append-only Architecture Decision Records.
 
 ### UI Registry (`ui_registry.json`)
 
-Semantic UI element definitions across platforms. Supports merge-on-update and platform gap detection.
+Semantic UI element definitions across platforms. Supports merge-on-update and platform gap detection. As of **v10.2.0** UI elements are first-class graph citizens: entries with a non-empty `source_repo` are indexed in `index.json` alongside features/workflows/data_model and are eligible for autonomous LLM enrichment via `enrich_parser_nodes` (target `ui` / `all`). The `source_repo` field is the provenance gate — manual entries without `source_repo` remain in the registry but are intentionally excluded from the canonical graph index.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique element ID (kebab-case) |
 | `name` | string | Display name |
 | `category` | string | `data_display` \| `data_input` \| `navigation` \| `feedback` \| `layout` \| `action` \| `composite` |
-| `purpose` | string | Semantic purpose |
+| `purpose` | string | Semantic purpose (role tag — preserved across enrichment) |
 | `features` | string[] | Related feature IDs |
 | `data_contract` | object | Input/output/events specification |
 | `interaction_model` | string[] | `hover` \| `click` \| `drag` \| `keyboard` \| `touch` \| `swipe` |
 | `platforms` | object | `{ web: {...}, ios: {...}, android: {...} }` |
+| `source_repo` | string? | Repository the element originated from. **Indexing/enrichment gate.** |
+| `source_file` | string? | Path of the source file the element was extracted from. |
+| `source_kind` | string? | `scanner` \| `manual` \| `sdk` \| `user_guidance` \| `generated`. Descriptive only. |
+| `evidence_refs` | string[]? | Supporting file paths / anchors. |
+| `intent` | string? | High-level intent (auto-populated by enrichment). |
+| `description_raw` | string? | Original raw description prior to enrichment rewrite. |
+| `enrichment` | object? | `{ enriched, enriched_at, enricher, model?, confidence? }` — same shape as features/data_model. |
+| `links` | GraphLink[]? | Cross-graph links (`feature`, `workflow`, `data_model`, `capability`, `datastore`, `ui_element`). |
 
 ---
 
@@ -286,18 +294,18 @@ The immutable knowledge base — **never modified by the cognitive system**. Wri
 | `auxiliary_entities.json` | Project entities discovered by `scan_project` that are *not* features/workflows/data_model: test suites, configuration files, automation scripts, registered MCP tools |
 | `index.json` | Entity ID → resource URI lookup |
 
-#### Enrichment fields (v10.1)
+#### Enrichment fields (v10.1, extended in v10.2 to cover UI registry)
 
-`Feature` and `DataModelEntity` entries support additive optional fields written by `enrich_parser_nodes`:
+`Feature`, `DataModelEntity`, and (as of v10.2) `SemanticElement` (UI registry) entries support additive optional fields written by `enrich_parser_nodes`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `intent` | string? | Why the entity exists / problem it solves |
-| `purpose` | string? | Short tag for primary role (e.g. `service-locator`, `configuration`) |
+| `purpose` | string? | Short tag for primary role (e.g. `service-locator`, `configuration`). For UI elements this field is **preserved**, not overwritten — the UI's own purpose already serves as the role tag. |
 | `description_raw` | string? | Original parser-generated description preserved before the LLM rewrote `description` |
 | `enrichment.enriched` | boolean | `true` once enriched |
 | `enrichment.enriched_at` | string | ISO timestamp |
-| `enrichment.enricher` | string | Tool identity (e.g. `enrich_parser_nodes/1.0`) |
+| `enrichment.enricher` | string | Tool identity (e.g. `enrich_parser_nodes/1.1`) |
 | `enrichment.model` | string? | LLM model name |
 | `enrichment.confidence` | number? | 0..1 self-reported confidence |
 

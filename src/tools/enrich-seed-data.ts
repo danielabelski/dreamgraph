@@ -36,6 +36,7 @@ import fs from "node:fs/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dataPath } from "../utils/paths.js";
 import { loadJsonArray, invalidateCache } from "../utils/cache.js";
+import { loadIndexableUIElements } from "../utils/ui-index.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 import { atomicWriteFile } from "../utils/atomic-write.js";
@@ -125,6 +126,10 @@ const WorkflowEntrySchema = z.object({
   name: z.string().min(1),
   description: z.string().default(""),
   trigger: z.string().default(""),
+  // Optional semantic classification derived from evidence. A workflow is a
+  // behavioral progression: a meaningful chain of actions, events, decisions,
+  // or state transitions. This must not be used to assume a technology.
+  workflow_kind: z.string().optional(),
   source_repo: z.string().default(""),
   source_files: z.array(SourceFileItem).default([]),
   domain: z.string().default("core"),
@@ -163,8 +168,16 @@ const DataModelEntrySchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string().default(""),
-  table_name: z.string().default(""),
-  storage: z.string().default("unknown"),
+  // Optional semantic classification derived from evidence. A data model is
+  // the structure and relationships of information inside the system; it may
+  // be an in-memory shape, wire format, schema, AST, binary layout, etc. and
+  // does not require persistence.
+  model_kind: z.string().optional(),
+  // Optional and evidence-bound persistence metadata: graph creation must not
+  // manufacture datastore facts for projects where no datastore has been
+  // discovered.
+  table_name: z.string().optional(),
+  storage: z.string().optional(),
   source_repo: z.string().default(""),
   source_files: z.array(SourceFileItem).default([]),
   domain: z.string().default("core"),
@@ -292,6 +305,7 @@ function entryToWorkflow(entry: WorkflowEntry): Workflow {
     name: entry.name,
     description: entry.description,
     trigger: entry.trigger,
+    ...(entry.workflow_kind ? { workflow_kind: entry.workflow_kind } : {}),
     source_repo: entry.source_repo,
     source_files: entry.source_files,
     domain: entry.domain,
@@ -320,8 +334,9 @@ function entryToDataModel(entry: DataModelEntry): DataModelEntity {
     id: entry.id,
     name: entry.name,
     description: entry.description,
-    table_name: entry.table_name,
-    storage: entry.storage,
+    ...(entry.model_kind ? { model_kind: entry.model_kind } : {}),
+    ...(entry.table_name ? { table_name: entry.table_name } : {}),
+    ...(entry.storage ? { storage: entry.storage } : {}),
     source_repo: entry.source_repo,
     source_files: entry.source_files,
     domain: entry.domain,
@@ -448,6 +463,16 @@ async function rebuildIndex(): Promise<number> {
       uri: `dreamgraph://resource/capability/${c.id}`,
       name: c.name,
       source_repo: c.source_repo,
+    };
+  }
+
+  // Slice 1 — first-class UI graph citizens. Only source-bound entries.
+  for (const u of await loadIndexableUIElements()) {
+    entities[u.id] = {
+      type: "ui_element",
+      uri: `dreamgraph://resource/ui_element/${u.id}`,
+      name: u.name,
+      source_repo: u.source_repo,
     };
   }
 
@@ -729,8 +754,8 @@ export function registerEnrichSeedDataTool(server: McpServer): void {
           "links (array of {target, type, relationship, description, strength} — or plain target strings). " +
           "Features additionally: category. " +
           "Capabilities additionally: category. " +
-          "Workflows additionally: trigger, steps (array of {order, name, description} — or plain step-name strings). " +
-          "Data model additionally: table_name, storage, " +
+          "Workflows additionally: trigger, workflow_kind (optional evidence-derived semantic category), steps (array of {order, name, description} — or plain step-name strings). " +
+          "Data model additionally: model_kind (optional evidence-derived semantic category), optional evidence-bound persistence fields table_name and storage, " +
           "key_fields (array of {name, type, description} — or plain field-name strings), " +
           "relationships (array of {type, target, via} — or plain target strings). " +
           "System overview additionally: repositories (array of {id, name, description, technology, local_path, source_repo, source_files}). " +

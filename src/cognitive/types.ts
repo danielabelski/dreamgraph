@@ -1120,6 +1120,62 @@ export interface SemanticElement {
 
   /** Conditions that control when this element is visible/enabled. */
   visibility_conditions?: string[];
+
+  // ---------------------------------------------------------------------
+  // Slice 1 — first-class graph citizenship.
+  //
+  // Source provenance (additive, optional, semver-safe). The resource
+  // index (`index.json`) admits only entries where `source_repo` is set,
+  // keeping the evidence boundary that features / data_model / workflows
+  // already enforce. Unscoped manual elements remain in the UI registry
+  // but are NOT canonical graph citizens until they acquire provenance.
+  // ---------------------------------------------------------------------
+
+  /** Owning repo id (matches the repo ids used by other resource entries). */
+  source_repo?: string;
+  /** Primary source-of-truth file path, when one exists. */
+  source_file?: string;
+  /** How this element entered the registry. "scanner" entries are eligible for autonomous enrichment. */
+  source_kind?: "scanner" | "manual" | "sdk" | "user_guidance" | "generated";
+  /** Free-form file/symbol references that ground this element in real code. */
+  evidence_refs?: string[];
+
+  // ---------------------------------------------------------------------
+  // Enrichment — written by `enrich_parser_nodes` (target: "ui" / "all").
+  //
+  // UIElement reuses its own `purpose` field as the role tag, so the
+  // `purpose` from EnrichableFields is intentionally NOT duplicated here.
+  // The enrichment shape mirrors `EnrichmentMetadata` in src/types/index.ts;
+  // they are kept aligned by tests rather than a shared import to avoid a
+  // type-only cycle between src/cognitive/types.ts and src/types/index.ts.
+  // ---------------------------------------------------------------------
+
+  /** Human-readable purpose: why this element exists / what problem it solves. */
+  intent?: string;
+  /** Preserved original `purpose`/`description` text from before enrichment overwrote it. */
+  description_raw?: string;
+  /** Enrichment provenance — present only after a successful enrichment pass. */
+  enrichment?: {
+    enriched: boolean;
+    enriched_at: string;
+    enricher: string;
+    model?: string;
+    confidence?: number;
+  };
+
+  // ---------------------------------------------------------------------
+  // Graph linkage — feature anchors and cross-entity links.
+  // Shape mirrors `GraphLink` in src/types/index.ts.
+  // ---------------------------------------------------------------------
+
+  links?: Array<{
+    target: string;
+    type: "feature" | "workflow" | "data_model" | "capability" | "datastore" | "ui_element";
+    relationship: string;
+    description: string;
+    strength: string;
+    meta?: Record<string, unknown>;
+  }>;
 }
 
 /** UI registry file structure */
@@ -1295,6 +1351,22 @@ export interface RegisterUIElementInput {
   is_async?: boolean;
   default_action?: string;
   visibility_conditions?: string[];
+
+  // Slice 1 — first-class graph citizenship (additive optional inputs).
+  source_repo?: string;
+  source_file?: string;
+  source_kind?: "scanner" | "manual" | "sdk" | "user_guidance" | "generated";
+  evidence_refs?: string[];
+  intent?: string;
+  description_raw?: string;
+  links?: Array<{
+    target: string;
+    type: "feature" | "workflow" | "data_model" | "capability" | "datastore" | "ui_element";
+    relationship: string;
+    description: string;
+    strength: string;
+    meta?: Record<string, unknown>;
+  }>;
 }
 
 export interface RegisterUIElementOutput {

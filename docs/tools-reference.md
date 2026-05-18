@@ -618,18 +618,20 @@ Both modes auto-strip template stubs (`_schema`, `_fields`, `_note` entries), in
 
 #### `enrich_parser_nodes`
 
-Autonomous batch enrichment for parser-discovered nodes. Filters entities where `provenance.scanner === "native"` and `enrichment.enriched !== true`, buckets them by `repo + domain`, and calls the configured dreamer LLM in batches to fill in `intent`, `purpose`, semantic `description`, `tags`, and proposed `feature_anchors` (weak `GraphLinks`). The original parser description is preserved in `description_raw` on first enrichment. Per-batch atomic persistence — partial progress survives crashes. Designed to be called once after `scan_project` instead of looping `enrich_seed_data`.
+Autonomous batch enrichment for parser-discovered nodes. Filters entities where `provenance.scanner === "native"` (for features / data_model) or `source_kind === "scanner"` with non-empty `source_repo` (for UI registry elements) and where `enrichment.enriched !== true`, buckets them by `repo + domain`, and calls the configured dreamer LLM in batches to fill in `intent`, `purpose`, semantic `description`, `tags`, and proposed `feature_anchors` (weak `GraphLinks`). The original parser description is preserved in `description_raw` on first enrichment. UI elements retain their existing `purpose` field as the role tag — only `intent`, `description_raw`, `tags`, `links`, and `enrichment` are written. Per-batch atomic persistence — partial progress survives crashes. Designed to be called once after `scan_project` instead of looping `enrich_seed_data`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target` | enum | `both` | `data_model`, `features`, or `both` |
+| `target` | enum | `all` | `data_model`, `features`, `ui`, `all` (= all three), or the deprecated `both` (= features + data_model, no UI; aliased for one back-compat cycle, removed in a future release) |
 | `max_nodes` | number (1–5000) | 500 | Cap on total eligible nodes processed in one call |
 | `batch_size` | number (1–50) | 10 | Nodes per LLM call within a `repo::domain` bucket |
 | `dry_run` | boolean | false | Run the LLM but skip persistence |
 | `force` | boolean | false | Re-enrich nodes that already have `enrichment.enriched === true` |
 | `feature_context_size` | number (0–100) | 20 | Sibling features included per bucket for anchor grounding |
 
-**Returns:** `{ files_processed[], total_eligible, total_enriched, total_skipped, batches_run, llm_calls, tokens_used, feature_anchors_written, errors[], dry_run }`.
+**Returns:** `{ files_processed[], total_eligible, total_enriched, total_skipped, batches_run, llm_calls, tokens_used, feature_anchors_written, errors[], notes[], dry_run }`. The `notes[]` array carries the `"both"`-deprecation warning when applicable.
+
+**UI eligibility gate:** Only UI registry entries with `source_kind === "scanner"` *and* a non-empty `source_repo` are candidates. Manual / SDK / user-guidance entries (no `source_repo`) remain in the registry untouched and are also excluded from `index.json`. `source_repo` is the indexing/enrichment gate; `source_kind` is descriptive only.
 
 **LLM unavailable:** Returns `error.code === "LLM_UNAVAILABLE"` without touching any file. Provider-agnostic — any configured provider (OpenAI / OpenRouter / sampling) works through the standard LLM seam.
 
@@ -737,13 +739,13 @@ Retire an ADR.
 
 #### `register_ui_element`
 
-Register a semantic UI element (platform-independent).
+Register a semantic UI element (platform-independent). As of v10.2.0, UI elements with `source_repo` set are first-class graph citizens: they appear in `index.json` and are eligible for autonomous LLM enrichment via `enrich_parser_nodes` (when `source_kind === "scanner"`). Manual entries without `source_repo` remain in the registry but are **not** admitted into the graph index.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | yes | Unique ID |
 | `name` | string | yes | Display name |
-| `purpose` | string | yes | What it does |
+| `purpose` | string | yes | What it does (role tag — preserved by enrichment) |
 | `category` | enum | yes | `data_display`, `data_input`, `navigation`, `feedback`, `layout`, `action`, `composite` |
 | `inputs` | array | yes | `{name, type, description, required}` |
 | `outputs` | array | yes | `{name, type, description, trigger}` |
@@ -752,6 +754,13 @@ Register a semantic UI element (platform-independent).
 | `implementations` | array | no | `{platform, component, source_file?, notes?}` |
 | `used_by` | string[] | no | Feature IDs |
 | `tags` | string[] | no | Tags |
+| `source_repo` | string | no | **REQUIRED for graph-index admission.** Without this, the element stays in the UI registry but is not a canonical graph citizen. |
+| `source_file` | string | no | Path to the source file the element was extracted from. |
+| `source_kind` | enum | no | `scanner`, `manual`, `sdk`, `user_guidance`, `generated`. Scanner entries are eligible for autonomous enrichment by `enrich_parser_nodes` (target `ui` / `all`). Descriptive only — `source_repo` is the indexing gate. |
+| `evidence_refs` | string[] | no | Supporting file paths or anchors. |
+| `intent` | string | no | High-level intent (auto-populated by enrichment when absent). |
+| `description_raw` | string | no | Original raw description prior to any enrichment rewrite. |
+| `links` | array | no | `GraphLink[]` to other graph entities (`feature`, `workflow`, `data_model`, `capability`, `datastore`, `ui_element`). |
 
 #### `query_ui_elements`
 

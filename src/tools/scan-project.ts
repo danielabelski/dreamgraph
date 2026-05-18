@@ -31,6 +31,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "../config/config.js";
 import { dataPath } from "../utils/paths.js";
 import { loadJsonArray, invalidateCache } from "../utils/cache.js";
+import { loadIndexableUIElements } from "../utils/ui-index.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 import { atomicWriteFile } from "../utils/atomic-write.js";
@@ -477,6 +478,20 @@ async function rebuildIndex(): Promise<number> {
   }
   for (const d of stripTemplateStubs(dataModel)) {
     entities[d.id] = { type: "data_model", uri: `dreamgraph://resource/data_model/${d.id}`, name: d.name, source_repo: d.source_repo };
+  }
+
+  // Slice 1 — first-class UI graph citizens. Only source-bound entries.
+  try {
+    for (const u of await loadIndexableUIElements()) {
+      entities[u.id] = {
+        type: "ui_element",
+        uri: `dreamgraph://resource/ui_element/${u.id}`,
+        name: u.name,
+        source_repo: u.source_repo,
+      };
+    }
+  } catch (err) {
+    logger.warn(`scan_project: failed to fold UI elements into index: ${err instanceof Error ? err.message : err}`);
   }
 
   // Phase 5 #9 — surface auxiliary entities in the index so downstream

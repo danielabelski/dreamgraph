@@ -57,21 +57,26 @@ import { atomicWriteFile } from "../utils/atomic-write.js";
 import { dataPath } from "../utils/paths.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import type {
   ToolResponse,
   GraphLink,
   EnrichmentMetadata,
   Feature,
   DataModelEntity,
+  UIRegistryFile,
+  SemanticElement,
 } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-const ENRICHER_ID = "enrich_parser_nodes/1.0";
+const ENRICHER_ID = "enrich_parser_nodes/1.1";
 
-type TargetFile = "data_model" | "features";
+type TargetFile = "data_model" | "features" | "ui";
+type TargetSpec = "data_model" | "features" | "ui" | "both" | "all";
 
 interface ParserNodeRecord {
   id: string;
@@ -111,7 +116,7 @@ interface PerNodeEnrichment {
 }
 
 interface EnrichResult {
-  target: "data_model" | "features" | "both";
+  target: TargetSpec;
   dry_run: boolean;
   files_processed: TargetFile[];
   total_eligible: number;
@@ -210,6 +215,59 @@ export function bucketKey(e: ParserNodeRecord): string {
   const repo = (e.source_repo ?? "_unknown").trim() || "_unknown";
   const domain = (e.domain ?? "_unknown").trim() || "_unknown";
   return `${repo}::${domain}`;
+}
+
+// ---------------------------------------------------------------------------
+// UI registry adapter — translate SemanticElement <-> ParserNodeRecord so the
+// same enrichment pipeline can process UI entries. UI elements have their own
+// `purpose` field with established semantics; we keep that field as the role
+// tag and route the LLM's role-tag output into the SAME field (idempotent
+// when already enriched).
+// ---------------------------------------------------------------------------
+
+export function isUiParserOrigin(el: SemanticElement): boolean {
+  return el?.source_kind === "scanner" && typeof el?.source_repo === "string" && el.source_repo.length > 0;
+}
+
+export function uiElementToRecord(el: SemanticElement): ParserNodeRecord {
+  return {
+    id: el.id,
+    name: el.name,
+    description: el.purpose,
+    source_repo: el.source_repo,
+    source_files: el.source_file ? [el.source_file] : (el.evidence_refs ?? []),
+    domain: "ui",
+    tags: Array.isArray(el.tags) ? [...el.tags] : [],
+    links: Array.isArray(el.links)
+      ? (el.links as GraphLink[]).map((l) => ({ ...l }))
+      : [],
+    provenance: { scanner: "native" },
+    enrichment: el.enrichment,
+    intent: el.intent,
+    purpose: el.purpose,
+    description_raw: el.description_raw,
+  };
+}
+
+async function loadUiRegistry(): Promise<UIRegistryFile | null> {
+  const file = dataPath("ui_registry.json");
+  if (!existsSync(file)) return null;
+  try {
+    const raw = await readFile(file, "utf-8");
+    const parsed = JSON.parse(raw) as UIRegistryFile;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.elements)) return null;
+    return parsed;
+  } catch (err) {
+    logger.warn(`enrich_parser_nodes: failed to load ui_registry.json: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+async function saveUiRegistry(file: UIRegistryFile): Promise<void> {
+  file.metadata.total_elements = file.elements.length;
+  file.metadata.last_updated = new Date().toISOString();
+  await atomicWriteFile(dataPath("ui_registry.json"), JSON.stringify(file, null, 2));
+  invalidateCache("ui_registry.json");
 }
 
 export function chunk<T>(arr: T[], n: number): T[][] {
@@ -389,7 +447,7 @@ export function mergeEnrichment(
 // ---------------------------------------------------------------------------
 
 interface EnrichOptions {
-  target: "data_model" | "features" | "both";
+  target: TargetSpec;
   maxNodes: number;
   batchSize: number;
   dryRun: boolean;
@@ -420,16 +478,61 @@ async function executeEnrichParserNodes(
   const allFeatures = (await loadJsonArray<ParserNodeRecord>("features.json")) ?? [];
   const allDataModel = (await loadJsonArray<ParserNodeRecord>("data_model.json")) ?? [];
 
-  const targets: Array<{ key: TargetFile; filename: string; entries: ParserNodeRecord[] }> = [];
-  if (opts.target === "data_model" || opts.target === "both") {
-    targets.push({ key: "data_model", filename: "data_model.json", entries: allDataModel });
+  // Normalize legacy `"both"` → features + data_model (without UI) with a
+  // deprecation note in the result. Slice 1 introduces `"ui"` and `"all"`;
+  // `"both"` becomes semantically ambiguous and will be removed in a future
+  // release.
+  const deprecationNotes: string[] = [];
+  const resolvedTarget = opts.target;
+  const wantsFeatures = resolvedTarget === "features" || resolvedTarget === "both" || resolvedTarget === "all";
+  const wantsDataModel = resolvedTarget === "data_model" || resolvedTarget === "both" || resolvedTarget === "all";
+  const wantsUi = resolvedTarget === "ui" || resolvedTarget === "all";
+  if (resolvedTarget === "both") {
+    deprecationNotes.push(
+      'target "both" is deprecated: use "all" to include UI, or list "features" / "data_model" / "ui" explicitly. "both" currently maps to features + data_model (excluding UI) for back-compat.',
+    );
   }
-  if (opts.target === "features" || opts.target === "both") {
-    targets.push({ key: "features", filename: "features.json", entries: allFeatures });
+
+  // Load UI registry only when needed. We hold the full file so we can save
+  // it back with the wrapper metadata intact. Eligibility gate: only
+  // scanner-origin elements with a non-empty source_repo are enrichment
+  // candidates. Manual / SDK / user-guidance entries stay in the registry
+  // untouched.
+  let uiRegistry: UIRegistryFile | null = null;
+  let uiEntries: ParserNodeRecord[] = [];
+  const uiIndexById = new Map<string, number>();
+  if (wantsUi) {
+    uiRegistry = await loadUiRegistry();
+    if (uiRegistry) {
+      uiRegistry.elements.forEach((el, i) => {
+        if (!isUiParserOrigin(el)) return;
+        uiIndexById.set(el.id, i);
+        uiEntries.push(uiElementToRecord(el));
+      });
+    }
+  }
+
+  interface TargetSlot {
+    key: TargetFile;
+    filename: string;
+    entries: ParserNodeRecord[];
+    /** When true, persist by re-wrapping into UIRegistryFile rather than as a top-level array. */
+    wrapped: boolean;
+  }
+
+  const targets: TargetSlot[] = [];
+  if (wantsDataModel) {
+    targets.push({ key: "data_model", filename: "data_model.json", entries: allDataModel, wrapped: false });
+  }
+  if (wantsFeatures) {
+    targets.push({ key: "features", filename: "features.json", entries: allFeatures, wrapped: false });
+  }
+  if (wantsUi) {
+    targets.push({ key: "ui", filename: "ui_registry.json", entries: uiEntries, wrapped: true });
   }
 
   const result: EnrichResult = {
-    target: opts.target,
+    target: resolvedTarget,
     dry_run: opts.dryRun,
     files_processed: [],
     total_eligible: 0,
@@ -441,7 +544,7 @@ async function executeEnrichParserNodes(
     tokens_used: 0,
     duration_ms: 0,
     errors: [],
-    notes: [],
+    notes: [...deprecationNotes],
   };
 
   // Pre-build the set of valid feature ids — used to filter anchors so we
@@ -587,8 +690,30 @@ async function executeEnrichParserNodes(
         // Per-batch persistence: crash-safe — work done so far survives.
         if (!opts.dryRun && batchEnriched > 0) {
           try {
-            await atomicWriteFile(dataPath(t.filename), JSON.stringify(t.entries, null, 2));
-            invalidateCache(t.filename);
+            if (t.wrapped) {
+              // UI registry: merge enriched fields back into the wrapped file.
+              if (!uiRegistry) throw new Error("ui_registry.json missing during write");
+              for (const node of batch) {
+                const idx = uiIndexById.get(node.id);
+                if (idx === undefined) continue;
+                const updated = t.entries[indexById.get(node.id) ?? -1];
+                if (!updated) continue;
+                const el = uiRegistry.elements[idx];
+                // Preserve UI's own purpose (do not overwrite). Write only
+                // intent / description_raw / tags / enrichment / links.
+                el.tags = Array.isArray(updated.tags) ? [...updated.tags] : el.tags;
+                if (typeof updated.intent === "string" && updated.intent.length > 0) el.intent = updated.intent;
+                if (typeof updated.description_raw === "string") el.description_raw = updated.description_raw;
+                if (updated.enrichment) el.enrichment = updated.enrichment;
+                if (Array.isArray(updated.links)) {
+                  el.links = (updated.links as GraphLink[]).map((l) => ({ ...l }));
+                }
+              }
+              await saveUiRegistry(uiRegistry);
+            } else {
+              await atomicWriteFile(dataPath(t.filename), JSON.stringify(t.entries, null, 2));
+              invalidateCache(t.filename);
+            }
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             result.errors.push(`Persist ${t.filename}: ${msg}`);
@@ -617,7 +742,7 @@ export async function enrichParserNodesProgrammatic(
   opts: Partial<EnrichOptions> = {},
 ): Promise<ToolResponse<EnrichResult>> {
   const merged: EnrichOptions = {
-    target: opts.target ?? "both",
+    target: opts.target ?? "all",
     maxNodes: opts.maxNodes ?? 500,
     batchSize: opts.batchSize ?? 10,
     dryRun: opts.dryRun ?? false,
@@ -643,20 +768,28 @@ export function registerEnrichParserNodesTool(server: McpServer): void {
   server.tool(
     "enrich_parser_nodes",
     "Autonomous batch enrichment for parser-discovered nodes. After scan_project " +
-      "populates data_model.json and features.json with structural facts, this tool " +
-      "calls the configured LLM provider to add semantic data (description rewrite, " +
-      "intent, purpose, tags, feature anchors) to every eligible parser-origin entry " +
-      "in a single invocation. Uses internal batching (default 10 nodes per LLM call) " +
-      "and persists after each batch for crash safety. Filters to entries where " +
-      "`provenance.scanner === \"native\"` and `enrichment.enriched !== true` (unless " +
-      "force is true). Preserves the original parser description in description_raw. " +
-      "Proposed feature anchors are written as weak GraphLinks on the entity — they " +
-      "do not bypass the dream/normalize edge promotion pipeline.",
+      "populates data_model.json / features.json (and source-bound entries in " +
+      "ui_registry.json) with structural facts, this tool calls the configured " +
+      "LLM provider to add semantic data (description rewrite, intent, purpose, " +
+      "tags, feature anchors) to every eligible parser-origin entry in a single " +
+      "invocation. Targets: 'data_model', 'features', 'ui', 'all' (default), or " +
+      "the deprecated 'both' (= features + data_model, no UI). Uses internal " +
+      "batching (default 10 nodes per LLM call) and persists after each batch " +
+      "for crash safety. Filters to entries where `provenance.scanner === \"native\"` " +
+      "(for features / data_model) or `source_kind === \"scanner\"` with a " +
+      "non-empty source_repo (for UI elements), and `enrichment.enriched !== true` " +
+      "unless force is true. UI elements retain their existing `purpose` field as " +
+      "the role tag; only `intent`, `description_raw`, `tags`, `links`, and " +
+      "`enrichment` are overwritten. Proposed feature anchors are written as weak " +
+      "GraphLinks on the entity \u2014 they do not bypass the dream/normalize edge " +
+      "promotion pipeline.",
     {
       target: z
-        .enum(["data_model", "features", "both"])
-        .default("both")
-        .describe("Which file(s) to enrich. Default: both."),
+        .enum(["data_model", "features", "ui", "both", "all"])
+        .default("all")
+        .describe(
+          'Which target(s) to enrich. "all" covers data_model + features + ui. "ui" enriches only source-bound UI registry entries (source_kind == "scanner"). "both" is DEPRECATED — maps to features + data_model (no UI) for one back-compat cycle.',
+        ),
       max_nodes: z
         .number()
         .int()

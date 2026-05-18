@@ -276,7 +276,7 @@ describe("mergeEnrichment", () => {
     expect(merged.enrichment).toEqual({
       enriched: true,
       enriched_at: "2025-01-01T00:00:00Z",
-      enricher: "enrich_parser_nodes/1.0",
+      enricher: "enrich_parser_nodes/1.1",
       model: "model-x",
       confidence: 0.7,
     });
@@ -380,7 +380,7 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     if (!res.success) return;
     expect(res.data.total_enriched).toBe(1);
     const after = await readData<ParserNodeRecord[]>("data_model.json");
-    expect(after[0].enrichment?.enricher).toBe("enrich_parser_nodes/1.0");
+    expect(after[0].enrichment?.enricher).toBe("enrich_parser_nodes/1.1");
   });
 
   it("respects batch_size — multiple LLM calls for larger inputs", async () => {
@@ -525,5 +525,134 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     const fOut = await readData<ParserNodeRecord[]>("features.json");
     expect(dmOut[0].enrichment?.enriched).toBe(true);
     expect(fOut[0].enrichment?.enriched).toBe(true);
+  });
+
+  it('target="both" emits a deprecation note', async () => {
+    await writeData("data_model.json", [parserNode({ id: "dm1" })]);
+    await writeData("features.json", []);
+    mockState.responses = [llmResponseFor([parserNode({ id: "dm1" })])];
+    const res = await enrichParserNodesProgrammatic({ target: "both" });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.notes.some((n) => /deprecated/i.test(n))).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // UI target (slice 1: first-class UI graph citizenship)
+  // -------------------------------------------------------------------------
+
+  function uiRegistryFile(elements: unknown[]): unknown {
+    return {
+      metadata: { total_elements: elements.length, last_updated: "2024-01-01" },
+      elements,
+    };
+  }
+
+  function scannerUiElement(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "ui_button_pay",
+      name: "PayButton",
+      purpose: "button",
+      category: "action",
+      source_kind: "scanner",
+      source_repo: "openrct2",
+      source_file: "src/ui/PayButton.tsx",
+      tags: [],
+      ...over,
+    };
+  }
+
+  it('target="ui" enriches scanner-origin UI elements with source_repo', async () => {
+    await writeData("data_model.json", []);
+    await writeData("features.json", []);
+    await writeData("ui_registry.json", uiRegistryFile([scannerUiElement()]));
+    mockState.responses = [
+      llmResponseFor([parserNode({ id: "ui_button_pay", name: "PayButton" })]),
+    ];
+
+    const res = await enrichParserNodesProgrammatic({ target: "ui" });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.files_processed).toEqual(["ui"]);
+    expect(res.data.total_enriched).toBe(1);
+
+    const out = await readData<{ elements: Array<Record<string, unknown>> }>(
+      "ui_registry.json",
+    );
+    const el = out.elements[0];
+    expect(el.enrichment).toMatchObject({ enriched: true, enricher: expect.any(String) });
+    // UI's own purpose field MUST be preserved (role tag), not overwritten by the LLM's purpose.
+    expect(el.purpose).toBe("button");
+    // intent should be set from LLM output.
+    expect(el.intent).toBe("Represents the PayButton concept.");
+  });
+
+  it('target="ui" skips UI elements without source_repo (manual entries)', async () => {
+    await writeData("data_model.json", []);
+    await writeData("features.json", []);
+    await writeData(
+      "ui_registry.json",
+      uiRegistryFile([
+        { id: "manual_btn", name: "Manual", purpose: "button" }, // no source_kind/source_repo
+        scannerUiElement({ id: "scoped_btn", name: "Scoped" }),
+      ]),
+    );
+    mockState.responses = [
+      llmResponseFor([parserNode({ id: "scoped_btn", name: "Scoped" })]),
+    ];
+
+    const res = await enrichParserNodesProgrammatic({ target: "ui" });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.total_enriched).toBe(1);
+
+    const out = await readData<{ elements: Array<Record<string, unknown>> }>(
+      "ui_registry.json",
+    );
+    expect(out.elements.find((e) => e.id === "manual_btn")?.enrichment).toBeUndefined();
+    expect(out.elements.find((e) => e.id === "scoped_btn")?.enrichment).toBeDefined();
+  });
+
+  it('target="ui" skips already-enriched elements unless force=true', async () => {
+    await writeData("data_model.json", []);
+    await writeData("features.json", []);
+    await writeData(
+      "ui_registry.json",
+      uiRegistryFile([
+        scannerUiElement({
+          id: "done_btn",
+          enrichment: { enriched: true, enriched_at: "2024-01-01", enricher: "x" },
+        }),
+      ]),
+    );
+
+    const res = await enrichParserNodesProgrammatic({ target: "ui" });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.total_enriched).toBe(0);
+    expect(mockState.calls.length).toBe(0);
+  });
+
+  it('target="all" processes data_model, features, and ui', async () => {
+    await writeData("data_model.json", [parserNode({ id: "dm1" })]);
+    await writeData("features.json", [
+      parserNode({
+        id: "f1",
+        name: "Feature",
+        provenance: { scanner: "native", language: "c", qualified_name: "F" },
+      }),
+    ]);
+    await writeData("ui_registry.json", uiRegistryFile([scannerUiElement({ id: "ui1", name: "UI1" })]));
+    mockState.responses = [
+      llmResponseFor([parserNode({ id: "dm1" })]),
+      llmResponseFor([parserNode({ id: "f1", name: "Feature" })]),
+      llmResponseFor([parserNode({ id: "ui1", name: "UI1" })]),
+    ];
+
+    const res = await enrichParserNodesProgrammatic({ target: "all" });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.files_processed.sort()).toEqual(["data_model", "features", "ui"]);
+    expect(res.data.total_enriched).toBe(3);
   });
 });

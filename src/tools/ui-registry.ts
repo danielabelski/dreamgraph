@@ -135,6 +135,9 @@ export async function applyPluginUiElement(
       }
       existing.used_by = [...new Set([...existing.used_by, ...(input.used_by ?? [])])];
       existing.tags = [...new Set([...(existing.tags ?? []), ...tagSet])];
+      // Slice 1 — do not downgrade existing provenance (e.g. scanner-emitted
+      // element later updated by a plugin keeps its `scanner` source_kind).
+      if (!existing.source_kind) existing.source_kind = "sdk";
       merged = true;
     } else {
       const element: SemanticElement = {
@@ -148,6 +151,10 @@ export async function applyPluginUiElement(
         implementations: input.implementations ?? [],
         used_by: input.used_by ?? [],
         tags: [...tagSet],
+        // Slice 1 — plugin-originated elements are stamped as `sdk` provenance.
+        // No source_repo is set automatically (plugins are not project-bound),
+        // so they remain in the registry but are NOT indexed in index.json.
+        source_kind: "sdk",
       };
       registry.elements.push(element);
     }
@@ -216,6 +223,45 @@ function normalizeElement(raw: any): SemanticElement {
   }
   if (typeof raw?.superseded_by === "string") normalized.superseded_by = raw.superseded_by;
   if (typeof raw?.deprecation_reason === "string") normalized.deprecation_reason = raw.deprecation_reason;
+
+  // Slice 1 — first-class graph citizenship: preserve provenance + enrichment
+  // fields on round-trip so they survive any external edit / file reload.
+  if (typeof raw?.source_repo === "string") normalized.source_repo = raw.source_repo;
+  if (typeof raw?.source_file === "string") normalized.source_file = raw.source_file;
+  if (
+    raw?.source_kind === "scanner" ||
+    raw?.source_kind === "manual" ||
+    raw?.source_kind === "sdk" ||
+    raw?.source_kind === "user_guidance" ||
+    raw?.source_kind === "generated"
+  ) {
+    normalized.source_kind = raw.source_kind;
+  }
+  if (Array.isArray(raw?.evidence_refs)) {
+    normalized.evidence_refs = raw.evidence_refs.filter((r: unknown) => typeof r === "string");
+  }
+  if (typeof raw?.intent === "string") normalized.intent = raw.intent;
+  if (typeof raw?.description_raw === "string") normalized.description_raw = raw.description_raw;
+  if (raw?.enrichment && typeof raw.enrichment === "object") {
+    const e = raw.enrichment as Record<string, unknown>;
+    if (typeof e.enriched === "boolean" && typeof e.enriched_at === "string" && typeof e.enricher === "string") {
+      normalized.enrichment = {
+        enriched: e.enriched,
+        enriched_at: e.enriched_at,
+        enricher: e.enricher,
+        ...(typeof e.model === "string" ? { model: e.model } : {}),
+        ...(typeof e.confidence === "number" ? { confidence: e.confidence } : {}),
+      };
+    }
+  }
+  if (Array.isArray(raw?.links)) {
+    normalized.links = raw.links.filter(
+      (l: unknown): l is NonNullable<SemanticElement["links"]>[number] =>
+        !!l && typeof l === "object" &&
+        typeof (l as { target?: unknown }).target === "string" &&
+        typeof (l as { type?: unknown }).type === "string",
+    );
+  }
 
   return normalized;
 }
@@ -444,6 +490,49 @@ export function registerUIRegistryTools(server: McpServer): void {
         .describe(
           'Conditions controlling visibility, e.g. ["has_api_key", "has_image"]'
         ),
+
+      // Slice 1 — first-class graph citizenship (optional, additive).
+      source_repo: z
+        .string()
+        .optional()
+        .describe(
+          "Owning repo id. REQUIRED for the element to be admitted into index.json (canonical graph). Manual registry entries without source_repo remain in the UI registry but are NOT graph citizens.",
+        ),
+      source_file: z
+        .string()
+        .optional()
+        .describe("Primary source-of-truth file path, when one exists."),
+      source_kind: z
+        .enum(["scanner", "manual", "sdk", "user_guidance", "generated"])
+        .optional()
+        .describe(
+          'How this element entered the registry. "scanner" entries are eligible for autonomous enrichment by enrich_parser_nodes (target: "ui").',
+        ),
+      evidence_refs: z
+        .array(z.string())
+        .optional()
+        .describe("File/symbol references that ground this element in real code."),
+      intent: z
+        .string()
+        .optional()
+        .describe("Human-readable purpose: why this element exists / what problem it solves. Normally written by enrich_parser_nodes; accept explicit overrides."),
+      description_raw: z
+        .string()
+        .optional()
+        .describe("Preserved original purpose/description text from before enrichment overwrote it."),
+      links: z
+        .array(
+          z.object({
+            target: z.string(),
+            type: z.enum(["feature", "workflow", "data_model", "capability", "datastore", "ui_element"]),
+            relationship: z.string(),
+            description: z.string(),
+            strength: z.string(),
+            meta: z.record(z.string(), z.unknown()).optional(),
+          }),
+        )
+        .optional()
+        .describe("Cross-entity links (feature anchors, etc.)."),
     },
     async (params) => {
       logger.debug(`register_ui_element called: "${params.id}"`);
@@ -487,6 +576,15 @@ export function registerUIRegistryTools(server: McpServer): void {
                 existing.default_action = params.default_action;
               if (params.visibility_conditions !== undefined)
                 existing.visibility_conditions = params.visibility_conditions;
+
+              // Slice 1 — first-class graph citizenship.
+              if (params.source_repo !== undefined) existing.source_repo = params.source_repo;
+              if (params.source_file !== undefined) existing.source_file = params.source_file;
+              if (params.source_kind !== undefined) existing.source_kind = params.source_kind;
+              if (params.evidence_refs !== undefined) existing.evidence_refs = params.evidence_refs;
+              if (params.intent !== undefined) existing.intent = params.intent;
+              if (params.description_raw !== undefined) existing.description_raw = params.description_raw;
+              if (params.links !== undefined) existing.links = params.links;
 
               const newImpls = params.implementations ?? [];
               for (const impl of newImpls) {
@@ -550,6 +648,14 @@ export function registerUIRegistryTools(server: McpServer): void {
                 ...(params.visibility_conditions !== undefined && {
                   visibility_conditions: params.visibility_conditions,
                 }),
+                // Slice 1 — first-class graph citizenship.
+                ...(params.source_repo !== undefined && { source_repo: params.source_repo }),
+                ...(params.source_file !== undefined && { source_file: params.source_file }),
+                ...(params.source_kind !== undefined && { source_kind: params.source_kind }),
+                ...(params.evidence_refs !== undefined && { evidence_refs: params.evidence_refs }),
+                ...(params.intent !== undefined && { intent: params.intent }),
+                ...(params.description_raw !== undefined && { description_raw: params.description_raw }),
+                ...(params.links !== undefined && { links: params.links }),
               };
               registry.elements.push(element);
             }

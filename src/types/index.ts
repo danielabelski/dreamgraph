@@ -24,7 +24,7 @@ export interface ResourceEntry {
 /** Second-hop reference embedded inside a link's metadata */
 export interface LinkRef {
   target: string;
-  type: "feature" | "workflow" | "data_model" | "capability";
+  type: "feature" | "workflow" | "data_model" | "capability" | "ui_element";
   hint: string;
 }
 
@@ -40,7 +40,7 @@ export interface LinkMeta {
 /** A rich cross-link (graph edge) between any two entities */
 export interface GraphLink {
   target: string;
-  type: "feature" | "workflow" | "data_model" | "capability" | "datastore";
+  type: "feature" | "workflow" | "data_model" | "capability" | "datastore" | "ui_element";
   relationship: string;
   description: string;
   strength: string;
@@ -286,7 +286,8 @@ export interface IndexEntry {
     | "test_suite"
     | "configuration"
     | "automation_script"
-    | "mcp_tool";
+    | "mcp_tool"
+    | "ui_element";
   uri: string;
   name: string;
   source_repo: string;
