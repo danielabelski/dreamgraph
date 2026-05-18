@@ -11,6 +11,7 @@ export type ExplorerNodeType =
   | "data_model"
   | "capability"
   | "datastore"
+  | "ui_element"
   | "dream_node"
   | "tension";
 

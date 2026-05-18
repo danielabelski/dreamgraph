@@ -22,6 +22,7 @@ export const ALL_NODE_TYPES: ExplorerNodeType[] = [
   "data_model",
   "capability",
   "datastore",
+  "ui_element",
   "dream_node",
   "tension",
 ];

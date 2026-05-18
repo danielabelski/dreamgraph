@@ -24,6 +24,12 @@ export interface IndexableUIElement {
   id: string;
   name: string;
   source_repo: string;
+  /** Feature/workflow IDs that consume this UI element. Optional. */
+  used_by: string[];
+  /** Child UI element IDs (composition). Optional. */
+  children: string[];
+  /** Workflow IDs this element participates in. Optional. */
+  flows: string[];
 }
 
 /**
@@ -66,7 +72,16 @@ export async function loadIndexableUIElements(): Promise<IndexableUIElement[]> {
     const name = typeof rec.name === "string" ? rec.name : "";
     const sourceRepo = typeof rec.source_repo === "string" ? rec.source_repo.trim() : "";
     if (!id || !name || !sourceRepo) continue;
-    out.push({ id, name, source_repo: sourceRepo });
+    const stringArray = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.length > 0) : [];
+    out.push({
+      id,
+      name,
+      source_repo: sourceRepo,
+      used_by: stringArray(rec.used_by),
+      children: stringArray(rec.children),
+      flows: stringArray(rec.flows),
+    });
   }
   return out;
 }

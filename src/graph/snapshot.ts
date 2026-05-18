@@ -39,6 +39,7 @@ export type ExplorerNodeType =
   | "data_model"
   | "capability"
   | "datastore"
+  | "ui_element"
   | "dream_node"
   | "tension";
 
@@ -160,6 +161,15 @@ function buildSnapshot(raw: GraphRawSnapshot): GraphSnapshot {
     if (ds?.id) pushSeedNode(nodes, ds.id, "datastore", ds.name ?? ds.id);
   }
 
+  // ---- UI registry nodes (only entries with source_repo provenance) ----
+  // Indexable UI elements are first-class graph citizens (per ui-index gate).
+  // They are seeded BEFORE fact-edge ingestion so `used_by` / `children` /
+  // `flows` edges from features and workflows can land on them, and so the
+  // UI element's own outgoing edges can resolve their endpoints.
+  for (const ui of raw.uiElements ?? []) {
+    if (ui?.id) pushSeedNode(nodes, ui.id, "ui_element", ui.name ?? ui.id);
+  }
+
   // ---- Dream nodes (speculative; lower default health) ----
   for (const dn of raw.dreamGraph.nodes ?? []) {
     if (!dn?.id) continue;
@@ -198,6 +208,17 @@ function buildSnapshot(raw: GraphRawSnapshot): GraphSnapshot {
   for (const w of raw.workflows as Workflow[]) ingestLinks(edges, nodes, w);
   for (const d of raw.dataModel as DataModelEntity[]) ingestLinks(edges, nodes, d);
   for (const c of raw.capabilities as CapabilityEntity[]) ingestLinks(edges, nodes, c);
+
+  // ---- UI registry fact edges ----
+  // `used_by` / `children` / `flows` are the registry's evidence-bound
+  // structural references. `pushEdge` skips endpoints that were never
+  // seeded, so UI nodes cannot synthesize ghost facts for unknown ids.
+  for (const ui of raw.uiElements ?? []) {
+    if (!ui?.id) continue;
+    for (const target of ui.used_by ?? []) pushEdge(edges, nodes, ui.id, target, "fact", 1);
+    for (const target of ui.children ?? []) pushEdge(edges, nodes, ui.id, target, "fact", 1);
+    for (const target of ui.flows ?? []) pushEdge(edges, nodes, ui.id, target, "fact", 1);
+  }
 
   // ---- Evidence-bound `stored_in` edges ----
   // Data models are connected to datastores only when explicit metadata or links

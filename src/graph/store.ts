@@ -8,6 +8,7 @@
  */
 
 import { loadJsonArray, loadJsonData } from "../utils/cache.js";
+import { loadIndexableUIElements, type IndexableUIElement } from "../utils/ui-index.js";
 import type {
   Feature,
   Workflow,
@@ -86,6 +87,8 @@ export interface GraphRawSnapshot {
   validated: ValidatedEdgesFile;
   candidates: CandidateEdgesFile;
   tensions: TensionFile;
+  /** Indexable UI elements (only entries with `source_repo` provenance). */
+  uiElements: IndexableUIElement[];
 }
 
 /**
@@ -103,6 +106,7 @@ export async function loadGraphRaw(): Promise<GraphRawSnapshot> {
     validated,
     candidates,
     tensions,
+    uiElements,
   ] = await Promise.all([
     safe(() => loadJsonArray<Feature>("features.json"), []),
     safe(() => loadJsonArray<Workflow>("workflows.json"), []),
@@ -119,6 +123,7 @@ export async function loadGraphRaw(): Promise<GraphRawSnapshot> {
       EMPTY_CANDIDATES,
     ),
     safe(() => loadJsonData<TensionFile>("tension_log.json"), EMPTY_TENSIONS),
+    safe(() => loadIndexableUIElements(), [] as IndexableUIElement[]),
   ]);
 
   // Strip template-stub entries (entries with `_schema` / `_note` markers).
@@ -136,5 +141,6 @@ export async function loadGraphRaw(): Promise<GraphRawSnapshot> {
     validated,
     candidates,
     tensions,
+    uiElements,
   };
 }

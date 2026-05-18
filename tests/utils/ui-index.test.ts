@@ -53,7 +53,7 @@ describe("loadIndexableUIElements", () => {
     });
     const result = await loadIndexableUIElements();
     expect(result).toEqual([
-      { id: "scoped1", name: "Scoped Element", source_repo: "openrct2" },
+      { id: "scoped1", name: "Scoped Element", source_repo: "openrct2", used_by: [], children: [], flows: [] },
     ]);
   });
 
@@ -67,6 +67,6 @@ describe("loadIndexableUIElements", () => {
       ],
     });
     const result = await loadIndexableUIElements();
-    expect(result).toEqual([{ id: "good", name: "Good", source_repo: "r" }]);
+    expect(result).toEqual([{ id: "good", name: "Good", source_repo: "r", used_by: [], children: [], flows: [] }]);
   });
 });

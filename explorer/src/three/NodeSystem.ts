@@ -21,6 +21,7 @@ import {
   ConeGeometry,
   CylinderGeometry,
   DodecahedronGeometry,
+  IcosahedronGeometry,
   InstancedBufferAttribute,
   InstancedMesh,
   type BufferGeometry,
@@ -84,6 +85,10 @@ function geometryForType(type: ExplorerNodeType): BufferGeometry {
       return new TorusGeometry(0.85, 0.32, 8, 18);
     case "datastore":
       return new CylinderGeometry(1.0, 1.0, 0.55, 16);
+    case "ui_element":
+      // Faceted sphere — visually distinct from dodecahedron/tetrahedron
+      // and reads as a "surface" the user interacts with.
+      return new IcosahedronGeometry(1.0, 0);
     case "dream_node":
       return new TetrahedronGeometry(1.2, 0);
     case "tension":

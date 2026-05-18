@@ -68,7 +68,8 @@ function emptyRaw(): GraphRawSnapshot {
       signals: [],
       resolved_tensions: [],
     },
-  };
+    uiElements: [],
+  } as GraphRawSnapshot;
 }
 
 describe("Explorer snapshot envelope", () => {
@@ -163,6 +164,50 @@ describe("Explorer snapshot envelope", () => {
     const a = buildSnapshotForTest(emptyRaw());
     const b = buildSnapshotForTest(emptyRaw());
     expect(a.etag).toBe(b.etag);
+  });
+
+  it("includes ui_element nodes and wires used_by/children/flows as fact edges", () => {
+    const raw = emptyRaw();
+    raw.features = [
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { id: "F1", name: "Dashboard" } as any,
+    ];
+    raw.workflows = [
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { id: "W1", name: "Login" } as any,
+    ];
+    raw.uiElements = [
+      {
+        id: "ui_button_primary",
+        name: "Primary Button",
+        source_repo: "myproj",
+        used_by: ["F1"],
+        children: [],
+        flows: ["W1"],
+      },
+      // Unknown-endpoint edges must be silently skipped by pushEdge.
+      {
+        id: "ui_orphan",
+        name: "Orphan",
+        source_repo: "myproj",
+        used_by: ["ghost"],
+        children: [],
+        flows: [],
+      },
+    ];
+
+    const snap = buildSnapshotForTest(raw);
+    const ids = snap.nodes.map((n) => n.id).sort();
+    expect(ids).toContain("ui_button_primary");
+    expect(ids).toContain("ui_orphan");
+    const ui = snap.nodes.find((n) => n.id === "ui_button_primary")!;
+    expect(ui.type).toBe("ui_element");
+    const factEdges = snap.edges.filter((e) => e.s === "ui_button_primary");
+    const targets = factEdges.map((e) => e.t).sort();
+    expect(targets).toEqual(["F1", "W1"]);
+    expect(factEdges.every((e) => e.kind === "fact")).toBe(true);
+    // Orphan UI edges to non-existent endpoints are dropped, not ghost-synthesized.
+    expect(snap.edges.find((e) => e.s === "ui_orphan")).toBeUndefined();
   });
 });
 
