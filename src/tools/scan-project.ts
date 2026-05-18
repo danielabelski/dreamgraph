@@ -59,6 +59,8 @@ import { classifyAuxiliaryFile } from "./auxiliary-classifier.js";
 import { generateAuxiliaryEntities } from "./auxiliary-generators.js";
 import { mergeAuxiliaryEntities, loadAuxiliaryEntities } from "./auxiliary-store.js";
 import { extractNativeDataModel, hasNativeCodeFiles } from "./native-data-model.js";
+import { extractNativeUiElements, hasScannableUiFiles } from "./native-ui-scanner.js";
+import { applyScannerUiElements } from "./ui-registry.js";
 import type {
   Feature,
   Workflow,
@@ -540,6 +542,17 @@ export interface ScanProjectResult {
   workflows: { inserted: number; updated: number; total: number };
   data_model: { inserted: number; updated: number; total: number };
   /**
+   * Slice 2 — UI registry counters. Only present when the `ui` target
+   * ran. Counts scanner-origin entries only; manual / sdk entries are
+   * never touched by the scanner and are not reflected here.
+   */
+  ui?: {
+    inserted: number;
+    updated: number;
+    skipped_protected: number;
+    total_for_repo: number;
+  };
+  /**
    * Wave-1 #4 — parser-backed (tree-sitter) coverage for native code
    * (C / C++). `parser_backed_files` is the number of C/C++ files the
    * extractor processed without throwing; `total_native_files` is the
@@ -551,6 +564,10 @@ export interface ScanProjectResult {
     total_native_files: number;
     parser_backed_pct: number;
     native_diagnostics: number;
+    /** Slice 2 — UI files matched by a framework extractor. */
+    ui_parsed_files?: number;
+    ui_total_files?: number;
+    ui_diagnostics?: number;
   };
   /** Phase 5 #9 — auxiliary entities (tests/configs/scripts/MCP tools). */
   auxiliary?: {
@@ -589,7 +606,7 @@ export interface RunScanOptions {
  * Can also be called programmatically (e.g. during instance bootstrap).
  */
 export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanProjectResult> {
-  const VALID_TARGETS = ["features", "workflows", "data_model"];
+  const VALID_TARGETS = ["features", "workflows", "data_model", "ui"];
   const depth = opts.depth ?? "deep";
   const targetList = opts.targets ?? [...VALID_TARGETS];
   const repos = opts.repos;
@@ -943,6 +960,69 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     }
   }
 
+  // Phase 2.7 — UI scanner bridge (slice 2). Detects components in
+  // .tsx/.jsx/.vue/.svelte/.razor/.xaml files and merges scanner-origin
+  // SemanticElement entries into `ui_registry.json`. Manual / SDK
+  // entries are preserved; enrichment fields on existing scanner-origin
+  // entries are not erased on re-scan.
+  let uiResult: ScanProjectResult["ui"] | undefined;
+  if (targetList.includes("ui")) {
+    const aggregatedUi = {
+      inserted: 0,
+      updated: 0,
+      skipped_protected: 0,
+      total_for_repo: 0,
+      parsed_files: 0,
+      total_ui_files: 0,
+      diagnostics: 0,
+    };
+    for (const scan of scans) {
+      if (!hasScannableUiFiles(scan)) continue;
+      try {
+        progress(`UI scan — ${scan.repoName}…`);
+        const { elements, quality } = await extractNativeUiElements(scan);
+        aggregatedUi.parsed_files += quality.parsedFiles;
+        aggregatedUi.total_ui_files += quality.totalUiFiles;
+        aggregatedUi.diagnostics += quality.diagnostics.length;
+        const merge = await applyScannerUiElements(scan.repoName, elements);
+        aggregatedUi.inserted += merge.inserted;
+        aggregatedUi.updated += merge.updated;
+        aggregatedUi.skipped_protected += merge.skipped_protected;
+        aggregatedUi.total_for_repo += merge.total_for_repo;
+        logger.info(
+          `scan_project: ui scan — ${merge.inserted} inserted, ${merge.updated} updated, ` +
+          `${merge.skipped_protected} protected (manual/sdk preserved) ` +
+          `(${quality.parsedFiles}/${quality.totalUiFiles} files)`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`UI scanner failed for ${scan.repoName}: ${msg}`);
+        logger.warn(`scan_project: ui scanner error (${scan.repoName}): ${msg}`);
+      }
+    }
+    if (aggregatedUi.total_ui_files > 0 || aggregatedUi.inserted + aggregatedUi.updated > 0) {
+      uiResult = {
+        inserted: aggregatedUi.inserted,
+        updated: aggregatedUi.updated,
+        skipped_protected: aggregatedUi.skipped_protected,
+        total_for_repo: aggregatedUi.total_for_repo,
+      };
+      // Fold UI counters into scan_quality so the existing surface stays
+      // a single source of truth for scanner coverage.
+      scanQuality = {
+        ...(scanQuality ?? {
+          parser_backed_files: 0,
+          total_native_files: 0,
+          parser_backed_pct: 0,
+          native_diagnostics: 0,
+        }),
+        ui_parsed_files: aggregatedUi.parsed_files,
+        ui_total_files: aggregatedUi.total_ui_files,
+        ui_diagnostics: aggregatedUi.diagnostics,
+      };
+    }
+  }
+
   progress("Rebuilding resource index…");
   const indexEntries = await rebuildIndex();
   logger.info(`scan_project: index rebuilt with ${indexEntries} entries`);
@@ -1094,6 +1174,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     features: featureResult,
     workflows: workflowResult,
     data_model: dataModelResult,
+    ui: uiResult,
     scan_quality: scanQuality,
     auxiliary: auxiliaryResult,
     index_entries: indexEntries,
@@ -1130,9 +1211,12 @@ export function registerScanProjectTool(server: McpServer): void {
         .array(z.string())
         .optional()
         .describe(
-          "Which seed data targets to populate. Default: all three. " +
-          "Each must be one of: features, workflows, data_model. " +
-          "Use to selectively re-scan only features, workflows, or data_model.",
+          "Which seed data targets to populate. Default: all four. " +
+          "Each must be one of: features, workflows, data_model, ui. " +
+          "Use to selectively re-scan only a subset. The 'ui' target runs the " +
+          "native UI scanner (slice 2) over .tsx/.jsx/.vue/.svelte/.razor/.xaml " +
+          "files and merges scanner-origin entries into ui_registry.json without " +
+          "overwriting manual or plugin-authored elements.",
         ),
       repos: z
         .array(z.string())
@@ -1142,7 +1226,7 @@ export function registerScanProjectTool(server: McpServer): void {
         ),
     },
     async ({ depth, targets, repos }, extra) => {
-      const VALID_TARGETS = ["features", "workflows", "data_model"];
+      const VALID_TARGETS = ["features", "workflows", "data_model", "ui"];
       const targetList = targets ?? [...VALID_TARGETS];
 
       // Validate targets up-front (before delegating to core)

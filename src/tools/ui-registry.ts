@@ -179,6 +179,96 @@ export async function removePluginUiElements(pluginId: string): Promise<{ remove
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  Slice 2 — Scanner UI bulk-merge helper                            */
+/* ------------------------------------------------------------------ */
+
+export interface ScannerUiMergeResult {
+  /** Newly inserted scanner-origin elements. */
+  inserted: number;
+  /** Existing scanner-origin elements whose detection fields were refreshed. */
+  updated: number;
+  /** Elements skipped because the existing entry has non-scanner provenance (manual/sdk/user_guidance). */
+  skipped_protected: number;
+  /** Total scanner-origin element count for `repoName` after the merge. */
+  total_for_repo: number;
+}
+
+/**
+ * Bulk-merge scanner-origin SemanticElement records into `ui_registry.json`.
+ *
+ * Provenance discipline (slice 2 invariant):
+ *   - New ids are inserted as-is (already stamped `source_kind: "scanner"`).
+ *   - Existing entries with `source_kind === "scanner"` (or absent, treated
+ *     as legacy scanner) are refreshed for detection-time fields:
+ *     `name`, `purpose`, `tags`, `implementations`, `source_repo`,
+ *     `source_file`, `source_kind`. Enrichment fields
+ *     (`intent`, `description_raw`, `enrichment`, `links`,
+ *     `visual_semantics`, etc.) are preserved across re-scans so the
+ *     scanner never erases LLM enrichment work.
+ *   - Existing entries with `source_kind` in {"manual", "sdk",
+ *     "user_guidance", "generated"} are SKIPPED. The scanner never
+ *     overwrites human- or plugin-authored entries.
+ *
+ * Returns counters that scan_project can fold into its scan_quality
+ * summary.
+ */
+export async function applyScannerUiElements(
+  repoName: string,
+  elements: SemanticElement[],
+): Promise<ScannerUiMergeResult> {
+  const result: ScannerUiMergeResult = {
+    inserted: 0,
+    updated: 0,
+    skipped_protected: 0,
+    total_for_repo: 0,
+  };
+  if (elements.length === 0) {
+    return withFileLock("ui_registry.json", async () => {
+      const registry = await loadRegistry();
+      result.total_for_repo = registry.elements.filter(
+        (e) => e.source_repo === repoName && e.source_kind === "scanner",
+      ).length;
+      return result;
+    });
+  }
+  return withFileLock("ui_registry.json", async () => {
+    const registry = await loadRegistry();
+    for (const incoming of elements) {
+      const idx = registry.elements.findIndex((e) => e.id === incoming.id);
+      if (idx < 0) {
+        registry.elements.push(incoming);
+        result.inserted += 1;
+        continue;
+      }
+      const existing = registry.elements[idx];
+      const provenance = existing.source_kind;
+      const isScannerOwned = provenance === undefined || provenance === "scanner";
+      if (!isScannerOwned) {
+        result.skipped_protected += 1;
+        continue;
+      }
+      // Refresh detection-time fields only. Preserve enrichment work and
+      // any non-scanner fields a curator may have set on a previously
+      // scanner-emitted entry.
+      existing.name = incoming.name;
+      existing.purpose = incoming.purpose;
+      existing.implementations = incoming.implementations;
+      existing.source_repo = incoming.source_repo;
+      existing.source_file = incoming.source_file;
+      existing.source_kind = "scanner";
+      const mergedTags = new Set([...(existing.tags ?? []), ...(incoming.tags ?? [])]);
+      existing.tags = [...mergedTags];
+      result.updated += 1;
+    }
+    result.total_for_repo = registry.elements.filter(
+      (e) => e.source_repo === repoName && e.source_kind === "scanner",
+    ).length;
+    await saveRegistry(registry);
+    return result;
+  });
+}
+
 function emptyRegistry(): UIRegistryFile {
   return {
     metadata: {

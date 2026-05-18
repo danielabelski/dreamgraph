@@ -297,6 +297,8 @@ candidate → [normalization] → validated (promoted)
 |------|-------|-------------|
 | 1 | Phase 1 — File scan | Discover directory structure, read key source files, classify by type. |
 | 2 | Phase 2 — LLM enrichment | If an LLM is configured, generate rich semantic descriptions for features, workflows, and data model entities. Falls back to structural-only analysis otherwise. |
+| 2.6 | Phase 2.6 — Native data-model bridge | When `data_model` is in `targets`, run the native polyglot scanner (`src/scanner/`) over discovered C/C++/Rust/Java files and merge results into `data_model.json`. |
+| 2.7 | Phase 2.7 — Native UI scanner (v10.3) | When `ui` is in `targets`, extract React/Vue/Svelte/Blazor/WPF components from `.tsx/.jsx/.vue/.svelte/.razor/.xaml` files and merge scanner-origin `SemanticElement` entries into `ui_registry.json` via `applyScannerUiElements`. Never overwrites entries with `source_kind` of `manual`, `sdk`, `user_guidance`, or `generated`; preserves enrichment fields on existing scanner entries across re-scans. |
 | 3 | Phase 3 — Auto-dream | Trigger a full dream cycle (`strategy="all"`) to generate initial speculative edges and validate them against the newly populated fact graph. |
 | 4 | Phase 4 — ADR discovery | Build an LLM prompt from discovered entities to identify implicit architectural decisions. Each discovered ADR is recorded via `recordADR()` with `decided_by: "system"`. |
 | 5 | Phase 5 — Schedule follow-ups | Five dream cycles are scheduled at 5-minute intervals to allow the knowledge graph to grow and stabilize. |

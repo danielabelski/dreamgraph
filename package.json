@@ -1,6 +1,6 @@
 {
   "name": "dreamgraph",
-  "version": "10.2.0",
+  "version": "10.3.0",
   "description": "Graph-first cognitive daemon with MCP tools, CLI, dashboard, Explorer, and VS Code integration",
   "engines": {
     "node": ">=20.0.0"

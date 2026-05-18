@@ -644,14 +644,16 @@ This is a convenience orchestrator. All individual tools (`init_graph`, `enrich_
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `depth` | enum | `deep` | `shallow` (3 levels) or `deep` (10 levels). Shallow is faster but may miss nested modules. |
-| `targets` | string[] | all three | Subset of `["features", "workflows", "data_model"]` to populate. |
+| `targets` | string[] | all four | Subset of `["features", "workflows", "data_model", "ui"]` to populate. The `ui` target runs the native UI scanner over `.tsx/.jsx/.vue/.svelte/.razor/.xaml` files (v10.3). |
 | `repos` | string[] | all configured | Specific repo names to scan. |
 
-**Returns:** Summary with counts for repos scanned, files discovered, UI files detected, technology detected, features/workflows/data_model inserted/updated/total, **auxiliary entities (test_suite/configuration/automation_script/mcp_tool) inserted/updated/total**, index entries rebuilt, LLM tokens used, and any warnings.
+**Returns:** Summary with counts for repos scanned, files discovered, UI files detected, technology detected, features/workflows/data_model inserted/updated/total, **auxiliary entities (test_suite/configuration/automation_script/mcp_tool) inserted/updated/total**, **UI scanner counters (`ui.inserted/updated/skipped_protected/total_for_repo`)** when the `ui` target ran, index entries rebuilt, LLM tokens used, and any warnings.
 
 **Phase 2.5 — auxiliary entity merge (v8.2):** After LLM enrichment and before index rebuild, `scan_project` classifies every scanned file into one of four auxiliary kinds (tests / config / scripts / MCP tools) and persists them to `data/auxiliary_entities.json` via `mergeAuxiliaryEntities`. The rebuilt `index.json` includes one row per auxiliary entry with `type` set to the kind. See [data-model.md](data-model.md#auxiliary-entities-auxiliary_entitiesjson) for schema.
 
 **Phase 2.6 — native-language data model (v10):** When `data_model` is in `targets`, `scan_project` invokes the native polyglot scanner (`src/scanner/`) for any C, C++, Rust, or Java sources discovered. Each per-file extractor (`src/scanner/extractors/{c,cpp,rust,java}.ts`) reuses a single canonical `CodeEntityKind` + `Relationship` vocabulary; language-specific construct labels (`unique_ptr`, `box`, `rc`, `hashmap`, `raw_ptr`, `list`, `optional`, `interface_impl`, `annotation`, …) live only in `edge.meta.via`, never in the kind. The orchestrator (`src/scanner/orchestrator.ts`) resolves `<lang>:type:Name` and `<lang>:include:Path` placeholders through one language-agnostic code path, so a Rust `Trait`, a Java `Interface`, and a C++ abstract `Class` bind semantically through identical machinery.
+
+**Phase 2.7 — native UI scanner (v10.3 slice 2):** When `ui` is in `targets`, `scan_project` invokes `extractNativeUiElements` (`src/tools/native-ui-scanner.ts`) on every discovered UI file. The scanner dispatches per extension — `.tsx/.jsx` → React (regex-based PascalCase export extraction with filename fallback), `.vue/.svelte/.razor/.xaml` → single-file-component frameworks (filename-stem to PascalCase). Each extracted component becomes a `SemanticElement` stamped with `source_kind: "scanner"`, `source_repo`, and `source_file`; merge is handled by `applyScannerUiElements` (`src/tools/ui-registry.ts`) under the `ui_registry.json` file lock. The merge **never overwrites** entries with `source_kind` of `manual`, `sdk`, `user_guidance`, or `generated`, and on re-scan it preserves human enrichment fields (`intent`, `description_raw`, `enrichment`, `links`, etc.) on existing scanner-origin entries.
 
 #### `wire_links`
 

@@ -258,6 +258,8 @@ Append-only Architecture Decision Records.
 
 Semantic UI element definitions across platforms. Supports merge-on-update and platform gap detection. As of **v10.2.0** UI elements are first-class graph citizens: entries with a non-empty `source_repo` are indexed in `index.json` alongside features/workflows/data_model and are eligible for autonomous LLM enrichment via `enrich_parser_nodes` (target `ui` / `all`). The `source_repo` field is the provenance gate — manual entries without `source_repo` remain in the registry but are intentionally excluded from the canonical graph index.
 
+As of **v10.3.0** (slice 2) `ui_registry.json` is also populated by the native UI scanner: `scan_project target:"ui"` walks `.tsx/.jsx/.vue/.svelte/.razor/.xaml` files and inserts scanner-origin entries via `applyScannerUiElements`. The merge preserves entries with `source_kind` of `manual`, `sdk`, `user_guidance`, or `generated` (the scanner never overwrites them) and preserves enrichment fields on existing scanner-origin entries across re-scans.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique element ID (kebab-case) |
