@@ -21,6 +21,7 @@ import { loadGraphRaw, type GraphRawSnapshot } from "./store.js";
 import { recordSnapshotMetrics } from "./metrics.js";
 import { graphEventBus } from "./events.js";
 import { getActiveScope } from "../instance/index.js";
+import { FORBIDDEN_PERSISTENCE_SENTINELS } from "../semantic-invariants.js";
 import type {
   Feature,
   Workflow,
@@ -208,6 +209,7 @@ function buildSnapshot(raw: GraphRawSnapshot): GraphSnapshot {
     const resolveStore = (storage: string | undefined): Datastore | undefined => {
       const value = storage?.trim();
       if (!value) return undefined;
+      if (FORBIDDEN_PERSISTENCE_SENTINELS.includes(value.toLowerCase())) return undefined;
       const exact = storeById.get(value);
       if (exact) return exact;
       const needle = value.toLowerCase();

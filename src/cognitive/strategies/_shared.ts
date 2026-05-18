@@ -12,6 +12,7 @@
 import { loadJsonArray } from "../../utils/cache.js";
 import { isMissingFileError } from "../../utils/json-store.js";
 import type { Feature, Workflow, DataModelEntity, Datastore, DatastoreTable } from "../../types/index.js";
+import { FORBIDDEN_PERSISTENCE_SENTINELS } from "../../semantic-invariants.js";
 
 // ---------------------------------------------------------------------------
 // Fact Graph Snapshot — in-memory read-only copy for dream analysis
@@ -311,6 +312,7 @@ export async function buildFactSnapshot(): Promise<FactSnapshot> {
     const resolveDatastore = (storage: string | undefined): Datastore | undefined => {
       const value = storage?.trim();
       if (!value) return undefined;
+      if (FORBIDDEN_PERSISTENCE_SENTINELS.includes(value.toLowerCase())) return undefined;
       const exact = datastoreById.get(value);
       if (exact) return exact;
       const needle = value.toLowerCase();

@@ -23,6 +23,7 @@ import type { DreamEdge, DreamNode, TensionSignal } from "../types.js";
 import { DEFAULT_DECAY } from "../types.js";
 import { groundEntities } from "../../utils/senses.js";
 import { dreamId, type FactSnapshot } from "./_shared.js";
+import { GRAPH_SEMANTIC_INVARIANTS } from "../../semantic-invariants.js";
 
 // ---------------------------------------------------------------------------
 // OpenAI Structured Outputs schema for dream responses.
@@ -230,7 +231,11 @@ Rules:
 - **PROOF OF WORK**: Every edge MUST include a "source_evidence" field citing the specific source file path, function, class, or line from the Source Code Evidence section below. Edges without source evidence will be REJECTED by the normalizer. If you cannot cite real code, do not propose the edge.
 - Be creative but grounded IN THE CODE — propose connections that the source code PROVES or strongly implies
 - Focus on: hidden dependencies found in actual imports/calls, behavioral progressions visible in actual control/data flow, information structures visible in actual types/formats/memory layouts, and integration points proven by shared interfaces
-- Preserve semantic richness without assuming technologies: workflow = ordered/causal progression of actions/events/decisions/state transitions; data_model = structure and relationships of information; persistence/datastore = optional evidence-bound state-retention strategy
+- Preserve semantic richness without assuming technologies:
+  - workflow: ${GRAPH_SEMANTIC_INVARIANTS.workflow}
+  - data_model: ${GRAPH_SEMANTIC_INVARIANTS.dataModel}
+  - architecture: ${GRAPH_SEMANTIC_INVARIANTS.architecture}
+  - persistence/datastore: ${GRAPH_SEMANTIC_INVARIANTS.persistence}
 - Confidence guide: 0.3-0.5 = code hints at it, 0.5-0.7 = code structure supports it, 0.7-0.9 = code directly proves it
 - Aim for ${Math.min(max, 15)} edges (quality over quantity)
 - **NEW CONCEPTS**: Propose new_node objects only for concepts the graph is MISSING and the source code evidence supports. Look for source-proven abstractions, behavioral chains, information structures, cross-cutting concerns, or integration points. Do not assume web apps, plugins, pipelines, queues, databases, frameworks, or domain names unless the provided project evidence says so. Each new_node needs: id (dream_llm_<snake_case_name>), name, description, intent (WHY this concept should exist), type ("hypothetical_feature" or "hypothetical_workflow" or "hypothetical_entity"), domain (derive from project evidence or use a neutral existing graph domain), keywords (array of semantic tags grounded in code evidence), and category ("feature", "workflow", or "data_model"). Nodes with strong domain and keyword grounding will be promoted into the fact graph after normalization.
