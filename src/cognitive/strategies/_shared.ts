@@ -304,21 +304,20 @@ export async function buildFactSnapshot(): Promise<FactSnapshot> {
   }
 
   if (datastores.length > 0) {
-    // Resolve which datastore a data_model belongs to. Match by:
-    //   1. exact id match against `storage` field, then
-    //   2. case-insensitive name/kind substring match against `storage`,
-    //   3. fall back to the first datastore (Decision #1: single primary).
+    // Resolve datastore membership only from explicit data_model storage evidence.
+    // Do not fall back to a primary/first datastore: many projects have no datastore,
+    // and data structure nodes must not be anchored to storage without proof.
     const datastoreById = new Map(datastores.map((d) => [d.id, d]));
-    const resolveDatastore = (storage: string): Datastore | undefined => {
-      if (!storage) return datastores[0];
-      const exact = datastoreById.get(storage);
+    const resolveDatastore = (storage: string | undefined): Datastore | undefined => {
+      const value = storage?.trim();
+      if (!value) return undefined;
+      const exact = datastoreById.get(value);
       if (exact) return exact;
-      const needle = storage.toLowerCase();
-      const fuzzy = datastores.find((d) => {
+      const needle = value.toLowerCase();
+      return datastores.find((d) => {
         const hay = `${d.id} ${d.name} ${d.kind}`.toLowerCase();
         return hay.includes(needle) || needle.includes(d.kind);
       });
-      return fuzzy ?? datastores[0];
     };
 
     for (const e of dataModel) {
@@ -328,13 +327,13 @@ export async function buildFactSnapshot(): Promise<FactSnapshot> {
         (l) => l.relationship === "stored_in" || datastoreById.has(l.target),
       );
       if (alreadyLinked) continue;
-      const target = resolveDatastore(e.storage ?? "");
+      const target = resolveDatastore(e.storage);
       if (!target) continue;
       ent.links.push({
         target: target.id,
         type: "datastore" as unknown as FactEntity["links"][number]["type"],
         relationship: "stored_in",
-        description: "Implicit hub edge: data_model anchored to its backing datastore.",
+        description: "Evidence-bound edge: data_model storage field resolves to this datastore.",
         strength: "medium",
       });
       edgeSet.add(`${e.id}|${target.id}`);

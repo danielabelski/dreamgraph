@@ -24,7 +24,7 @@ import {
   loadRegistry,
   findInstance,
   resolveMasterDir,
-} from "../../instance/index.js";
+} from "../../instance/cli.js";
 import {
   readServerMeta,
   isProcessAlive,

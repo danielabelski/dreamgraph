@@ -19,7 +19,7 @@ import {
   loadRegistry,
   findInstance,
   resolveMasterDir,
-} from "../../instance/index.js";
+} from "../../instance/cli.js";
 import { readServerMeta, isProcessAlive } from "../utils/daemon.js";
 import { mcpCallTool } from "../utils/mcp-call.js";
 import type { ParsedArgs } from "../dg.js";

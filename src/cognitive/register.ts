@@ -23,6 +23,7 @@
  *   cognitive_status            — Read current state
  *   query_dreams                — Search dream/validated data
  *   clear_dreams                — Reset dream data (safety valve)
+ *   quarantine_source_less_facts— Quarantine unowned/ungrounded canonical facts and connected cognitive artifacts
  *   get_dream_insights          — Introspection: strongest hypotheses, clusters, tensions
  *   resolve_tension             — Close a tension with authority
  *   nightmare_cycle             — Adversarial security scan (NIGHTMARE state)
@@ -587,7 +588,7 @@ export function registerCognitiveTools(server: McpServer): void {
         ])
         .optional()
         .describe(
-          'Dream strategy. "llm_dream": LLM-powered creative dreaming (THE primary strategy). "gap_detection": find unconnected related entities. "weak_reinforcement": strengthen weak edges. "cross_domain": bridge different domains. "missing_abstraction": propose unifying features. "symmetry_completion": add reverse edges. "tension_directed": focus on unresolved tensions. "causal_replay": mine history for cause→effect chains. "reflective": agent-directed insights from code reading. "pgo_wave": stochastic Lévy-flight divergence. "orphan_bridging": attach degree-0 entities to nearest plausible neighbor. "schema_grounding": anchor data_models to scanned datastore tables and surface cross-repo state sharing. "all": run all strategies (LLM first, then structural). Default: "all".'
+          'Dream strategy. "llm_dream": LLM-powered creative dreaming (THE primary strategy). "gap_detection": find unconnected related entities. "weak_reinforcement": strengthen weak edges. "cross_domain": bridge different domains. "missing_abstraction": propose unifying features. "symmetry_completion": add reverse edges. "tension_directed": focus on unresolved tensions. "causal_replay": mine history for cause→effect chains. "reflective": agent-directed insights from code reading. "pgo_wave": stochastic Lévy-flight divergence. "orphan_bridging": attach degree-0 entities to nearest plausible neighbor. "schema_grounding": when scanned datastore evidence exists, propose persistence links and shared-state edges without treating datastore absence as a data_model defect. "all": run all strategies (LLM first, then structural). Default: "all".'
         ),
       max_dreams: z
         .number()
@@ -1124,6 +1125,45 @@ export function registerCognitiveTools(server: McpServer): void {
             cleared,
             timestamp: new Date().toISOString(),
           });
+        }
+      );
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // =========================================================================
+  // quarantine_source_less_facts — Provenance cleanup for polluted instances
+  // =========================================================================
+  server.tool(
+    "quarantine_source_less_facts",
+    "Quarantine canonical facts and connected cognitive artifacts that are not owned by any managed source_repo or have no grounded provenance path. This is project-agnostic: it does not assume DreamGraph internals or any specific managed-project architecture. Repo-scoped derived hubs are preserved when their support chain reaches source-backed, human-asserted, or already-grounded hub nodes. Requires explicit confirmation.",
+    {
+      confirm: z
+        .boolean()
+        .describe("Must be true to proceed. Safety gate because the operation removes polluted canonical/cognitive artifacts after writing a quarantine report."),
+    },
+    async ({ confirm }) => {
+      logger.info(`quarantine_source_less_facts tool called: confirm=${confirm}`);
+
+      const result = await safeExecute<unknown>(
+        async (): Promise<ToolResponse<unknown>> => {
+          if (!confirm) {
+            return error(
+              "CONFIRMATION_REQUIRED",
+              "Set confirm: true to quarantine source-less or ungrounded facts."
+            );
+          }
+
+          const quarantine = await engine.quarantineSourceLessFacts();
+          return success(quarantine);
         }
       );
 

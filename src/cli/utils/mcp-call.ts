@@ -38,18 +38,28 @@ export async function mcpCallTool(
     version: "10.0.1",
   });
 
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
   try {
     await client.connect(transport);
 
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Tool call '${tool}' timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+
     const result = await Promise.race([
       client.callTool({ name: tool, arguments: args }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Tool call '${tool}' timed out after ${timeoutMs}ms`)), timeoutMs),
-      ),
+      timeoutPromise,
     ]);
 
     return result as McpCallResult;
   } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
     try {
       await client.close();
     } catch {

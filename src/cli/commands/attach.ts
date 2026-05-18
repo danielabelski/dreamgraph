@@ -14,8 +14,8 @@ import {
   findInstance,
   updateInstanceEntry,
   resolveMasterDir,
-} from "../../instance/index.js";
-import type { DreamGraphInstance, InstanceMcpConfig } from "../../instance/index.js";
+} from "../../instance/cli.js";
+import type { DreamGraphInstance, InstanceMcpConfig } from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 
 /**

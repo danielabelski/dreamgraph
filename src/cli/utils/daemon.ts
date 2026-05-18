@@ -17,8 +17,8 @@ import {
   loadRegistry,
   findInstance,
   resolveMasterDir,
-} from "../../instance/index.js";
-import type { RegistryEntry } from "../../instance/index.js";
+} from "../../instance/registry.js";
+import type { RegistryEntry } from "../../instance/types.js";
 
 /* ------------------------------------------------------------------ */
 /*  ServerMeta — runtime/server.json schema (ADR-003)                 */

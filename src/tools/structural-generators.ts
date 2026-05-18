@@ -29,22 +29,23 @@ export function toTitleCase(str: string): string {
 }
 
 export function inferDomain(dirParts: string[]): string {
+  /**
+   * Domain labels must describe evidenced project vocabulary, not architecture,
+   * framework, language, or persistence structure. Generic containers such as
+   * api/routes/controllers/db/database/models/schema/middleware are intentionally
+   * not mapped into semantic domains.
+   */
   const hints: Record<string, string> = {
-    auth: "authentication", login: "authentication",
-    api: "api", server: "api", routes: "api", controller: "api",
-    ui: "ui", component: "ui", view: "ui", page: "ui",
-    model: "data", schema: "data", database: "data", migration: "data",
-    util: "infrastructure", config: "infrastructure", lib: "infrastructure",
-    tool: "tooling", tools: "tooling",
-    plugin: "plugin-system", extension: "plugin-system",
-    cli: "cli", command: "cli",
-    test: "testing", spec: "testing",
+    auth: "authentication", login: "authentication", session: "authentication",
+    user: "user_management", account: "user_management", profile: "user_management",
+    admin: "administration", report: "reporting", analytics: "analytics",
+    search: "search", notification: "notification", email: "notification",
+    import: "import_export", export: "import_export",
   };
+
   for (const part of dirParts) {
-    const lower = part.toLowerCase();
-    for (const [hint, domain] of Object.entries(hints)) {
-      if (lower.includes(hint)) return domain;
-    }
+    const key = part.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (hints[key]) return hints[key];
   }
   return "core";
 }
@@ -87,31 +88,37 @@ export function generateStructuralFeatures(scan: ProjectScan): Record<string, un
 }
 
 export function generateStructuralWorkflows(scan: ProjectScan): Record<string, unknown>[] {
+  // Structural fallback has no source-content access, so it must be conservative:
+  // only promote files/directories that explicitly describe themselves as a flow,
+  // workflow, or process. Broad framework-shaped names (route/controller/hook/etc.)
+  // are intentionally not enough evidence because DreamGraph must be language,
+  // framework, platform, and structure agnostic.
   const workflowPatterns = [
-    /route/i, /handler/i, /middleware/i, /hook/i, /pipeline/i, /flow/i,
-    /controller/i, /command/i,
+    /(^|[-_./\\])(workflow|workflows|flow|flows|process|processes)([-_./\\]|$)/i,
   ];
   const entries: Record<string, unknown>[] = [];
   const seen = new Set<string>();
 
   for (const f of scan.files) {
     const dir = f.dirParts.join("/");
+    const evidence = `${dir}/${path.basename(f.name, f.ext)}`;
     if (seen.has(dir)) continue;
-    if (workflowPatterns.some((p) => p.test(dir) || p.test(f.name))) {
+    if (workflowPatterns.some((p) => p.test(evidence))) {
       seen.add(dir);
-      const id = toSnakeCase(`${scan.repoName}_${dir}_flow`);
+      const id = toSnakeCase(`${scan.repoName}_${dir || path.basename(f.name, f.ext)}_flow`);
+      const evidenceFiles = scan.files
+        .filter((sf) => sf.dirParts.join("/") === dir)
+        .slice(0, 10)
+        .map((sf) => sf.rel);
       entries.push({
         id,
-        name: `${toTitleCase(f.dirParts[f.dirParts.length - 1] ?? f.name)} Flow`,
-        description: `Workflow detected in ${dir}/`,
-        trigger: `Source: ${f.rel}`,
+        name: `${toTitleCase(f.dirParts[f.dirParts.length - 1] ?? path.basename(f.name, f.ext))} Flow`,
+        description: `Workflow explicitly indicated by source path evidence: ${f.rel}`,
+        trigger: `unknown from discovered source; evidence: ${f.rel}`,
         source_repo: scan.repoName,
-        source_files: scan.files
-          .filter((sf) => sf.dirParts.join("/") === dir)
-          .slice(0, 10)
-          .map((sf) => sf.rel),
+        source_files: evidenceFiles.length > 0 ? evidenceFiles : [f.rel],
         domain: inferDomain(f.dirParts),
-        keywords: f.dirParts.map((d) => d.toLowerCase()),
+        keywords: [path.basename(f.name, f.ext).toLowerCase(), ...f.dirParts.map((d) => d.toLowerCase())],
         status: "active",
         steps: [],
         links: [],
@@ -122,8 +129,10 @@ export function generateStructuralWorkflows(scan: ProjectScan): Record<string, u
 }
 
 export function generateStructuralDataModel(scan: ProjectScan): Record<string, unknown>[] {
+  // Without reading source content, only explicit self-describing names are enough
+  // evidence for a data-structure node. Do not infer datastore/table/storage facts.
   const modelPatterns = [
-    /model/i, /schema/i, /entity/i, /types?$/i, /interface/i, /contract/i, /dto/i,
+    /(^|[-_./\\])(model|models|schema|schemas|entity|entities|type|types|interface|interfaces|contract|contracts|dto|dtos)([-_./\\]|$)/i,
   ];
   const entries: Record<string, unknown>[] = [];
   const seen = new Set<string>();
@@ -131,16 +140,15 @@ export function generateStructuralDataModel(scan: ProjectScan): Record<string, u
   for (const f of scan.files) {
     const dir = f.dirParts.join("/");
     const nameNoExt = path.basename(f.name, f.ext);
+    const evidence = `${dir}/${nameNoExt}`;
     if (seen.has(dir + nameNoExt)) continue;
-    if (modelPatterns.some((p) => p.test(dir) || p.test(nameNoExt))) {
+    if (modelPatterns.some((p) => p.test(evidence))) {
       seen.add(dir + nameNoExt);
       const id = toSnakeCase(`${scan.repoName}_${dir}_${nameNoExt}`);
       entries.push({
         id,
         name: toTitleCase(nameNoExt),
-        description: `Data model detected at ${f.rel}`,
-        table_name: id,
-        storage: "unknown",
+        description: `Data structure explicitly indicated by source path evidence: ${f.rel}`,
         source_repo: scan.repoName,
         source_files: [f.rel],
         domain: inferDomain(f.dirParts),

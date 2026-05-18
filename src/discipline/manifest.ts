@@ -494,7 +494,7 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
   },
 
   // =====================================================================
-  // COGNITIVE TOOLS — DreamGraph internal only (11 tools)
+  // COGNITIVE TOOLS — DreamGraph internal only (12 tools)
   // =====================================================================
   {
     tool_name: "dream_cycle",
@@ -522,6 +522,14 @@ export const TOOL_CLASSIFICATIONS: ToolClassification[] = [
   },
   {
     tool_name: "clear_dreams",
+    tool_class: "cognitive",
+    protection_level: "internal-only",
+    allowed_phases: [],
+    requires_plan_entry: false,
+    requires_audit_trail: true,
+  },
+  {
+    tool_name: "quarantine_source_less_facts",
     tool_class: "cognitive",
     protection_level: "internal-only",
     allowed_phases: [],

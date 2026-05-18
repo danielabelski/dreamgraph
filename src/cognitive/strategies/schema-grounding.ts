@@ -1,15 +1,16 @@
 /**
  * Strategy — Schema Grounding (per plans/DATASTORE_AS_HUB.md, Slice 3).
  *
- * Uses the live `tables[]` populated by `scan_database` to:
+ * Persistence-specific strategy. Data models are information structures and do
+ * not require a datastore; this strategy only runs when scanned datastore table
+ * evidence exists. It uses the live `tables[]` populated by `scan_database` to:
  *   1. Propose `stored_in` dream edges from data_model entities to the
  *      datastore whose tables match (exact = 0.85, fuzzy = 0.55).
  *   2. Propose `shares_state_with` edges between top-level entities
  *      (feature/workflow) in *different repos* whose data_model
  *      neighbors resolve to the same datastore.
- *   3. Raise `missing_link` tensions for:
- *        - phantom_entity: data_model with no resolvable table.
- *        - shadow_table:   table with no data_model representation.
+ *   3. Raise `missing_link` tensions only for shadow_table: a scanned table
+ *      with no data_model representation.
  *
  * Inert when no datastores exist or no scan has populated `tables[]`.
  */
@@ -129,16 +130,13 @@ export async function schemaGrounding(
   const dataModels = [...snapshot.entities.values()].filter(
     (e) => e.type === "data_model",
   );
-  const phantomEntities: FactEntity[] = [];
 
   for (const dm of dataModels) {
     const match = resolveByTable(dm, index);
     if (!match) {
-      // Only flag as phantom if the data_model isn't already linked to *some* datastore.
-      const linkedToAnyStore = dm.links.some(
-        (l) => snapshot.entities.get(l.target)?.type === "datastore",
-      );
-      if (!linkedToAnyStore) phantomEntities.push(dm);
+      // A data_model without a matching table can still be a valid internal
+      // information structure (struct, enum, AST, message payload, in-memory
+      // graph, etc.). Absence of persistence evidence is not a defect.
       continue;
     }
     dmStoreOf.set(dm.id, match.storeId);
@@ -266,7 +264,7 @@ export async function schemaGrounding(
   }
 
   // --------------------------------------------------------------------
-  // (5) Raise tensions for shadow tables / phantom data_models.
+  // (5) Raise tensions for shadow tables only.
   //     Reuses the existing `missing_link` type to avoid widening the
   //     TensionSignal union (see plans/DATASTORE_AS_HUB.md decision notes).
   // --------------------------------------------------------------------
@@ -291,26 +289,6 @@ export async function schemaGrounding(
           }`,
         );
       }
-    }
-  }
-
-  // phantom_entity: data_model with no resolvable table.
-  for (const dm of phantomEntities) {
-    try {
-      await engine.recordTension({
-        type: "missing_link",
-        domain: "data_model",
-        entities: [dm.id],
-        description: `phantom_entity: data_model "${dm.name}" has no matching table in any scanned datastore.`,
-        urgency: 0.5,
-      });
-      tensions_raised++;
-    } catch (err) {
-      logger.debug(
-        `schema_grounding: failed to raise phantom_entity tension: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
     }
   }
 

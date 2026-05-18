@@ -11,8 +11,8 @@ import {
   loadRegistry,
   findInstance,
   listInstances,
-} from "../../instance/index.js";
-import type { InstanceStatus } from "../../instance/index.js";
+} from "../../instance/cli.js";
+import type { InstanceStatus } from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 
 const VALID_STATUSES: InstanceStatus[] = ["active", "archived", "corrupted"];

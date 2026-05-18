@@ -9,8 +9,8 @@
 
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { createInstance } from "../../instance/index.js";
-import type { PolicyProfile, InstanceMode, InstanceTransport } from "../../instance/index.js";
+import { createInstance } from "../../instance/cli.js";
+import type { PolicyProfile, InstanceMode, InstanceTransport } from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 
 const VALID_POLICIES: PolicyProfile[] = ["strict", "balanced", "creative"];

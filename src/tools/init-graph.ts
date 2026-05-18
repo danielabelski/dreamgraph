@@ -54,6 +54,7 @@ import type {
 const CODE_EXTENSIONS = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
   ".py", ".rb", ".go", ".rs", ".java", ".kt", ".cs",
+  ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
   ".vue", ".svelte",
 ]);
 
@@ -64,47 +65,33 @@ const SKIP_DIRS = new Set([
   ".turbo", ".cache", ".parcel-cache",
 ]);
 
-/** Patterns that indicate a workflow / process flow */
+/**
+ * Path evidence patterns used only as conservative fallback signals.
+ * These are intentionally narrow: broad framework terms such as route,
+ * controller, hook, command, prisma, sql, etc. are not enough to create graph
+ * nodes because DreamGraph must be language, platform, datastore, and structure
+ * agnostic. Prefer content evidence below whenever available.
+ */
 const WORKFLOW_PATTERNS = [
-  /route[rs]?[/\\]/i,
-  /handler[s]?[/\\]/i,
-  /middleware[/\\]/i,
-  /hook[s]?[/\\]/i,
-  /webhook[s]?[/\\]/i,
-  /cron[/\\]/i,
-  /job[s]?[/\\]/i,
-  /pipeline[s]?[/\\]/i,
-  /flow[s]?[/\\]/i,
-  /command[s]?[/\\]/i,
-  /controller[s]?[/\\]/i,
-  /action[s]?[/\\]/i,
+  /(^|[/\\_-])(workflow|workflows|flow|flows|process|processes)([/\\_-]|$)/i,
 ];
 
-/** Patterns that indicate a data model / schema */
+/** Conservative path evidence for data structures; never implies storage. */
 const DATA_MODEL_PATTERNS = [
-  /model[s]?[/\\]/i,
-  /schema[s]?[/\\]/i,
-  /migration[s]?[/\\]/i,
-  /entit(?:y|ies)[/\\]/i,
-  /types?[/\\]/i,
-  /database[/\\]/i,
-  /prisma[/\\]/i,
-  /drizzle[/\\]/i,
-  /knex[/\\]/i,
-  /sql[/\\]/i,
+  /(^|[/\\_-])(model|models|schema|schemas|entity|entities|type|types|interface|interfaces|contract|contracts|dto|dtos)([/\\_-]|$)/i,
 ];
 
-/** Content patterns for deeper classification */
+/**
+ * Content patterns for deeper classification.
+ * Workflow hints are behavioral: ordered/causal actions, events, decisions, or
+ * state transitions. They intentionally do not treat web routes, controllers,
+ * background jobs, queues, CI/CD, or other technologies as workflows by
+ * themselves.
+ */
 const CONTENT_HINTS = {
   workflow: [
-    /export\s+(async\s+)?function\s+handle/i,
-    /router\.(get|post|put|delete|patch)\s*\(/i,
-    /app\.(get|post|put|delete|patch)\s*\(/i,
-    /createTRPCRouter|protectedProcedure|publicProcedure/i,
-    /addEventListener|on\w+Event/i,
-    /@(Get|Post|Put|Delete|Patch|Controller|Injectable)/i,
-    /class\s+\w+Controller/i,
-    /def\s+(get|post|put|delete|patch)\s*\(/i,
+    /\b(workflow|flow|sequence|step|transition|state\s*machine|lifecycle)\b/i,
+    /\b(cause|causal|trigger|event|action|decision|effect|advance|enable|then|next)\b/i,
   ],
   dataModel: [
     /CREATE\s+TABLE/i,
@@ -274,27 +261,24 @@ function toTitleCase(str: string): string {
 }
 
 function inferDomain(dirParts: string[]): string {
+  /**
+   * Domain labels are descriptive metadata only. Keep them evidence-derived from
+   * explicitly meaningful project vocabulary and avoid mapping generic
+   * architecture/framework/storage directory names (api, routes, controller,
+   * db, database, middleware, etc.) into project semantics.
+   */
   const domainHints: Record<string, string> = {
     auth: "authentication", login: "authentication", session: "authentication",
-    billing: "billing", payment: "billing", invoice: "billing", stripe: "billing",
+    billing: "billing", payment: "billing", invoice: "billing",
     user: "user_management", account: "user_management", profile: "user_management",
-    api: "api", server: "api", routes: "api",
-    db: "database", database: "database", model: "database", schema: "database", migration: "database",
-    cognitive: "cognitive", dream: "cognitive", normaliz: "cognitive",
-    ui: "ui", component: "ui", view: "ui", page: "ui",
-    util: "infrastructure", config: "infrastructure", lib: "infrastructure",
-    test: "testing", spec: "testing", __tests__: "testing",
-    cli: "cli", command: "cli",
-    tool: "tooling", tools: "tooling",
-    middleware: "middleware",
-    webhook: "integration", integration: "integration",
+    admin: "administration", report: "reporting", analytics: "analytics",
+    search: "search", notification: "notification", email: "notification",
+    import: "import_export", export: "import_export",
   };
 
   for (const part of dirParts) {
-    const lower = part.toLowerCase();
-    for (const [hint, domain] of Object.entries(domainHints)) {
-      if (lower.includes(hint)) return domain;
-    }
+    const normalized = part.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (domainHints[normalized]) return domainHints[normalized];
   }
   return "core";
 }
@@ -318,19 +302,11 @@ function extractKeywords(files: SourceFile[]): string[] {
 async function classifyFile(file: SourceFile): Promise<"workflow" | "data_model" | "feature"> {
   const relLower = file.rel.toLowerCase();
 
-  // Path-based heuristics first (cheap)
-  for (const pat of WORKFLOW_PATTERNS) {
-    if (pat.test(relLower)) return "workflow";
-  }
-  for (const pat of DATA_MODEL_PATTERNS) {
-    if (pat.test(relLower)) return "data_model";
-  }
-
-  // Content-based heuristics (read first 2KB)
+  // Content evidence is primary. Path evidence is only a conservative fallback.
   try {
     const fd = await fs.open(file.abs, "r");
-    const buf = Buffer.alloc(2048);
-    await fd.read(buf, 0, 2048, 0);
+    const buf = Buffer.alloc(4096);
+    await fd.read(buf, 0, 4096, 0);
     await fd.close();
     const content = buf.toString("utf-8");
 
@@ -341,6 +317,15 @@ async function classifyFile(file: SourceFile): Promise<"workflow" | "data_model"
       if (pat.test(content)) return "workflow";
     }
   } catch { /* ignore */ }
+
+  // Fallback: only explicit self-describing names count. Do not infer workflow,
+  // datastore, or architectural roles from common framework directory shapes.
+  for (const pat of WORKFLOW_PATTERNS) {
+    if (pat.test(relLower)) return "workflow";
+  }
+  for (const pat of DATA_MODEL_PATTERNS) {
+    if (pat.test(relLower)) return "data_model";
+  }
 
   return "feature";
 }
@@ -443,9 +428,7 @@ function generateDataModel(groups: FileGroup[], repoName: string): DataModelEnti
     .map(g => ({
       id: g.id,
       name: g.name,
-      description: g.description,
-      table_name: g.id,
-      storage: "unknown",
+      description: `${g.description} Storage/table information is omitted unless direct source evidence is discovered.`,
       source_repo: repoName,
       source_files: g.files.map(f => f.rel),
       domain: g.domain,
@@ -598,7 +581,7 @@ async function writeSeedFile(filename: string, data: unknown): Promise<void> {
 export function registerInitGraphTool(server: McpServer): void {
   server.tool(
     "init_graph",
-    "Bootstrap the fact graph by scanning configured project repositories. This discovers features, workflows, and data model entities from source code and populates the seed data files (features.json, workflows.json, data_model.json, system_overview.json, index.json). Run this ONCE for a new project, or when the fact graph is empty and the dreamer has nothing to work with. The tool reads source files, classifies them by directory structure and content patterns, generates cross-links between related entities, and writes all seed files. After running, the dreamer will have a populated fact graph to dream about.",
+    "Bootstrap the fact graph by scanning configured project repositories. This discovers features, behavioral workflows, and information-structure data models only from project evidence and populates the seed data files (features.json, workflows.json, data_model.json, system_overview.json, index.json). Run this ONCE for a new project, or when the fact graph is empty and only the project directory/config are known. The tool reads source files, classifies them from cited source evidence rather than assumed language, framework, architecture, or datastore conventions, generates evidence-bound cross-links, and writes all seed files.",
     {
       repos: z.array(z.string()).optional().describe("Specific repo names to scan (from DREAMGRAPH_REPOS config). If omitted, scans ALL configured repos."),
       force: z.boolean().optional().describe("If true, overwrites existing seed data. If false (default), skips if features.json already has real entries."),
@@ -691,9 +674,9 @@ export function registerInitGraphTool(server: McpServer): void {
 
           const overview: SystemOverview = {
             id: "system-overview",
-            name: "DreamGraph System Overview",
-            description: "High-level map of configured repositories, generated by init_graph.",
-            source_repo: "dreamgraph",
+            name: "System Overview",
+            description: "High-level map of configured repositories, generated from discovered project files by init_graph.",
+            source_repo: repositories[0]?.source_repo ?? "",
             source_files: repositories.map((repository) => repository.local_path),
             repositories,
           };

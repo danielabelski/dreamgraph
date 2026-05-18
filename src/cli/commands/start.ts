@@ -23,8 +23,8 @@ import { openSync, closeSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { config } from "../../config/config.js";
-import { updateInstanceEntry } from "../../instance/index.js";
-import type { DreamGraphInstance } from "../../instance/index.js";
+import { updateInstanceEntry } from "../../instance/cli.js";
+import type { DreamGraphInstance } from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 import {
   type ServerMeta,

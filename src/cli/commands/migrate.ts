@@ -7,8 +7,8 @@
  */
 
 import { resolve } from "node:path";
-import { migrateFromLegacy } from "../../instance/index.js";
-import type { PolicyProfile } from "../../instance/index.js";
+import { migrateFromLegacy } from "../../instance/cli.js";
+import type { PolicyProfile } from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 
 const VALID_POLICIES: PolicyProfile[] = ["strict", "balanced", "creative"];

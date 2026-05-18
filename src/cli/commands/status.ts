@@ -13,8 +13,8 @@ import {
   loadRegistry,
   findInstance,
   resolveMasterDir,
-} from "../../instance/index.js";
-import type { DreamGraphInstance } from "../../instance/index.js";
+} from "../../instance/registry.js";
+import type { DreamGraphInstance } from "../../instance/types.js";
 import type { ParsedArgs } from "../dg.js";
 import {
   readServerMeta,

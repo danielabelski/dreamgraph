@@ -13,7 +13,7 @@ import {
   loadRegistry,
   findInstance,
   resolveMasterDir,
-} from "../../instance/index.js";
+} from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 
 type ExportFormat = "snapshot" | "docs" | "archetypes";

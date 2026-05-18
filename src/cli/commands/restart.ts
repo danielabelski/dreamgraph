@@ -10,7 +10,7 @@
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import type { DreamGraphInstance } from "../../instance/index.js";
+import type { DreamGraphInstance } from "../../instance/cli.js";
 import { resolveInstanceForCommand } from "../utils/daemon.js";
 import type { ParsedArgs } from "../dg.js";
 import { cmdStop } from "./stop.js";

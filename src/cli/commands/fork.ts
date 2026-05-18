@@ -14,8 +14,8 @@ import {
   findInstance,
   resolveMasterDir,
   createInstance,
-} from "../../instance/index.js";
-import type { DreamGraphInstance, PolicyProfile } from "../../instance/index.js";
+} from "../../instance/cli.js";
+import type { DreamGraphInstance, PolicyProfile } from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 
 export async function cmdFork(

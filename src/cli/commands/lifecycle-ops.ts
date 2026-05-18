@@ -15,7 +15,7 @@ import {
   updateInstanceEntry,
   deregisterInstance,
   resolveMasterDir,
-} from "../../instance/index.js";
+} from "../../instance/cli.js";
 import type { ParsedArgs } from "../dg.js";
 
 export async function cmdArchive(

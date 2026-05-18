@@ -47,7 +47,7 @@ const DREAM_RESPONSE_SCHEMA: Record<string, unknown> = {
           reason:     { type: "string", description: "Why this connection exists (1-2 sentences)" },
           confidence: { type: "number", description: "0.0-1.0 confidence estimate" },
           type:       { type: "string", description: "Edge type (default: hypothetical)" },
-          source_evidence: { type: "string", description: "REQUIRED: The source file path and line/function/class that justifies this connection. Must reference code from the Source Code Evidence section. Example: 'src/MEF/Hosting/ToolHost.cs:LoadPlugins() calls IPlugin.Initialize() — proving dependency chain'" },
+          source_evidence: { type: "string", description: "REQUIRED: The source file path and line/function/class that justifies this connection. Must reference code from the Source Code Evidence section. Cite only identifiers actually present in the analyzed project; do not borrow examples from DreamGraph or any other architecture." },
         },
         required: ["from", "to", "relation", "reason", "confidence", "type", "source_evidence"],
         additionalProperties: false,
@@ -229,11 +229,12 @@ Rules:
 - Use EXISTING entity IDs from the graph (listed below). Do NOT invent entity IDs.
 - **PROOF OF WORK**: Every edge MUST include a "source_evidence" field citing the specific source file path, function, class, or line from the Source Code Evidence section below. Edges without source evidence will be REJECTED by the normalizer. If you cannot cite real code, do not propose the edge.
 - Be creative but grounded IN THE CODE — propose connections that the source code PROVES or strongly implies
-- Focus on: hidden dependencies found in actual imports/calls, architectural patterns visible in code structure, data flow through actual function signatures, integration points proven by shared interfaces
+- Focus on: hidden dependencies found in actual imports/calls, behavioral progressions visible in actual control/data flow, information structures visible in actual types/formats/memory layouts, and integration points proven by shared interfaces
+- Preserve semantic richness without assuming technologies: workflow = ordered/causal progression of actions/events/decisions/state transitions; data_model = structure and relationships of information; persistence/datastore = optional evidence-bound state-retention strategy
 - Confidence guide: 0.3-0.5 = code hints at it, 0.5-0.7 = code structure supports it, 0.7-0.9 = code directly proves it
 - Aim for ${Math.min(max, 15)} edges (quality over quantity)
-- **NEW CONCEPTS**: Actively propose 2-5 new_node objects for concepts the graph is MISSING. Look for: shared abstractions (e.g. a "Billing Pipeline" hub connecting invoice, payment, subscription features), cross-cutting concerns (authorization layer, audit logging, caching strategy), unnamed integration points, and architectural patterns visible in the code. Each new_node needs: id (dream_llm_<snake_case_name>), name, description, intent (WHY this concept should exist), type ("hypothetical_feature" or "hypothetical_workflow" or "hypothetical_entity"), domain (match an existing domain from the graph, e.g. "invoicing", "core", "auth"), keywords (array of semantic tags that overlap with existing entity keywords), and category ("feature", "workflow", or "data_model"). Nodes with strong domain and keyword grounding will be promoted into the fact graph after normalization.
-- Copy-paste exact identifiers, class names, or short code fragments (under 50 characters). Do NOT include markdown formatting, newlines, or extra indentation in the source_evidence string, as this will break the exact substring verification.
+- **NEW CONCEPTS**: Propose new_node objects only for concepts the graph is MISSING and the source code evidence supports. Look for source-proven abstractions, behavioral chains, information structures, cross-cutting concerns, or integration points. Do not assume web apps, plugins, pipelines, queues, databases, frameworks, or domain names unless the provided project evidence says so. Each new_node needs: id (dream_llm_<snake_case_name>), name, description, intent (WHY this concept should exist), type ("hypothetical_feature" or "hypothetical_workflow" or "hypothetical_entity"), domain (derive from project evidence or use a neutral existing graph domain), keywords (array of semantic tags grounded in code evidence), and category ("feature", "workflow", or "data_model"). Nodes with strong domain and keyword grounding will be promoted into the fact graph after normalization.
+- Copy-paste exact identifiers, class names, or short code fragments from the provided project evidence (under 50 characters). Do NOT include markdown formatting, newlines, or extra indentation in the source_evidence string, as this will break the exact substring verification.
 - Output format MUST be strictly this JSON array:
   [
     {

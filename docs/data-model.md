@@ -313,6 +313,20 @@ The immutable knowledge base — **never modified by the cognitive system**. Wri
 
 Existing readers that ignore these fields continue to work unchanged.
 
+#### Provenance fields (v10.4)
+
+`Feature`, `Workflow`, and `DataModelEntity` entries also support optional provenance metadata used by the canonical promotion gate (see [docs/cognitive-engine.md](cognitive-engine.md#canonical-promotion-provenance)):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provenance_kind` | `"source_backed" \| "human_asserted" \| "derived_hub"` | How this entity earned its place in the canonical graph. |
+| `human_asserted` | boolean? | `true` when a human explicitly asserted this entity (no source files required). |
+| `derived_from_node_ids` | string[]? | For `derived_hub` entities: ids of grounded supports the hub derives from. |
+| `source_repo` | string \| string[]? | Repo(s) that own this entity. Required for promotion via any path. |
+| `source_files` | string[]? | Source-file evidence for `source_backed` entities. |
+
+The promotion gate blocks dreams that have no `source_repo`, no `source_files`, are not `human_asserted`, and whose `derived_from_node_ids` chain does not reach grounded supports. The `quarantine_source_less_facts` MCP tool retroactively enforces the same invariant.
+
 ### Auxiliary Entities (`auxiliary_entities.json`)
 
 Populated by `scan_project` during Phase 2.5 (after LLM enrichment, before index rebuild). Each entry classifies a single project file by `kind`:

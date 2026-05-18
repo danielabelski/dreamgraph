@@ -29,6 +29,7 @@ import { config as appConfig } from "../config/config.js";
 import { logger } from "../utils/logger.js";
 import { dataPath } from "../utils/paths.js";
 import { loadJsonArray, invalidateCache } from "../utils/cache.js";
+import { loadIndexableUIElements } from "../utils/ui-index.js";
 import { getActiveCognitiveTuning } from "../instance/index.js";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { withFileLock } from "../utils/mutex.js";
@@ -97,6 +98,38 @@ interface ReinforcementMemory {
   peak_confidence: number;
   /** Cycle when this memory was last updated */
   last_cycle: number;
+}
+
+type CanonicalProvenanceKind = "source_backed" | "derived_hub" | "human_asserted";
+
+interface CanonicalPromotionProvenance {
+  sourceRepo: string;
+  sourceFiles: string[];
+  kind: CanonicalProvenanceKind;
+  derivedFromNodeIds: string[];
+}
+
+interface ProvenanceCarrier {
+  id?: string;
+  source_repo?: unknown;
+  source_files?: unknown;
+  provenance_kind?: unknown;
+  derived_from_node_ids?: unknown;
+  human_asserted?: unknown;
+  inspiration?: unknown;
+}
+
+interface SourceLessFactQuarantineResult {
+  quarantined_nodes: number;
+  quarantined_validated_edges: number;
+  quarantined_candidate_results: number;
+  quarantined_dream_nodes: number;
+  quarantined_dream_edges: number;
+  quarantined_active_tensions: number;
+  quarantined_resolved_tensions: number;
+  affected_node_ids: string[];
+  quarantine_file: string;
+  timestamp: string;
 }
 
 class CognitiveEngine {
@@ -1085,16 +1118,109 @@ class CognitiveEngine {
   // Entity Promotion — Dream nodes → Fact graph seed files
   // -------------------------------------------------------------------------
 
+  private stringArray(value: unknown): string[] {
+    return Array.isArray(value)
+      ? value.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      : [];
+  }
+
+  private stringValue(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+  }
+
+  private buildGroundedEntityIndex(
+    features: Feature[],
+    workflows: Workflow[],
+    dataModel: DataModelEntity[]
+  ): { groundedIds: Set<string>; reposById: Map<string, string> } {
+    const all = [...features, ...workflows, ...dataModel] as ProvenanceCarrier[];
+    const byId = new Map<string, ProvenanceCarrier>();
+    const groundedIds = new Set<string>();
+    const reposById = new Map<string, string>();
+
+    for (const entity of all) {
+      if (!entity.id) continue;
+      byId.set(entity.id, entity);
+      const repo = this.stringValue(entity.source_repo);
+      if (repo) reposById.set(entity.id, repo);
+      if (repo && this.stringArray(entity.source_files).length > 0) {
+        groundedIds.add(entity.id);
+      }
+      if (repo && entity.human_asserted === true) {
+        groundedIds.add(entity.id);
+      }
+    }
+
+    // Derived hubs are grounded only when their declared supports already have
+    // a repo-grounded path. Iterate to a fixed point so hubs can derive from hubs.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const entity of all) {
+        if (!entity.id || groundedIds.has(entity.id)) continue;
+        const repo = reposById.get(entity.id) ?? "";
+        const supports = this.stringArray(entity.derived_from_node_ids);
+        if (repo && supports.length > 0 && supports.every((id) => groundedIds.has(id))) {
+          groundedIds.add(entity.id);
+          changed = true;
+        }
+      }
+    }
+
+    return { groundedIds, reposById };
+  }
+
+  private resolveCanonicalPromotionProvenance(
+    node: DreamNode,
+    groundedIds: Set<string>,
+    reposById: Map<string, string>
+  ): CanonicalPromotionProvenance | null {
+    const carrier = node as ProvenanceCarrier;
+    const sourceFiles = this.stringArray(carrier.source_files);
+    const explicitRepo = this.stringValue(carrier.source_repo);
+    const declaredSupports = this.stringArray(carrier.derived_from_node_ids);
+    const inspirationSupports = this.stringArray(carrier.inspiration);
+    const derivedFromNodeIds = declaredSupports.length > 0 ? declaredSupports : inspirationSupports;
+
+    // Middle route: a hub may lack direct source files, but it still must be
+    // scoped to a repository. If the dream node did not carry source_repo yet,
+    // infer it only when all grounded support nodes point to exactly one repo.
+    const supportRepos = new Set(
+      derivedFromNodeIds
+        .filter((id) => groundedIds.has(id))
+        .map((id) => reposById.get(id) ?? "")
+        .filter((repo) => repo.length > 0)
+    );
+    const sourceRepo = explicitRepo || (supportRepos.size === 1 ? [...supportRepos][0] : "");
+    if (!sourceRepo) return null;
+
+    if (sourceFiles.length > 0) {
+      return { sourceRepo, sourceFiles, kind: "source_backed", derivedFromNodeIds: [] };
+    }
+
+    if (carrier.human_asserted === true) {
+      return { sourceRepo, sourceFiles: [], kind: "human_asserted", derivedFromNodeIds: [] };
+    }
+
+    if (derivedFromNodeIds.length > 0 && derivedFromNodeIds.every((id) => groundedIds.has(id))) {
+      return { sourceRepo, sourceFiles: [], kind: "derived_hub", derivedFromNodeIds };
+    }
+
+    return null;
+  }
+
   /**
    * Promote validated dream nodes into the fact graph.
    *
-   * When a dream node's intent reaches sufficient confidence through
-   * normalization, it becomes a factual entity. The speculative intent
-   * becomes the entity's description — dreams become reality.
+   * Promotion is not validation-by-density. A canonical entity must belong to a
+   * repository and must have a provenance path back to real evidence: direct
+   * source files, explicit human assertion, or a derived-hub chain whose support
+   * nodes are already grounded. This preserves useful semantic hubs while
+   * preventing self-consistent fictional clouds from becoming facts.
    *
-   * Each node is written to the appropriate seed file based on its
-   * category (feature, workflow, or data_model), then the resource
-   * index is rebuilt.
+   * Each grounded node is written to the appropriate seed file based on its
+   * category (feature, workflow, or data_model), then the resource index is
+   * rebuilt.
    *
    * The dream node is marked with `promoted_at` so it won't be
    * promoted again, but remains in dream_graph.json as provenance.
@@ -1111,12 +1237,16 @@ class CognitiveEngine {
       loadJsonArray<DataModelEntity>("data_model.json"),
     ]);
 
-    // Build existing ID sets to prevent duplicates
+    // Build existing ID sets to prevent duplicates and provenance indexes for
+    // validating derived hubs. Every canonical node must be repo-scoped, and a
+    // source-less hub must derive from already-grounded nodes rather than from
+    // other ungrounded dreams.
     const existingIds = new Set<string>([
       ...features.map(f => f.id),
       ...workflows.map(w => w.id),
       ...dataModel.map(d => d.id),
     ]);
+    const { groundedIds, reposById } = this.buildGroundedEntityIndex(features, workflows, dataModel);
 
     let promoted = 0;
     let skipped = 0;
@@ -1131,22 +1261,39 @@ class CognitiveEngine {
         continue;
       }
 
+      const provenance = this.resolveCanonicalPromotionProvenance(node, groundedIds, reposById);
+      if (!provenance) {
+        skipped++;
+        logger.warn(
+          `Entity promotion blocked for "${node.id}": missing repository-scoped source evidence, ` +
+          `human assertion, or grounded derived-hub support`
+        );
+        continue;
+      }
+
       const category = node.category ?? "feature";
-      // Intent becomes the factual description — dreams become reality
+      // Intent enriches the description, but canonical status comes from provenance.
       const description = node.intent
         ? `${node.description}. Intent: ${node.intent}`
         : node.description;
+      const provenanceFields = {
+        source_repo: provenance.sourceRepo,
+        source_files: provenance.sourceFiles,
+        provenance_kind: provenance.kind,
+        ...(provenance.derivedFromNodeIds.length > 0
+          ? { derived_from_node_ids: provenance.derivedFromNodeIds }
+          : {}),
+      };
 
       if (category === "feature") {
         features.push({
           id: factId,
           name: node.name,
           description,
-          source_repo: "",
-          source_files: [],
+          ...provenanceFields,
           status: "discovered",
           category: node.domain ?? "dream-promoted",
-          tags: ["dream-promoted"],
+          tags: ["dream-promoted", provenance.kind],
           domain: node.domain ?? "",
           keywords: node.keywords ?? [],
           links: [],
@@ -1156,9 +1303,8 @@ class CognitiveEngine {
           id: factId,
           name: node.name,
           description,
-          source_repo: "",
-          source_files: [],
-          trigger: "unknown",
+          ...provenanceFields,
+          trigger: provenance.kind === "derived_hub" ? "derived from grounded behavioral evidence" : "source evidence",
           steps: [],
           domain: node.domain ?? "",
           keywords: node.keywords ?? [],
@@ -1170,10 +1316,7 @@ class CognitiveEngine {
           id: factId,
           name: node.name,
           description,
-          source_repo: "",
-          source_files: [],
-          table_name: "",
-          storage: "unknown",
+          ...provenanceFields,
           key_fields: [],
           relationships: [],
           domain: node.domain ?? "",
@@ -1182,6 +1325,9 @@ class CognitiveEngine {
           links: [],
         });
       }
+
+      groundedIds.add(factId);
+      reposById.set(factId, provenance.sourceRepo);
 
       // Mark the dream node as promoted
       node.promoted_at = now;
@@ -1216,6 +1362,15 @@ class CognitiveEngine {
     }
     for (const d of dataModel.filter(e => !("_schema" in e))) {
       entities[d.id] = { type: "data_model", uri: `dreamgraph://resource/data_model/${d.id}`, name: d.name, source_repo: d.source_repo };
+    }
+    // Slice 1 — first-class UI graph citizens. Only source-bound entries.
+    for (const u of await loadIndexableUIElements()) {
+      entities[u.id] = {
+        type: "ui_element",
+        uri: `dreamgraph://resource/ui_element/${u.id}`,
+        name: u.name,
+        source_repo: u.source_repo,
+      };
     }
     const index: ResourceIndex = { entities };
     await withFileLock("index.json", async () => {
@@ -2030,6 +2185,269 @@ class CognitiveEngine {
   // -------------------------------------------------------------------------
   // Clear / Reset
   // -------------------------------------------------------------------------
+
+  private repoValues(value: unknown): string[] {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    if (Array.isArray(value)) {
+      return value
+        .filter((v): v is string => typeof v === "string")
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
+    }
+    return [];
+  }
+
+  private hasRepoScope(entity: ProvenanceCarrier): boolean {
+    return this.repoValues(entity.source_repo).length > 0;
+  }
+
+  private isDirectlyGrounded(entity: ProvenanceCarrier): boolean {
+    return this.hasRepoScope(entity) && (
+      this.stringArray(entity.source_files).length > 0 ||
+      entity.human_asserted === true
+    );
+  }
+
+  private buildGroundedCanonicalIdSet(entities: ProvenanceCarrier[]): Set<string> {
+    const byId = new Map<string, ProvenanceCarrier>();
+    const groundedIds = new Set<string>();
+
+    for (const entity of entities) {
+      if (!entity.id) continue;
+      byId.set(entity.id, entity);
+      if (this.isDirectlyGrounded(entity)) groundedIds.add(entity.id);
+    }
+
+    // Hubs are valid connective tissue when they are repo-scoped and their
+    // supports already have a grounding path. Iterate to a fixed point so
+    // hub→hub chains survive when their ends ultimately reach real nodes.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const entity of entities) {
+        if (!entity.id || groundedIds.has(entity.id)) continue;
+        if (!this.hasRepoScope(entity)) continue;
+        const supports = this.stringArray(entity.derived_from_node_ids);
+        if (supports.length > 0 && supports.every((id) => groundedIds.has(id))) {
+          groundedIds.add(entity.id);
+          changed = true;
+        }
+      }
+    }
+
+    return groundedIds;
+  }
+
+  private artifactTouchesIds(artifact: unknown, ids: Set<string>): boolean {
+    if (ids.size === 0 || !artifact || typeof artifact !== "object") return false;
+    const record = artifact as Record<string, unknown>;
+    const scalarKeys = ["id", "dream_id", "from", "to", "source", "target"];
+    for (const key of scalarKeys) {
+      const value = record[key];
+      if (typeof value === "string" && ids.has(value)) return true;
+    }
+    const arrayKeys = ["entities", "inspiration", "derived_from_node_ids", "affected_ids"];
+    for (const key of arrayKeys) {
+      const value = record[key];
+      if (Array.isArray(value) && value.some((v) => typeof v === "string" && ids.has(v))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Quarantine existing canonical/cognitive artifacts with no repository scope
+   * or no provenance path back to repo evidence.
+   *
+   * This intentionally does NOT hard-code DreamGraph's own repository or any
+   * assumed managed-project structure. The instance graph may describe any
+   * project. The invariant is project-agnostic: canonical facts need at least
+   * one `source_repo`, and source-less hubs are kept only when already
+   * repo-scoped and derived from grounded source-backed/human/hub nodes.
+   */
+  async quarantineSourceLessFacts(): Promise<SourceLessFactQuarantineResult> {
+    const timestamp = new Date().toISOString();
+    const quarantineFilename = `source_less_fact_quarantine_${timestamp.replace(/[:.]/g, "-")}.json`;
+    const quarantineFile = dataPath(quarantineFilename);
+
+    const [features, workflows, dataModel, dreamGraph, candidates, validated, tensions] = await Promise.all([
+      loadJsonArray<Feature>("features.json"),
+      loadJsonArray<Workflow>("workflows.json"),
+      loadJsonArray<DataModelEntity>("data_model.json"),
+      this.loadDreamGraph(),
+      this.loadCandidateEdges(),
+      this.loadValidatedEdges(),
+      this.loadTensions(),
+    ]);
+
+    const canonicalEntities = [
+      ...features.filter((e) => !("_schema" in e)),
+      ...workflows.filter((e) => !("_schema" in e)),
+      ...dataModel.filter((e) => !("_schema" in e)),
+    ] as ProvenanceCarrier[];
+    const groundedIds = this.buildGroundedCanonicalIdSet(canonicalEntities);
+    const canonicalIds = new Set(canonicalEntities.map((e) => e.id).filter((id): id is string => typeof id === "string"));
+    const affectedNodeIds = new Set<string>();
+
+    for (const entity of canonicalEntities) {
+      if (!entity.id) continue;
+      if (!groundedIds.has(entity.id)) affectedNodeIds.add(entity.id);
+    }
+
+    const invalidCanonical = (entity: ProvenanceCarrier): boolean => !!entity.id && affectedNodeIds.has(entity.id);
+    const keepFeature = (entity: Feature): boolean => ("_schema" in entity) || !invalidCanonical(entity as ProvenanceCarrier);
+    const keepWorkflow = (entity: Workflow): boolean => ("_schema" in entity) || !invalidCanonical(entity as ProvenanceCarrier);
+    const keepDataModel = (entity: DataModelEntity): boolean => ("_schema" in entity) || !invalidCanonical(entity as ProvenanceCarrier);
+
+    const nextFeatures = features.filter(keepFeature);
+    const nextWorkflows = workflows.filter(keepWorkflow);
+    const nextDataModel = dataModel.filter(keepDataModel);
+    const quarantinedNodes = [
+      ...features.filter((e) => !keepFeature(e)),
+      ...workflows.filter((e) => !keepWorkflow(e)),
+      ...dataModel.filter((e) => !keepDataModel(e)),
+    ];
+
+    // Dream artifacts are not canonical facts, but a source-less phantom cloud
+    // can keep regenerating invalid facts/tensions. Quarantine dream nodes that
+    // either are the invalid canonical IDs or are source-less and disconnected
+    // from a grounded canonical support path.
+    const quarantinedDreamNodes = dreamGraph.nodes.filter((node) => {
+      if (affectedNodeIds.has(node.id)) return true;
+      if (this.artifactTouchesIds(node, affectedNodeIds)) return true;
+      const carrier = node as ProvenanceCarrier;
+      if (this.hasRepoScope(carrier)) return false;
+      const supports = this.stringArray(carrier.inspiration).concat(this.stringArray(carrier.derived_from_node_ids));
+      return supports.length === 0 || !supports.every((id) => groundedIds.has(id));
+    });
+    for (const node of quarantinedDreamNodes) affectedNodeIds.add(node.id);
+
+    const quarantinedDreamNodeIds = new Set(quarantinedDreamNodes.map((node) => node.id));
+    const quarantinedDreamEdges = dreamGraph.edges.filter((edge) =>
+      affectedNodeIds.has(edge.from) ||
+      affectedNodeIds.has(edge.to) ||
+      this.artifactTouchesIds(edge, affectedNodeIds) ||
+      (!canonicalIds.has(edge.from) && !groundedIds.has(edge.from) && quarantinedDreamNodeIds.has(edge.from)) ||
+      (!canonicalIds.has(edge.to) && !groundedIds.has(edge.to) && quarantinedDreamNodeIds.has(edge.to))
+    );
+    for (const edge of quarantinedDreamEdges) affectedNodeIds.add(edge.id);
+
+    const quarantinedValidatedEdges = validated.edges.filter((edge) =>
+      affectedNodeIds.has(edge.from) ||
+      affectedNodeIds.has(edge.to) ||
+      (canonicalIds.has(edge.from) && !groundedIds.has(edge.from)) ||
+      (canonicalIds.has(edge.to) && !groundedIds.has(edge.to))
+    );
+    for (const edge of quarantinedValidatedEdges) affectedNodeIds.add(edge.id);
+
+    const quarantinedCandidateResults = candidates.results.filter((result) =>
+      this.artifactTouchesIds(result, affectedNodeIds)
+    );
+
+    const quarantinedActiveTensions = tensions.signals.filter((signal) =>
+      this.artifactTouchesIds(signal, affectedNodeIds)
+    );
+    const quarantinedResolvedTensions = (tensions.resolved_tensions ?? []).filter((resolved) =>
+      this.artifactTouchesIds(resolved, affectedNodeIds) ||
+      this.artifactTouchesIds(resolved.original, affectedNodeIds)
+    );
+
+    const quarantineReport = {
+      timestamp,
+      invariant: "Canonical nodes require repo scope plus direct source files, explicit human assertion, or a grounded derived-hub chain. Hubs may connect to hubs when the chain reaches grounded repo nodes.",
+      affected_node_ids: [...affectedNodeIds].sort(),
+      canonical_nodes: quarantinedNodes,
+      dream_nodes: quarantinedDreamNodes,
+      dream_edges: quarantinedDreamEdges,
+      validated_edges: quarantinedValidatedEdges,
+      candidate_results: quarantinedCandidateResults,
+      active_tensions: quarantinedActiveTensions,
+      resolved_tensions: quarantinedResolvedTensions,
+    };
+
+    await withFileLock(quarantineFilename, async () => {
+      await atomicWriteFile(quarantineFile, JSON.stringify(quarantineReport, null, 2));
+    });
+
+    const writeSeed = async (filename: string, data: unknown) => {
+      await withFileLock(filename, async () => {
+        await atomicWriteFile(dataPath(filename), JSON.stringify(data, null, 2));
+      });
+      invalidateCache(filename);
+    };
+
+    await Promise.all([
+      writeSeed("features.json", nextFeatures),
+      writeSeed("workflows.json", nextWorkflows),
+      writeSeed("data_model.json", nextDataModel),
+    ]);
+
+    dreamGraph.nodes = dreamGraph.nodes.filter((node) => !quarantinedDreamNodes.some((q) => q.id === node.id));
+    dreamGraph.edges = dreamGraph.edges.filter((edge) => !quarantinedDreamEdges.some((q) => q.id === edge.id));
+    await this.saveDreamGraph(dreamGraph);
+
+    candidates.results = candidates.results.filter((result) => !quarantinedCandidateResults.includes(result));
+    await this.saveCandidateEdges(candidates);
+
+    validated.edges = validated.edges.filter((edge) => !quarantinedValidatedEdges.includes(edge));
+    validated.metadata.total_validated = validated.edges.length;
+    await this.saveValidatedEdges(validated);
+
+    tensions.signals = tensions.signals.filter((signal) => !quarantinedActiveTensions.includes(signal));
+    tensions.resolved_tensions = (tensions.resolved_tensions ?? []).filter((resolved) => !quarantinedResolvedTensions.includes(resolved));
+    await this.saveTensions(tensions);
+
+    const entities: Record<string, IndexEntry> = {};
+    for (const f of nextFeatures.filter((e) => !("_schema" in e))) {
+      entities[f.id] = { type: "feature", uri: `dreamgraph://resource/feature/${f.id}`, name: f.name, source_repo: f.source_repo };
+    }
+    for (const w of nextWorkflows.filter((e) => !("_schema" in e))) {
+      entities[w.id] = { type: "workflow", uri: `dreamgraph://resource/workflow/${w.id}`, name: w.name, source_repo: w.source_repo };
+    }
+    for (const d of nextDataModel.filter((e) => !("_schema" in e))) {
+      entities[d.id] = { type: "data_model", uri: `dreamgraph://resource/data_model/${d.id}`, name: d.name, source_repo: d.source_repo };
+    }
+    // Slice 1 — first-class UI graph citizens. Only source-bound entries.
+    for (const u of await loadIndexableUIElements()) {
+      entities[u.id] = {
+        type: "ui_element",
+        uri: `dreamgraph://resource/ui_element/${u.id}`,
+        name: u.name,
+        source_repo: u.source_repo,
+      };
+    }
+    const index: ResourceIndex = { entities };
+    await withFileLock("index.json", async () => {
+      await atomicWriteFile(dataPath("index.json"), JSON.stringify(index, null, 2));
+    });
+    invalidateCache("index.json");
+
+    const result: SourceLessFactQuarantineResult = {
+      quarantined_nodes: quarantinedNodes.length,
+      quarantined_validated_edges: quarantinedValidatedEdges.length,
+      quarantined_candidate_results: quarantinedCandidateResults.length,
+      quarantined_dream_nodes: quarantinedDreamNodes.length,
+      quarantined_dream_edges: quarantinedDreamEdges.length,
+      quarantined_active_tensions: quarantinedActiveTensions.length,
+      quarantined_resolved_tensions: quarantinedResolvedTensions.length,
+      affected_node_ids: [...affectedNodeIds].sort(),
+      quarantine_file: quarantineFile,
+      timestamp,
+    };
+
+    logger.warn(
+      `Source-less fact quarantine complete: ${result.quarantined_nodes} canonical nodes, ` +
+      `${result.quarantined_dream_nodes} dream nodes, ${result.quarantined_dream_edges} dream edges, ` +
+      `${result.quarantined_validated_edges} validated edges, ${result.quarantined_candidate_results} candidates, ` +
+      `${result.quarantined_active_tensions + result.quarantined_resolved_tensions} tensions. Report: ${quarantineFile}`
+    );
+
+    return result;
+  }
 
   async clearDreamGraph(): Promise<void> {
     await this.saveDreamGraph(this.emptyDreamGraphFile());

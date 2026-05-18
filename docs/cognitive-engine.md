@@ -73,6 +73,33 @@ Validated edges become part of long-term architectural understanding and can inf
 
 ---
 
+## Canonical Promotion Provenance
+
+Validated dream nodes are not promoted into the fact graph (`features.json`, `workflows.json`, `data_model.json`) unless they have a defensible provenance path. Self-consistent fictional clusters — for example a tight ring of hubs that all reference each other but no real source code — are blocked at the gate. The check is project-agnostic; it does not assume DreamGraph internals or any specific managed-project structure.
+
+Every promoted entity carries a `provenance_kind` field:
+
+| Kind | Required evidence |
+|---|---|
+| `source_backed` | `source_repo` is set, and at least one entry in `source_files`. |
+| `human_asserted` | `source_repo` is set, and `human_asserted: true` (or `provenance_kind: "human_asserted"`). |
+| `derived_hub` | `source_repo` is set, and every id in `derived_from_node_ids` is itself grounded. Grounding is computed to a fixed point so hub → hub chains survive when their ends ultimately reach `source_backed` or `human_asserted` nodes. |
+
+When a dream node lacks an explicit `source_repo` but every grounded support points at the same single repo, that repo is inferred. Dreams that fail every rule are left in the dream graph (so they remain visible) but never become facts.
+
+### Source-less fact quarantine
+
+The MCP tool `quarantine_source_less_facts` enforces the same invariant retroactively against an instance that was polluted before the gate was added. It:
+
+1. Computes the grounded canonical id set using the same fixed-point algorithm.
+2. Quarantines every ungrounded canonical entity, then cascades to dream nodes that touch or depend on them, their dream edges, validated edges, candidate results, and both active and resolved tensions.
+3. Writes a full `source_less_fact_quarantine_<ISO-ts>.json` audit report **before** mutating any seed file.
+4. Rewrites `features.json`, `workflows.json`, `data_model.json`, dream graph, candidates, validated edges, tensions, and `index.json` (the UI elements added in slice 1 are re-included).
+
+The tool requires `confirm: true` and is classified as `internal-only` in the discipline manifest.
+
+---
+
 ## Dream Strategies
 
 DreamGraph supports multiple dream-generation strategies.

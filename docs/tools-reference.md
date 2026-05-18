@@ -206,6 +206,16 @@ Reset cognitive data. Requires confirmation.
 | `target` | enum | yes | `dream_graph`, `candidates`, `validated`, `tensions`, `history`, `all` |
 | `confirm` | boolean | yes | Must be `true` |
 
+#### `quarantine_source_less_facts`
+
+Quarantine canonical facts (and connected dream nodes, dream edges, validated edges, candidate results, and tensions) that lack any `source_repo` scope, lack direct source-file evidence, are not explicitly human-asserted, and cannot reach grounded supports through a `derived_from_node_ids` chain. Repo-scoped hubs are preserved when their support chain ultimately reaches a source-backed, human-asserted, or already-grounded hub node. Writes a `source_less_fact_quarantine_<ISO-ts>.json` report to the data directory before mutating any seed file. Project-agnostic — does not assume DreamGraph internals or any specific managed-project architecture.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `confirm` | boolean | yes | Must be `true`. Safety gate because the operation removes polluted artifacts after writing the quarantine report. |
+
+Returns counts per artifact kind, the set of affected node IDs, the absolute path of the quarantine report, and the timestamp.
+
 ---
 
 ### v5.2 Dream Scheduling
