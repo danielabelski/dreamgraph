@@ -307,6 +307,30 @@ candidate → [normalization] → validated (promoted)
 
 ---
 
+## 15b. Autonomous Parser-Node Enrichment (`parser_node_enrichment_flow`)
+
+**Purpose:** Convert hundreds of structurally-discovered but semantically-thin parser nodes (from `scan_project` native extractors) into rich, intent-bearing graph entities — in one tool call, autonomously.
+
+**Trigger:** `enrich_parser_nodes` MCP tool, typically once after `scan_project` completes.
+**Source:** [src/tools/enrich-parser-nodes.ts](../src/tools/enrich-parser-nodes.ts)
+
+| Step | Description |
+|------|-------------|
+| 1 | Short-circuit with `LLM_UNAVAILABLE` if no provider is configured (no writes occur). |
+| 2 | Load `features.json` and `data_model.json` (per `target` arg: `data_model` \| `features` \| `both`). |
+| 3 | Filter eligible: `provenance.scanner === "native"` AND (`force` OR `enrichment.enriched !== true`); cap by `max_nodes`. |
+| 4 | Bucket eligible nodes by `repo::domain` so each LLM call sees coherent context. |
+| 5 | For each bucket, chunk into batches of `batch_size`; pick up to `feature_context_size` sibling features as anchor candidates. |
+| 6 | Call the dreamer LLM with strict JSON schema; parse `results[]` per node. |
+| 7 | Merge per-node: preserve original `description` into `description_raw`, write `intent` / `purpose` / `tags` / `enrichment{...}`, append validated `feature_anchors` as weak `GraphLink`s. |
+| 8 | Atomically persist after every batch (crash-safe) and invalidate cache. Continue on per-batch errors; record them in `errors[]`. |
+
+**Output:** `{ files_processed, total_eligible, total_enriched, total_skipped, batches_run, llm_calls, tokens_used, feature_anchors_written, errors, dry_run }`.
+
+**Architect guidance:** call once with defaults; do not loop. See [tools-reference.md](tools-reference.md#enrich_parser_nodes).
+
+---
+
 ## 16. Explorer Curated Mutation (`explorer_mutation_flow`)
 
 **Purpose**: Operator-driven promotion, rejection, or tension resolution applied through the Explorer SPA with optimistic concurrency, mandatory rationale, and a permanent audit trail.
@@ -315,7 +339,7 @@ candidate → [normalization] → validated (promoted)
 1. Operator opens the Explorer (`/explorer/`) via the VS Code statusbar quick-pick or directly in the browser.
 2. SPA fetches `GET /explorer/api/snapshot` ? receives `{ instance_uuid, etag, ... }`.
 3. Operator selects the Tensions or Candidates tab in the right rail. Each row is enriched (endpoints, names, descriptions) and exposes Inspect chips that jump to the Inspector tab.
-4. Operator chooses an action � Resolve / Promote / Reject � and a form opens with a `reason` textarea.
+4. Operator chooses an action � Resolve / Promote / Reject � and a form opens with a `reason` textarea.
 5. (Optional) Operator clicks **Suggest** ? SPA `POST /explorer/api/reason-suggest` with `{ intent, subject }`. The Dreamer LLM (`gpt-5.4-nano`) drafts a reason; operator edits as needed.
 6. Operator submits the form. SPA `POST /explorer/mutations/<intent>` with headers `X-DreamGraph-Instance: <uuid>` + `If-Match: <etag>` and body `{ <id>, reason }`.
 7. Daemon validates the etag. On mismatch ? **HTTP 412**; SPA refetches the snapshot, surfaces a conflict banner, and the operator can retry against the fresh state.
@@ -346,5 +370,5 @@ candidate → [normalization] → validated (promoted)
 | 6 | Surface gaps | The same strategy raises `phantom_entity` tensions (data_models with no resolvable table) and `shadow_table` tensions (tables nothing claims). `dg curate --targets datastores` lists both. |
 | 7 | Curate | Address each finding: enrich the `storage` field, run `scan_database({ create_missing: true })`, or add stub entities via `enrich_seed_data`. |
 
-**Inert when unconfigured**: with no `DATABASE_URL`, the dashboard card renders a `NOT CONFIGURED` pill, no auto-seed runs, `schema_grounding` returns `[]` immediately, and the `orphan_bridging` hub-bias bonus is `0` � zero impact on non-DB instances.
+**Inert when unconfigured**: with no `DATABASE_URL`, the dashboard card renders a `NOT CONFIGURED` pill, no auto-seed runs, `schema_grounding` returns `[]` immediately, and the `orphan_bridging` hub-bias bonus is `0` � zero impact on non-DB instances.
 

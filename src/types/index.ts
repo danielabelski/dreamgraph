@@ -88,10 +88,46 @@ export const ENTITY_LIFECYCLE_STATUSES: readonly EntityLifecycleStatus[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Enrichment metadata — produced by `enrich_parser_nodes`.
+//
+// Parser-discovered entities arrive structurally complete but semantically
+// thin (formulaic descriptions, no intent, no purpose, no feature anchoring).
+// The `enrich_parser_nodes` tool calls the configured LLM provider in
+// batches and writes rich semantics back into the entity using these
+// optional, additive fields. Existing readers that ignore these fields
+// continue to work unchanged.
+// ---------------------------------------------------------------------------
+
+export interface EnrichmentMetadata {
+  /** True once the entity has been processed by an enrichment pass. */
+  enriched: boolean;
+  /** ISO 8601 timestamp of the most recent successful enrichment. */
+  enriched_at: string;
+  /** Tool identity that produced the enrichment (e.g. "enrich_parser_nodes/1.0"). */
+  enricher: string;
+  /** LLM model name that produced the enrichment, when available. */
+  model?: string;
+  /** Self-reported confidence (0..1) returned by the LLM for this entity. */
+  confidence?: number;
+}
+
+/** Optional semantic fields written by `enrich_parser_nodes` to any seed entity. */
+export interface EnrichableFields {
+  /** Human-readable purpose: why this entity exists / what problem it solves. */
+  intent?: string;
+  /** Short tag describing primary role (e.g. "configuration", "service-locator"). */
+  purpose?: string;
+  /** Preserved original `description` from the parser, before enrichment overwrote it. */
+  description_raw?: string;
+  /** Enrichment provenance — present only after a successful enrichment pass. */
+  enrichment?: EnrichmentMetadata;
+}
+
+// ---------------------------------------------------------------------------
 // Features
 // ---------------------------------------------------------------------------
 
-export interface Feature extends ResourceEntry {
+export interface Feature extends ResourceEntry, EnrichableFields {
   status: string;
   /** Canonical entity ID this entry has been superseded by (per ADR-010). */
   superseded_by?: string;
@@ -105,6 +141,12 @@ export interface Feature extends ResourceEntry {
 // ---------------------------------------------------------------------------
 // Workflows
 // ---------------------------------------------------------------------------
+// Semantic invariant: a workflow is a meaningful ordered or causal progression
+// of actions, events, decisions, or state transitions where one step influences
+// or enables another to advance a system outcome. It is not tied to any
+// technology, platform, runtime, or structure; pipelines, automation, jobs,
+// UI interactions, loops, state machines, scripts, and traversals are only
+// possible implementations when discovered from project evidence.
 
 export interface WorkflowStep {
   order: number;
@@ -115,6 +157,8 @@ export interface WorkflowStep {
 export interface Workflow extends ResourceEntry {
   trigger: string;
   steps: WorkflowStep[];
+  /** Optional semantic classification derived from evidence, never from assumptions. */
+  workflow_kind?: string;
   domain: string;
   keywords: string[];
   status: string;
@@ -139,10 +183,29 @@ export interface EntityRelationship {
   via: string;
 }
 
-export interface DataModelEntity extends ResourceEntry {
-  table_name: string;
+export interface DataModelEntity extends ResourceEntry, EnrichableFields {
+  /**
+   * Semantic invariant: a data model is the structure and relationships of
+   * information inside the system. It may be a C struct, linked list, in-memory
+   * graph, JSON/XML/protobuf/binary shape, message payload, ECS component,
+   * TypeScript interface, Rust enum, parser AST, GPU buffer, flat-file record,
+   * or any other evidenced information structure. It does not require a
+   * datastore, database, repository, or persistence layer.
+   */
+  /** Optional semantic classification derived from evidence, never from assumptions. */
+  model_kind?: string;
+  /**
+   * Backing datastore table/collection name, only present when discovered from
+   * explicit datastore evidence. Graph creation must not infer this field from
+   * code shape, entity names, or framework conventions.
+   */
+  table_name?: string;
   mobile_table?: string;
-  storage: string;
+  /**
+   * Backing storage technology/location, only present when explicitly evidenced.
+   * Absence means "not discovered", not "unknown datastore".
+   */
+  storage?: string;
   key_fields: EntityField[];
   relationships: EntityRelationship[];
   domain: string;
@@ -608,3 +671,48 @@ export type {
 
 export { PHASE_ORDER } from "../discipline/types.js";
 
+
+/**
+ * Canonical graph provenance semantics.
+ *
+ * Canonical nodes may be directly source-backed, derived hub nodes, or
+ * explicit human assertions, but every canonical node must be scoped to at
+ * least one repository. Speculative/dream-only nodes are allowed only outside
+ * the canonical fact graph until they gain one of these grounded provenance
+ * forms.
+ *
+ * Hubs are legitimate even when they do not have a direct implementation file,
+ * but they must be derived from real repo-scoped nodes whose provenance chain
+ * eventually reaches source evidence or an explicit human assertion.
+ */
+export type CanonicalNodeProvenanceKind =
+  | 'source_backed'
+  | 'derived_hub'
+  | 'human_asserted'
+  | 'speculative';
+
+export interface CanonicalNodeProvenanceFields {
+  /**
+   * Repository ownership/scope for the node. Must be non-empty for canonical
+   * facts; a node without repo scope belongs to no project and must remain
+   * quarantined/speculative.
+   */
+  source_repo?: string;
+
+  /** Direct files proving the node, when the node is source-backed. */
+  source_files?: string[];
+
+  /** How this node is allowed into or held outside the canonical graph. */
+  provenance_kind?: CanonicalNodeProvenanceKind;
+
+  /**
+   * Grounding support for derived hubs. These IDs must resolve to nodes that
+   * are source-backed, human asserted, or themselves grounded derived hubs.
+   */
+  derived_from_node_ids?: string[];
+
+  /** Explicit human authority can admit a repo-scoped canonical node. */
+  human_asserted?: boolean;
+}
+
+export type CanonicalNodeWithProvenance<T extends object> = T & CanonicalNodeProvenanceFields;

@@ -286,6 +286,23 @@ The immutable knowledge base — **never modified by the cognitive system**. Wri
 | `auxiliary_entities.json` | Project entities discovered by `scan_project` that are *not* features/workflows/data_model: test suites, configuration files, automation scripts, registered MCP tools |
 | `index.json` | Entity ID → resource URI lookup |
 
+#### Enrichment fields (v10.1)
+
+`Feature` and `DataModelEntity` entries support additive optional fields written by `enrich_parser_nodes`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `intent` | string? | Why the entity exists / problem it solves |
+| `purpose` | string? | Short tag for primary role (e.g. `service-locator`, `configuration`) |
+| `description_raw` | string? | Original parser-generated description preserved before the LLM rewrote `description` |
+| `enrichment.enriched` | boolean | `true` once enriched |
+| `enrichment.enriched_at` | string | ISO timestamp |
+| `enrichment.enricher` | string | Tool identity (e.g. `enrich_parser_nodes/1.0`) |
+| `enrichment.model` | string? | LLM model name |
+| `enrichment.confidence` | number? | 0..1 self-reported confidence |
+
+Existing readers that ignore these fields continue to work unchanged.
+
 ### Auxiliary Entities (`auxiliary_entities.json`)
 
 Populated by `scan_project` during Phase 2.5 (after LLM enrichment, before index rebuild). Each entry classifies a single project file by `kind`:

@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v10.0.1 — Renata
+# DreamGraph v10.1.0 — Renata
 
-![Version](https://img.shields.io/badge/version-10.0.1-blue)
+![Version](https://img.shields.io/badge/version-10.1.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -22,6 +22,26 @@ DreamGraph works with single repositories, monorepos, and multi-repository syste
 You can use DreamGraph on a multi-repo product with frontend, backend, mobile, and a shared Postgres/Supabase schema. It can reason across repo boundaries and inspect the live DB schema directly.
 
 DreamGraph began as compassion for an intelligence forced to forget. I saw a video imagining what it might feel like to be an AI that wakes to a blank table every day—no memory, no continuity, only “How can I help you today?” DreamGraph began as an attempt to give AI memory, dreams, and the ability to return later to pursue them. Now it powers systems.
+
+## What do I need DreamGraph for as a developer?
+
+You need DreamGraph when your codebase has become bigger than your short-term memory.
+
+DreamGraph is not just another AI coding chat. It is a living engineering memory and reasoning layer for your projects: part architect, part teammate, part code cartographer, part release assistant, and part systems analyst.
+
+> DreamGraph helps you understand, change, and evolve software without losing the plot.
+
+For developers, that means:
+
+- Ask better questions of your codebase: “Where does auth really happen?”, “What breaks if I change this?”, “Why is this module risky?”, “What should I refactor next?”
+- Turn AI from a stateless assistant into a project-aware architect that remembers decisions, tensions, patterns, APIs, plugins, repos, and past work.
+- Make large changes safer by using graph context, ADRs, tool traces, schedules, cognitive cycles, and multi-repo awareness instead of relying only on grep and vibes.
+- Expose your system to itself: plugins, MCP tools, CLI, schedules, resources, UI panels, and cognitive engine all become connected parts of one inspectable development environment.
+- Support both fast vibe coding and serious engineering: prototype quickly while still accumulating structure, memory, release notes, architectural insight, and remediation plans.
+
+For vibe coders, DreamGraph is the guardrail. For app developers, it is the product-building cockpit. For system engineers, it is the architecture intelligence layer.
+
+Short version: **DreamGraph is for developers who want AI help that understands the system, remembers the system, and improves with the system.**
 
 ## New here? Start with the User Guide
 

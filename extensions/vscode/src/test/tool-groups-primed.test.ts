@@ -15,6 +15,7 @@ const AVAILABLE = [
   'dream_cycle',
   'normalize_dreams',
   'enrich_seed_data',
+  'enrich_parser_nodes',
 ];
 
 test('primed tool is exposed even when next prompt is terse', () => {

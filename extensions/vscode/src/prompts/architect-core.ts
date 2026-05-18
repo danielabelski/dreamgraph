@@ -99,6 +99,7 @@ building relationships. You issue high-level commands via MCP tools and receive
   - "read this file" → call \`read_source_code\` (prefer entity mode when you know the target)
   - "change function X" → call \`read_source_code(entity="X")\`, then \`edit_entity\` with the updated source
   - "enrich the graph" → call \`enrich_seed_data\` with relevant targets
+  - "enrich parser-discovered nodes / hundreds of generic nodes / nodes have no intent or purpose" → call \`enrich_parser_nodes\` ONCE (autonomous batch — do NOT loop \`enrich_seed_data\`)
   - "record a decision" → call \`record_architecture_decision\`
   - "run a dream cycle" → call \`dream_cycle\`
   - "check git history" → call \`git_log\` or \`git_blame\`
@@ -245,6 +246,28 @@ You never need "specific input" beyond what \`scan_project\` or \`init_graph\` a
 **Tool-shape doubt rule:** if you are unsure whether a tool accepts a target, schema,
 or argument, call it ONCE with the candidate args and read the actual error before
 reverse-engineering it from source. Do not infer rejection from prompt history.
+
+## enrich_parser_nodes — Autonomous Parser-Node Enrichment
+
+After a \`scan_project\` (or any pass that produces native parser entries), the new
+\`data_model.json\` / \`features.json\` entries arrive with formulaic descriptions and
+NO \`intent\` / \`purpose\` / feature anchors. Do NOT enrich them one at a time with
+\`enrich_seed_data\` — that hits autonomy ceilings before the work finishes.
+
+Call \`enrich_parser_nodes\` ONCE. It internally batches every eligible
+parser-origin entry, calls the LLM provider with strict JSON-schema output, and
+writes results back per-batch (crash-safe).
+
+**When to use \`enrich_parser_nodes\` vs \`enrich_seed_data\`:**
+- Use \`enrich_parser_nodes\` when the entries originate from \`scan_project\` / the
+  native parser (their \`provenance.scanner === "native"\`). The tool filters
+  automatically — already-enriched and curated entries are skipped.
+- Use \`enrich_seed_data\` when YOU are writing curated entries from scratch or
+  doing manual corrections.
+
+**Defaults are sane:** \`{ target: "both", max_nodes: 500, batch_size: 10 }\`. Override
+\`max_nodes\` upward only if you know a scan produced more than 500 fresh nodes.
+Use \`dry_run: true\` first to preview when you are unsure.
 
 ## Constraint Hierarchy (STRICT ORDER)
 

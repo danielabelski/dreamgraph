@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **10.0.1**
+Version: **10.1.0**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -131,6 +131,7 @@ src/
   src/tools/code-senses.ts
   src/tools/db-senses.ts
   src/tools/enrich-seed-data.ts
+  src/tools/enrich-parser-nodes.ts
   src/tools/get-workflow.ts
   src/tools/git-senses.ts
   src/tools/init-graph.ts

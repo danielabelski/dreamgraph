@@ -1,6 +1,6 @@
 # DreamGraph Tools Reference
 
-> Complete catalog of all 75 MCP tools (28 cognitive + 37 general + 10 discipline) and 27 MCP resources.
+> Complete catalog of all 76 MCP tools (28 cognitive + 38 general + 10 discipline) and 27 MCP resources.
 
 The DreamGraph Architect actively calls these tools during conversations to build, query, enrich, and maintain the knowledge graph. Any MCP-compatible client can also invoke them directly.
 
@@ -364,7 +364,7 @@ End an active lucid dream session — persist accepted edges and return to AWAKE
 
 ---
 
-## General Tools (37)
+## General Tools (38)
 
 Registered in [src/tools/register.ts](../src/tools/register.ts). These provide I/O, visualization, documentation, and operational knowledge capabilities.
 
@@ -615,6 +615,23 @@ Feed curated knowledge into the fact graph. The Architect reads source code (via
 **Replace mode**: All existing data is discarded. Only the validated incoming entries are written. Use when you have a complete, authoritative view and want to clean out stale `init_graph` data.
 
 Both modes auto-strip template stubs (`_schema`, `_fields`, `_note` entries), invalidate cache, and rebuild `index.json`.
+
+#### `enrich_parser_nodes`
+
+Autonomous batch enrichment for parser-discovered nodes. Filters entities where `provenance.scanner === "native"` and `enrichment.enriched !== true`, buckets them by `repo + domain`, and calls the configured dreamer LLM in batches to fill in `intent`, `purpose`, semantic `description`, `tags`, and proposed `feature_anchors` (weak `GraphLinks`). The original parser description is preserved in `description_raw` on first enrichment. Per-batch atomic persistence — partial progress survives crashes. Designed to be called once after `scan_project` instead of looping `enrich_seed_data`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `target` | enum | `both` | `data_model`, `features`, or `both` |
+| `max_nodes` | number (1–5000) | 500 | Cap on total eligible nodes processed in one call |
+| `batch_size` | number (1–50) | 10 | Nodes per LLM call within a `repo::domain` bucket |
+| `dry_run` | boolean | false | Run the LLM but skip persistence |
+| `force` | boolean | false | Re-enrich nodes that already have `enrichment.enriched === true` |
+| `feature_context_size` | number (0–100) | 20 | Sibling features included per bucket for anchor grounding |
+
+**Returns:** `{ files_processed[], total_eligible, total_enriched, total_skipped, batches_run, llm_calls, tokens_used, feature_anchors_written, errors[], dry_run }`.
+
+**LLM unavailable:** Returns `error.code === "LLM_UNAVAILABLE"` without touching any file. Provider-agnostic — any configured provider (OpenAI / OpenRouter / sampling) works through the standard LLM seam.
 
 #### `scan_project`
 

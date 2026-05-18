@@ -187,6 +187,39 @@ All hooks are best-effort: failures are logged but never abort the host operatio
 
 ---
 
+## Autonomous Parser-Node Enrichment (v10.1)
+
+`scan_project` discovers entities through deterministic native extractors. The
+resulting graph is **structurally complete** (correct identity, source paths,
+basic relationships) but **semantically thin**: descriptions are formulaic
+("Class `Foo` in `bar.cpp`"), `intent` and `purpose` are absent, and most
+parser-discovered nodes have no `feature_anchors` — they are orphans with
+generic names.
+
+`enrich_parser_nodes` closes that gap in one autonomous batch pass:
+
+- **Eligibility** is intrinsic to the data: an entity is eligible when
+  `provenance.scanner === "native"` and `enrichment.enriched !== true`. No
+  per-call hand-curation is required.
+- **Bucketing** by `repo + domain` keeps the LLM's context coherent so anchors
+  reference real siblings, not hallucinated ids.
+- **Anchor validation** is provider-agnostic: any `feature_anchors[].target_id`
+  not in the known feature id set is dropped silently, never written. Anchors
+  are persisted as **weak `GraphLink`s** so they can be promoted or rejected
+  by normal cognitive cycles.
+- **Per-batch persistence** is atomic (`atomicWriteFile` + `invalidateCache`)
+  so partial progress always survives a crash or interruption.
+- **Replaces hand-looping `enrich_seed_data`.** The Architect calls this tool
+  once after `scan_project`; previous workflows that issued one
+  `enrich_seed_data` per missing node are deprecated for the bulk path
+  (`enrich_seed_data` remains for targeted, hand-authored payloads).
+
+The output is a single result object aggregating eligibility counts, batches
+run, LLM calls and tokens, anchors written, and any per-batch errors — a
+report the agent can reason about directly without re-querying the graph.
+
+---
+
 ## Normalizer and Dreamer Separation
 
 The cognitive engine supports separate LLM tuning for:
