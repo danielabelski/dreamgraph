@@ -116,6 +116,26 @@ The agent picks tools the way you'd pick CLI commands. You don't have to wire an
 
 ---
 
+## What do I need DreamGraph for as a developer?
+
+You need DreamGraph when your codebase has become bigger than your short-term memory.
+
+DreamGraph is not just another AI coding chat. It is a living engineering memory and reasoning layer for your projects: part architect, part teammate, part code cartographer, part release assistant, and part systems analyst.
+
+> DreamGraph helps you understand, change, and evolve software without losing the plot.
+
+For developers, that means:
+
+- Ask better questions of your codebase: “Where does auth really happen?”, “What breaks if I change this?”, “Why is this module risky?”, “What should I refactor next?”
+- Turn AI from a stateless assistant into a project-aware architect that remembers decisions, tensions, patterns, APIs, plugins, repos, and past work.
+- Make large changes safer by using graph context, ADRs, tool traces, schedules, cognitive cycles, and multi-repo awareness instead of relying only on grep and vibes.
+- Expose your system to itself: plugins, MCP tools, CLI, schedules, resources, UI panels, and cognitive engine all become connected parts of one inspectable development environment.
+- Support both fast vibe coding and serious engineering: prototype quickly while still accumulating structure, memory, release notes, architectural insight, and remediation plans.
+
+For vibe coders, DreamGraph is the guardrail. For app developers, it is the product-building cockpit. For system engineers, it is the architecture intelligence layer.
+
+Short version: **DreamGraph is for developers who want AI help that understands the system, remembers the system, and improves with the system.**
+
 ## What you actually do with it
 
 A realistic picture:
