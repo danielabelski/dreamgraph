@@ -538,7 +538,7 @@ function registerContributedTool(args: {
   definition: ToolDefinition;
 }): () => void {
   const { plugin, identity, telemetry, definition } = args;
-  const expectedPrefix = `${plugin.manifest.id}.`;
+  const expectedPrefix = plugin.manifest.id.replace(/[^a-zA-Z0-9_]/g, '_') + '_';
   // Capability gate
   if (!plugin.manifest.capabilities.includes("tools:register")) {
     return emitContribReject({
@@ -732,7 +732,10 @@ function registerContributedUiElement(args: {
   definition: UiElementDefinition;
 }): () => void {
   const { plugin, identity, telemetry, definition } = args;
-  const expectedPrefix = `${plugin.manifest.id}.`;
+  // UI element ids retain the raw <plugin-id>. prefix (dotted form). Unlike MCP tool names
+  // (which must be model-safe snake_case), UI ids are namespaced human-readable identifiers
+  // and preserve the natural plugin id so they remain stable across registries and docs.
+  const expectedPrefix = plugin.manifest.id + '.';
 
   if (!plugin.manifest.capabilities.includes("ui:register")) {
     return emitContribReject({

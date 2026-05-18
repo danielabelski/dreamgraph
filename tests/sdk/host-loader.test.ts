@@ -23,7 +23,7 @@ function manifestJson(overrides: Record<string, unknown> = {}): string {
     expectedEffects: ["emit_tool"],
     forbiddenEffects: ["write_internal_graph"],
     capabilities: ["tools:register"],
-    tools: [{ name: "example.plugin.echo" }],
+    tools: [{ name: "example_plugin_echo" }],
     resources: [{ uriNamespace: "plugin://example.plugin/" }],
     ...overrides,
   });

@@ -19,7 +19,7 @@ describe("SDK plugin manifest schema", () => {
     if (result.success) {
       expect(result.data.id).toBe("example.plugin");
       expect(result.data.capabilities).toEqual(["tools:register"]);
-      expect(result.data.tools).toEqual([{ name: "example.plugin.echo" }]);
+      expect(result.data.tools).toEqual([{ name: "example_plugin_echo" }]);
       expect(result.data.resources).toEqual([{ uriNamespace: "plugin://example.plugin/" }]);
     }
   });
@@ -27,7 +27,7 @@ describe("SDK plugin manifest schema", () => {
   it.each([
     ["missing id", "invalid-missing-id.json"],
     ["invalid capability", "invalid-bad-capability.json"],
-    ["unprefixed tool name", "invalid-tool-name-unprefixed.json"],
+    ["tool name with invalid chars", "invalid-tool-name-unprefixed.json"],
     ["resource URI outside plugin namespace", "invalid-resource-uri-out-of-namespace.json"],
   ])("rejects %s", async (_label, fixtureName) => {
     const result = PluginManifestSchema.safeParse(await readFixture(fixtureName));

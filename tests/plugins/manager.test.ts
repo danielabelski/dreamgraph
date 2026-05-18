@@ -278,10 +278,10 @@ describe("plugin contributions (M4)", () => {
       {
         expectedEffects: ["emit_tool"],
         capabilities: ["tools:register"],
-        tools: [{ name: "examples.contrib-tool.hello" }],
+        tools: [{ name: "examples_contrib_tool_hello" }],
       },
       `ctx.tools.register({
-        name: "examples.contrib-tool.hello",
+        name: "examples_contrib_tool_hello",
         description: "say hi",
         inputSchema: {},
         expectedEffects: ["emit_tool"],
@@ -294,7 +294,7 @@ describe("plugin contributions (M4)", () => {
     const tools = getContributedTools();
     expect(tools.length).toBe(1);
     expect(tools[0].pluginId).toBe("examples.contrib-tool");
-    expect(tools[0].definition.name).toBe("examples.contrib-tool.hello");
+    expect(tools[0].definition.name).toBe("examples_contrib_tool_hello");
     expect(tools[0].active).toBe(true);
     expect(isPluginActivated("examples.contrib-tool")).toBe(true);
   });
@@ -365,7 +365,7 @@ describe("plugin hot lifecycle (M3.5)", () => {
         capabilities: ["tools:register"],
       },
       `ctx.tools.register({
-        name: "examples.unload-me.ping",
+        name: "examples_unload_me_ping",
         description: "ping",
         inputSchema: {},
         expectedEffects: ["emit_tool"],
@@ -398,7 +398,7 @@ describe("plugin hot lifecycle (M3.5)", () => {
         capabilities: ["tools:register"],
       },
       `ctx.tools.register({
-        name: "examples.reload-me.ping",
+        name: "examples_reload_me_ping",
         description: "ping",
         inputSchema: {},
         expectedEffects: ["emit_tool"],

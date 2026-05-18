@@ -6,12 +6,12 @@
     "dreamgraph": ">=9.0.0"
   },
   "main": "./dist/index.js",
-  "intent": "This fixture must fail because plugin tools require an id prefix.",
+  "intent": "This fixture must fail because plugin tool names must be lowercase snake_case (no dots, hyphens, or uppercase).",
   "expectedEffects": ["emit_tool"],
   "capabilities": ["tools:register"],
   "tools": [
     {
-      "name": "echo"
+      "name": "Example.Plugin-Echo"
     }
   ]
 }

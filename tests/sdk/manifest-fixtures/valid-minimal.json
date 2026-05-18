@@ -13,7 +13,7 @@
   "capabilities": ["tools:register"],
   "tools": [
     {
-      "name": "example.plugin.echo"
+      "name": "example_plugin_echo"
     }
   ],
   "resources": [

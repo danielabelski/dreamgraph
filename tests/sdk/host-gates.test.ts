@@ -23,7 +23,7 @@ describe("host capability gates", () => {
   it("accepts a properly prefixed tool when capability is held", () => {
     const result = gateToolRegistration({
       manifest: baseManifest,
-      toolName: "example.plugin.echo",
+      toolName: "example_plugin_echo",
     });
     expect(result.ok).toBe(true);
   });
@@ -41,8 +41,8 @@ describe("host capability gates", () => {
   it("rejects a tool that collides with a built-in name", () => {
     const result = gateToolRegistration({
       manifest: baseManifest,
-      toolName: "example.plugin.echo",
-      builtInToolNames: new Set(["example.plugin.echo"]),
+      toolName: "example_plugin_echo",
+      builtInToolNames: new Set(["example_plugin_echo"]),
     });
     expect(result).toEqual(
       expect.objectContaining({ ok: false, reason: "tool_name_collision" }),
@@ -52,7 +52,7 @@ describe("host capability gates", () => {
   it("rejects a tool registration without tools:register", () => {
     const result = gateToolRegistration({
       manifest: { id: "example.plugin", capabilities: ["events:read"] },
-      toolName: "example.plugin.echo",
+      toolName: "example_plugin_echo",
     });
     expect(result).toEqual(
       expect.objectContaining({ ok: false, reason: "tool_capability_missing" }),

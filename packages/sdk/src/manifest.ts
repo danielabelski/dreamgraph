@@ -52,7 +52,7 @@ export type PhasePermission = z.infer<typeof PhasePermissionSchema>;
 export const PluginToolNameSchema = z
   .string()
   .min(3)
-  .regex(/^[a-z0-9][a-z0-9.-]*\.[a-z0-9][a-z0-9_-]*$/, "Tool names must be prefixed as <plugin-id>.<tool_name>");
+  .regex(/^[a-z0-9][a-z0-9_]*$/, "Tool names must be model-safe snake_case prefixed as <sanitized-plugin-id>_<tool_name> (lowercase a-z, 0-9, underscore only)");
 
 export const PluginResourceUriNamespaceSchema = z
   .string()

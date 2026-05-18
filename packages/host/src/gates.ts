@@ -25,7 +25,10 @@ export type GateResult =
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 
 function pluginIdPrefix(pluginId: string): string {
-  return `${pluginId}.`;
+  // Sanitize to snake_case: any non-alphanumeric/underscore char (including '.' and '-') becomes '_'.
+  // This must match the tool-name prefix produced by the SDK so plugins authored with dotted/hyphenated ids
+  // (e.g. "examples.hello-events") map cleanly to model-safe tool names like "examples_hello_events_greet".
+  return pluginId.replace(/[^a-zA-Z0-9_]/g, '_') + '_';
 }
 
 function pluginUriPrefix(pluginId: string): string {
