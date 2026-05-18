@@ -27,6 +27,7 @@ import { javaExtractor } from "../scanner/extractors/java.js";
 import { kotlinExtractor } from "../scanner/extractors/kotlin.js";
 import { pythonExtractor } from "../scanner/extractors/python.js";
 import { csharpExtractor } from "../scanner/extractors/csharp.js";
+import { goExtractor } from "../scanner/extractors/go.js";
 import { gradleExtractor } from "../scanner/extractors/gradle.js";
 import { linkProject } from "../scanner/orchestrator.js";
 import { CodeEntityKind, Relationship } from "../scanner/ontology.js";
@@ -43,7 +44,7 @@ import type { ProjectScan, ScannedFile } from "./scan-types.js";
  * wins for any given file; this matters for `.h` (C wins over C++) so
  * mixed projects don't double-parse headers.
  */
-const NATIVE_EXTRACTORS: readonly Extractor[] = [gradleExtractor, cExtractor, cppExtractor, rustExtractor, javaExtractor, kotlinExtractor, pythonExtractor, csharpExtractor];
+const NATIVE_EXTRACTORS: readonly Extractor[] = [gradleExtractor, cExtractor, cppExtractor, rustExtractor, javaExtractor, kotlinExtractor, pythonExtractor, csharpExtractor, goExtractor];
 
 const EXTENSION_TO_EXTRACTOR = new Map<string, Extractor>();
 for (const ext of NATIVE_EXTRACTORS) {
