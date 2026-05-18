@@ -83,9 +83,10 @@ const MAX_FILE_BYTES = 3072;
 /** File extensions we scan */
 const CODE_EXTENSIONS = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
-  ".py", ".rb", ".go", ".rs", ".java", ".kt", ".cs",
+  ".py", ".rb", ".go", ".rs", ".java", ".kt", ".kts", ".cs",
   ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
   ".vue", ".svelte", ".xaml", ".razor",
+  ".gradle",
 ]);
 
 /** Config / manifest files that reveal project structure */

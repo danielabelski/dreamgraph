@@ -1,0 +1,13 @@
+plugins {
+    id 'java-library'
+    id 'org.springframework.boot' version '3.0.0'
+}
+
+apply plugin: 'checkstyle'
+
+dependencies {
+    implementation 'org.apache.commons:commons-lang3:3.13.0'
+    api 'com.google.guava:guava:32.1.2-jre'
+    implementation project(':core')
+    testImplementation 'junit:junit:4.13.2'
+}

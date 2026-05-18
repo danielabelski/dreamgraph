@@ -27,6 +27,7 @@ import { javaExtractor } from "../scanner/extractors/java.js";
 import { kotlinExtractor } from "../scanner/extractors/kotlin.js";
 import { pythonExtractor } from "../scanner/extractors/python.js";
 import { csharpExtractor } from "../scanner/extractors/csharp.js";
+import { gradleExtractor } from "../scanner/extractors/gradle.js";
 import { linkProject } from "../scanner/orchestrator.js";
 import { CodeEntityKind, Relationship } from "../scanner/ontology.js";
 import { logger } from "../utils/logger.js";
@@ -42,7 +43,7 @@ import type { ProjectScan, ScannedFile } from "./scan-types.js";
  * wins for any given file; this matters for `.h` (C wins over C++) so
  * mixed projects don't double-parse headers.
  */
-const NATIVE_EXTRACTORS: readonly Extractor[] = [cExtractor, cppExtractor, rustExtractor, javaExtractor, kotlinExtractor, pythonExtractor, csharpExtractor];
+const NATIVE_EXTRACTORS: readonly Extractor[] = [gradleExtractor, cExtractor, cppExtractor, rustExtractor, javaExtractor, kotlinExtractor, pythonExtractor, csharpExtractor];
 
 const EXTENSION_TO_EXTRACTOR = new Map<string, Extractor>();
 for (const ext of NATIVE_EXTRACTORS) {
@@ -54,12 +55,18 @@ for (const ext of NATIVE_EXTRACTORS) {
 }
 
 function pickExtractor(file: ScannedFile): Extractor | undefined {
+  // Specialised matches() predicates take precedence over extension
+  // dispatch — e.g. the gradle extractor claims `build.gradle.kts`
+  // before kotlin can. Ordering follows NATIVE_EXTRACTORS registration.
+  for (const ext of NATIVE_EXTRACTORS) {
+    if (ext.matches && ext.matches(file)) return ext;
+  }
   return EXTENSION_TO_EXTRACTOR.get(file.ext.toLowerCase());
 }
 
 /** File-extension presence check used by `scan_project` to decide whether to invoke the bridge at all. */
 export function hasNativeCodeFiles(scan: ProjectScan): boolean {
-  return scan.files.some((f) => EXTENSION_TO_EXTRACTOR.has(f.ext.toLowerCase()));
+  return scan.files.some((f) => pickExtractor(f) !== undefined);
 }
 
 // ---------------------------------------------------------------------------

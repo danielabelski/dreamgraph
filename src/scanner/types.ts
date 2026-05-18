@@ -185,6 +185,15 @@ export interface Extractor {
   readonly extensions: readonly string[];
   /** True when backed by a real parser (tree-sitter etc.). */
   readonly parserBacked: boolean;
+  /**
+   * Optional filename-aware predicate. When present, the dispatch layer
+   * (`native-data-model.pickExtractor`) checks `matches(file)` BEFORE
+   * falling back to extension lookup. This lets specialised extractors
+   * (Gradle build scripts, Bazel BUILD files, etc.) claim files that
+   * would otherwise be routed to a general-purpose language extractor
+   * by extension. Implementations MUST be pure and synchronous.
+   */
+  matches?(file: { readonly name: string; readonly ext: string; readonly rel: string; readonly dirParts: readonly string[] }): boolean;
   /** Run the extractor against one file. */
   extract(file: ExtractFileInput): Promise<ExtractorOutput>;
 }
