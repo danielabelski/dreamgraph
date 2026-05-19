@@ -46,7 +46,7 @@ $VsCodeCliHints = @(
 function Write-Step([string]$msg) { Write-Host "`n$msg" -ForegroundColor Cyan }
 function Write-Ok([string]$msg)   { Write-Host "  $msg (ok)" -ForegroundColor Green }
 function Write-Warn([string]$msg) { Write-Host "  WARNING: $msg" -ForegroundColor Yellow }
-function Fail-Install([string]$msg) { Write-Error $msg; exit 1 }
+function Stop-Install([string]$msg) { Write-Error $msg; exit 1 }
 function Get-ArrayCount {
     param([AllowNull()]$Value)
     if ($null -eq $Value) { return 0 }
@@ -93,7 +93,7 @@ function Invoke-LoggedCommand {
     }
 
     if (-not $AllowFailure -and $exitCode -ne 0) {
-        Fail-Install "$FilePath $($Arguments -join ' ') failed with exit code $exitCode"
+        Stop-Install "$FilePath $($Arguments -join ' ') failed with exit code $exitCode"
     }
 
     return [pscustomobject]@{
@@ -106,7 +106,7 @@ function Test-CommandAvailable([string]$Name) {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-function Ensure-RootBuildDependencies {
+function Initialize-RootBuildDependencies {
     $requiredPaths = @(
         (Join-Path $SourceDir "node_modules"),
         (Join-Path $SourceDir "node_modules\typescript"),
@@ -120,7 +120,7 @@ function Ensure-RootBuildDependencies {
         Write-Host "  Installing root npm dependencies (including devDependencies)..." -ForegroundColor Cyan
         $result = Invoke-LoggedCommand -FilePath "npm" -Arguments @("install", "--include=dev", "--loglevel=warn") -WorkingDirectory $SourceDir
         if ($result.ExitCode -ne 0) {
-            Fail-Install "Root npm install failed (exit code $($result.ExitCode))"
+            Stop-Install "Root npm install failed (exit code $($result.ExitCode))"
         }
         Write-Ok "Root build dependencies installed"
     }
@@ -148,7 +148,7 @@ function Test-CanBuildVsCodeExtension {
     return (Test-Path $extSourceDir)
 }
 
-function Ensure-ExtensionBuildDependencies {
+function Initialize-ExtensionBuildDependencies {
     $extSourceDir = Join-Path $SourceDir "extensions\vscode"
     $tsPath = Join-Path $extSourceDir "node_modules\typescript"
     $esbuildPath = Join-Path $extSourceDir "node_modules\esbuild"
@@ -157,7 +157,7 @@ function Ensure-ExtensionBuildDependencies {
         Write-Host "  Installing VS Code extension build dependencies..." -ForegroundColor Cyan
         $result = Invoke-LoggedCommand -FilePath "npm" -Arguments @("install", "--loglevel=warn") -WorkingDirectory $extSourceDir
         if ($result.ExitCode -ne 0) {
-            Fail-Install "VS Code extension npm install failed (exit code $($result.ExitCode))"
+            Stop-Install "VS Code extension npm install failed (exit code $($result.ExitCode))"
         }
         Write-Ok "VS Code extension build dependencies installed"
     }
@@ -227,29 +227,29 @@ Write-Step "Checking prerequisites..."
 
 $nodeVersion = & node --version 2>$null
 if (-not $nodeVersion) {
-    Fail-Install "Node.js is required but not found. Install from https://nodejs.org/"
+    Stop-Install "Node.js is required but not found. Install from https://nodejs.org/"
 }
 $major = [int]($nodeVersion -replace '^v(\d+)\..*', '$1')
 if ($major -lt 20) {
-    Fail-Install "Node.js >= 20 required (found $nodeVersion). Install Node 20 LTS or newer from https://nodejs.org/"
+    Stop-Install "Node.js >= 20 required (found $nodeVersion). Install Node 20 LTS or newer from https://nodejs.org/"
 }
 Write-Ok "Node.js $nodeVersion"
 
 $npmVersion = & npm --version 2>$null
 if (-not $npmVersion) {
-    Fail-Install "npm is required but not found."
+    Stop-Install "npm is required but not found."
 }
 Write-Ok "npm $npmVersion"
 
 # -- Validate source ------------------------------------------------
 $packageJsonPath = Join-Path $SourceDir "package.json"
 if (-not (Test-Path $packageJsonPath)) {
-    Fail-Install "No package.json found at $SourceDir. Is this the DreamGraph repo?"
+    Stop-Install "No package.json found at $SourceDir. Is this the DreamGraph repo?"
 }
 
 $pkg = Get-Content $packageJsonPath -Raw | ConvertFrom-Json
 if ($pkg.name -ne "dreamgraph") {
-    Fail-Install "package.json does not appear to be DreamGraph (name: $($pkg.name))"
+    Stop-Install "package.json does not appear to be DreamGraph (name: $($pkg.name))"
 }
 $version = $pkg.version
 Write-Ok "DreamGraph v$version source at $SourceDir"
@@ -271,16 +271,16 @@ if ((Test-Path $DistTarget) -and -not $Force) {
 
 # -- Build ----------------------------------------------------------
 Write-Step "Building DreamGraph..."
-Ensure-RootBuildDependencies
+Initialize-RootBuildDependencies
 $result = Invoke-LoggedCommand -FilePath "npm" -Arguments @("run", "build") -WorkingDirectory $SourceDir
 if ($result.ExitCode -ne 0) {
-    Fail-Install "Build failed with exit code $($result.ExitCode)"
+    Stop-Install "Build failed with exit code $($result.ExitCode)"
 }
 Write-Ok "Build complete"
 
 $SourceDist = Join-Path $SourceDir "dist"
 if (-not (Test-Path $SourceDist)) {
-    Fail-Install "dist/ directory not found after build"
+    Stop-Install "dist/ directory not found after build"
 }
 
 # -- Deploy ---------------------------------------------------------
@@ -313,7 +313,7 @@ foreach ($wsName in $workspacePackages) {
         "--loglevel=warn"
     ) -WorkingDirectory $SourceDir -Quiet
     if ($packResult.ExitCode -ne 0) {
-        Fail-Install "npm pack $wsName failed (exit code $($packResult.ExitCode))"
+        Stop-Install "npm pack $wsName failed (exit code $($packResult.ExitCode))"
     }
     # The tarball name is "<scope>-<name>-<version>.tgz" (scope dash-folded).
     $tarballLine = @($packResult.Output) | Where-Object { $_ -is [string] -and $_ -match "\.tgz$" } | Select-Object -Last 1
@@ -325,7 +325,7 @@ foreach ($wsName in $workspacePackages) {
         $tarballLine = (Split-Path -Leaf ($tarballLine.ToString().Trim()))
     }
     if (-not $tarballLine) {
-        Fail-Install "Could not determine tarball name for $wsName"
+        Stop-Install "Could not determine tarball name for $wsName"
     }
     $workspaceTarballs[$wsName] = "file:./vendor/$tarballLine"
     Write-Ok "Packed $wsName -> vendor/$tarballLine"
@@ -369,7 +369,7 @@ if (Test-Path $binLockFile) {
 }
 $result = Invoke-LoggedCommand -FilePath "npm" -Arguments @("install", "--omit=dev", "--loglevel=warn") -WorkingDirectory $BinDir
 if ($result.ExitCode -ne 0) {
-    Fail-Install "npm install failed (exit code $($result.ExitCode))"
+    Stop-Install "npm install failed (exit code $($result.ExitCode))"
 }
 Write-Ok "Dependencies installed"
 
@@ -416,7 +416,7 @@ if (Test-CanBuildVsCodeExtension) {
         $vsixName = "$($extPkg.name)-$($extPkg.version).vsix"
         $vsixPath = Join-Path $ExtSourceDir $vsixName
 
-        Ensure-ExtensionBuildDependencies
+        Initialize-ExtensionBuildDependencies
         $buildResult = Invoke-LoggedCommand -FilePath "npm" -Arguments @("run", "build") -WorkingDirectory $ExtSourceDir -AllowFailure
         if ($buildResult.ExitCode -ne 0) {
             Write-Warn "Extension build failed -- skipping VS Code extension install"
