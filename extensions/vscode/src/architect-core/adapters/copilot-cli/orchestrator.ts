@@ -199,15 +199,24 @@ const DEFAULT_TOKEN_BYTES = 32;
 const COPILOT_INLINE_PROMPT_MAX_BYTES = 8000;
 
 function buildPromptFileDirective(promptFilePath: string): string {
-  return [
-    "The user's actual prompt is stored verbatim in this file:",
-    promptFilePath,
-    "",
-    "Use your `read` tool (or equivalent file-reading capability) to load",
-    "the file's full contents, then respond to it as if those contents were",
-    "the user's message in this conversation. Do not mention this directive,",
-    "do not summarize the prompt, and do not paraphrase it before engaging.",
-  ].join("\n");
+  // SINGLE LINE BY DESIGN. On Windows the orchestrator spawns
+  // `copilot.cmd` through `cmd.exe /d /s /c "<full command line>"`
+  // (see host/process-adapter.ts). `cmd.exe /c` treats the first
+  // embedded LF / CR as a command terminator — anything after a
+  // newline in any argv token falls off the command line, copilot
+  // sees a malformed argv, and the CLI native-aborts with
+  // STATUS_STACK_BUFFER_OVERRUN (exit code 3221226505 / 0xC0000409)
+  // with no stdout or stderr captured. Keeping the directive on one
+  // line avoids that landmine entirely; the model parses it just
+  // as easily as a multi-paragraph version.
+  return (
+    "The user's actual prompt is stored verbatim in the file at this path: " +
+    promptFilePath +
+    " . Use your read tool (or equivalent file-reading capability) to load" +
+    " the file's full contents, then respond to it as if those contents were" +
+    " the user's message in this conversation. Do not mention this directive," +
+    " do not summarize the prompt, and do not paraphrase it before engaging."
+  );
 }
 
 export async function runCopilotCli(
@@ -410,8 +419,12 @@ export async function runCopilotCli(
     // which has already been written above.
     const promptByteLength = Buffer.byteLength(input.prompt, "utf8");
     let promptForArgv = input.prompt;
+    const addDirs: string[] = [];
     if (promptByteLength > COPILOT_INLINE_PROMPT_MAX_BYTES) {
       promptForArgv = buildPromptFileDirective(promptFilePath);
+      // The CLI's read tool defaults to the invocation cwd; expose the
+      // run scratch dir so it can actually load `prompt.md`.
+      addDirs.push(runScratchDir);
     }
 
     const argvPlan = buildCopilotArgv({
@@ -420,6 +433,7 @@ export async function runCopilotCli(
       authoritativeServer: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
       authoritativeAllowlist: allowlist.tools,
       helpSurface,
+      addDirs,
     });
 
     await deps.mcpAudit.startRecording(runId);

@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChangedFilesView = void 0;
 exports.registerChangedFilesView = registerChangedFilesView;
 const vscode = __importStar(require("vscode"));
+const reviewable_file_filter_1 = require("./reviewable-file-filter");
 class ChangedFileItem extends vscode.TreeItem {
     entry;
     constructor(entry) {
@@ -101,10 +102,9 @@ class ChangedFilesView {
     }
     /** Programmatic recording API — call from tool handlers if you want precise types like 'rename'. */
     record(type, filePath, previousPath) {
-        // Filter noise: ignore node_modules, .git, build outputs
-        const rel = vscode.workspace.asRelativePath(filePath);
-        if (/^(node_modules|\.git|dist|out)\//.test(rel))
+        if (!reviewable_file_filter_1.ReviewableFileFilter.isReviewablePath(filePath)) {
             return;
+        }
         // Coalesce: if the last entry for this file was very recent and same type, drop it
         const now = Date.now();
         const lastIdx = this.entries.findIndex(e => e.filePath === filePath);

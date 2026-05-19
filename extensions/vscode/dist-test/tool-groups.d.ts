@@ -20,7 +20,7 @@ export declare const TOOL_GROUPS: {
     /** File writes — only when intent is clearly mutating. */
     readonly core_write: readonly ["edit_file", "create_file", "rename_file", "delete_file", "write_file", "modify_entity", "run_command", "append_to_file", "patch_file", "edit_markdown_section", "patch_markdown_chapter"];
     /** Graph mutations — knowledge-graph editing. */
-    readonly graph_write: readonly ["enrich_seed_data", "solidify_cognitive_insight", "register_ui_element", "modify_api_surface", "edit_entity"];
+    readonly graph_write: readonly ["enrich_seed_data", "enrich_parser_nodes", "solidify_cognitive_insight", "register_ui_element", "modify_api_surface", "edit_entity"];
     /** ADR lifecycle. */
     readonly adr: readonly ["record_architecture_decision", "query_architecture_decisions", "deprecate_architecture_decision"];
     /** Cognitive read-only inspection. */

@@ -19,6 +19,7 @@ const AVAILABLE = [
     'dream_cycle',
     'normalize_dreams',
     'enrich_seed_data',
+    'enrich_parser_nodes',
 ];
 (0, node_test_1.default)('primed tool is exposed even when next prompt is terse', () => {
     const decision = (0, tool_groups_js_1.selectToolGroups)({

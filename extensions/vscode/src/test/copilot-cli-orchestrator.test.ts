@@ -383,7 +383,7 @@ test("orchestrator: happy path runs all six steps and returns ok=true", async ()
   assert.equal(spawned.env.PATH, "/usr/bin");
   assert.deepEqual([...spawned.args], [...result.argvPlan!.args]);
   assert.ok(spawned.args.includes("--allow-tool"));
-  assert.ok(spawned.args.includes("dreamgraph:query_resource"));
+  assert.ok(spawned.args.includes("dreamgraph(query_resource)"));
   assert.ok(spawned.args.includes("--allow-all-tools"));
   // No `--additional-mcp-config` on argv — MCP config travels by file.
   assert.equal(spawned.args.includes("--additional-mcp-config"), false);

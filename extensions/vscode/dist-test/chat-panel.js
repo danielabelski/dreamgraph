@@ -53,12 +53,14 @@ const entity_links_js_1 = require("./webview/entity-links.js");
 const card_renderer_js_1 = require("./webview/card-renderer.js");
 const architect_llm_1 = require("./architect-llm");
 const local_tools_js_1 = require("./local-tools.js");
+const change_review_service_1 = require("./change-review-service");
 const index_js_1 = require("./prompts/index.js");
 const tool_groups_js_1 = require("./tool-groups.js");
 const runner_js_1 = require("./architect-core/runner.js");
 const index_js_2 = require("./architect-core/adapters/copilot-cli/index.js");
 const autonomy_js_1 = require("./autonomy.js");
 const autonomy_loop_js_1 = require("./autonomy-loop.js");
+const tool_classification_js_1 = require("./tool-classification.js");
 const autonomy_structured_js_1 = require("./autonomy-structured.js");
 const envelope_utils_js_1 = require("./envelope-utils.js");
 const reporting_js_1 = require("./reporting.js");
@@ -179,6 +181,45 @@ function _elideStaleToolResults(rawMessages, keepLastPairs) {
         });
     }
 }
+function summarizePendingReviewDiff(before, after) {
+    if (before === after) {
+        return { addedLines: 0, deletedLines: 0, previewLines: [] };
+    }
+    const normalizeLines = (text) => {
+        if (text.length === 0)
+            return [];
+        const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+        if (lines.length > 0 && lines[lines.length - 1] === '')
+            lines.pop();
+        return lines;
+    };
+    const beforeLines = normalizeLines(before);
+    const afterLines = normalizeLines(after);
+    let prefix = 0;
+    while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix])
+        prefix++;
+    let beforeEnd = beforeLines.length - 1;
+    let afterEnd = afterLines.length - 1;
+    while (beforeEnd >= prefix && afterEnd >= prefix && beforeLines[beforeEnd] === afterLines[afterEnd]) {
+        beforeEnd--;
+        afterEnd--;
+    }
+    const deleted = beforeLines.slice(prefix, beforeEnd + 1);
+    const added = afterLines.slice(prefix, afterEnd + 1);
+    const previewLines = [];
+    const maxPreview = 12;
+    for (const line of deleted.slice(0, maxPreview)) {
+        previewLines.push({ kind: 'delete', text: line });
+    }
+    for (const line of added.slice(0, Math.max(0, maxPreview - previewLines.length))) {
+        previewLines.push({ kind: 'add', text: line });
+    }
+    return {
+        addedLines: added.length,
+        deletedLines: deleted.length,
+        previewLines,
+    };
+}
 class ChatPanel {
     context;
     static viewType = 'dreamgraph.chatView';
@@ -208,6 +249,7 @@ class ChatPanel {
     _domPurifySource = null;
     /** Cached URI to bundled webview runtime for Slice 3 Option C migration. */
     _webviewBundleUri = null;
+    _pendingReviewsCollapsed = true;
     _lastToolTrace = [];
     /** Set when the report-required guard has already forced a final report
      * turn for the current run, so we don't loop forever asking for reports. */
@@ -492,6 +534,31 @@ class ChatPanel {
                     this._resetAutonomy();
                     break;
                 }
+                case 'refreshPendingReviews': {
+                    await this._postPendingReviews();
+                    break;
+                }
+                case 'togglePendingReviews': {
+                    this._pendingReviewsCollapsed = !this._pendingReviewsCollapsed;
+                    await this._postPendingReviews();
+                    break;
+                }
+                case 'keepPendingReview': {
+                    const result = await change_review_service_1.changeReviewService.keep(message.filePath);
+                    void vscode.window.showInformationMessage(result.message);
+                    await this._postPendingReviews();
+                    break;
+                }
+                case 'undoPendingReview': {
+                    const result = await change_review_service_1.changeReviewService.undo(message.filePath);
+                    void vscode.window.showInformationMessage(result.message);
+                    await this._postPendingReviews();
+                    break;
+                }
+                case 'openPendingReview': {
+                    await this._openPendingReviewDiff(message.filePath);
+                    break;
+                }
             }
         }, null, this.disposables);
         await this.rehydrateWebview();
@@ -738,7 +805,31 @@ class ChatPanel {
             // Force the no-tools branch and let `runPassViaCopilotCli` own
             // the turn end-to-end.
             const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
-            const effectiveTools = copilotCliRoute ? [] : tools;
+            let effectiveTools = copilotCliRoute ? [] : tools;
+            // Cross-turn write-pressure narrowing. The autonomy-continuation path
+            // (see ~line 2459) already narrows the live tool catalog to write+verify
+            // when both the prior and current pass were locate-only with a sticky
+            // anchor. But when the user manually re-clicks a "Patch …" action chip
+            // (or otherwise starts a fresh non-continuation pass) the autonomy
+            // state still carries `lastPassWasLocateOnly === true` and a non-empty
+            // `lastAnchorPaths` from the previous turn, yet the catalog is
+            // rebuilt from intent classification alone — typically full of read
+            // tools. That is exactly the loop the user kept hitting: "Discovered
+            // … no code changes were applied this turn" repeating across manual
+            // re-clicks. Mirror the same narrowing here so the next manual retry
+            // is forced toward the write path. `narrowToWriteAndVerify` already
+            // falls back to the full catalog if narrowing would empty it, so
+            // this is always safe.
+            if (!copilotCliRoute
+                && effectiveTools.length > 0
+                && this._autonomyState.lastPassWasLocateOnly === true
+                && (this._autonomyState.lastAnchorPaths?.length ?? 0) > 0) {
+                const narrowed = (0, tool_classification_js_1.narrowToWriteAndVerify)(effectiveTools);
+                if (narrowed.length > 0 && narrowed.length < effectiveTools.length) {
+                    this.contextInspector?.appendContextLine(`Tool narrowing (cross-turn write-pressure): ${narrowed.length}/${effectiveTools.length} tools — sticky anchor + prior pass was locate-only.`);
+                    effectiveTools = narrowed;
+                }
+            }
             if (effectiveTools.length > 0) {
                 fullContent = await this.runAgenticLoop(conversation, effectiveTools);
             }
@@ -932,6 +1023,10 @@ class ChatPanel {
         const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
             ? timeoutMsRaw
             : 180_000;
+        const toolListTimeoutMsRaw = cfg.get('copilotCli.toolListTimeoutMs');
+        const toolListTimeoutMs = typeof toolListTimeoutMsRaw === 'number' && Number.isFinite(toolListTimeoutMsRaw) && toolListTimeoutMsRaw > 0
+            ? toolListTimeoutMsRaw
+            : undefined;
         const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
         const auditDirAbsPath = vscode.Uri.joinPath(this.context.globalStorageUri, 'copilot-cli-audit').fsPath;
         const bridgeEntryPath = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'copilot-cli-bridge.js').fsPath;
@@ -940,6 +1035,7 @@ class ChatPanel {
             bridgeEntryPath,
             nodeExecPath: process.execPath,
             auditDirAbsPath,
+            ...(toolListTimeoutMs !== undefined ? { toolListTimeoutMs } : {}),
         });
         const mcpAudit = (0, index_js_2.createHostAudit)({ auditDirAbsPath });
         const model = llm.currentConfig?.model;
@@ -1413,12 +1509,69 @@ class ChatPanel {
         if (this.draftText)
             await this.postMessage({ type: 'restoreDraft', text: this.draftText });
         await this._syncAttachments();
+        await this._postPendingReviews();
         // Patch #1.5: always broadcast autonomy state so the header dropdown +
         // pass-budget pill stay populated even when the active mode is cautious.
         this._broadcastAutonomyStatus();
     }
     async postState() {
         await this.postMessage({ type: 'state', state: { messages: this.messages } });
+        await this._postPendingReviews();
+    }
+    async _postPendingReviews() {
+        const reviews = await Promise.all(change_review_service_1.changeReviewService.getPendingReviews().map((review) => this._toPendingReviewViewModel(review)));
+        if (reviews.length === 0) {
+            this._pendingReviewsCollapsed = true;
+        }
+        await this.postMessage({ type: 'pendingReviews', reviews, collapsed: this._pendingReviewsCollapsed });
+    }
+    async _toPendingReviewViewModel(review) {
+        const diff = await this._summarizePendingReviewDiff(review);
+        return {
+            filePath: review.filePath,
+            relativePath: vscode.workspace.asRelativePath(review.filePath),
+            status: review.status === 'conflict' ? 'conflict' : 'pending',
+            baselineKind: review.baselineKind,
+            currentKind: review.currentKind,
+            updatedAt: review.updatedAt,
+            addedLines: diff.addedLines,
+            deletedLines: diff.deletedLines,
+            previewLines: diff.previewLines,
+        };
+    }
+    async _summarizePendingReviewDiff(review) {
+        const decoder = new TextDecoder('utf-8');
+        const before = review.baselineContent ? decoder.decode(review.baselineContent) : '';
+        let after = '';
+        if (review.currentKind !== 'deleted') {
+            try {
+                after = decoder.decode(await vscode.workspace.fs.readFile(vscode.Uri.file(review.filePath)));
+            }
+            catch {
+                after = '';
+            }
+        }
+        return summarizePendingReviewDiff(before, after);
+    }
+    async _openPendingReviewDiff(filePath) {
+        const review = change_review_service_1.changeReviewService.getPendingReview(filePath);
+        const fileUri = vscode.Uri.file(filePath);
+        if (!review) {
+            await vscode.commands.executeCommand('vscode.open', fileUri);
+            return;
+        }
+        const currentDoc = await vscode.workspace.openTextDocument(fileUri);
+        const currentText = currentDoc.getText();
+        const baselineText = review.baselineContent ? Buffer.from(review.baselineContent).toString('utf8') : '';
+        const baselineUri = fileUri.with({ scheme: 'untitled', path: `${fileUri.path}.dreamgraph-baseline` });
+        await vscode.workspace.openTextDocument(baselineUri);
+        const baselineEdit = new vscode.WorkspaceEdit();
+        baselineEdit.insert(baselineUri, new vscode.Position(0, 0), baselineText);
+        await vscode.workspace.applyEdit(baselineEdit);
+        await vscode.commands.executeCommand('vscode.diff', baselineUri, fileUri, `Pending Review: ${vscode.workspace.asRelativePath(filePath)}`);
+        if (currentText.length === 0 && review.currentKind === 'deleted') {
+            void vscode.window.showInformationMessage('Current file is deleted; diff shows baseline versus current state.');
+        }
     }
     getActionLogForTest() {
         return this._actionLog;
@@ -1540,16 +1693,6 @@ class ChatPanel {
         if (message.role === 'assistant') {
             if (message.content.includes('[Response truncated]')) {
                 actions.push({ id: 'show-full', label: 'Show full', kind: 'primary', actionType: 'show_full' });
-            }
-            if (this._lastToolTrace.length > 0) {
-                actions.push({
-                    id: 'show-trace',
-                    label: 'Show tool trace',
-                    kind: 'secondary',
-                    actionType: 'tool',
-                    toolName: 'query_self_metrics',
-                    toolArgs: { flush_to_disk: false },
-                });
             }
         }
         return actions;
@@ -1811,6 +1954,25 @@ class ChatPanel {
     _checkApiKeyWarning() {
         // noop preserved behavior if implemented elsewhere
     }
+    _architectSettingsTarget() {
+        return vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    }
+    _defaultArchitectBaseUrl(provider) {
+        switch (provider) {
+            case 'anthropic':
+                return 'https://api.anthropic.com/v1';
+            case 'openai':
+                return 'https://api.openai.com/v1';
+            case 'ollama':
+                return 'http://localhost:11434';
+            case 'lmstudio':
+                return 'http://localhost:1234/v1';
+            case 'copilot-cli':
+                return '';
+            default:
+                return '';
+        }
+    }
     async _changeProvider(provider) {
         // Update in-memory config immediately so _sendModelUpdate reads the new value.
         if (this.architectLlm) {
@@ -1820,6 +1982,7 @@ class ChatPanel {
                         : [];
             const previousModel = this.architectLlm.currentConfig?.model ?? '';
             const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
+            const baseUrl = this._defaultArchitectBaseUrl(provider);
             // Keyless providers: ollama (no auth), lmstudio (fixed literal
             // placeholder; the LM Studio server ignores the auth header but
             // the OpenAI-compat code path sends one regardless), and
@@ -1835,18 +1998,20 @@ class ChatPanel {
             this.architectLlm.applyConfig({
                 provider,
                 model: defaultModel,
-                baseUrl: '',
+                baseUrl,
                 apiKey,
             });
         }
         this._sendModelUpdate();
         await this._syncAttachments();
-        // Persist to settings in background (do NOT call loadConfig — it would race)
+        // Persist to the workspace when a project is open; workspace settings win over globals on reload.
         const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+        const target = this._architectSettingsTarget();
         const defaultModel = this.architectLlm?.currentConfig?.model ?? '';
-        void cfg.update('provider', provider, vscode.ConfigurationTarget.Global);
+        void cfg.update('provider', provider, target);
         if (defaultModel)
-            void cfg.update('model', defaultModel, vscode.ConfigurationTarget.Global);
+            void cfg.update('model', defaultModel, target);
+        void cfg.update('baseUrl', this._defaultArchitectBaseUrl(provider), target);
     }
     async _changeModel(model) {
         // Update in-memory config immediately so _sendModelUpdate reads the new value.
@@ -1861,8 +2026,8 @@ class ChatPanel {
         }
         this._sendModelUpdate();
         await this._syncAttachments();
-        // Persist to settings in background (do NOT call loadConfig — it would race)
-        void vscode.workspace.getConfiguration('dreamgraph.architect').update('model', model, vscode.ConfigurationTarget.Global);
+        // Persist to the workspace when a project is open; workspace settings win over globals on reload.
+        void vscode.workspace.getConfiguration('dreamgraph.architect').update('model', model, this._architectSettingsTarget());
     }
     static MAX_TOOL_ITERATIONS = 32;
     static MAX_RETRIES = 3;
@@ -1952,10 +2117,37 @@ class ChatPanel {
             },
         });
     }
+    /**
+     * Lever 2 — bind a concrete write tool to apply/patch-style recommended
+     * actions when the model emitted them without a `tool` (or with a
+     * read-only one). Pure: returns a new array; never mutates inputs.
+     * Falls through (no binding) when no write tool is available in the
+     * live catalog so the loop never deadlocks.
+     */
+    static _bindWriteToolToAnchorActions(actions, tools) {
+        const writeTool = (0, tool_classification_js_1.pickPreferredWriteTool)(tools);
+        if (!writeTool)
+            return actions.map((a) => ({ ...a }));
+        return actions.map((a) => {
+            const isApplyLabel = tool_classification_js_1.APPLY_LABEL_PATTERN.test(a.label);
+            const toolMissingOrRead = !a.tool || !(0, tool_classification_js_1.isWriteToolName)(a.tool);
+            if (isApplyLabel && toolMissingOrRead) {
+                return { ...a, tool: writeTool };
+            }
+            return { ...a };
+        });
+    }
     async _handleAutonomyPassComplete(content, messageId, llmMessages, tools) {
-        // Extract structured envelope and build recommended actions
+        // Extract structured envelope and build recommended actions.
         const envelope = (0, autonomy_structured_js_1.extractStructuredPassEnvelope)(content);
-        const actions = envelope.nextSteps;
+        // Lever 2 — bind a concrete write tool to apply/patch-style actions
+        // when the model emitted them with a missing or read-only `tool`
+        // field. The continuation prompt then has a binding to suggest and
+        // the model is far less likely to default back to a search/read tool
+        // on the next pass. This is the soft hint; Lever 1 (catalog
+        // narrowing on the second sticky-anchor locate-only pass) is the
+        // hard fallback. Both layers are token-economy at task level.
+        const actions = ChatPanel._bindWriteToolToAnchorActions(envelope.nextSteps, tools);
         this._lastRecommendedActions = actions;
         // Tool / file-edit accounting drives the empty-pass detector. Without
         // these, a pass that only printed "Autonomy counters: ..." with no real
@@ -2002,6 +2194,13 @@ class ChatPanel {
         // (see card-renderer.ts renderEnvelope). No separate broadcast needed —
         // it would duplicate the buttons below the assistant message.
         if (result.decision.shouldContinue && !this.abortController?.signal.aborted) {
+            // Capture the prior locate-only marker BEFORE advancing state — Lever 1
+            // narrows the next pass's tool catalog when the prior pass was already
+            // locate-only AND the just-completed pass was also locate-only AND a
+            // sticky patch anchor is in play. We mechanically eliminate the
+            // ability of the model to spend another turn on pure reads instead of
+            // hard-stopping the loop ("no failure: keep going until done").
+            const priorPassWasLocateOnly = this._autonomyState.lastPassWasLocateOnly === true;
             // Advance state and continue
             this._autonomyState = (0, autonomy_loop_js_1.advanceAutonomyStateIfContinued)(this._autonomyState, result.decision, result.signal, result.patchAnchorEstablished, result.anchorPaths, result.isLocateOnlyThisPass);
             this._broadcastAutonomyStatus();
@@ -2035,10 +2234,20 @@ class ChatPanel {
             this.messages.push(notice);
             await this.persistMessages();
             await this.postMessage({ type: 'addMessage', message: notice, actions: [], roleMeta: this._roleMetaFor(notice), contextFooter: undefined });
-            // Trigger next pass
+            // Trigger next pass.
+            // Lever 1 — narrow the live tool catalog to write+verify only when
+            // BOTH the prior and the just-completed pass were locate-only AND a
+            // patch anchor is sticky. The narrower keeps the loop alive (it
+            // falls back to the full catalog if it would otherwise empty out)
+            // and applies pressure exactly where the model is wasting tokens
+            // re-reading instead of writing.
+            const shouldNarrow = result.patchAnchorEstablished
+                && priorPassWasLocateOnly
+                && result.isLocateOnlyThisPass;
+            const effectiveTools = shouldNarrow ? (0, tool_classification_js_1.narrowToWriteAndVerify)(tools) : tools;
             const continuationPrompt = result.nextPrompt
                 ?? (0, autonomy_loop_js_1.buildContinuationPrompt)(selectedAction, { patchAnchorEstablished: result.patchAnchorEstablished });
-            await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, tools, result.actionSet.actions);
+            await this._runAutonomyContinuationPass(continuationPrompt, llmMessages, effectiveTools, result.actionSet.actions);
         }
         else {
             // ──────────────────────────────────────────────────────────────────
@@ -2537,17 +2746,34 @@ class ChatPanel {
         let finalText = '';
         let pass = 0;
         const maxPasses = 12;
-        // Phase A — task-level token-economy: track read vs write tool calls inside
-        // this single agentic loop. Once the model has spent WRITE_RESERVATION_READ_THRESHOLD
-        // reads with zero writes, inject a synthetic user message that reserves the
-        // remaining iterations of this loop for write/verification calls only. The
-        // canonical anti-pattern this guards against is post-anchor re-reading: the
-        // model has already located the patch site but keeps re-confirming instead
-        // of editing, burning tokens at task level even when each individual call
-        // stays under the per-pass BudgetCoordinator ceiling.
+        // Phase A — task-level token-economy: nudge the model toward writes when it
+        // is stuck re-reading already-located content. The reservation is a
+        // synthetic user message injected after the model has spent
+        // WRITE_RESERVATION_READ_THRESHOLD CONSECUTIVE reads (no intervening write).
+        // It is **lifted automatically** the next time any write tool runs in this
+        // loop, and may re-arm later if the model returns to read-only spam without
+        // further writes. The counter resets on any write — including
+        // patch_markdown_chapter, edit_markdown_section, edit_entity, create_file,
+        // delete_file, and any other non-read-prefixed tool — so the constraint
+        // never "holds on" after legitimate progress.
+        //
+        // GATE: the reservation only arms when a prior pass established a sticky
+        // patch anchor (`AutonomyState.lastAnchorPaths` non-empty). Fresh user
+        // prompts and read-only / assess tasks never have this set, so they read
+        // freely. The constraint exists to apply write-pressure when a write was
+        // ALREADY IMPLIED AND ANCHORED by the previous pass — not to ban
+        // prerequisite reads on tasks that are inherently read-only. Allowed even
+        // under pressure: exact body required for safe patch, post-write
+        // verification reads, stale-anchor recovery, and reading a newly
+        // identified concrete blocker target. Discouraged: broad search,
+        // re-reading already-inspected files, relocating the same anchor,
+        // "just to be sure" discovery.
+        const hasStickyAnchorFromPriorPass = Array.isArray(this._autonomyState.lastAnchorPaths)
+            && this._autonomyState.lastAnchorPaths.length > 0;
         const WRITE_RESERVATION_READ_THRESHOLD = 8;
         let totalReadToolCalls = 0;
         let totalWriteToolCalls = 0;
+        let readsSinceLastWrite = 0;
         let writeReservationInjected = false;
         while (pass < maxPasses) {
             pass += 1;
@@ -2592,10 +2818,20 @@ class ChatPanel {
                 for (const toolCall of response.toolCalls) {
                     const toolStartedAt = Date.now();
                     await this.postMessage({ type: 'tool-progress', tool: toolCall.name, message: `Running ${toolCall.name}…` });
+                    const reviewSnapshot = (0, tool_classification_js_1.isWriteToolName)(toolCall.name)
+                        ? await change_review_service_1.changeReviewService.captureWorkspaceSnapshot()
+                        : null;
                     try {
                         const result = (0, local_tools_js_1.isLocalTool)(toolCall.name)
                             ? await (0, local_tools_js_1.executeLocalTool)(toolCall.name, toolCall.input ?? {})
                             : await this._callMcpToolWithLazyConnect(toolCall.name, toolCall.input ?? {});
+                        if (reviewSnapshot) {
+                            const changedReviewPaths = await change_review_service_1.changeReviewService.recordWorkspaceChanges(reviewSnapshot);
+                            if (changedReviewPaths.length > 0) {
+                                this._pendingReviewsCollapsed = true;
+                                await this._postPendingReviews();
+                            }
+                        }
                         const rawString = this._stringifyToolResult(result);
                         // Phase 4 — pressure-aware multi-tier compression. The coordinator
                         // owns the policy via getPressure()/getRemainingTargetTokens() and
@@ -2629,6 +2865,18 @@ class ChatPanel {
                         await this.postMessage({ type: 'tool-progress', tool: toolCall.name, message: `${toolCall.name} done` });
                     }
                     catch (toolErr) {
+                        if (reviewSnapshot) {
+                            try {
+                                const changedReviewPaths = await change_review_service_1.changeReviewService.recordWorkspaceChanges(reviewSnapshot);
+                                if (changedReviewPaths.length > 0) {
+                                    this._pendingReviewsCollapsed = true;
+                                    await this._postPendingReviews();
+                                }
+                            }
+                            catch (reviewErr) {
+                                console.warn('[DreamGraph] Failed to record pending review changes after failed write tool:', reviewErr);
+                            }
+                        }
                         const toolError = toolErr instanceof Error ? toolErr.message : String(toolErr);
                         toolResultBlocks.push({
                             type: 'tool_result',
@@ -2652,31 +2900,61 @@ class ChatPanel {
                 // content with a short stub. This prevents quadratic growth when the loop
                 // runs many passes (each pass otherwise re-sends every prior tool_result in full).
                 _elideStaleToolResults(rawMessages, /*keepLastPairs*/ 6);
-                // Phase A — tally read/write split for THIS iteration's tool batch and,
-                // if the threshold has been crossed with zero writes, inject the
-                // write-reservation nudge as a synthetic user message before the next
-                // iteration. Fired at most once per loop.
+                // Phase A — tally read/write split for THIS iteration's tool batch.
+                // Track reads-since-last-write so the reservation can self-lift the
+                // moment any write tool runs, and re-arm later if the model goes back
+                // to read-only spam without writing. Any non-read-prefixed tool counts
+                // as a write here — patch_markdown_chapter, edit_markdown_section,
+                // create_file, edit_entity, run_command, etc. — which matches the
+                // common-sense "the model is making progress" signal.
+                let writesThisPass = 0;
                 for (const tc of response.toolCalls) {
                     if ((0, autonomy_loop_js_1.isReadOnlyTool)(tc.name)) {
                         totalReadToolCalls += 1;
+                        readsSinceLastWrite += 1;
                     }
                     else {
                         totalWriteToolCalls += 1;
+                        writesThisPass += 1;
+                        readsSinceLastWrite = 0;
                     }
                 }
+                // Reset trigger: any write call in this pass lifts an active
+                // reservation and clears the read counter. The next reservation can
+                // only fire if the model spends WRITE_RESERVATION_READ_THRESHOLD
+                // consecutive reads AGAIN without writing.
+                if (writeReservationInjected && writesThisPass > 0) {
+                    writeReservationInjected = false;
+                    rawMessages.push({
+                        role: 'user',
+                        content: [{
+                                type: 'text',
+                                text: `Write observed (${writesThisPass} this pass, ${totalWriteToolCalls} total write call${totalWriteToolCalls === 1 ? '' : 's'} this turn). `
+                                    + `The earlier write-reservation nudge is LIFTED. `
+                                    + `You may resume normal read+write cadence — including read-back, `
+                                    + `verification, and additional discovery as needed for the next change. `
+                                    + `The constraint will only re-arm if you go back to reading without writing.`,
+                            }],
+                    });
+                }
                 if (!writeReservationInjected
-                    && totalReadToolCalls >= WRITE_RESERVATION_READ_THRESHOLD
-                    && totalWriteToolCalls === 0
+                    && hasStickyAnchorFromPriorPass
+                    && readsSinceLastWrite >= WRITE_RESERVATION_READ_THRESHOLD
                     && pass < maxPasses) {
                     writeReservationInjected = true;
-                    const remaining = maxPasses - pass;
-                    const reservationText = `You have spent ${totalReadToolCalls} read tool calls locating the change with zero writes. `
-                        + `The remaining ${remaining} iteration${remaining === 1 ? '' : 's'} of this turn `
-                        + `${remaining === 1 ? 'is' : 'are'} reserved for write + verification tool calls only `
-                        + `(e.g. replace_string_in_file, multi_replace_string_in_file, create_file, patch_file, `
-                        + `edit_file, edit_entity, then a build/test/read-back verification). `
-                        + `If you cannot write yet, state the missing prerequisite explicitly and stop. `
-                        + `Re-reading already-located files is token-economy waste at task level and will end this turn.`;
+                    const anchorList = this._autonomyState.lastAnchorPaths.slice(0, 3).join(', ');
+                    const reservationText = `A patch anchor was established by the previous pass (${anchorList}) and you have spent `
+                        + `${readsSinceLastWrite} consecutive read tool calls in this turn without writing. `
+                        + `Token-economy nudge: the next iteration should attempt the implied write `
+                        + `(e.g. replace_string_in_file, multi_replace_string_in_file, create_file, `
+                        + `patch_file, edit_file, edit_entity, patch_markdown_chapter, edit_markdown_section) `
+                        + `OR state the missing prerequisite explicitly. `
+                        + `Allowed reads under this nudge: the exact file/function body required for a safe patch, `
+                        + `post-write verification, stale-anchor recovery after a failed edit, and reading a newly `
+                        + `identified concrete blocker target. Avoid: broad search, re-reading already-inspected `
+                        + `files, relocating the same anchor, "just to be sure" discovery. `
+                        + `This nudge LIFTS automatically the moment any write tool succeeds — `
+                        + `it is not a permanent ban on reads.`;
                     rawMessages.push({
                         role: 'user',
                         content: [{ type: 'text', text: reservationText }],
@@ -2738,13 +3016,18 @@ class ChatPanel {
                 const wrapNote = '\n\n_(Wrapping up: agentic loop hit pass limit — requesting summary…)_\n';
                 this.streamingContent += wrapNote;
                 await this.postMessage({ type: 'stream-chunk', chunk: wrapNote });
-                // Phase A — when the loop ended with the write-reservation already
-                // tripped (heavy reads, zero writes), the wrap-up text changes from the
-                // generic "summarize what you did" to an explicit token-economy stop
-                // notice. The model is asked to either name the patch it WOULD have
-                // applied or the missing prerequisite — never to keep proposing more
-                // reads as a next step.
-                const wrapText = (writeReservationInjected && totalWriteToolCalls === 0)
+                // Phase A — strict "you spent the budget on reads" wrap-up only when:
+                // (1) a sticky patch anchor existed from a prior pass (a write was
+                // already implied), AND (2) the loop ended with zero writes AND
+                // heavy reads. Read-only / assess tasks and fresh user prompts get
+                // the generic wrap-up regardless of read volume — reading is the
+                // whole point of those turns. If the model DID write at any point
+                // this turn, the generic wrap-up applies (writes lifted any prior
+                // reservation).
+                const heavyReadsNoWrite = hasStickyAnchorFromPriorPass
+                    && totalWriteToolCalls === 0
+                    && totalReadToolCalls >= WRITE_RESERVATION_READ_THRESHOLD;
+                const wrapText = heavyReadsNoWrite
                     ? 'You have used the available tool budget for this turn AND spent it entirely on reads (' + totalReadToolCalls + ' read calls, 0 writes). Stop calling tools. In your reply: (1) name the exact patch you WOULD have applied (file path + change in one sentence) OR the concrete missing prerequisite that prevented the write; (2) set goal_status to either "partial" with a write-bound recommended_next_step, or "blocked" with the missing prerequisite. Re-reading is no longer a valid next step. Emit the structured JSON envelope as instructed by the system prompt.'
                     : 'You have used the available tool budget for this turn. Stop calling tools. In your reply, briefly summarize what you discovered, what you changed (if anything), the current state, and one clear recommended next step. If autonomy is enabled, emit the structured JSON envelope as instructed by the system prompt.';
                 const wrapPrompt = [
@@ -3105,6 +3388,7 @@ class ChatPanel {
     <span id="budget-pill-components" class="budget-pill-components"></span>
   </div>
 
+  <div id="pending-reviews" class="pending-reviews" style="display:none"></div>
   <div id="messages"></div>
   <div id="empty-state">
     <div class="empty-logo">🌙</div>
@@ -3139,6 +3423,7 @@ class ChatPanel {
   ${!this._webviewBundleUri ? entityLinkScript : ''}
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    const pendingReviewsEl = document.getElementById('pending-reviews');
     const messagesEl = document.getElementById('messages');
     const emptyStateEl = document.getElementById('empty-state');
     const promptEl = document.getElementById('prompt');
@@ -3157,6 +3442,8 @@ class ChatPanel {
 
     let draftSaveTimer = null;
     let lastToolTrace = [];
+    let pendingReviews = [];
+    let pendingReviewsCollapsed = true;
     let lastVerdict = null;
     let streamingBubble = null;
     let streamingMarkdownEl = null;
@@ -3187,6 +3474,128 @@ class ChatPanel {
     function setEmptyStateVisible(visible) {
       emptyStateEl.style.display = visible ? 'flex' : 'none';
       messagesEl.style.display = visible ? 'none' : 'flex';
+    }
+
+    function formatPendingReviewSummary(review) {
+      const from = review.baselineKind === 'missing' ? 'new file' : 'existing file';
+      const to = review.currentKind === 'deleted' ? 'deleted state' : 'edited state';
+      return from + ' → ' + to;
+    }
+
+    function makePendingReviewButton(label, className, handler) {
+      const button = document.createElement('button');
+      button.className = className;
+      button.textContent = label;
+      button.addEventListener('click', handler);
+      return button;
+    }
+
+    function renderPendingReviews(reviews, collapsed) {
+      pendingReviews = Array.isArray(reviews) ? reviews : [];
+      pendingReviewsCollapsed = collapsed !== false;
+      if (!pendingReviewsEl) return;
+      pendingReviewsEl.innerHTML = '';
+      if (pendingReviews.length === 0) {
+        pendingReviewsEl.style.display = 'none';
+        messagesEl.style.paddingBottom = '24px';
+        messagesEl.style.scrollPaddingBottom = '24px';
+        return;
+      }
+
+      const totalAdded = pendingReviews.reduce((sum, review) => sum + (Number(review.addedLines) || 0), 0);
+      const totalDeleted = pendingReviews.reduce((sum, review) => sum + (Number(review.deletedLines) || 0), 0);
+      pendingReviewsEl.style.display = 'block';
+      pendingReviewsEl.style.border = '1px solid var(--vscode-panel-border)';
+      pendingReviewsEl.style.borderRadius = '8px';
+      pendingReviewsEl.style.margin = '0 10px 8px';
+      pendingReviewsEl.style.padding = '6px 10px';
+      pendingReviewsEl.style.background = 'var(--vscode-sideBar-background)';
+      pendingReviewsEl.style.fontSize = '12px';
+      pendingReviewsEl.style.order = '2';
+      const pendingReviewsHeight = pendingReviewsEl.offsetHeight || 0;
+      const bottomReserve = Math.max(72, pendingReviewsHeight + 16);
+      messagesEl.style.paddingBottom = bottomReserve + 'px';
+      messagesEl.style.scrollPaddingBottom = bottomReserve + 'px';
+
+      const header = document.createElement('div');
+      header.className = 'pending-reviews-title';
+      header.style.display = 'flex';
+      header.style.alignItems = 'center';
+      header.style.justifyContent = 'space-between';
+      header.style.gap = '8px';
+
+      const titleButton = document.createElement('button');
+      titleButton.type = 'button';
+      titleButton.className = 'pending-review-toggle';
+      titleButton.style.all = 'unset';
+      titleButton.style.cursor = 'pointer';
+      titleButton.style.display = 'inline-flex';
+      titleButton.style.alignItems = 'center';
+      titleButton.style.gap = '6px';
+      titleButton.innerHTML = '<span style="font-size:10px;opacity:.8">' + (pendingReviewsCollapsed ? '▶' : '▼') + '</span>'
+        + '<strong>' + (pendingReviews.length === 1 ? '1 file changed' : pendingReviews.length + ' files changed') + '</strong>'
+        + ' <span style="color:var(--vscode-gitDecoration-addedResourceForeground,#3fb950)">+' + totalAdded + '</span>'
+        + ' <span style="color:var(--vscode-gitDecoration-deletedResourceForeground,#f85149)">-' + totalDeleted + '</span>';
+      titleButton.addEventListener('click', () => {
+        pendingReviewsCollapsed = !pendingReviewsCollapsed;
+        vscode.postMessage({ type: 'togglePendingReviews' });
+        renderPendingReviews(pendingReviews, pendingReviewsCollapsed);
+      });
+
+      const bulkActions = document.createElement('div');
+      bulkActions.style.display = 'flex';
+      bulkActions.style.gap = '6px';
+      bulkActions.appendChild(makePendingReviewButton('Keep', 'message-action-btn primary', () => {
+        for (const review of pendingReviews) vscode.postMessage({ type: 'keepPendingReview', filePath: review.filePath });
+      }));
+      bulkActions.appendChild(makePendingReviewButton('Undo', 'message-action-btn', () => {
+        for (const review of pendingReviews) vscode.postMessage({ type: 'undoPendingReview', filePath: review.filePath });
+      }));
+      header.appendChild(titleButton);
+      header.appendChild(bulkActions);
+      pendingReviewsEl.appendChild(header);
+
+      if (pendingReviewsCollapsed) {
+        return;
+      }
+
+      const list = document.createElement('div');
+      list.style.display = 'flex';
+      list.style.flexDirection = 'column';
+      list.style.gap = '4px';
+      list.style.marginTop = '8px';
+
+      for (const review of pendingReviews) {
+        const row = document.createElement('div');
+        row.className = 'pending-review-row';
+        row.style.display = 'grid';
+        row.style.gridTemplateColumns = '1fr auto';
+        row.style.alignItems = 'center';
+        row.style.gap = '8px';
+
+        const pathButton = document.createElement('button');
+        pathButton.type = 'button';
+        pathButton.className = 'pending-review-path';
+        pathButton.style.all = 'unset';
+        pathButton.style.cursor = 'pointer';
+        pathButton.style.color = 'var(--vscode-textLink-foreground)';
+        pathButton.style.overflow = 'hidden';
+        pathButton.style.textOverflow = 'ellipsis';
+        pathButton.style.whiteSpace = 'nowrap';
+        pathButton.textContent = review.relativePath || review.filePath;
+        pathButton.title = 'Open diff';
+        pathButton.addEventListener('click', () => vscode.postMessage({ type: 'openPendingReview', filePath: review.filePath }));
+
+        const stats = document.createElement('div');
+        stats.innerHTML = '<span style="color:var(--vscode-gitDecoration-addedResourceForeground,#3fb950);font-weight:600">+' + (Number(review.addedLines) || 0) + '</span> '
+          + '<span style="color:var(--vscode-gitDecoration-deletedResourceForeground,#f85149);font-weight:600">-' + (Number(review.deletedLines) || 0) + '</span>';
+
+        row.appendChild(pathButton);
+        row.appendChild(stats);
+        list.appendChild(row);
+      }
+
+      pendingReviewsEl.appendChild(list);
     }
 
     function autoresize() {
@@ -3220,6 +3629,9 @@ class ChatPanel {
       optimisticSubmitMarkdownEl.innerHTML = '<span class="immediate-submit-pulse" aria-hidden="true"></span><span>Assessing the shape of the request…</span>';
       optimisticSubmitBubble.appendChild(optimisticSubmitMarkdownEl);
       messagesEl.appendChild(optimisticSubmitBubble);
+      const submitReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+      messagesEl.style.paddingBottom = submitReserve + 'px';
+      messagesEl.style.scrollPaddingBottom = submitReserve + 'px';
       messagesEl.scrollTop = messagesEl.scrollHeight;
 
       sendBtn.style.display = 'none';
@@ -3549,6 +3961,9 @@ class ChatPanel {
           scheduleVerification(node);
         }
         if (opts.stickToBottom !== false) {
+          const renderReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+          messagesEl.style.paddingBottom = renderReserve + 'px';
+          messagesEl.style.scrollPaddingBottom = renderReserve + 'px';
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
       });
@@ -3641,6 +4056,9 @@ class ChatPanel {
       const node = createMessageNode(message, actions, roleMeta, contextFooter, uiState);
       messagesEl.appendChild(node);
       requestAnimationFrame(() => {
+        const messageReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+        messagesEl.style.paddingBottom = messageReserve + 'px';
+        messagesEl.style.scrollPaddingBottom = messageReserve + 'px';
         messagesEl.scrollTop = messagesEl.scrollHeight;
       });
     }
@@ -3945,9 +4363,14 @@ class ChatPanel {
       }
     });
 
+    vscode.postMessage({ type: 'refreshPendingReviews' });
+
     window.addEventListener('message', (event) => {
       const msg = event.data;
       switch (msg.type) {
+        case 'pendingReviews':
+          renderPendingReviews(msg.reviews, msg.collapsed);
+          break;
         case 'state':
           restoreState(msg.state);
           break;
@@ -4174,6 +4597,9 @@ class ChatPanel {
               wrapper.appendChild(doAll);
             }
             targetBubble.appendChild(wrapper);
+            const actionReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+            messagesEl.style.paddingBottom = actionReserve + 'px';
+            messagesEl.style.scrollPaddingBottom = actionReserve + 'px';
             messagesEl.scrollTop = messagesEl.scrollHeight;
           }
           break;
@@ -4236,6 +4662,9 @@ class ChatPanel {
             });
           });
           targetBubble.appendChild(host);
+          const summaryReserve = Math.max(72, (pendingReviewsEl ? pendingReviewsEl.offsetHeight : 0) + 16);
+          messagesEl.style.paddingBottom = summaryReserve + 'px';
+          messagesEl.style.scrollPaddingBottom = summaryReserve + 'px';
           messagesEl.scrollTop = messagesEl.scrollHeight;
           break;
         }

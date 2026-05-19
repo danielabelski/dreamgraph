@@ -111,20 +111,6 @@ export declare function applyModeProfileToState(mode: AutonomyMode, nowEpochMs?:
 export declare function rankRecommendedActions(actions: RecommendedAction[]): RecommendedActionSet;
 export declare function computeDoAllEligibility(actions: RecommendedAction[]): boolean;
 export declare function chooseActionForMode(mode: AutonomyMode, actionSet: RecommendedActionSet, signal: PassOutcomeSignal): string | undefined;
-export interface PassContextSnapshot {
-    /** Number of write tool calls executed during the just-completed pass. */
-    writeToolCalls: number;
-    /** Number of files actually edited/created during the just-completed pass. */
-    fileEdits: number;
-    /** Concrete file paths the architect named as the patch site during this
-     * pass (prose anchors). Empty when no prose anchor was detected. */
-    currentAnchorPaths?: readonly string[];
-    /** Set true when the structured envelope (or prose) explicitly reports a
-     * NEW blocker that the prior pass did not have. The two-strike
-     * token-economy stop will allow continuation when a new blocker is
-     * present even if all other waste conditions hold. */
-    newBlockerReported?: boolean;
-}
-export declare function shouldContinueAfterPass(state: AutonomyState, signal: PassOutcomeSignal, actionSet?: RecommendedActionSet, passContext?: PassContextSnapshot): ContinuationDecision;
+export declare function shouldContinueAfterPass(state: AutonomyState, signal: PassOutcomeSignal, actionSet?: RecommendedActionSet): ContinuationDecision;
 export declare function getAutonomyInstructionBlock(state?: AutonomyInstructionState): string;
 //# sourceMappingURL=autonomy.d.ts.map

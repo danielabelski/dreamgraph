@@ -53,6 +53,7 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
     private _domPurifySource;
     /** Cached URI to bundled webview runtime for Slice 3 Option C migration. */
     private _webviewBundleUri;
+    private _pendingReviewsCollapsed;
     private _lastToolTrace;
     /** Set when the report-required guard has already forced a final report
      * turn for the current run, so we don't loop forever asking for reports. */
@@ -174,6 +175,10 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
     private resetStreamState;
     private rehydrateWebview;
     private postState;
+    private _postPendingReviews;
+    private _toPendingReviewViewModel;
+    private _summarizePendingReviewDiff;
+    private _openPendingReviewDiff;
     getActionLogForTest(): ActionExecutionRecord[];
     private _createMessageId;
     private _logContextToOutput;
@@ -216,6 +221,8 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
     private restoreMessages;
     private _sendModelUpdate;
     private _checkApiKeyWarning;
+    private _architectSettingsTarget;
+    private _defaultArchitectBaseUrl;
     private _changeProvider;
     private _changeModel;
     private static readonly MAX_TOOL_ITERATIONS;
@@ -232,6 +239,14 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
     private _setAutonomyMode;
     private _resetAutonomy;
     private _broadcastAutonomyStatus;
+    /**
+     * Lever 2 — bind a concrete write tool to apply/patch-style recommended
+     * actions when the model emitted them without a `tool` (or with a
+     * read-only one). Pure: returns a new array; never mutates inputs.
+     * Falls through (no binding) when no write tool is available in the
+     * live catalog so the loop never deadlocks.
+     */
+    private static _bindWriteToolToAnchorActions;
     private _handleAutonomyPassComplete;
     private _runAutonomyContinuationPass;
     /**

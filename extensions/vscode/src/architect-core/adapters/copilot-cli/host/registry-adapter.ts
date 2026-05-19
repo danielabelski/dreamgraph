@@ -78,7 +78,11 @@ export interface HostRegistryOptions {
 }
 
 const DEFAULT_DREAMGRAPH_ARGS: readonly string[] = ["--transport", "stdio"];
-const DEFAULT_TOOL_LIST_TIMEOUT_MS = 8_000;
+// The dreamgraph stdio server loads ~20 JSON stores and warms several
+// cognitive subsystems before responding to `tools/list`. Measured cold
+// starts on a developer laptop sit around 11–12 s, so the default needs
+// generous headroom; hosts can override via `toolListTimeoutMs`.
+const DEFAULT_TOOL_LIST_TIMEOUT_MS = 30_000;
 
 export function createHostRegistry(opts: HostRegistryOptions): CopilotCliRegistryPort {
   validate(opts);

@@ -210,8 +210,8 @@ const MINIMAL_SURFACE = (0, index_js_1.parseCopilotHelpSurface)(MINIMAL_HELP);
         "--allow-all-tools",
         "--deny-tool", "shell",
         "--deny-tool", "write",
-        "--allow-tool", "dreamgraph:query_resource",
-        "--allow-tool", "dreamgraph:read_source_code",
+        "--allow-tool", "dreamgraph(query_resource)",
+        "--allow-tool", "dreamgraph(read_source_code)",
         "--disallow-temp-dir",
         "--prompt", "Plan a refactor.",
     ]);
@@ -220,8 +220,35 @@ const MINIMAL_SURFACE = (0, index_js_1.parseCopilotHelpSurface)(MINIMAL_HELP);
     strict_1.default.equal(plan.policy.inlineWriteDenied, true);
     strict_1.default.equal(plan.policy.allowAllToolsEnabled, true);
     strict_1.default.equal(plan.policy.availableToolsRestricted, false);
-    strict_1.default.deepEqual([...plan.policy.allowedToolSpecs], ["dreamgraph:query_resource", "dreamgraph:read_source_code"]);
+    strict_1.default.deepEqual([...plan.policy.allowedToolSpecs], ["dreamgraph(query_resource)", "dreamgraph(read_source_code)"]);
     strict_1.default.deepEqual([...plan.policy.deniedToolSpecs], ["shell", "write"]);
+});
+(0, node_test_1.default)("argv: emits one --add-dir per addDirs entry, ordered, after --disallow-temp-dir and before --prompt", () => {
+    const plan = (0, index_js_1.buildCopilotArgv)({
+        prompt: "Hi.",
+        authoritativeServer: index_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+        authoritativeAllowlist: ["query_resource"],
+        helpSurface: FULL_SURFACE,
+        addDirs: ["C:/tmp/run-abc", "/var/tmp/run-xyz"],
+    });
+    const tempDirIdx = plan.args.indexOf("--disallow-temp-dir");
+    const addDirIdx1 = plan.args.indexOf("--add-dir");
+    const promptIdx = plan.args.indexOf("--prompt");
+    strict_1.default.ok(tempDirIdx >= 0 && addDirIdx1 > tempDirIdx && promptIdx > addDirIdx1);
+    strict_1.default.equal(plan.args[addDirIdx1 + 1], "C:/tmp/run-abc");
+    strict_1.default.equal(plan.args[addDirIdx1 + 2], "--add-dir");
+    strict_1.default.equal(plan.args[addDirIdx1 + 3], "/var/tmp/run-xyz");
+    strict_1.default.deepEqual([...plan.policy.addedDirs], ["C:/tmp/run-abc", "/var/tmp/run-xyz"]);
+});
+(0, node_test_1.default)("argv: omits --add-dir entirely when addDirs is empty or absent", () => {
+    const plan = (0, index_js_1.buildCopilotArgv)({
+        prompt: "Hi.",
+        authoritativeServer: index_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+        authoritativeAllowlist: ["query_resource"],
+        helpSurface: FULL_SURFACE,
+    });
+    strict_1.default.equal(plan.args.includes("--add-dir"), false);
+    strict_1.default.deepEqual([...plan.policy.addedDirs], []);
 });
 (0, node_test_1.default)("argv: omits --disallow-temp-dir when help surface lacks it", () => {
     const plan = (0, index_js_1.buildCopilotArgv)({

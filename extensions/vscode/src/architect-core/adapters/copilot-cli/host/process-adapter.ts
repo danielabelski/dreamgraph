@@ -352,6 +352,26 @@ function captureRun(opts: CaptureOptions): Promise<CapturedRun> {
           ...opts.args,
         ];
       } else if (IS_WINDOWS && /\.(?:cmd|bat)$/i.test(opts.command)) {
+        // Reject embedded LF/CR in any token BEFORE handing the
+        // command line to cmd.exe. `cmd.exe /c` treats the first
+        // newline as a command terminator; everything after it falls
+        // off the command line and the child sees a malformed argv.
+        // On real shims this manifests as a silent native crash with
+        // exit code 3221226505 (0xC0000409 STATUS_STACK_BUFFER_OVERRUN)
+        // and no captured stdout / stderr — extremely hard to diagnose
+        // post-hoc. Failing loudly here forces the caller to keep
+        // multi-line content out of argv (the Large Payload Isolation
+        // Rule already mandates this for prompts; this is the
+        // mechanical guard that backs it up).
+        for (let i = 0; i < opts.args.length; i++) {
+          if (/[\r\n]/.test(opts.args[i] as string)) {
+            throw new Error(
+              `process.spawn: argv[${i}] for Windows .cmd/.bat shim contains a newline; ` +
+                "newlines are unrepresentable across cmd.exe /c and would crash the child silently. " +
+                "Move the payload to a file and pass the path instead.",
+            );
+          }
+        }
         const tokens = [opts.command, ...opts.args]
           .map((t) => quoteForCommandLineToArgvW(t))
           .map((t) => escapeForCmdExe(t))

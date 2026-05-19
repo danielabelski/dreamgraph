@@ -233,13 +233,22 @@ interface ChatMessage {
   toolTrace?: ToolTraceEntry[];
   anchor?: import('./types.js').SemanticAnchor;
   attachments?: ReadonlyArray<ChatMessageAttachmentSnapshot>;
+  /**
+   * Stable, persisted tag used by `_buildMessageActions` to deterministically
+   * re-attach action buttons after a webview rehydration. Today only used
+   * for provider-auth recovery (`'copilot_login_required'`) but kept as an
+   * open string union so future provider-specific recoveries (Anthropic
+   * key missing, OpenAI org switch, etc.) can add entries without changing
+   * the renderer contract.
+   */
+  metaTag?: 'copilot_login_required';
 }
 
 interface MessageAction {
   id: string;
   label: string;
   kind: 'primary' | 'secondary';
-  actionType: 'tool' | 'show_full';
+  actionType: 'tool' | 'show_full' | 'copilot_login';
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   destructive?: boolean;
@@ -529,7 +538,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private static readonly MAX_RENDERED_MESSAGE_CHARS = 100_000;
   private static readonly MAX_ENTITY_LINKS_PER_MESSAGE = 100;
-  private static readonly ACTION_ALLOWLIST = new Set(['tool', 'show_full']);
+  private static readonly ACTION_ALLOWLIST = new Set(['tool', 'show_full', 'copilot_login']);
 
   private static readonly MAX_TEXT_ATTACHMENT_BYTES = 100_000;
   private static readonly MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -1240,19 +1249,49 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const recovered = await this._recoverFromLlmTimeout(err, trimmed, envelope);
     if (!recovered) {
       const message = err instanceof Error ? err.message : String(err);
-      const assistantMessage: ChatMessage = {
-        id: this._createMessageId(),
-        role: 'assistant',
-        content: `Error: ${message}`,
-        timestamp: new Date().toISOString(),
-        instanceId: this.currentInstanceId,
-        verdict: { level: 'speculative', summary: 'Request failed before completion' },
-        toolTrace: this._lastToolTrace.length > 0 ? [...this._lastToolTrace] : undefined,
-      };
-      this.messages.push(assistantMessage);
-      await this.persistMessages();
-      await this.postState();
-      await this.postMessage({ type: 'error', error: message });
+      // Provider-auth recovery: copilot-cli surfaces "not logged in" as a
+      // structured failure with a stable code. When we see it, emit a
+      // dedicated system message carrying the `copilot_login_required`
+      // meta-tag — `_buildMessageActions` then attaches a clickable
+      // "Open Copilot login" button that opens the device-code page +
+      // an interactive `copilot login` terminal in one click. The tag
+      // is persisted on the message so the button survives reloads.
+      const failureCode = (err as { copilotCliFailureCode?: unknown } | null)?.copilotCliFailureCode;
+      if (failureCode === 'COPILOT_NOT_LOGGED_IN') {
+        const loginMessage: ChatMessage = {
+          id: this._createMessageId(),
+          role: 'system',
+          content:
+            `Copilot CLI is not logged in.\n\n` +
+            `Click **Open Copilot login** below to (1) open the GitHub device-code page in your browser and (2) launch an interactive \`copilot login\` terminal. Paste the code the CLI prints into the browser page, then re-run your request.`,
+          timestamp: new Date().toISOString(),
+          instanceId: this.currentInstanceId,
+          metaTag: 'copilot_login_required',
+        };
+        this.messages.push(loginMessage);
+        await this.persistMessages();
+        await this.postMessage({
+          type: 'addMessage',
+          message: loginMessage,
+          actions: this._buildMessageActions(loginMessage),
+          roleMeta: this._roleMetaFor(loginMessage),
+          contextFooter: undefined,
+        });
+      } else {
+        const assistantMessage: ChatMessage = {
+          id: this._createMessageId(),
+          role: 'assistant',
+          content: `Error: ${message}`,
+          timestamp: new Date().toISOString(),
+          instanceId: this.currentInstanceId,
+          verdict: { level: 'speculative', summary: 'Request failed before completion' },
+          toolTrace: this._lastToolTrace.length > 0 ? [...this._lastToolTrace] : undefined,
+        };
+        this.messages.push(assistantMessage);
+        await this.persistMessages();
+        await this.postState();
+        await this.postMessage({ type: 'error', error: message });
+      }
     }
   } finally {
     this._finalizeCurrentBudgetTurn();
@@ -1317,6 +1356,10 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
       ? timeoutMsRaw
       : 180_000;
+    const toolListTimeoutMsRaw = cfg.get<number>('copilotCli.toolListTimeoutMs');
+    const toolListTimeoutMs = typeof toolListTimeoutMsRaw === 'number' && Number.isFinite(toolListTimeoutMsRaw) && toolListTimeoutMsRaw > 0
+      ? toolListTimeoutMsRaw
+      : undefined;
 
     const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const auditDirAbsPath = vscode.Uri.joinPath(this.context.globalStorageUri, 'copilot-cli-audit').fsPath;
@@ -1327,6 +1370,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       bridgeEntryPath,
       nodeExecPath: process.execPath,
       auditDirAbsPath,
+      ...(toolListTimeoutMs !== undefined ? { toolListTimeoutMs } : {}),
     });
     const mcpAudit = createHostAudit({ auditDirAbsPath });
 
@@ -2058,6 +2102,12 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         actions.push({ id: 'show-full', label: 'Show full', kind: 'primary', actionType: 'show_full' });
       }
     }
+    // Provider-auth recovery actions are reattached deterministically from
+    // the persisted `metaTag` so they survive webview rehydration (the
+    // original `addMessage` action list is not part of `messages[]`).
+    if (message.metaTag === 'copilot_login_required') {
+      actions.push({ id: 'copilot-login', label: 'Open Copilot login', kind: 'primary', actionType: 'copilot_login' });
+    }
     return actions;
   }
 
@@ -2120,6 +2170,35 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     }
 
     try {
+      if (action.actionType === 'copilot_login') {
+        // Provider-auth recovery: GitHub Copilot's `login` subcommand runs
+        // the OAuth device-code flow interactively (prints an 8-char code,
+        // expects the user to paste it at github.com/login/device). We
+        // can't wrap that headlessly, so:
+        //   1. Open the device-code page in the user's default browser
+        //      so it is ready to receive the code, then
+        //   2. Spawn an interactive terminal running `copilot login` so
+        //      the code is visible and the CLI can complete the handshake.
+        // The binary name honours the same setting the adapter uses, so
+        // a user who installed a non-default Copilot CLI still gets the
+        // right command.
+        const cfg = vscode.workspace.getConfiguration('dreamgraph.architect.copilotCli');
+        const binaryName = (cfg.get<string>('binaryName') ?? 'copilot').trim() || 'copilot';
+        try {
+          await vscode.env.openExternal(vscode.Uri.parse('https://github.com/login/device'));
+        } catch (openErr) {
+          // Browser open is best-effort — the device code printed by the
+          // CLI also includes a URL the user can copy manually.
+          console.warn('[DreamGraph] copilot_login: openExternal failed', openErr);
+        }
+        const terminal = vscode.window.createTerminal({ name: 'Copilot Login' });
+        terminal.show(true);
+        terminal.sendText(`${binaryName} login`);
+        this._actionLog.push({ timestamp: new Date().toISOString(), actionType: action.actionType, sourceMessageId: messageId, outcome: 'completed', detail: binaryName });
+        await this.postMessage({ type: 'messageActionState', messageId, actionId, status: 'completed' });
+        return;
+      }
+
       if (action.actionType === 'show_full') {
         if (!message.fullContent || message.fullContent === message.content) {
           throw new Error('Full response is not available for this message.');
@@ -3001,38 +3080,38 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
    * model didn't emit a JSON envelope, so the card always has data to render.
    */
   /**
-   * Sign-off chip emitter. When the autonomy loop stops (budget exhausted,
-   * safety cap, decided to pause) we still know what the next concrete
-   * actions would have been. Surface them as clickable chips bound to the
-   * stop/system message so the user can resume continuation with one click.
+   * Sign-off resume-action registrar. When the autonomy loop stops
+   * (budget exhausted, safety cap, decided to pause) the assistant
+   * bubble immediately above the stop/system message already renders
+   * the SUMMARY card with the same recommended-action chip strip
+   * (built from the JSON envelope embedded in its `content`, so it
+   * survives webview re-renders). All this method needs to do is
+   * publish the action set into the shared `_lastRecommendedActions`
+   * slot so chip clicks on that surviving card route through
+   * `_executeRecommendedAction` correctly.
    *
-   * The chips reuse the same envelope the SUMMARY card emits, so the
-   * existing webview chip renderer + `_executeRecommendedAction` resolver
-   * (which keys off `_lastRecommendedActions`) work end-to-end without
-   * additional wiring. The recommended-action set is also persisted here
-   * so chip clicks survive the stop transition.
+   * HISTORICAL NOTE: a prior version of this method also posted a
+   * `summaryCard` message targeted at the system stop bubble, which
+   * caused the webview to append a SECOND, visually identical envelope
+   * card inside that bubble via DOM mutation. Because the duplicate
+   * was never persisted to `messages[]`, any re-render (scroll
+   * virtualization, tab switch, theme change) silently destroyed it —
+   * a glitchy, half-real card. Removed entirely; continuity is
+   * preserved end-to-end by the `_lastRecommendedActions` write below
+   * because the assistant card's chips invoke the same handler.
+   *
+   * @param _messageId Retained for call-site stability; intentionally unused.
+   * @param _envelope  Retained for call-site stability; intentionally unused.
    */
   private _broadcastSignOffActions(
-    messageId: string,
-    envelope: StructuredPassEnvelope,
+    _messageId: string,
+    _envelope: StructuredPassEnvelope,
     actions: RecommendedAction[],
   ): void {
     if (!actions || actions.length === 0) return;
     // Persist so chip clicks resolve via `_executeRecommendedAction`.
+    // This is the only side effect required for resume continuity.
     this._lastRecommendedActions = actions;
-    const eligibleCount = actions.filter((a) => a.eligible && a.withinScope).length;
-    void this.postMessage({
-      type: 'summaryCard',
-      messageId,
-      envelope: {
-        summary: envelope.summary ?? '',
-        goal_status: envelope.goalStatus,
-        progress_status: envelope.progressStatus,
-        uncertainty: envelope.uncertainty,
-        recommended_next_steps: actions.map((a) => ({ id: a.id, label: a.label, rationale: a.rationale })),
-        doAllEligible: eligibleCount > 1,
-      },
-    });
   }
 
   private _broadcastSummaryCard(content: string, messageId: string): void {

@@ -30,7 +30,11 @@ const index_js_1 = require("@modelcontextprotocol/sdk/client/index.js");
 const stdio_js_1 = require("@modelcontextprotocol/sdk/client/stdio.js");
 const audit_adapter_js_1 = require("./audit-adapter.js");
 const DEFAULT_DREAMGRAPH_ARGS = ["--transport", "stdio"];
-const DEFAULT_TOOL_LIST_TIMEOUT_MS = 8_000;
+// The dreamgraph stdio server loads ~20 JSON stores and warms several
+// cognitive subsystems before responding to `tools/list`. Measured cold
+// starts on a developer laptop sit around 11–12 s, so the default needs
+// generous headroom; hosts can override via `toolListTimeoutMs`.
+const DEFAULT_TOOL_LIST_TIMEOUT_MS = 30_000;
 function createHostRegistry(opts) {
     validate(opts);
     const dreamgraphArgs = opts.dreamgraphArgs ?? DEFAULT_DREAMGRAPH_ARGS;

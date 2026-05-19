@@ -255,6 +255,11 @@
           "default": 180000,
           "description": "Hard wall-clock cap (ms) for a single Copilot CLI invocation."
         },
+        "dreamgraph.architect.copilotCli.toolListTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Hard wall-clock cap (ms) for the one-shot DreamGraph stdio `tools/list` probe run before each Copilot CLI pass. Bump this if the dreamgraph stdio server cold-start exceeds the default on your machine."
+        },
         "dreamgraph.architect.useCorePass": {
           "type": "boolean",
           "default": false,

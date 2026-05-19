@@ -156,6 +156,14 @@ export interface CopilotArgvInput {
      * the running CLI's help output are silently omitted from argv.
      */
     readonly helpSurface: CopilotHelpSurface;
+    /**
+     * Extra directories the CLI's file-access layer should treat as
+     * allowed for read tools. Emitted as one `--add-dir <path>` per entry.
+     * The orchestrator uses this to expose the per-run scratch directory
+     * (where `prompt.md` lives) when the prompt is delivered via the
+     * file-redirect directive instead of inline argv.
+     */
+    readonly addDirs?: readonly string[];
 }
 /**
  * Result of the pure argv builder. The caller passes `args` straight to
@@ -172,6 +180,7 @@ export interface CopilotArgvPlan {
         readonly allowAllToolsEnabled: boolean;
         readonly allowedToolSpecs: readonly string[];
         readonly deniedToolSpecs: readonly string[];
+        readonly addedDirs: readonly string[];
     };
 }
 /**

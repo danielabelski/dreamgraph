@@ -276,8 +276,8 @@ test("argv: emits model, allow-all-tools, deny-shell, deny-write, allow-tool per
       "--allow-all-tools",
       "--deny-tool", "shell",
       "--deny-tool", "write",
-      "--allow-tool", "dreamgraph:query_resource",
-      "--allow-tool", "dreamgraph:read_source_code",
+      "--allow-tool", "dreamgraph(query_resource)",
+      "--allow-tool", "dreamgraph(read_source_code)",
       "--disallow-temp-dir",
       "--prompt", "Plan a refactor.",
     ],
@@ -290,9 +290,38 @@ test("argv: emits model, allow-all-tools, deny-shell, deny-write, allow-tool per
   assert.equal(plan.policy.availableToolsRestricted, false);
   assert.deepEqual(
     [...plan.policy.allowedToolSpecs],
-    ["dreamgraph:query_resource", "dreamgraph:read_source_code"],
+    ["dreamgraph(query_resource)", "dreamgraph(read_source_code)"],
   );
   assert.deepEqual([...plan.policy.deniedToolSpecs], ["shell", "write"]);
+});
+
+test("argv: emits one --add-dir per addDirs entry, ordered, after --disallow-temp-dir and before --prompt", () => {
+  const plan = buildCopilotArgv({
+    prompt: "Hi.",
+    authoritativeServer: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+    authoritativeAllowlist: ["query_resource"],
+    helpSurface: FULL_SURFACE,
+    addDirs: ["C:/tmp/run-abc", "/var/tmp/run-xyz"],
+  });
+  const tempDirIdx = plan.args.indexOf("--disallow-temp-dir");
+  const addDirIdx1 = plan.args.indexOf("--add-dir");
+  const promptIdx = plan.args.indexOf("--prompt");
+  assert.ok(tempDirIdx >= 0 && addDirIdx1 > tempDirIdx && promptIdx > addDirIdx1);
+  assert.equal(plan.args[addDirIdx1 + 1], "C:/tmp/run-abc");
+  assert.equal(plan.args[addDirIdx1 + 2], "--add-dir");
+  assert.equal(plan.args[addDirIdx1 + 3], "/var/tmp/run-xyz");
+  assert.deepEqual([...plan.policy.addedDirs], ["C:/tmp/run-abc", "/var/tmp/run-xyz"]);
+});
+
+test("argv: omits --add-dir entirely when addDirs is empty or absent", () => {
+  const plan = buildCopilotArgv({
+    prompt: "Hi.",
+    authoritativeServer: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+    authoritativeAllowlist: ["query_resource"],
+    helpSurface: FULL_SURFACE,
+  });
+  assert.equal(plan.args.includes("--add-dir"), false);
+  assert.deepEqual([...plan.policy.addedDirs], []);
 });
 
 test("argv: omits --disallow-temp-dir when help surface lacks it", () => {

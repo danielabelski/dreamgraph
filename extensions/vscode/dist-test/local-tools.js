@@ -55,6 +55,7 @@ const vscode = __importStar(require("vscode"));
 const cp = __importStar(require("node:child_process"));
 const path = __importStar(require("node:path"));
 const fs = __importStar(require("node:fs/promises"));
+const change_review_service_1 = require("./change-review-service");
 /* ------------------------------------------------------------------ */
 /*  Tool definitions (same shape as MCP ToolDefinition)               */
 /* ------------------------------------------------------------------ */
@@ -482,6 +483,7 @@ async function handleModifyEntity(input) {
                             `{ "entity": "memberName", "parentEntity": "${entityName}" }.`);
                     }
                 }
+                await change_review_service_1.changeReviewService.captureBeforeWrite(absPath);
                 // Symbol-based replacement
                 const edit = new vscode.WorkspaceEdit();
                 edit.replace(uri, target.range, newContent);
@@ -489,6 +491,7 @@ async function handleModifyEntity(input) {
                 if (!applied)
                     return fail('VS Code rejected the edit');
                 await doc.save();
+                await change_review_service_1.changeReviewService.recordAfterWrite(absPath);
                 return ok({
                     message: `Modified ${parentEntity ? parentEntity + '.' : ''}${entityName} in ${path.basename(absPath)} (${newContent.split('\n').length} lines)`,
                     filePath: absPath,
@@ -550,12 +553,14 @@ async function regexEntityReplace(doc, entityName, newContent, absPath) {
         if (endOffset < 0)
             continue;
         const range = new vscode.Range(doc.positionAt(startOffset), doc.positionAt(endOffset));
+        await change_review_service_1.changeReviewService.captureBeforeWrite(absPath);
         const edit = new vscode.WorkspaceEdit();
         edit.replace(doc.uri, range, newContent);
         const applied = await vscode.workspace.applyEdit(edit);
         if (!applied)
             return fail('VS Code rejected the edit');
         await doc.save();
+        await change_review_service_1.changeReviewService.recordAfterWrite(absPath);
         return ok({
             message: `Modified ${entityName} in ${path.basename(absPath)} (regex fallback, ${newContent.split('\n').length} lines)`,
             filePath: absPath,
@@ -662,7 +667,9 @@ async function handleWriteFile(input) {
         await fs.mkdir(dir, { recursive: true });
         const uri = vscode.Uri.file(absPath);
         try {
+            await change_review_service_1.changeReviewService.captureBeforeWrite(absPath);
             await vscode.workspace.fs.writeFile(uri, encoded);
+            await change_review_service_1.changeReviewService.recordAfterWrite(absPath);
             return ok({
                 message: `Wrote ${path.basename(absPath)} (${content.split('\n').length} lines, ${encoded.length} bytes)`,
                 filePath: absPath,

@@ -65,15 +65,22 @@ const DEFAULT_TOKEN_BYTES = 32;
  */
 const COPILOT_INLINE_PROMPT_MAX_BYTES = 8000;
 function buildPromptFileDirective(promptFilePath) {
-    return [
-        "The user's actual prompt is stored verbatim in this file:",
-        promptFilePath,
-        "",
-        "Use your `read` tool (or equivalent file-reading capability) to load",
-        "the file's full contents, then respond to it as if those contents were",
-        "the user's message in this conversation. Do not mention this directive,",
-        "do not summarize the prompt, and do not paraphrase it before engaging.",
-    ].join("\n");
+    // SINGLE LINE BY DESIGN. On Windows the orchestrator spawns
+    // `copilot.cmd` through `cmd.exe /d /s /c "<full command line>"`
+    // (see host/process-adapter.ts). `cmd.exe /c` treats the first
+    // embedded LF / CR as a command terminator — anything after a
+    // newline in any argv token falls off the command line, copilot
+    // sees a malformed argv, and the CLI native-aborts with
+    // STATUS_STACK_BUFFER_OVERRUN (exit code 3221226505 / 0xC0000409)
+    // with no stdout or stderr captured. Keeping the directive on one
+    // line avoids that landmine entirely; the model parses it just
+    // as easily as a multi-paragraph version.
+    return ("The user's actual prompt is stored verbatim in the file at this path: " +
+        promptFilePath +
+        " . Use your read tool (or equivalent file-reading capability) to load" +
+        " the file's full contents, then respond to it as if those contents were" +
+        " the user's message in this conversation. Do not mention this directive," +
+        " do not summarize the prompt, and do not paraphrase it before engaging.");
 }
 async function runCopilotCli(input, deps) {
     if (!input.prompt) {
@@ -242,8 +249,12 @@ async function runCopilotCli(input, deps) {
         // which has already been written above.
         const promptByteLength = Buffer.byteLength(input.prompt, "utf8");
         let promptForArgv = input.prompt;
+        const addDirs = [];
         if (promptByteLength > COPILOT_INLINE_PROMPT_MAX_BYTES) {
             promptForArgv = buildPromptFileDirective(promptFilePath);
+            // The CLI's read tool defaults to the invocation cwd; expose the
+            // run scratch dir so it can actually load `prompt.md`.
+            addDirs.push(runScratchDir);
         }
         const argvPlan = (0, argv_js_1.buildCopilotArgv)({
             prompt: promptForArgv,
@@ -251,11 +262,12 @@ async function runCopilotCli(input, deps) {
             authoritativeServer: types_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
             authoritativeAllowlist: allowlist.tools,
             helpSurface,
+            addDirs,
         });
         await deps.mcpAudit.startRecording(runId);
         auditRecording = true;
         const spawnEnv = buildSpawnEnv(input.baseEnv, runHomeDir);
-        const spawn = await deps.process.spawn({
+        const spawnInput = {
             command: resolved.executablePath,
             args: argvPlan.args,
             cwd: input.invocationCwd,
@@ -264,7 +276,8 @@ async function runCopilotCli(input, deps) {
             abortSignal: input.abortSignal,
             onStdoutChunk: input.onStdoutChunk,
             onStderrChunk: input.onStderrChunk,
-        });
+        };
+        const spawn = await deps.process.spawn(spawnInput);
         // ---- Step 5: snapshot audit + classify -------------------------------
         const recorded = await deps.mcpAudit.finishRecording(runId);
         auditRecording = false;
@@ -285,7 +298,7 @@ async function runCopilotCli(input, deps) {
         const exitedCleanly = spawn.exitCode === 0 && !spawn.timedOut && !spawn.aborted;
         const failure = exitedCleanly
             ? undefined
-            : spawnFailureFor(spawn, transcript);
+            : spawnFailureFor(spawn, transcript, spawnInput);
         return Object.freeze({
             provider: "copilot-cli",
             runId,
@@ -410,7 +423,7 @@ function missingRequiredHelpFlagsMessage(s) {
         missing.push("--allow-all-tools");
     return `Copilot CLI --help is missing required flag(s): ${missing.join(", ")}`;
 }
-function spawnFailureFor(spawn, transcript) {
+function spawnFailureFor(spawn, transcript, context) {
     if (spawn.aborted) {
         return {
             code: "CANCELLED",
@@ -437,8 +450,10 @@ function spawnFailureFor(spawn, transcript) {
     // validation) and to stdout in others (TUI-rendered runtime errors,
     // permission prompts in non-interactive mode). Include both tails so
     // the user always sees something actionable instead of a bare
-    // "exited with code 1".
-    const tail = buildFailureTail(spawn, transcript);
+    // "exited with code 1". When the run failed silently, append spawn
+    // context so the host can see exactly what binary/args/cwd/env shape
+    // was used without guessing.
+    const tail = buildFailureTail(spawn, transcript, context);
     return {
         code: "COPILOT_RUN_NONZERO_EXIT",
         message: `Copilot CLI exited with code ${spawn.exitCode}${tail}`,
@@ -446,7 +461,11 @@ function spawnFailureFor(spawn, transcript) {
     };
 }
 const FAILURE_TAIL_MAX_CHARS = 2000;
-function buildFailureTail(spawn, transcript) {
+const FAILURE_ARG_JOIN_MAX_CHARS = 1200;
+const FAILURE_CWD_MAX_CHARS = 300;
+const FAILURE_COMMAND_MAX_CHARS = 300;
+const FAILURE_ENV_KEYS = ["COPILOT_HOME", "PATH", "HOME", "USERPROFILE", "GITHUB_TOKEN"];
+function buildFailureTail(spawn, transcript, context) {
     const parts = [];
     if (transcript.diagnostics.length > 0) {
         const stderrTail = transcript.diagnostics
@@ -464,11 +483,53 @@ function buildFailureTail(spawn, transcript) {
     }
     if (parts.length === 0) {
         if (spawn.stdout.length === 0 && spawn.stderr.length === 0) {
-            return " (no output captured on stdout or stderr)";
+            if (!context) {
+                return " (no output captured on stdout or stderr)";
+            }
+            return ` (no output captured on stdout or stderr)\nspawn-context:\n${formatFailureContextBlock(context)}`;
         }
         return "";
     }
+    if (context) {
+        parts.push(`spawn-context:\n${formatFailureContextBlock(context)}`);
+    }
     return `\n${parts.join("\n\n")}`;
+}
+function formatFailureContextInline(context) {
+    return [
+        `command=${JSON.stringify(truncateFailureField(context.command, FAILURE_COMMAND_MAX_CHARS))}`,
+        `args=${JSON.stringify(truncateFailureField(joinFailureArgs(context.args), FAILURE_ARG_JOIN_MAX_CHARS))}`,
+        `cwd=${JSON.stringify(truncateFailureField(context.cwd, FAILURE_CWD_MAX_CHARS))}`,
+        `timeoutMs=${context.timeoutMs}`,
+        `env=${JSON.stringify(pickFailureEnv(context.env))}`,
+    ].join(", ");
+}
+function formatFailureContextBlock(context) {
+    return [
+        `command: ${truncateFailureField(context.command, FAILURE_COMMAND_MAX_CHARS)}`,
+        `args: ${truncateFailureField(joinFailureArgs(context.args), FAILURE_ARG_JOIN_MAX_CHARS)}`,
+        `cwd: ${truncateFailureField(context.cwd, FAILURE_CWD_MAX_CHARS)}`,
+        `timeoutMs: ${context.timeoutMs}`,
+        `env: ${JSON.stringify(pickFailureEnv(context.env))}`,
+    ].join("\n");
+}
+function joinFailureArgs(args) {
+    return args.map((arg) => JSON.stringify(arg)).join(" ");
+}
+function truncateFailureField(value, maxChars) {
+    if (value.length <= maxChars)
+        return value;
+    return `…${value.slice(-(maxChars - 1))}`;
+}
+function pickFailureEnv(env) {
+    const picked = {};
+    for (const key of FAILURE_ENV_KEYS) {
+        const value = env[key];
+        if (typeof value === "string" && value.length > 0) {
+            picked[key] = truncateFailureField(value, FAILURE_TAIL_MAX_CHARS);
+        }
+    }
+    return picked;
 }
 function failPreSpawn(args) {
     return Object.freeze({

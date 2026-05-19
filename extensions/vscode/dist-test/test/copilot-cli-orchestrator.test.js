@@ -299,7 +299,7 @@ function makeDeps(over = {}) {
     strict_1.default.equal(spawned.env.PATH, "/usr/bin");
     strict_1.default.deepEqual([...spawned.args], [...result.argvPlan.args]);
     strict_1.default.ok(spawned.args.includes("--allow-tool"));
-    strict_1.default.ok(spawned.args.includes("dreamgraph:query_resource"));
+    strict_1.default.ok(spawned.args.includes("dreamgraph(query_resource)"));
     strict_1.default.ok(spawned.args.includes("--allow-all-tools"));
     // No `--additional-mcp-config` on argv — MCP config travels by file.
     strict_1.default.equal(spawned.args.includes("--additional-mcp-config"), false);
@@ -412,6 +412,28 @@ function makeDeps(over = {}) {
     strict_1.default.match(result.failure.message, /code 2/);
     strict_1.default.match(result.failure.message, /bad model name/);
     strict_1.default.ok(result.transcript?.hasStderrErrors);
+});
+(0, node_test_1.default)("orchestrator: empty-output nonzero exit includes spawn context", async () => {
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stdout: "",
+            stderr: "",
+            exitCode: 1,
+            signal: null,
+            timedOut: false,
+            aborted: false,
+        },
+    });
+    const result = await (0, index_js_1.runCopilotCli)(defaultInput(), makeDeps({ process }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "COPILOT_RUN_NONZERO_EXIT");
+    strict_1.default.match(result.failure.message, /code 1/);
+    strict_1.default.match(result.failure.message, /no output captured on stdout or stderr/);
+    strict_1.default.match(result.failure.message, /spawn-context:/);
+    strict_1.default.match(result.failure.message, /command: \/usr\/local\/bin\/copilot/);
+    strict_1.default.match(result.failure.message, /cwd: \/work\/run/);
+    strict_1.default.match(result.failure.message, /timeoutMs: 60000/);
+    strict_1.default.match(result.failure.message, /args:/);
 });
 (0, node_test_1.default)("orchestrator: timeout → TIMEOUT", async () => {
     const { process } = makeFakeProcess({

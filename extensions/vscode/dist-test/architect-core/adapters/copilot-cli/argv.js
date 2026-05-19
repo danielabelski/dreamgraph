@@ -35,7 +35,7 @@
 //     `--deny-tool shell` and `--deny-tool write` below: deny rules take
 //     precedence over allows in Copilot CLI's policy resolution.
 //   • Always deny inline destructive surfaces (`shell`, `write`).
-//   • Allow only `<authoritativeServer>:<tool>` MCP specs from the
+//   • Allow only `<authoritativeServer>(<tool>)` MCP specs from the
 //     verified allowlist. Never wildcard the server.
 //   • `--available-tools` is reported as policy metadata but NOT emitted
 //     because its argument grammar varies between CLI versions; the
@@ -82,10 +82,14 @@ function buildCopilotArgv(input) {
         deniedSpecs.push(inline);
     }
     // 4. Authoritative MCP allows. One flag per tool — keeps each spec
-    //    individually auditable in the spawned argv.
+    //    individually auditable in the spawned argv. Copilot CLI's
+    //    permission grammar uses the `<server>(<tool>)` form (see
+    //    `copilot --help` examples, e.g. `--allow-tool='MyMCP(my_tool)'`).
+    //    A bare `<server>` would whitelist every tool the server exposes,
+    //    which is exactly what authoritative mode must prevent.
     const allowedSpecs = [];
     for (const tool of input.authoritativeAllowlist) {
-        const spec = `${input.authoritativeServer}:${tool}`;
+        const spec = `${input.authoritativeServer}(${tool})`;
         args.push("--allow-tool", spec);
         allowedSpecs.push(spec);
     }
@@ -94,6 +98,17 @@ function buildCopilotArgv(input) {
     if (input.helpSurface.optional.disallowTempDir) {
         args.push("--disallow-temp-dir");
         tempDirDisallowed = true;
+    }
+    // 5b. File-access allowlist. Copilot CLI restricts read tools to the
+    //     invocation cwd by default; the orchestrator passes the per-run
+    //     scratch directory here so the file-redirect directive's
+    //     `prompt.md` is reachable. Empty when the prompt fits inline.
+    const addedDirs = [];
+    for (const dir of input.addDirs ?? []) {
+        if (typeof dir !== "string" || dir.length === 0)
+            continue;
+        args.push("--add-dir", dir);
+        addedDirs.push(dir);
     }
     // 6. Prompt last so the prompt text is visually adjacent to the run
     //    command in shell history / audit dumps. Per the Large Payload
@@ -114,6 +129,7 @@ function buildCopilotArgv(input) {
             allowAllToolsEnabled,
             allowedToolSpecs: Object.freeze(allowedSpecs),
             deniedToolSpecs: Object.freeze(deniedSpecs),
+            addedDirs: Object.freeze(addedDirs),
         },
     };
 }

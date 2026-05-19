@@ -52,6 +52,7 @@ class ContextCache {
         "lucid_action",
         "wake_from_lucid",
         "enrich_seed_data",
+        "enrich_parser_nodes",
         "solidify_cognitive_insight",
         "init_graph",
         "scan_project",
