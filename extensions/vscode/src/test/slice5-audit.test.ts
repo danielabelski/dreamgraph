@@ -13,7 +13,7 @@ test('Slice 5 audit: hover actions are wired for copy, retry, and pin', () => {
 
 test('Slice 5 audit: action execution remains allowlisted and explicit-click only', () => {
   const source = readFileSync(join(process.cwd(), 'src', 'chat-panel.ts'), 'utf8');
-  assert.match(source, /ACTION_ALLOWLIST = new Set\(\['tool', 'show_full'\]\)/);
+  assert.match(source, /ACTION_ALLOWLIST = new Set\(\['tool', 'show_full', 'copilot_login'\]\)/);
   assert.match(source, /addEventListener\('click', \(\) => \{/);
   assert.doesNotMatch(source, /runMessageAction[^\n]*onload/i);
 });

@@ -72,6 +72,21 @@ export {
   type CopilotCliRunResult,
 } from "./orchestrator.js";
 
+// NDJSON stdout event stream for `--output-format json` (always
+// emitted by argv.ts). Authoritative runtime source for tool-call
+// surfacing and per-token assistant text streaming.
+export {
+  createCopilotCliEventStream,
+  type CliJsonAssistantDeltaEvent,
+  type CliJsonAssistantMessageEvent,
+  type CliJsonEvent,
+  type CliJsonOtherEvent,
+  type CliJsonResultEvent,
+  type CliJsonToolCompleteEvent,
+  type CliJsonToolStartEvent,
+  type CopilotCliEventStream,
+} from "./event-stream.js";
+
 // Real host runtime adapters. The four stable ports (fs/process/
 // crypto/clock) are exported as singletons. The two ports that depend
 // on the DreamGraph stdio MCP server (`registry`, `mcpAudit`) ship as
@@ -85,8 +100,10 @@ export {
   auditFilePathFor,
   bridgeEnvForRun,
   createHostAudit,
+  createHostAuditLive,
   createHostRegistry,
-  probeDreamgraphStdio,
+  probeDreamgraphHttpMcp,
+  type HostAuditLiveOptions,
   type HostAuditOptions,
   type HostRegistryOptions,
 } from "./host/index.js";
@@ -97,6 +114,9 @@ export {
 export {
   serializeConversationForCopilotCli,
   type SerializeConversationOptions,
+  type CliToolsManifest,
+  CURRENT_TURN_OPEN_MARKER,
+  CURRENT_TURN_CLOSE_MARKER,
 } from "./prompt-serializer.js";
 
 // Slice 4: live `ProviderPort` implementation that drives the Slice 2
@@ -104,4 +124,5 @@ export {
 export {
   createCopilotCliProviderPort,
   type CopilotCliProviderPortOptions,
+  type PromptComposedInfo,
 } from "./provider-port.js";

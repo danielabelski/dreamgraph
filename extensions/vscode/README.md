@@ -1,4 +1,4 @@
-# DreamGraph v10.0.1 — Renata
+# DreamGraph v10.1.0 — Renata
 ### The Autonomous Cognitive Layer for Sovereign Development.
 
 DreamGraph is a model-agnostic, graph-grounded development agent. It replaces brute-force context dumping with architectural discipline, ensuring your project's logic remains persistent regardless of which LLM you choose to plug in.
@@ -9,7 +9,7 @@ DreamGraph is a model-agnostic, graph-grounded development agent. It replaces br
 * **Autonomous Normalization:** Background 'Dream Cycles' continuously map and resolve architectural tensions.
 * **100% Local Privacy:** Your database, your daemon, your keys. Sovereign by design.
 
-## 🛠 Status: v10.0.1 "Renata"
+## 🛠 Status: v10.1.0 "Renata"
 * **Engine:** Active
 * **Explorer:** Production-ready graph browsing and curated mutations
 * **Governance:** ADR-enforced

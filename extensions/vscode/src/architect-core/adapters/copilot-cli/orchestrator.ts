@@ -56,6 +56,10 @@ import { buildCopilotArgv } from "./argv.js";
 import { classifyToolCall } from "./transcript-classifier.js";
 import { normalizeCopilotTranscript, type CopilotCliTranscript } from "./transcript.js";
 import {
+  createCopilotCliEventStream,
+  type CliJsonEvent,
+} from "./event-stream.js";
+import {
   type CopilotCliClockPort,
   type CopilotCliCryptoPort,
   type CopilotCliFsPort,
@@ -118,6 +122,24 @@ export interface CopilotCliRunInput {
    * and when packagers ship a renamed binary.
    */
   readonly binaryName?: string;
+  /**
+   * Optional callback invoked synchronously as soon as the orchestrator
+   * has minted the `runId` for this invocation, before the CLI is
+   * spawned and before `mcpAudit.startRecording` runs. Used by the
+   * provider-port layer to subscribe to the live audit NDJSON file at
+   * the earliest possible moment so no tool calls are missed.
+   */
+  readonly onRunIdAssigned?: (runId: string) => void;
+  /**
+   * Optional per-event callback for the CLI's `--output-format json`
+   * NDJSON stdout stream. Receives every parsed event (tool starts/
+   * completes, assistant message/reasoning deltas, the final
+   * `result` summary, plus any unrecognized event surfaced as
+   * `kind: "other"`). Always set by the production provider-port to
+   * drive the authoritative live UX. Handler exceptions are
+   * swallowed so a buggy consumer cannot break the run.
+   */
+  readonly onCliEvent?: (event: CliJsonEvent) => void;
 }
 
 export interface CopilotCliDeps {
@@ -210,12 +232,10 @@ function buildPromptFileDirective(promptFilePath: string): string {
   // line avoids that landmine entirely; the model parses it just
   // as easily as a multi-paragraph version.
   return (
-    "The user's actual prompt is stored verbatim in the file at this path: " +
+    "The full conversation (system instructions, prior turns, and the CURRENT user turn) is stored verbatim in the file at this path: " +
     promptFilePath +
     " . Use your read tool (or equivalent file-reading capability) to load" +
-    " the file's full contents, then respond to it as if those contents were" +
-    " the user's message in this conversation. Do not mention this directive," +
-    " do not summarize the prompt, and do not paraphrase it before engaging."
+    " the file's full contents. The file may contain many prior `[user]` and `[assistant]` blocks; respond ONLY to the message wrapped between the markers `===== CURRENT TURN — RESPOND ONLY TO THIS MESSAGE =====` and `===== END CURRENT TURN =====`, using earlier turns and any `[system]` block strictly as background context. Do not mention this directive, do not summarize the prompt, and do not paraphrase the current turn before engaging."
   );
 }
 
@@ -236,6 +256,14 @@ export async function runCopilotCli(
   const startedAtEpochMs = deps.clock.nowMs();
   const runId = deps.crypto.randomRunId();
   const binaryName = input.binaryName ?? DEFAULT_BINARY_NAME;
+
+  if (input.onRunIdAssigned) {
+    try {
+      input.onRunIdAssigned(runId);
+    } catch {
+      // Observer failures must not crash the orchestrator.
+    }
+  }
 
   let runScratchDir: string | null = null;
   let auditRecording = false;
@@ -439,6 +467,35 @@ export async function runCopilotCli(
     await deps.mcpAudit.startRecording(runId);
     auditRecording = true;
 
+    // Build the NDJSON event-stream parser BEFORE spawn so every
+    // stdout chunk — including chunks delivered during partial-line
+    // boundaries — flows through it. The user's original
+    // `onStdoutChunk` (if any) still receives the raw bytes for
+    // forensic/debug purposes; the parser is purely additive.
+    const cliEventStream = createCopilotCliEventStream();
+    const dispatchEvent = (event: CliJsonEvent): void => {
+      if (!input.onCliEvent) return;
+      try {
+        input.onCliEvent(event);
+      } catch {
+        // observer failures must not break the spawn
+      }
+    };
+    const stdoutTap = (chunk: string): void => {
+      // Forward to original observer first so a slow parser never
+      // delays raw chunk visibility.
+      if (input.onStdoutChunk) {
+        try {
+          input.onStdoutChunk(chunk);
+        } catch {
+          // observer failures must not break the spawn
+        }
+      }
+      for (const ev of cliEventStream.feed(chunk)) {
+        dispatchEvent(ev);
+      }
+    };
+
     const spawnEnv = buildSpawnEnv(input.baseEnv, runHomeDir);
     const spawnInput = {
       command: resolved.executablePath,
@@ -447,10 +504,15 @@ export async function runCopilotCli(
       env: spawnEnv,
       timeoutMs: input.timeoutMs,
       abortSignal: input.abortSignal,
-      onStdoutChunk: input.onStdoutChunk,
+      onStdoutChunk: stdoutTap,
       onStderrChunk: input.onStderrChunk,
     };
     const spawn = await deps.process.spawn(spawnInput);
+
+    // Drain any partial trailing line the spawn may have left buffered.
+    for (const ev of cliEventStream.flush()) {
+      dispatchEvent(ev);
+    }
 
     // ---- Step 5: snapshot audit + classify -------------------------------
     const recorded = await deps.mcpAudit.finishRecording(runId);
@@ -468,8 +530,21 @@ export async function runCopilotCli(
     }));
 
     // ---- Step 6: normalize transcript + envelope -------------------------
+    // With `--output-format json` (always emitted by argv.ts) the
+    // authoritative assistant text comes from the event stream's
+    // accumulator: `assistant.message_delta` events concatenated, or
+    // an `assistant.message` event verbatim when one arrives. The raw
+    // stdout NDJSON is intentionally NOT shown to users — they would
+    // see JSON envelopes. We still pass it through the transcript
+    // normalizer to populate `diagnostics` (stderr) and detect
+    // stderr-error patterns; the stdout argument is overridden with
+    // the parser snapshot. Falls back to raw stdout when the parser
+    // saw zero qualifying events (defensive: test fakes that feed
+    // plain text and any future CLI version that ignores the flag).
+    const parserSnapshot = cliEventStream.snapshotAssistantText();
+    const transcriptStdout = parserSnapshot.length > 0 ? parserSnapshot : spawn.stdout;
     const transcript = normalizeCopilotTranscript({
-      stdout: spawn.stdout,
+      stdout: transcriptStdout,
       stderr: spawn.stderr,
     });
 

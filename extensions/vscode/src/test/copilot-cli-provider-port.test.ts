@@ -239,7 +239,11 @@ test("provider-port: callProvider serializes the conversation into --prompt", as
   assert.ok(promptArgIdx >= 0);
   const promptValue = spawn.args[promptArgIdx + 1]!;
   assert.match(promptValue, /\[system\]\nyou are an architect/);
-  assert.match(promptValue, /\[user\]\ndesign a queue/);
+  // Provider-port defaults `markCurrentTurn=true`; the final user turn
+  // is wrapped with the CURRENT TURN markers so the single-shot CLI
+  // model can identify the active request even when prior turns are
+  // also in the file.
+  assert.match(promptValue, /\[user\]\n===== CURRENT TURN[\s\S]*\ndesign a queue\n===== END CURRENT TURN =====/);
   // Model flag forwarded.
   assert.ok(spawn.args.includes("--model"));
   assert.ok(spawn.args.includes("claude-sonnet-4.5"));
@@ -285,7 +289,16 @@ test("provider-port: callProvider forwards abortSignal to the spawn port", async
   });
   const ac = new AbortController();
   await port.callProvider(makeCallInput({ abortSignal: ac.signal }));
-  assert.equal(proc.log.spawnCalls[0]!.abortSignal, ac.signal);
+  // The provider-port wraps the external signal in an internal
+  // controller so it can additionally abort on dreamgraph-MCP-failed
+  // events. Reference equality no longer holds; assert propagation
+  // instead: aborting the external signal must abort the forwarded
+  // one.
+  const forwarded = proc.log.spawnCalls[0]!.abortSignal as AbortSignal | undefined;
+  assert.ok(forwarded instanceof AbortSignal, "spawn port received an AbortSignal");
+  assert.equal(forwarded!.aborted, false);
+  ac.abort();
+  assert.equal(forwarded!.aborted, true);
 });
 
 test("provider-port: callProvider throws annotated Error when orchestrator returns ok=false", async () => {

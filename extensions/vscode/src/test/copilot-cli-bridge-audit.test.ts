@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Copilot CLI adapter — Slice 3b tests for the audit adapter + bridge.
+// Copilot CLI adapter â€” Slice 3b tests for the audit adapter + bridge.
 //
 // 1. `createHostAudit` is exercised against real `node:fs` operations
 //    (mkdtemp, NDJSON read-back, malformed-line skipping, missing-file
@@ -53,7 +53,7 @@ test("createHostAudit: rejects empty auditDirAbsPath", () => {
   assert.throws(() => createHostAudit({ auditDirAbsPath: "" }));
 });
 
-test("createHostAudit: missing file → empty array, no throw", async () => {
+test("createHostAudit: missing file â†’ empty array, no throw", async () => {
   const dir = await mkdtemp(join(tmpdir(), "dg-audit-missing-"));
   try {
     const audit = createHostAudit({ auditDirAbsPath: dir });
@@ -113,7 +113,7 @@ test("createHostAudit: parses NDJSON, drops malformed lines, deletes file", asyn
   }
 });
 
-test("createHostAudit: finishRecording without startRecording → empty", async () => {
+test("createHostAudit: finishRecording without startRecording â†’ empty", async () => {
   const dir = await mkdtemp(join(tmpdir(), "dg-audit-no-start-"));
   try {
     const audit = createHostAudit({ auditDirAbsPath: dir });
@@ -124,7 +124,7 @@ test("createHostAudit: finishRecording without startRecording → empty", async 
   }
 });
 
-test("createHostAudit: second finishRecording for same runId → empty", async () => {
+test("createHostAudit: second finishRecording for same runId â†’ empty", async () => {
   const dir = await mkdtemp(join(tmpdir(), "dg-audit-twice-"));
   try {
     const audit = createHostAudit({ auditDirAbsPath: dir });
@@ -153,93 +153,207 @@ test("createHostAudit: second finishRecording for same runId → empty", async (
 });
 
 // ---------------------------------------------------------------------------
-// bridge-entry
+// bridge-entry (HTTP MCP inheritance proxy)
 // ---------------------------------------------------------------------------
 //
-// Strategy: spawn the bridge bundle with env that points it at a tiny
-// inline Node "fake MCP server" launched via `node -e`. We then feed
-// the bridge JSON-RPC tools/call lines on its stdin and observe both
-// the stdout passthrough and the audit NDJSON file.
+// After the v10.0.x bridge redesign, the bridge no longer spawns a
+// stdio dreamgraph child. It opens a Streamable HTTP MCP client to
+// the architect's already-running daemon (`DREAMGRAPH_HOST_MCP_URL`)
+// and forwards every inbound stdio MCP request.
+//
+// Test strategy:
+//   1. Stand up an in-process HTTP MCP server using the official SDK
+//      (`Server` + `StreamableHTTPServerTransport`). This is the
+//      "upstream daemon" stand-in.
+//   2. Spawn the bridge bundle via `StdioClientTransport`, passing
+//      `DREAMGRAPH_HOST_MCP_URL` pointing at our stand-in.
+//   3. Drive the bridge as a real MCP client. Verify forwarding +
+//      audit NDJSON contents + fail-closed behaviour.
 
-const FAKE_SERVER_SCRIPT = `
-let buf = '';
-process.stdin.on('data', (chunk) => {
-  buf += chunk.toString('utf8');
-  let nl;
-  while ((nl = buf.indexOf('\\n')) >= 0) {
-    const line = buf.slice(0, nl);
-    buf = buf.slice(nl + 1);
-    if (!line.trim()) continue;
-    let msg;
-    try { msg = JSON.parse(line); } catch { continue; }
-    if (msg && msg.method === 'tools/call' && msg.id !== undefined) {
-      const tool = msg.params && msg.params.name;
-      const isError = tool === 'boom';
-      const reply = isError
-        ? { jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'boom failed' } }
-        : { jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ok-' + tool }], isError: false } };
-      process.stdout.write(JSON.stringify(reply) + '\\n');
-    }
-  }
-});
-process.stdin.on('end', () => process.exit(0));
-`;
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import { AddressInfo } from "node:net";
 
-interface BridgeRunResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  auditLines: string[];
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+
+interface UpstreamHandle {
+  url: string;
+  close: () => Promise<void>;
 }
 
-async function runBridge(opts: {
-  inputLines: readonly string[];
+/**
+ * Boot a real, in-process HTTP MCP server backed by the SDK. The
+ * caller supplies `toolHandler(name, args)` which is invoked on
+ * every tools/call; throwing inside it propagates as a JSON-RPC
+ * error response â€” exactly what the bridge should record as
+ * `isError: true`.
+ */
+async function startUpstreamHttpMcp(opts: {
+  toolHandler: (name: string, args: Record<string, unknown>) => unknown;
+}): Promise<UpstreamHandle> {
+  function buildServer(): McpServer {
+    const server = new McpServer(
+      { name: "test-upstream", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    server.setRequestHandler(ListToolsRequestSchema, () => ({
+      tools: [
+        {
+          name: "query_resource",
+          description: "test tool",
+          inputSchema: { type: "object", properties: {}, additionalProperties: true },
+        },
+        {
+          name: "list_directory",
+          description: "test tool",
+          inputSchema: { type: "object", properties: {}, additionalProperties: true },
+        },
+        {
+          name: "boom",
+          description: "test tool that throws",
+          inputSchema: { type: "object", properties: {}, additionalProperties: true },
+        },
+      ],
+    }));
+    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+      const out = opts.toolHandler(
+        req.params.name,
+        (req.params.arguments ?? {}) as Record<string, unknown>,
+      );
+      return {
+        content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out) }],
+        isError: false,
+      };
+    });
+    return server;
+  }
+
+  // Mirror the real daemon: session-id based routing, one McpServer +
+  // transport per session, created lazily on POST initialize.
+  const crypto = await import("node:crypto");
+  const sessions = new Map<
+    string,
+    { server: McpServer; transport: StreamableHTTPServerTransport }
+  >();
+
+  const http: HttpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (c: string) => (body += c));
+    req.on("end", () => {
+      void (async () => {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        const parsed = body.length > 0 ? safeJson(body) : undefined;
+        if (sessionId && sessions.has(sessionId)) {
+          await sessions.get(sessionId)!.transport.handleRequest(req, res, parsed);
+          return;
+        }
+        if (req.method === "POST") {
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => crypto.randomUUID(),
+            onsessioninitialized: (id) => {
+              sessions.set(id, { server, transport });
+            },
+          });
+          transport.onclose = () => {
+            const id = transport.sessionId;
+            if (id) sessions.delete(id);
+          };
+          const server = buildServer();
+          await server.connect(transport);
+          await transport.handleRequest(req, res, parsed);
+          return;
+        }
+        res.writeHead(400);
+        res.end();
+      })();
+    });
+  });
+  await new Promise<void>((res) => http.listen(0, "127.0.0.1", res));
+  const addr = http.address() as AddressInfo;
+  const url = `http://127.0.0.1:${addr.port}/mcp`;
+  return {
+    url,
+    close: async () => {
+      for (const { server, transport } of sessions.values()) {
+        try {
+          await transport.close();
+        } catch {
+          /* ignore */
+        }
+        try {
+          await server.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      sessions.clear();
+      await new Promise<void>((res) => http.close(() => res()));
+    },
+  };
+}
+
+function safeJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
+}
+
+interface BridgeClientHandle {
+  client: Client;
+  close: () => Promise<void>;
+  auditPath: string;
+}
+
+async function startBridgeClient(opts: {
+  hostMcpUrl: string;
   withAudit: boolean;
-}): Promise<BridgeRunResult> {
+}): Promise<BridgeClientHandle> {
   const dir = await mkdtemp(join(tmpdir(), "dg-bridge-"));
   const auditPath = join(dir, "calls.ndjson");
   const env: Record<string, string> = {
     ...filteredProcEnv(),
-    DREAMGRAPH_BRIDGE_TARGET_COMMAND: process.execPath,
-    DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON: JSON.stringify(["-e", FAKE_SERVER_SCRIPT]),
+    DREAMGRAPH_HOST_MCP_URL: opts.hostMcpUrl,
     DREAMGRAPH_BRIDGE_SERVER_NAME: "dreamgraph",
   };
-  if (opts.withAudit) {
-    env["DREAMGRAPH_AUDIT_PATH"] = auditPath;
-  }
+  if (opts.withAudit) env["DREAMGRAPH_AUDIT_PATH"] = auditPath;
 
-  const child = spawn(process.execPath, [BRIDGE_PATH], {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [BRIDGE_PATH],
     env,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
+    stderr: "pipe",
   });
-  let stdout = "";
-  let stderr = "";
-  child.stdout!.setEncoding("utf8");
-  child.stderr!.setEncoding("utf8");
-  child.stdout!.on("data", (c: string) => (stdout += c));
-  child.stderr!.on("data", (c: string) => (stderr += c));
-
-  for (const line of opts.inputLines) {
-    child.stdin!.write(`${line}\n`);
-  }
-  child.stdin!.end();
-
-  const exitCode: number | null = await new Promise((res) => {
-    child.on("close", (code) => res(typeof code === "number" ? code : null));
-  });
-
-  let auditLines: string[] = [];
-  if (opts.withAudit) {
-    try {
-      const raw = await readFile(auditPath, "utf8");
-      auditLines = raw.split(/\r?\n/).filter((l) => l.length > 0);
-    } catch {
-      auditLines = [];
-    }
-  }
-  await rm(dir, { recursive: true, force: true });
-  return { stdout, stderr, exitCode, auditLines };
+  const client = new Client(
+    { name: "test-driver", version: "1.0.0" },
+    { capabilities: {} },
+  );
+  await client.connect(transport);
+  return {
+    client,
+    auditPath,
+    close: async () => {
+      try {
+        await client.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await transport.close();
+      } catch {
+        /* ignore */
+      }
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 function filteredProcEnv(): Record<string, string> {
@@ -247,74 +361,131 @@ function filteredProcEnv(): Record<string, string> {
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v === "string") out[k] = v;
   }
+  // Strip any pre-existing bridge config so tests are deterministic.
+  delete out["DREAMGRAPH_HOST_MCP_URL"];
+  delete out["DREAMGRAPH_AUDIT_PATH"];
+  delete out["DREAMGRAPH_BRIDGE_SERVER_NAME"];
   return out;
 }
 
-test("bridge: forwards stdin to child and child stdout to parent verbatim", async () => {
-  const req = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/call",
-    params: { name: "query_resource", arguments: { uri: "system://overview" } },
+async function readAuditLines(path: string): Promise<string[]> {
+  try {
+    const raw = await readFile(path, "utf8");
+    return raw.split(/\r?\n/).filter((l) => l.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+test("bridge: forwards tools/list to the HTTP upstream", async () => {
+  const upstream = await startUpstreamHttpMcp({
+    toolHandler: () => "ok",
   });
-  const r = await runBridge({ inputLines: [req], withAudit: false });
-  assert.equal(r.exitCode, 0);
-  assert.match(r.stdout, /"id":1/);
-  assert.match(r.stdout, /ok-query_resource/);
-  assert.equal(r.auditLines.length, 0);
+  const bridge = await startBridgeClient({ hostMcpUrl: upstream.url, withAudit: false });
+  try {
+    const result = await bridge.client.listTools();
+    const names = result.tools.map((t) => t.name).sort();
+    assert.deepEqual(names, ["boom", "list_directory", "query_resource"]);
+    const lines = await readAuditLines(bridge.auditPath);
+    assert.equal(lines.length, 0);
+  } finally {
+    await bridge.close();
+    await upstream.close();
+  }
 });
 
-test("bridge: writes one NDJSON audit record per request/response pair", async () => {
-  const req1 = JSON.stringify({
-    jsonrpc: "2.0",
-    id: "a",
-    method: "tools/call",
-    params: { name: "query_resource", arguments: { uri: "x" } },
+test("bridge: forwards tools/call and writes one NDJSON audit record per call", async () => {
+  let lastArgs: Record<string, unknown> | null = null;
+  const upstream = await startUpstreamHttpMcp({
+    toolHandler: (name, args) => {
+      lastArgs = args;
+      return `ok-${name}`;
+    },
   });
-  const req2 = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/call",
-    params: { name: "list_directory", arguments: { repo: "dreamgraph" } },
-  });
-  const r = await runBridge({ inputLines: [req1, req2], withAudit: true });
-  assert.equal(r.exitCode, 0);
-  assert.equal(r.auditLines.length, 2);
+  const bridge = await startBridgeClient({ hostMcpUrl: upstream.url, withAudit: true });
+  try {
+    const r1 = await bridge.client.callTool({
+      name: "query_resource",
+      arguments: { uri: "system://overview" },
+    });
+    assert.deepEqual(lastArgs, { uri: "system://overview" });
+    assert.equal(
+      ((r1.content as Array<{ type: string; text: string }>)[0] ?? {}).text,
+      "ok-query_resource",
+    );
 
-  const a = JSON.parse(r.auditLines[0]!);
-  const b = JSON.parse(r.auditLines[1]!);
-  assert.equal(a.server, "dreamgraph");
-  assert.equal(a.tool, "query_resource");
-  assert.equal(a.isError, false);
-  assert.equal(typeof a.durationMs, "number");
-  assert.ok(a.durationMs >= 0);
-  assert.equal(typeof a.startedAtEpochMs, "number");
-  assert.match(a.inputJson, /system|x/);
-  assert.match(a.resultJson, /ok-query_resource/);
+    const r2 = await bridge.client.callTool({
+      name: "list_directory",
+      arguments: { repo: "dreamgraph" },
+    });
+    assert.equal(
+      ((r2.content as Array<{ type: string; text: string }>)[0] ?? {}).text,
+      "ok-list_directory",
+    );
 
-  assert.equal(b.tool, "list_directory");
+    const lines = await readAuditLines(bridge.auditPath);
+    assert.equal(lines.length, 2);
+    const a = JSON.parse(lines[0]!);
+    const b = JSON.parse(lines[1]!);
+    assert.equal(a.server, "dreamgraph");
+    assert.equal(a.tool, "query_resource");
+    assert.equal(a.isError, false);
+    assert.equal(typeof a.durationMs, "number");
+    assert.ok(a.durationMs >= 0);
+    assert.equal(typeof a.startedAtEpochMs, "number");
+    assert.match(a.inputJson, /system:\/\/overview/);
+    assert.match(a.resultJson, /ok-query_resource/);
+    assert.equal(b.tool, "list_directory");
+  } finally {
+    await bridge.close();
+    await upstream.close();
+  }
 });
 
 test("bridge: marks JSON-RPC error responses with isError=true", async () => {
-  const req = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 7,
-    method: "tools/call",
-    params: { name: "boom", arguments: {} },
+  const upstream = await startUpstreamHttpMcp({
+    toolHandler: (name) => {
+      if (name === "boom") throw new Error("boom failed");
+      return "ok";
+    },
   });
-  const r = await runBridge({ inputLines: [req], withAudit: true });
-  assert.equal(r.exitCode, 0);
-  assert.equal(r.auditLines.length, 1);
-  const rec = JSON.parse(r.auditLines[0]!);
-  assert.equal(rec.tool, "boom");
-  assert.equal(rec.isError, true);
-  assert.match(rec.resultJson, /boom failed/);
+  const bridge = await startBridgeClient({ hostMcpUrl: upstream.url, withAudit: true });
+  try {
+    await assert.rejects(
+      bridge.client.callTool({ name: "boom", arguments: {} }),
+      /boom failed/,
+    );
+    const lines = await readAuditLines(bridge.auditPath);
+    assert.equal(lines.length, 1);
+    const rec = JSON.parse(lines[0]!);
+    assert.equal(rec.tool, "boom");
+    assert.equal(rec.isError, true);
+    assert.match(rec.resultJson, /boom failed/);
+  } finally {
+    await bridge.close();
+    await upstream.close();
+  }
 });
 
-test("bridge: fails fast (exit 2) when DREAMGRAPH_BRIDGE_TARGET_COMMAND is unset", async () => {
+test("bridge: only tools/call generates audit records (tools/list does not)", async () => {
+  const upstream = await startUpstreamHttpMcp({
+    toolHandler: () => "ok",
+  });
+  const bridge = await startBridgeClient({ hostMcpUrl: upstream.url, withAudit: true });
+  try {
+    await bridge.client.listTools();
+    await bridge.client.callTool({ name: "query_resource", arguments: {} });
+    const lines = await readAuditLines(bridge.auditPath);
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]!).tool, "query_resource");
+  } finally {
+    await bridge.close();
+    await upstream.close();
+  }
+});
+
+test("bridge: fails fast (exit 2) when DREAMGRAPH_HOST_MCP_URL is unset", async () => {
   const env = filteredProcEnv();
-  delete env["DREAMGRAPH_BRIDGE_TARGET_COMMAND"];
-  delete env["DREAMGRAPH_AUDIT_PATH"];
   const child = spawn(process.execPath, [BRIDGE_PATH], {
     env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -328,14 +499,12 @@ test("bridge: fails fast (exit 2) when DREAMGRAPH_BRIDGE_TARGET_COMMAND is unset
     child.on("close", (c) => res(typeof c === "number" ? c : null));
   });
   assert.equal(code, 2);
-  assert.match(stderr, /DREAMGRAPH_BRIDGE_TARGET_COMMAND/);
+  assert.match(stderr, /DREAMGRAPH_HOST_MCP_URL/);
 });
 
-test("bridge: fails fast (exit 2) when DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON is malformed", async () => {
+test("bridge: fails fast (exit 2) when DREAMGRAPH_HOST_MCP_URL is malformed", async () => {
   const env = filteredProcEnv();
-  env["DREAMGRAPH_BRIDGE_TARGET_COMMAND"] = process.execPath;
-  env["DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON"] = "not-a-json-array";
-  delete env["DREAMGRAPH_AUDIT_PATH"];
+  env["DREAMGRAPH_HOST_MCP_URL"] = "not-a-url";
   const child = spawn(process.execPath, [BRIDGE_PATH], {
     env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -349,24 +518,34 @@ test("bridge: fails fast (exit 2) when DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON is mal
     child.on("close", (c) => res(typeof c === "number" ? c : null));
   });
   assert.equal(code, 2);
-  assert.match(stderr, /DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON/);
+  assert.match(stderr, /not a valid URL/);
 });
 
-test("bridge: ignores non-tools/call traffic in audit (e.g. initialize)", async () => {
-  const init = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: { protocolVersion: "2024-11-05" },
+test("bridge: fails closed when upstream is unreachable", async () => {
+  // Listen-only socket on an ephemeral port, then close it so the
+  // port is "addressable but nobody's home". The bridge should
+  // exit non-zero with a clear stderr message.
+  const placeholder = createServer();
+  await new Promise<void>((res) => placeholder.listen(0, "127.0.0.1", res));
+  const addr = placeholder.address() as AddressInfo;
+  const url = `http://127.0.0.1:${addr.port}/mcp`;
+  await new Promise<void>((res) => placeholder.close(() => res()));
+
+  const env = filteredProcEnv();
+  env["DREAMGRAPH_HOST_MCP_URL"] = url;
+  env["DREAMGRAPH_BRIDGE_HEALTH_TIMEOUT_MS"] = "2000";
+  const child = spawn(process.execPath, [BRIDGE_PATH], {
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   });
-  const call = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/call",
-    params: { name: "query_resource", arguments: {} },
+  child.stdin!.end();
+  let stderr = "";
+  child.stderr!.setEncoding("utf8");
+  child.stderr!.on("data", (c: string) => (stderr += c));
+  const code: number | null = await new Promise((res) => {
+    child.on("close", (c) => res(typeof c === "number" ? c : null));
   });
-  const r = await runBridge({ inputLines: [init, call], withAudit: true });
-  assert.equal(r.exitCode, 0);
-  assert.equal(r.auditLines.length, 1);
-  assert.equal(JSON.parse(r.auditLines[0]!).tool, "query_resource");
+  assert.notEqual(code, 0);
+  assert.match(stderr, /failed to connect to architect MCP/);
 });

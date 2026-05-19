@@ -274,6 +274,7 @@ test("argv: emits model, allow-all-tools, deny-shell, deny-write, allow-tool per
     [
       "--model", "claude-sonnet-4.5",
       "--allow-all-tools",
+      "--output-format", "json",
       "--deny-tool", "shell",
       "--deny-tool", "write",
       "--allow-tool", "dreamgraph(query_resource)",

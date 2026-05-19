@@ -82,6 +82,14 @@ export function buildCopilotArgv(input: CopilotArgvInput): CopilotArgvPlan {
   args.push("--allow-all-tools");
   const allowAllToolsEnabled = true;
 
+  // 2b. Authoritative live UX channel. NDJSON event stream on stdout —
+  //     one JSON object per line covering tool starts/completes,
+  //     assistant message deltas, reasoning deltas, and the final
+  //     `result` event with session id + usage. Replaces the
+  //     ANSI-rendered TUI transcript as the runtime source of truth
+  //     for tool-call surfacing and per-token streaming.
+  args.push("--output-format", "json");
+
   // 3. Inline-tool denies. Emitted AFTER `--allow-all-tools` so the
   //    deny precedence is unambiguous in the argv ordering as well.
   const deniedSpecs: string[] = [];

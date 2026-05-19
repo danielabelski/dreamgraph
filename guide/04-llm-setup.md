@@ -123,6 +123,23 @@ For `gpt-5.5*` models, the Architect uses the OpenAI Responses API (not Chat Com
 
 The DreamGraph knowledge graph remains the source of memory; Responses API is used statelessly.
 
+### GitHub Copilot CLI (no API key)
+
+Set `dreamgraph.architect.provider` to `copilot-cli` to run passes through your locally-installed GitHub Copilot CLI (`copilot` binary on `PATH`, or set an absolute path in `dreamgraph.architect.copilotCli.command`). This uses your existing Copilot login — no API key, no separate billing.
+
+When this provider is active the Architect:
+
+- Talks to the **same** DreamGraph daemon the extension is connected to. The extension injects an in-process MCP **inheritance proxy** as Copilot CLI's `dreamgraph` server, which forwards every tool call over HTTP to the live daemon. ADRs you record, dreams you trigger, and tools you call from a Copilot CLI pass land in the same graph as everything else.
+- **Fails closed** before a pass runs if the daemon is unreachable: the proxy will refuse to come up, Copilot CLI reports `dreamgraph` as a failed MCP server, and the orchestrator aborts the run instead of letting the model hallucinate against a missing graph.
+
+Knobs:
+
+| Setting | Purpose |
+|---------|---------|
+| `dreamgraph.architect.copilotCli.command` | Path to the `copilot` binary (default: `copilot` on `PATH`). |
+| `dreamgraph.architect.copilotCli.timeoutMs` | Hard wall-clock cap per pass (default 180000). |
+| `dreamgraph.architect.copilotCli.toolListTimeoutMs` | Bridge health-probe timeout against the daemon (default 30000). Bump if your daemon is slow to respond. |
+
 ---
 
 ## Picking a model

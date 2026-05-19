@@ -139,7 +139,13 @@ export function createHostAudit(opts: HostAuditOptions): CopilotCliMcpAuditPort 
   });
 }
 
-function parseRecordOrNull(line: string): RecordedMcpToolCall | null {
+/**
+ * Parse one NDJSON line written by the bridge into a frozen
+ * `RecordedMcpToolCall`, or return `null` if the line is not a
+ * well-formed audit record. Shared with the live tail reader
+ * (`audit-live-adapter.ts`) so both readers agree on the wire format.
+ */
+export function parseRecordOrNull(line: string): RecordedMcpToolCall | null {
   let raw: unknown;
   try {
     raw = JSON.parse(line);

@@ -2,7 +2,7 @@
   "name": "dreamgraph-vscode",
   "displayName": "DreamGraph",
   "description": "DreamGraph-native development agent — intentional context, architectural discipline, knowledge-grounded AI.",
-  "version": "10.0.1",
+  "version": "10.1.0",
   "icon": "media/dreamgraph-icon.png",
   "publisher": "siteledger-solutions",
   "homepage": "https://dreamgraph.nofs.ai/",
@@ -245,11 +245,6 @@
           "default": "copilot",
           "description": "Executable name (or absolute path) for the GitHub Copilot CLI binary. Must be runnable in PATH or given as an absolute path."
         },
-        "dreamgraph.architect.copilotCli.dreamgraphCommand": {
-          "type": "string",
-          "default": "dreamgraph",
-          "description": "Command used to spawn the DreamGraph MCP server in stdio mode (the bridge runs `<command> --transport stdio`)."
-        },
         "dreamgraph.architect.copilotCli.timeoutMs": {
           "type": "number",
           "default": 180000,
@@ -258,7 +253,7 @@
         "dreamgraph.architect.copilotCli.toolListTimeoutMs": {
           "type": "number",
           "default": 30000,
-          "description": "Hard wall-clock cap (ms) for the one-shot DreamGraph stdio `tools/list` probe run before each Copilot CLI pass. Bump this if the dreamgraph stdio server cold-start exceeds the default on your machine."
+          "description": "Hard wall-clock cap (ms) for the inheritance-proxy bridge's upstream MCP `tools/list` probe run before each Copilot CLI pass. Bump this if the architect's DreamGraph daemon is slow to respond on your machine."
         },
         "dreamgraph.architect.useCorePass": {
           "type": "boolean",

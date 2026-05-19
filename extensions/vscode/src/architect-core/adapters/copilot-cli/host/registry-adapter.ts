@@ -1,30 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Copilot CLI adapter — real `CopilotCliRegistryPort` (Slice 3b).
+// Copilot CLI adapter — real `CopilotCliRegistryPort`.
 //
-// Two responsibilities:
+// After the v10.0.x inheritance-bridge redesign, this module's two
+// responsibilities are:
 //
-//   1. `listAuthoritativeToolNames()` — spin up a short-lived MCP
-//      client against the configured DreamGraph stdio MCP server, ask
-//      `tools/list`, return the names. The orchestrator uses this to
-//      verify `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS` is satisfied
-//      BEFORE spawning Copilot CLI, so we trade a few hundred ms of
-//      one-time latency for a strong runtime sanity check.
+//   1. `listAuthoritativeToolNames()` — open a short-lived MCP
+//      client against the architect's already-running DreamGraph
+//      daemon (Streamable HTTP at `<hostMcpUrl>`), ask `tools/list`,
+//      and return the names. The orchestrator uses this to verify
+//      `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS` is satisfied BEFORE
+//      spawning Copilot CLI. Probing the SAME endpoint the bridge
+//      will forward to means a green probe is a real guarantee, not
+//      a "different process happens to work" coincidence.
 //
 //   2. `describeBridgeSpawn()` — return the concrete spawn config
 //      Copilot CLI will write into `mcp-config.json` to launch the
-//      DreamGraph stdio MCP bridge (the `bridge-entry.ts` artifact).
-//      The bridge in turn re-spawns the real DreamGraph stdio server
-//      and sniffs the JSON-RPC traffic for the audit port.
-//
-// This file deliberately depends on `@modelcontextprotocol/sdk` only
-// for the client. The server side stays in the dreamgraph package; the
-// extension only proxies to it.
-
-import { spawn } from "node:child_process";
+//      DreamGraph stdio MCP bridge (`bridge-entry.ts`). The bridge
+//      runs as a stdio MCP server for Copilot CLI and forwards
+//      every request to the architect's daemon over HTTP. See the
+//      header of `bridge-entry.ts` for the rationale — short
+//      version: spawning a fresh dreamgraph child here would create
+//      a SECOND, unrelated graph session, which is exactly the
+//      class of bug v10.0.x was created to prevent.
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import type {
   CopilotCliRegistryPort,
@@ -34,16 +35,13 @@ import { auditFilePathFor } from "./audit-adapter.js";
 
 export interface HostRegistryOptions {
   /**
-   * Absolute path to the DreamGraph stdio MCP server entry point. On
-   * a packaged install this is typically the `dreamgraph` binary on
-   * PATH; in dev the host can point at `node <repo>/dist/index.js`.
+   * Full URL of the architect's already-open DreamGraph MCP endpoint
+   * (e.g. `http://127.0.0.1:7321/mcp`). This MUST be the same URL the
+   * extension's long-running `McpClient` is connected to, so probes
+   * and bridge forwards see the SAME daemon session the rest of the
+   * extension operates against.
    */
-  readonly dreamgraphCommand: string;
-  /**
-   * Args appended after `dreamgraphCommand`. Defaults to
-   * `["--transport", "stdio"]` so callers do not have to repeat it.
-   */
-  readonly dreamgraphArgs?: readonly string[];
+  readonly hostMcpUrl: string;
   /**
    * Absolute path to the bridge entry artifact (typically
    * `<extension>/dist/copilot-cli-bridge.js`). Copilot CLI will
@@ -65,92 +63,44 @@ export interface HostRegistryOptions {
   readonly auditDirAbsPath: string;
   /**
    * Optional extra env to merge into the bridge spawn. The orchestrator
-   * already overlays `DREAMGRAPH_MCP_TOKEN` and `DREAMGRAPH_RUN_ID` on
-   * top of whatever is returned from `describeBridgeSpawn`.
+   * already overlays `DREAMGRAPH_RUN_ID` and the resolved audit path
+   * on top of whatever is returned from `describeBridgeSpawn`.
    */
   readonly extraBridgeEnv?: Readonly<Record<string, string>>;
   /**
    * Hard timeout (ms) for the one-shot `tools/list` probe. Defaults to
-   * 8 s — generous enough for a cold dreamgraph start, short enough
-   * that a wedged server cannot block run startup indefinitely.
+   * 15 s — generous enough for a slow round-trip while keeping the
+   * orchestrator startup bounded.
    */
   readonly toolListTimeoutMs?: number;
 }
 
-const DEFAULT_DREAMGRAPH_ARGS: readonly string[] = ["--transport", "stdio"];
-// The dreamgraph stdio server loads ~20 JSON stores and warms several
-// cognitive subsystems before responding to `tools/list`. Measured cold
-// starts on a developer laptop sit around 11–12 s, so the default needs
-// generous headroom; hosts can override via `toolListTimeoutMs`.
-const DEFAULT_TOOL_LIST_TIMEOUT_MS = 30_000;
+// The daemon answers `tools/list` over already-warm HTTP, so the
+// probe budget can be tight. We pick 15 s as a safe ceiling that
+// still bounds startup if the daemon is paging in from cold cache.
+const DEFAULT_TOOL_LIST_TIMEOUT_MS = 15_000;
 
 export function createHostRegistry(opts: HostRegistryOptions): CopilotCliRegistryPort {
   validate(opts);
-  const dreamgraphArgs = opts.dreamgraphArgs ?? DEFAULT_DREAMGRAPH_ARGS;
   const toolListTimeoutMs = opts.toolListTimeoutMs ?? DEFAULT_TOOL_LIST_TIMEOUT_MS;
+  const hostMcpUrl = opts.hostMcpUrl;
 
   return Object.freeze({
     async listAuthoritativeToolNames(): Promise<readonly string[]> {
-      const transport = new StdioClientTransport({
-        command: opts.dreamgraphCommand,
-        args: [...dreamgraphArgs],
-        stderr: "ignore",
-      });
-      const client = new Client(
-        { name: "dreamgraph-copilot-cli-registry-probe", version: "1.0.0" },
-        { capabilities: {} },
+      return Object.freeze(
+        await probeHostMcpToolNames({ url: hostMcpUrl, timeoutMs: toolListTimeoutMs }),
       );
-
-      const timeoutHandle: { id: NodeJS.Timeout | null } = { id: null };
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle.id = setTimeout(() => {
-          reject(
-            new Error(
-              `listAuthoritativeToolNames: dreamgraph tools/list probe exceeded ${toolListTimeoutMs}ms`,
-            ),
-          );
-        }, toolListTimeoutMs);
-        timeoutHandle.id.unref?.();
-      });
-
-      try {
-        const work = (async () => {
-          await client.connect(transport);
-          const result = await client.listTools();
-          return result.tools.map((t) => t.name);
-        })();
-        const names = await Promise.race([work, timeoutPromise]);
-        return Object.freeze(names);
-      } finally {
-        if (timeoutHandle.id) clearTimeout(timeoutHandle.id);
-        try {
-          await client.close();
-        } catch {
-          /* ignore */
-        }
-        try {
-          await transport.close();
-        } catch {
-          /* ignore */
-        }
-      }
     },
 
     async describeBridgeSpawn(): Promise<CopilotMcpBridgeSpawn> {
       const env: Record<string, string> = {
         ...(opts.extraBridgeEnv ?? {}),
-        DREAMGRAPH_BRIDGE_TARGET_COMMAND: opts.dreamgraphCommand,
-        DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON: JSON.stringify([...dreamgraphArgs]),
+        // The single piece of state the bridge needs to inherit
+        // the architect's MCP session. Everything else (audit
+        // path, server name) is layered on by the orchestrator
+        // per-run via `bridgeEnvForRun`.
+        DREAMGRAPH_HOST_MCP_URL: hostMcpUrl,
         DREAMGRAPH_BRIDGE_AUDIT_DIR: opts.auditDirAbsPath,
-        // The bridge expects `DREAMGRAPH_AUDIT_PATH` to point at the
-        // run-specific NDJSON file. The orchestrator overlays
-        // `DREAMGRAPH_RUN_ID` on top of this env, but Copilot CLI does
-        // not perform variable expansion — so the orchestrator MUST
-        // resolve the file path itself when it knows the runId. We
-        // expose the directory here and the orchestrator's caller
-        // (Slice 4) is responsible for setting `DREAMGRAPH_AUDIT_PATH`
-        // explicitly via `extraBridgeEnv` before each run, OR for
-        // calling `bridgeEnvForRun` below.
       };
       return Object.freeze({
         command: opts.nodeExecPath,
@@ -176,36 +126,72 @@ export function bridgeEnvForRun(
 }
 
 /**
- * Quick liveness probe used by Slice 4 host wiring to verify the
- * DreamGraph stdio server actually starts before the orchestrator
- * begins a run. Throws on failure so the caller can fall back to a
- * disabled state with a clear error message instead of waiting for
- * Copilot CLI to fail mysteriously.
+ * Liveness probe used by host wiring to verify the architect's
+ * DreamGraph MCP endpoint is actually serving requests before the
+ * orchestrator begins a run. Throws on failure so the caller can
+ * fall back to a disabled state with a clear error message instead
+ * of waiting for Copilot CLI to fail mysteriously.
  */
-export async function probeDreamgraphStdio(opts: {
-  command: string;
-  args?: readonly string[];
+export async function probeDreamgraphHttpMcp(opts: {
+  url: string;
   timeoutMs?: number;
 }): Promise<{ readonly toolCount: number }> {
-  const args = opts.args ?? DEFAULT_DREAMGRAPH_ARGS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TOOL_LIST_TIMEOUT_MS;
-  // Reuse the registry by constructing it with throwaway disk paths.
-  // We only call `listAuthoritativeToolNames`, so the bridge fields
-  // are inert.
-  const probe = createHostRegistry({
-    dreamgraphCommand: opts.command,
-    dreamgraphArgs: args,
-    bridgeEntryPath: "<unused>",
-    nodeExecPath: process.execPath,
-    auditDirAbsPath: process.cwd(),
-    toolListTimeoutMs: timeoutMs,
+  const names = await probeHostMcpToolNames({ url: opts.url, timeoutMs });
+  return Object.freeze({ toolCount: names.length });
+}
+
+async function probeHostMcpToolNames(opts: {
+  url: string;
+  timeoutMs: number;
+}): Promise<string[]> {
+  let url: URL;
+  try {
+    url = new URL(opts.url);
+  } catch (err) {
+    throw new Error(
+      `probeHostMcpToolNames: invalid URL ${opts.url}: ${(err as Error).message}`,
+    );
+  }
+
+  const transport = new StreamableHTTPClientTransport(url);
+  const client = new Client(
+    { name: "dreamgraph-copilot-cli-registry-probe", version: "1.0.0" },
+    { capabilities: {} },
+  );
+
+  const timeoutHandle: { id: NodeJS.Timeout | null } = { id: null };
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle.id = setTimeout(() => {
+      reject(
+        new Error(
+          `probeHostMcpToolNames: ${opts.url} tools/list probe exceeded ${opts.timeoutMs}ms`,
+        ),
+      );
+    }, opts.timeoutMs);
+    timeoutHandle.id.unref?.();
   });
-  const tools = await probe.listAuthoritativeToolNames();
-  // Touch `spawn` so the bundler keeps the import (defensive: this
-  // module imports child_process for symmetry with the bridge spawn,
-  // but we do not currently call it directly here).
-  void spawn;
-  return Object.freeze({ toolCount: tools.length });
+
+  try {
+    const work = (async () => {
+      await client.connect(transport);
+      const result = await client.listTools();
+      return result.tools.map((t) => t.name);
+    })();
+    return await Promise.race([work, timeoutPromise]);
+  } finally {
+    if (timeoutHandle.id) clearTimeout(timeoutHandle.id);
+    try {
+      await client.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await transport.close();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function validate(opts: HostRegistryOptions): void {
@@ -213,7 +199,7 @@ function validate(opts: HostRegistryOptions): void {
     throw new Error("createHostRegistry: opts is required");
   }
   for (const key of [
-    "dreamgraphCommand",
+    "hostMcpUrl",
     "bridgeEntryPath",
     "nodeExecPath",
     "auditDirAbsPath",
@@ -222,6 +208,15 @@ function validate(opts: HostRegistryOptions): void {
     if (typeof v !== "string" || v.length === 0) {
       throw new Error(`createHostRegistry: opts.${key} is required (non-empty string)`);
     }
+  }
+  try {
+    // Throws on malformed URL. Catch -> rethrow with a clearer
+    // message so the caller knows which arg is wrong.
+    void new URL(opts.hostMcpUrl);
+  } catch (err) {
+    throw new Error(
+      `createHostRegistry: opts.hostMcpUrl must be a valid URL (got ${JSON.stringify(opts.hostMcpUrl)}): ${(err as Error).message}`,
+    );
   }
   if (
     opts.toolListTimeoutMs !== undefined &&

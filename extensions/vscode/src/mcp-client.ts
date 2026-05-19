@@ -86,6 +86,25 @@ export class McpClient implements vscode.Disposable {
     this._baseUrl = url;
   }
 
+  /**
+   * Daemon base URL the client is currently configured against
+   * (e.g. `http://127.0.0.1:7321`). Does NOT include the `/mcp`
+   * path suffix.
+   */
+  get baseUrl(): string {
+    return this._baseUrl;
+  }
+
+  /**
+   * Fully qualified MCP endpoint (`<baseUrl>/mcp`). Use this when
+   * handing the URL to other MCP clients (e.g. the Copilot CLI
+   * inheritance bridge) so they connect to the SAME daemon session
+   * the extension host is already using.
+   */
+  get mcpUrl(): string {
+    return `${this._baseUrl}/mcp`;
+  }
+
   /* ---- Tool Calls ---- */
 
   /**

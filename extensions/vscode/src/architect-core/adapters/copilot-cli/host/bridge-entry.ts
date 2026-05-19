@@ -1,281 +1,299 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Copilot CLI adapter — DreamGraph stdio MCP bridge entry point
-// (Slice 3b).
+// Copilot CLI adapter — DreamGraph MCP inheritance bridge.
 //
 // This file is BUNDLED INTO ITS OWN STANDALONE ARTIFACT and shipped
 // alongside the extension at `dist/copilot-cli-bridge.js`. Copilot
 // CLI spawns it (per `mcp-config.json`) when it wants to talk to the
-// DreamGraph MCP server. The bridge:
+// DreamGraph MCP server.
 //
-//   1. Spawns the real DreamGraph stdio MCP server as a child.
-//   2. Pipes Copilot's stdin → child stdin, child stdout → Copilot's
-//      stdout, child stderr → bridge stderr (which Copilot inherits).
-//   3. Sniffs the newline-delimited JSON-RPC traffic in BOTH
-//      directions, pairs `tools/call` requests with their responses
-//      by `id`, and appends one NDJSON record per pair to the audit
-//      file (so the orchestrator's `CopilotCliMcpAuditPort` has an
-//      authoritative source of truth for which tools were actually
-//      served).
+// CRITICAL DESIGN POINT (and the difference from a "spawn a second
+// dreamgraph child" naive proxy): the architect (extension host)
+// already maintains a live MCP connection to the user's DreamGraph
+// daemon over HTTP (Streamable HTTP at `<baseUrl>/mcp`). Spawning a
+// fresh stdio dreamgraph child here would be wrong for three reasons:
+//   1. It bypasses the architect's session/instance scoping — the
+//      Copilot CLI would see a different graph than the architect
+//      that called it.
+//   2. It silently doubles resource usage and contention on the
+//      JSON stores.
+//   3. It can hide reachability failures from the architect's UX —
+//      we want the SAME upstream health to dictate whether Copilot
+//      CLI runs at all.
 //
-// Configuration (env, all required unless noted):
-//   DREAMGRAPH_BRIDGE_TARGET_COMMAND   — absolute path to dreamgraph
-//                                        (or any stdio MCP server).
-//   DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON — JSON-encoded string array
-//                                        for the target argv. Defaults
-//                                        to `[]` when unset/blank.
-//   DREAMGRAPH_AUDIT_PATH              — absolute path to the NDJSON
-//                                        audit file (one per run).
-//                                        When unset, the bridge runs
-//                                        as a transparent proxy with
-//                                        no audit output.
-//   DREAMGRAPH_BRIDGE_SERVER_NAME      — name to record under
-//                                        `server` in audit records.
-//                                        Defaults to "dreamgraph".
+// So this bridge ACTS AS a stdio MCP server towards Copilot CLI, but
+// every request is forwarded to the architect's already-open daemon
+// session over HTTP. If the upstream is unreachable, the bridge
+// FAILS CLOSED before MCP initialize completes, so Copilot CLI sees
+// the server as "failed to load" and the orchestrator's fail-fast
+// path in `provider-port.ts` aborts the run.
+//
+// Configuration (env, all read at process start):
+//   DREAMGRAPH_HOST_MCP_URL          — required; full URL to the
+//                                       architect's MCP endpoint
+//                                       (e.g. `http://127.0.0.1:7321/mcp`).
+//   DREAMGRAPH_AUDIT_PATH            — optional; absolute path to an
+//                                       NDJSON file the bridge appends
+//                                       one record per `tools/call`
+//                                       to. When unset, the bridge
+//                                       runs without audit output.
+//   DREAMGRAPH_BRIDGE_SERVER_NAME    — optional; name recorded under
+//                                       `server` in audit records.
+//                                       Defaults to "dreamgraph".
+//   DREAMGRAPH_BRIDGE_HEALTH_TIMEOUT_MS — optional; ms budget for the
+//                                       initial upstream `tools/list`
+//                                       health probe. Defaults to
+//                                       15000.
 //
 // Hard rules:
-//   - The bridge is provider-agnostic: it knows nothing about Copilot,
-//     Anthropic, OpenAI, etc. It only knows MCP JSON-RPC over stdio.
-//   - The bridge MUST exit with the same exit code as the child so
-//     Copilot CLI can react to MCP server crashes.
-//   - Audit failures MUST NOT corrupt the proxied stream. We swallow
-//     write errors and continue forwarding bytes verbatim.
+//   - Provider-agnostic: knows nothing about Copilot, Anthropic, etc.
+//     Only knows stdio MCP server <-> HTTP MCP client forwarding.
+//   - FAIL CLOSED on upstream errors. Never serve stale or fabricated
+//     results. If we cannot reach the daemon, exit non-zero so the
+//     CLI reports the server failed.
 
-import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-interface PendingCall {
-  readonly tool: string;
-  readonly inputJson: string;
-  readonly startedAtEpochMs: number;
-}
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema,
+  type ServerCapabilities,
+} from "@modelcontextprotocol/sdk/types.js";
 
-const TARGET_COMMAND = process.env["DREAMGRAPH_BRIDGE_TARGET_COMMAND"] ?? "";
-const TARGET_ARGS_JSON = process.env["DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON"] ?? "";
+const HOST_MCP_URL = process.env["DREAMGRAPH_HOST_MCP_URL"] ?? "";
 const AUDIT_PATH = process.env["DREAMGRAPH_AUDIT_PATH"] ?? "";
 const SERVER_NAME = process.env["DREAMGRAPH_BRIDGE_SERVER_NAME"] ?? "dreamgraph";
+const HEALTH_TIMEOUT_MS = Number.parseInt(
+  process.env["DREAMGRAPH_BRIDGE_HEALTH_TIMEOUT_MS"] ?? "",
+  10,
+);
+const HEALTH_BUDGET_MS = Number.isFinite(HEALTH_TIMEOUT_MS) && HEALTH_TIMEOUT_MS > 0
+  ? HEALTH_TIMEOUT_MS
+  : 15_000;
 
-if (TARGET_COMMAND.length === 0) {
-  process.stderr.write(
-    "[copilot-cli-bridge] DREAMGRAPH_BRIDGE_TARGET_COMMAND is required\n",
-  );
-  process.exit(2);
+function bail(code: number, msg: string): never {
+  try {
+    process.stderr.write(`[copilot-cli-bridge] ${msg}\n`);
+  } catch {
+    /* ignore */
+  }
+  process.exit(code);
 }
 
-let targetArgs: string[] = [];
-if (TARGET_ARGS_JSON.length > 0) {
-  try {
-    const parsed = JSON.parse(TARGET_ARGS_JSON);
-    if (!Array.isArray(parsed) || !parsed.every((s) => typeof s === "string")) {
-      throw new Error("not a string[]");
-    }
-    targetArgs = parsed as string[];
-  } catch (err) {
-    process.stderr.write(
-      `[copilot-cli-bridge] DREAMGRAPH_BRIDGE_TARGET_ARGS_JSON is not a JSON string array: ${
-        (err as Error).message
-      }\n`,
-    );
-    process.exit(2);
-  }
+if (HOST_MCP_URL.length === 0) {
+  bail(
+    2,
+    "DREAMGRAPH_HOST_MCP_URL is required (the architect's MCP endpoint URL, e.g. http://127.0.0.1:<port>/mcp). Refusing to start.",
+  );
+}
+
+let upstreamUrl: URL;
+try {
+  upstreamUrl = new URL(HOST_MCP_URL);
+} catch (err) {
+  bail(2, `DREAMGRAPH_HOST_MCP_URL is not a valid URL: ${(err as Error).message}`);
 }
 
 if (AUDIT_PATH.length > 0) {
-  // Pre-create the audit directory so the first appendFile call cannot
-  // race on `mkdir -p`. The audit-adapter also calls mkdir on its side,
-  // but we cannot assume strict ordering between extension host and
-  // bridge spawn.
   try {
     mkdirSync(dirname(AUDIT_PATH), { recursive: true });
   } catch (err) {
     process.stderr.write(
       `[copilot-cli-bridge] failed to ensure audit dir: ${(err as Error).message}\n`,
     );
-    // Continue without audit rather than failing the run — proxying is
-    // the primary responsibility.
+    // Continue without audit rather than failing the run — proxying
+    // is the primary responsibility, audit is a secondary signal.
   }
 }
 
-const child = spawn(TARGET_COMMAND, targetArgs, {
-  stdio: ["pipe", "pipe", "pipe"],
-  windowsHide: true,
-});
+// ---------------------------------------------------------------------------
+// Upstream: open Streamable HTTP client to the architect's daemon.
+// FAIL CLOSED if we cannot connect or list tools within the health
+// budget. This is the boundary the user demanded: "fail closed before
+// model execution if the proxy cannot confirm upstream health".
+// ---------------------------------------------------------------------------
 
-child.on("error", (err) => {
-  process.stderr.write(
-    `[copilot-cli-bridge] failed to spawn target: ${err.message}\n`,
+const upstream = new Client(
+  { name: "dreamgraph-copilot-cli-bridge", version: "1.0.0" },
+  { capabilities: {} },
+);
+const upstreamTransport = new StreamableHTTPClientTransport(upstreamUrl);
+
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let handle: NodeJS.Timeout | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    handle = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+    handle.unref?.();
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    if (handle) clearTimeout(handle);
+  }
+}
+
+async function main(): Promise<void> {
+  // During startup, an upstream close means we never finished health
+  // probing — surface it as a fail-closed bail, not a clean shutdown.
+  let started = false;
+  upstreamTransport.onclose = () => {
+    if (!started) {
+      bail(
+        3,
+        `failed to connect to architect MCP at ${HOST_MCP_URL}: upstream transport closed before initialize completed. ` +
+          `Ensure the DreamGraph daemon is running and the extension is connected before invoking Copilot CLI.`,
+      );
+    }
+    process.stderr.write(
+      `[copilot-cli-bridge] upstream MCP transport closed; shutting down.\n`,
+    );
+    void shutdown(0);
+  };
+
+  try {
+    await withTimeout(upstream.connect(upstreamTransport), HEALTH_BUDGET_MS, "upstream MCP connect");
+  } catch (err) {
+    bail(
+      3,
+      `failed to connect to architect MCP at ${HOST_MCP_URL}: ${(err as Error).message}. ` +
+        `Ensure the DreamGraph daemon is running and the extension is connected before invoking Copilot CLI.`,
+    );
+  }
+
+  // Health probe — proves the upstream is actually responsive, not
+  // just TCP-reachable. tools/list is the cheapest authoritative call.
+  try {
+    await withTimeout(upstream.listTools(), HEALTH_BUDGET_MS, "upstream tools/list probe");
+  } catch (err) {
+    bail(
+      3,
+      `upstream MCP health probe failed: ${(err as Error).message}. ` +
+        `The architect's DreamGraph session at ${HOST_MCP_URL} is not serving requests.`,
+    );
+  }
+
+  started = true;
+
+  // Mirror the upstream's capabilities so the CLI sees the same
+  // feature set the architect already negotiated.
+  const upstreamCaps: ServerCapabilities = upstream.getServerCapabilities() ?? {};
+  const upstreamInstructions = upstream.getInstructions();
+
+  const server = new Server(
+    { name: SERVER_NAME, version: "1.0.0" },
+    {
+      capabilities: upstreamCaps,
+      ...(upstreamInstructions !== undefined ? { instructions: upstreamInstructions } : {}),
+    },
   );
-  process.exit(127);
-});
 
-// ---------------------------------------------------------------------------
-// Stdin (Copilot → bridge → child) — sniff requests, then forward verbatim.
-// ---------------------------------------------------------------------------
-
-const pending = new Map<string | number, PendingCall>();
-
-const stdinSniffer = makeNdjsonSniffer((msg) => {
-  // tools/call request: capture id, tool name, input JSON.
-  if (
-    typeof msg !== "object" ||
-    msg === null ||
-    !("method" in msg) ||
-    msg["method"] !== "tools/call"
-  ) {
-    return;
-  }
-  const id = (msg as { id?: unknown }).id;
-  if (typeof id !== "string" && typeof id !== "number") return;
-  const params = (msg as { params?: unknown }).params;
-  if (typeof params !== "object" || params === null) return;
-  const tool = (params as { name?: unknown }).name;
-  if (typeof tool !== "string") return;
-  const args = (params as { arguments?: unknown }).arguments;
-  pending.set(id, {
-    tool,
-    inputJson: safeStringify(args ?? {}),
-    startedAtEpochMs: Date.now(),
+  // tools/list — pure forward.
+  server.setRequestHandler(ListToolsRequestSchema, async (req) => {
+    return upstream.listTools(req.params);
   });
-});
 
-process.stdin.on("data", (chunk: Buffer) => {
-  // Forward to child first to minimize latency, then sniff.
-  try {
-    child.stdin.write(chunk);
-  } catch {
-    /* child died; the close handler will exit */
-  }
-  if (AUDIT_PATH.length > 0) {
-    stdinSniffer.feed(chunk);
-  }
-});
-process.stdin.on("end", () => {
-  try {
-    child.stdin.end();
-  } catch {
-    /* ignore */
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Stdout (child → bridge → Copilot) — sniff responses, then forward verbatim.
-// ---------------------------------------------------------------------------
-
-const stdoutSniffer = makeNdjsonSniffer((msg) => {
-  if (typeof msg !== "object" || msg === null) return;
-  const id = (msg as { id?: unknown }).id;
-  if (typeof id !== "string" && typeof id !== "number") return;
-  const pendingCall = pending.get(id);
-  if (!pendingCall) return;
-  pending.delete(id);
-
-  const isError = "error" in msg
-    || (typeof (msg as { result?: unknown }).result === "object"
-        && (msg as { result: { isError?: unknown } }).result !== null
-        && (msg as { result: { isError?: unknown } }).result.isError === true);
-
-  let resultJson: string;
-  if ("error" in msg) {
-    resultJson = safeStringify((msg as { error: unknown }).error);
-  } else {
-    resultJson = safeStringify((msg as { result?: unknown }).result ?? null);
-  }
-
-  appendAudit({
-    server: SERVER_NAME,
-    tool: pendingCall.tool,
-    inputJson: pendingCall.inputJson,
-    resultJson,
-    isError,
-    durationMs: Math.max(0, Date.now() - pendingCall.startedAtEpochMs),
-    startedAtEpochMs: pendingCall.startedAtEpochMs,
-  });
-});
-
-child.stdout.on("data", (chunk: Buffer) => {
-  try {
-    process.stdout.write(chunk);
-  } catch {
-    /* parent stdout closed; nothing useful to do */
-  }
-  if (AUDIT_PATH.length > 0) {
-    stdoutSniffer.feed(chunk);
-  }
-});
-
-child.stderr.on("data", (chunk: Buffer) => {
-  try {
-    process.stderr.write(chunk);
-  } catch {
-    /* ignore */
-  }
-});
-
-child.on("close", (code, signal) => {
-  if (typeof code === "number") {
-    process.exit(code);
-  }
-  if (signal) {
-    process.stderr.write(`[copilot-cli-bridge] target killed by ${signal}\n`);
-    process.exit(128);
-  }
-  process.exit(0);
-});
-
-// Forward fatal signals to the child so cleanup is symmetric.
-for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, () => {
+  // tools/call — forward + audit. Audit failures must not corrupt
+  // the proxied response, so we wrap appendAudit in try/catch.
+  server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    const startedAtEpochMs = Date.now();
+    const inputJson = safeStringify(req.params.arguments ?? {});
     try {
-      child.kill(sig);
-    } catch {
-      /* ignore */
+      const result = await upstream.callTool(req.params);
+      auditCallResult({
+        tool: req.params.name,
+        inputJson,
+        resultJson: safeStringify(result),
+        isError: Boolean((result as { isError?: unknown }).isError),
+        durationMs: Math.max(0, Date.now() - startedAtEpochMs),
+        startedAtEpochMs,
+      });
+      return result;
+    } catch (err) {
+      auditCallResult({
+        tool: req.params.name,
+        inputJson,
+        resultJson: safeStringify({ message: (err as Error).message }),
+        isError: true,
+        durationMs: Math.max(0, Date.now() - startedAtEpochMs),
+        startedAtEpochMs,
+      });
+      throw err;
     }
   });
-}
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+  // resources/list, resources/templates/list, resources/read — pure
+  // forwards. Guarded by upstream capability advertisement: if the
+  // upstream did not advertise `resources`, the SDK won't even
+  // dispatch these to us.
+  if (upstreamCaps.resources) {
+    server.setRequestHandler(ListResourcesRequestSchema, async (req) => {
+      return upstream.listResources(req.params);
+    });
+    server.setRequestHandler(ListResourceTemplatesRequestSchema, async (req) => {
+      return upstream.listResourceTemplates(req.params);
+    });
+    server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+      return upstream.readResource(req.params);
+    });
+  }
 
-interface NdjsonSniffer {
-  feed(chunk: Buffer): void;
-}
+  // prompts/list, prompts/get — same pattern.
+  if (upstreamCaps.prompts) {
+    server.setRequestHandler(ListPromptsRequestSchema, async (req) => {
+      return upstream.listPrompts(req.params);
+    });
+    server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+      return upstream.getPrompt(req.params);
+    });
+  }
 
-/**
- * Newline-delimited JSON sniffer. MCP stdio uses one JSON object per
- * line (terminated by `\n`). We accumulate bytes until we see a
- * newline, parse the line as JSON, and call `onMessage`. Bytes are
- * NEVER mutated, dropped, or re-emitted — sniffing is a read-only
- * side effect of the proxy.
- */
-function makeNdjsonSniffer(onMessage: (msg: unknown) => void): NdjsonSniffer {
-  let buf = "";
-  return {
-    feed(chunk) {
-      buf += chunk.toString("utf8");
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).replace(/\r$/, "");
-        buf = buf.slice(nl + 1);
-        if (line.length === 0) continue;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          // Non-JSON line. MCP stdio shouldn't produce these but a
-          // malformed server might; ignore and keep proxying.
-          continue;
-        }
-        try {
-          onMessage(parsed);
-        } catch {
-          // Sniffer callbacks must never crash the bridge.
-        }
-      }
-    },
+  const transport = new StdioServerTransport();
+  transport.onclose = () => {
+    void shutdown(0);
   };
+  await server.connect(transport);
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle — keep the bridge alive until upstream/stdio closes.
+// ---------------------------------------------------------------------------
+
+async function shutdown(code: number): Promise<void> {
+  try {
+    await upstream.close();
+  } catch {
+    /* ignore */
+  }
+  process.exit(code);
+}
+
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    void shutdown(0);
+  });
+}
+
+main().catch((err) => {
+  bail(1, `bridge fatal error: ${(err as Error).message}`);
+});
+
+// ---------------------------------------------------------------------------
+// Audit helpers (single-record-per-tool-call NDJSON, same schema the
+// orchestrator's `CopilotCliMcpAuditPort` already consumes).
+// ---------------------------------------------------------------------------
 
 function safeStringify(value: unknown): string {
   try {
@@ -285,8 +303,7 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function appendAudit(record: {
-  server: string;
+function auditCallResult(rec: {
   tool: string;
   inputJson: string;
   resultJson: string;
@@ -296,7 +313,11 @@ function appendAudit(record: {
 }): void {
   if (AUDIT_PATH.length === 0) return;
   try {
-    appendFileSync(AUDIT_PATH, `${JSON.stringify(record)}\n`, { encoding: "utf8" });
+    appendFileSync(
+      AUDIT_PATH,
+      `${JSON.stringify({ server: SERVER_NAME, ...rec })}\n`,
+      { encoding: "utf8" },
+    );
   } catch (err) {
     process.stderr.write(
       `[copilot-cli-bridge] failed to write audit record: ${(err as Error).message}\n`,

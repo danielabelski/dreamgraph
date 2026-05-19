@@ -276,3 +276,41 @@ export interface CopilotCliMcpAuditPort {
    */
   finishRecording(runId: string): Promise<readonly RecordedMcpToolCall[]>;
 }
+
+// ---------------------------------------------------------------------------
+// Live audit port — tail of the per-run NDJSON stream for UX progress
+// ---------------------------------------------------------------------------
+
+/**
+ * Live tail of the per-run MCP audit NDJSON. Emits one event per
+ * tool-call the bridge appends, in append order, while the Copilot CLI
+ * subprocess is still running. Closing the subscription is idempotent
+ * and safe at any point in the run lifecycle.
+ *
+ * Purely additive to {@link CopilotCliMcpAuditPort}: `finishRecording`
+ * remains the authoritative source of the complete classified tool-call
+ * set. The live channel is a UX hint and may legally lose its last
+ * in-flight line if the spawn dies mid-write — `finishRecording` will
+ * see that line after the bridge flushes on exit.
+ */
+export interface CopilotCliMcpAuditLivePort {
+  /**
+   * Begin tailing the audit file for `runId`. The handler is invoked
+   * once per appended NDJSON line, in append order, with a parsed
+   * record. Malformed lines are skipped silently (same policy as the
+   * batch reader). Handler exceptions are swallowed so a buggy
+   * consumer cannot break the run.
+   *
+   * Records written between `startRecording` and `subscribe` are
+   * replayed as catch-up events before any new ones are delivered.
+   */
+  subscribe(
+    runId: string,
+    handler: (call: RecordedMcpToolCall) => void,
+  ): Promise<CopilotCliMcpAuditLiveSubscription>;
+}
+
+export interface CopilotCliMcpAuditLiveSubscription {
+  /** Stop receiving events. Idempotent. Never throws. */
+  close(): Promise<void>;
+}

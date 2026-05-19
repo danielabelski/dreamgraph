@@ -12,7 +12,7 @@
 //   - createHostAudit({ auditDirAbsPath })       → CopilotCliMcpAuditPort
 //   - createHostRegistry({ … })                  → CopilotCliRegistryPort
 //   - bridgeEnvForRun({ auditDirAbsPath, runId}) → run-scoped env overlay
-//   - probeDreamgraphStdio(…)                    → liveness probe
+//   - probeDreamgraphHttpMcp(…)                  → liveness probe
 //   - auditFilePathFor(dir, runId)               → bridge↔adapter contract
 //
 // The bridge entry point (`bridge-entry.ts`) is bundled to its own
@@ -32,8 +32,14 @@ export {
 } from "./audit-adapter.js";
 
 export {
+  createHostAuditLive,
+  MAX_LIVE_RESULT_JSON_BYTES,
+  type HostAuditLiveOptions,
+} from "./audit-live-adapter.js";
+
+export {
   bridgeEnvForRun,
   createHostRegistry,
-  probeDreamgraphStdio,
+  probeDreamgraphHttpMcp,
   type HostRegistryOptions,
 } from "./registry-adapter.js";

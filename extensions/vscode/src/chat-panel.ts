@@ -44,8 +44,13 @@ import {
   HOST_PROCESS,
   createHostAudit,
   createHostRegistry,
+  COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+  DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+  type ClassifiedToolCall,
   type CopilotCliProviderPortOptions,
   type CopilotCliRunResult,
+  type PromptComposedInfo,
+  type RecordedMcpToolCall,
 } from './architect-core/adapters/copilot-cli/index.js';
 import type { ChatPanelHost } from './architect-core/adapters/host.js';
 import {
@@ -490,6 +495,15 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   private _webviewBundleUri: string | null = null;
   private _pendingReviewsCollapsed = true;
   private _lastToolTrace: ToolTraceEntry[] = [];
+  /**
+   * Per-run map keyed by `${runId}:${server}:${tool}:${startedAtEpochMs}`.
+   * Value is the index into `_lastToolTrace` of the live (provisional)
+   * entry pushed by the audit-live tail. `onRunResult` reconciles by
+   * REPLACING the entry at that index with the authoritative
+   * `ClassifiedToolCall`-derived entry, and appending only entries
+   * whose key has no live counterpart. Cleared at run start.
+   */
+  private _liveToolCallsSeen: Map<string, number> = new Map();
   /** Set when the report-required guard has already forced a final report
    * turn for the current run, so we don't loop forever asking for reports. */
   private _reportForcedThisRun = false;
@@ -874,6 +888,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   this._lastToolTrace = [];
+  this._liveToolCallsSeen.clear();
   this._lastVerdict = null;
   this._reportForcedThisRun = false;
   await this.postState();
@@ -1351,7 +1366,18 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const llm = this.architectLlm;
     const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
     const binaryName = (cfg.get<string>('copilotCli.command') ?? '').trim() || 'copilot';
-    const dreamgraphCommand = (cfg.get<string>('copilotCli.dreamgraphCommand') ?? '').trim() || 'dreamgraph';
+    // The Copilot CLI bridge inherits the architect's existing MCP
+    // session by proxying to the SAME daemon URL the extension is
+    // already connected to. We read it from the long-lived McpClient
+    // so the bridge can never accidentally point at a different
+    // (or stale) instance.
+    if (!this.mcpClient) {
+      throw new Error(
+        'Cannot build Copilot CLI provider options: McpClient is not initialized. ' +
+        'The DreamGraph daemon must be running and connected before invoking Copilot CLI.',
+      );
+    }
+    const hostMcpUrl = this.mcpClient.mcpUrl;
     const timeoutMsRaw = cfg.get<number>('copilotCli.timeoutMs');
     const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
       ? timeoutMsRaw
@@ -1366,13 +1392,23 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const bridgeEntryPath = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'copilot-cli-bridge.js').fsPath;
 
     const registry = createHostRegistry({
-      dreamgraphCommand,
+      hostMcpUrl,
       bridgeEntryPath,
       nodeExecPath: process.execPath,
       auditDirAbsPath,
       ...(toolListTimeoutMs !== undefined ? { toolListTimeoutMs } : {}),
     });
     const mcpAudit = createHostAudit({ auditDirAbsPath });
+    // Bridge audit-live tail is kept as a secondary MCP-only
+    // provenance layer (see audit-live-adapter.ts); the authoritative
+    // live UX source is now the CLI's `--output-format json` stdout
+    // stream wired through `provider-port.onCliEvent`. We therefore
+    // no longer instantiate or pass `auditLive` here. The bridge
+    // still writes its per-run NDJSON file via `mcpAudit` for
+    // post-run forensic queries; future surfaces (e.g. an MCP-only
+    // forensic side panel) can subscribe to that file directly
+    // through `createHostAuditLive` without coupling to this code
+    // path.
 
     const model = llm.currentConfig?.model;
     return {
@@ -1384,6 +1420,20 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // CLI applies its own routing heuristic.
       model: model && model !== 'auto' ? model : undefined,
       binaryName,
+      // Cap the history sent to the single-shot CLI prompt: keeps
+      // the architect-assembled context-economy block authoritative
+      // while preventing stale `[user]` blocks from drifting back
+      // into the model's focus (see CURRENT TURN markers below).
+      historyKeepLast: 10,
+      markCurrentTurn: true,
+      // Advertise the dreamgraph MCP tools the orchestrator's
+      // allowlist guarantees. The serializer appends a directive
+      // telling the model to prefer these over inline CLI tools
+      // for repo/graph queries.
+      cliToolsManifest: {
+        server: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+        tools: COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+      },
       deps: {
         fs: HOST_FS,
         process: HOST_PROCESS,
@@ -1392,18 +1442,72 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         registry,
         mcpAudit,
       },
+      onPromptComposed: (info: PromptComposedInfo): void => {
+        try {
+          this.contextInspector?.appendContextLine(
+            `Copilot CLI prompt composed: ${info.promptByteLength}B, ${info.historyMessageCount} msgs, mcp=${info.mcpServerAdvertised ?? 'none'}(${info.mcpToolsAdvertised} tools), markCurrentTurn=${info.markCurrentTurn}, model=${info.model ?? 'auto'}.`,
+          );
+        } catch {
+          // inspector failures must not affect the run
+        }
+      },
+      onCliDiagnostic: (line: string): void => {
+        try {
+          this.contextInspector?.appendContextLine(line);
+        } catch {
+          // inspector failures must not affect the run
+        }
+      },
+      onToolCall: (runId: string, call: RecordedMcpToolCall): void => {
+        // Authoritative live tool entry, sourced from the CLI's
+        // `--output-format json` stdout stream (via provider-port's
+        // `onCliEvent` translation). Push a `ToolTraceEntry` and
+        // remember its index keyed by
+        // `(runId, server, tool, startedAtEpochMs)` so duplicate
+        // events from any future secondary source collapse onto the
+        // same row.
+        try {
+          const key = ChatPanel._toolCallDedupKey(
+            runId,
+            call.server,
+            call.tool,
+            call.startedAtEpochMs,
+          );
+          if (this._liveToolCallsSeen.has(key)) {
+            return;
+          }
+          const entry = this._toolTraceEntryFromRawCall(call);
+          const index = this._lastToolTrace.length;
+          this._lastToolTrace.push(entry);
+          this._liveToolCallsSeen.set(key, index);
+          void this.postMessage({
+            type: 'tool-progress',
+            tool: entry.tool,
+            message: `${entry.tool} ${entry.status === 'failed' ? 'failed' : 'done'} (${entry.durationMs}ms)`,
+          });
+        } catch (liveErr) {
+          console.warn('[DreamGraph][copilot-cli] onToolCall handler failed:', liveErr);
+        }
+      },
       onRunResult: (result: CopilotCliRunResult): void => {
         // Surface failures into the existing tool-trace channel so
         // the user sees them next to MCP tool entries. Best-effort:
-        // never let observer code break the turn.
+        // never let observer code break the turn. The bridge's
+        // post-run `result.toolCalls` is intentionally NOT mirrored
+        // into the tool-trace here — the stdout JSON stream already
+        // surfaced every tool (CLI-native + MCP) live, so a second
+        // push would duplicate every MCP entry under a different
+        // dedup key (the bridge's clock differs from the CLI's).
+        // `result.toolCalls` remains available on the result for
+        // future post-run forensic surfaces.
         try {
           if (!result.ok) {
             const code = result.failure?.code ?? 'COPILOT_CLI_UNKNOWN_FAILURE';
             const message = result.failure?.message ?? 'Copilot CLI run failed';
             console.warn(`[DreamGraph][copilot-cli] ${code}: ${message}`);
           }
-        } catch {
-          // ignore
+        } catch (observerErr) {
+          console.warn('[DreamGraph][copilot-cli] onRunResult observer failed:', observerErr);
         }
       },
     };
@@ -1764,7 +1868,28 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   private _getLlmTimeoutMs(options: { mode: 'stream' | 'tool'; toolCount?: number; reducedContext?: boolean }): number {
-    return _getLlmTimeoutMsPure({ ...options, provider: this.architectLlm?.provider ?? 'anthropic' });
+    const provider = this.architectLlm?.provider ?? 'anthropic';
+    // The copilot-cli adapter has its own hard wall-clock cap (the
+    // orchestrator's spawn `timeoutMs`, sourced from the
+    // `dreamgraph.architect.copilotCli.timeoutMs` setting, default 180s).
+    // If the chat-panel wraps the call in a smaller AbortSignal, that
+    // signal will fire FIRST and the orchestrator surfaces it as
+    // `CANCELLED` — indistinguishable from the user clicking Stop.
+    // To keep the orchestrator's budget authoritative, derive the
+    // chat-panel wrapper from the same setting plus a 30s buffer so
+    // the spawn-side timeout always wins. The base PROVIDER_BUDGETS
+    // table doesn't cover copilot-cli (only API providers), which is
+    // why this branch is needed.
+    if (provider === 'copilot-cli') {
+      const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+      const raw = cfg.get<number>('copilotCli.timeoutMs');
+      const base = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 180_000;
+      let budget = base + 30_000;
+      if (options.toolCount && options.toolCount > 12) budget += 30_000;
+      if (options.reducedContext) budget = Math.max(60_000, budget - 30_000);
+      return budget;
+    }
+    return _getLlmTimeoutMsPure({ ...options, provider });
   }
 
   private _isTimeoutError(err: unknown): boolean {
@@ -2834,6 +2959,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       this.streaming = true;
       this.streamingContent = '';
       this._lastToolTrace = [];
+      this._liveToolCallsSeen.clear();
       this._lastVerdict = null;
       this.abortController = new AbortController();
 
@@ -2922,7 +3048,13 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // below remains the source of truth for tool-using continuations
       // until Phase 3d wires `host.executeTool`.
       const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get<boolean>('useCorePass') === true;
-      const seamRoute = useCorePass && tools.length === 0 && envelope !== null;
+      const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
+      // Copilot CLI handles its own tool selection internally — we must
+      // force the no-tools branch (tools=[]) and route through
+      // `runPassViaCopilotCli`. Without this, autonomy continuations
+      // fall through to `this.architectLlm!.stream(...)` which throws
+      // "Copilot CLI provider does not use ArchitectLlm transport".
+      const seamRoute = (useCorePass || copilotCliRoute) && envelope !== null;
       let seamOwnedAssistant = false;
 
       let fullContent = '';
@@ -2948,18 +3080,32 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         this._autonomyContinuing = false;
         const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
         try {
-          const passResult = await runPassViaCore({
-            host,
-            text: prompt,
-            tools: [],
-            onStreamChunk: (chunk: string) => {
-              const safeChunk = this._redactSecrets(chunk);
-              fullContent += safeChunk;
-              this.streamingContent += safeChunk;
-              void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-            },
-            abortSignal: req.signal,
-          });
+          const passResult = copilotCliRoute
+            ? await runPassViaCopilotCli({
+                host,
+                text: prompt,
+                tools: [],
+                providerOptions: this._buildCopilotCliProviderOptions(),
+                onStreamChunk: (chunk: string) => {
+                  const safeChunk = this._redactSecrets(chunk);
+                  fullContent += safeChunk;
+                  this.streamingContent += safeChunk;
+                  void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                },
+                abortSignal: req.signal,
+              })
+            : await runPassViaCore({
+                host,
+                text: prompt,
+                tools: [],
+                onStreamChunk: (chunk: string) => {
+                  const safeChunk = this._redactSecrets(chunk);
+                  fullContent += safeChunk;
+                  this.streamingContent += safeChunk;
+                  void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                },
+                abortSignal: req.signal,
+              });
           if (!fullContent && passResult.assistantMessage.content) {
             fullContent = passResult.assistantMessage.content;
           }
@@ -3846,6 +3992,84 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private _extractFilesAffected(toolNameOrInput: unknown, inputOrResult?: unknown, maybeResult?: string): string[] {
     return helpers.extractFilesAffected(toolNameOrInput, inputOrResult, maybeResult);
+  }
+
+  /**
+   * Project one `ClassifiedToolCall` (captured by the copilot-cli MCP
+   * audit bridge) into the `ToolTraceEntry` shape the webview already
+   * renders. Args are parsed from the audit's `inputJson`; failures to
+   * parse fall back to "no args" rather than aborting the projection
+   * (the bridge always emits valid JSON, but we never want a bad record
+   * to lose the whole turn's provenance).
+   *
+   * Tool name is prefixed with the MCP server when the call did not
+   * come from the authoritative DreamGraph server, so the provenance
+   * card visibly distinguishes `dreamgraph:query_resource` from
+   * `<inline>:write` (which never reaches us — denied — but kept in
+   * the projection so the same code handles future relaxations).
+   */
+  private _toolTraceEntryFromCopilotCall(classified: ClassifiedToolCall): ToolTraceEntry {
+    const { call } = classified;
+    let parsedArgs: unknown = {};
+    try {
+      parsedArgs = call.inputJson ? JSON.parse(call.inputJson) : {};
+    } catch {
+      parsedArgs = {};
+    }
+    // Always prefix with the server name so the provenance card
+    // visibly distinguishes `dreamgraph:query_resource`,
+    // `cli:powershell`, and any third-party MCP server uniformly.
+    const displayTool = `${call.server}:${call.tool}`;
+    return {
+      tool: displayTool,
+      argsSummary: this._summarizeToolArgs(parsedArgs),
+      filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
+      durationMs: Math.max(0, Math.floor(call.durationMs)),
+      status: call.isError ? 'failed' : 'completed',
+    };
+  }
+
+  /**
+   * Build a ToolTraceEntry from a raw audit record (no classification
+   * available yet). Used by the live audit tail to surface tool
+   * activity in-flight. Treats `dreamgraph` server calls as
+   * authoritative for display; everything else gets the `server:tool`
+   * prefix. `onRunResult` later replaces these entries with the
+   * authoritative `ClassifiedToolCall`-derived equivalents.
+   */
+  private _toolTraceEntryFromRawCall(call: RecordedMcpToolCall): ToolTraceEntry {
+    let parsedArgs: unknown = {};
+    try {
+      parsedArgs = call.inputJson ? JSON.parse(call.inputJson) : {};
+    } catch {
+      parsedArgs = {};
+    }
+    // Display convention (binding): always prefix the server name.
+    // CLI-native tools surface as e.g. `cli:powershell`, `cli:Read`,
+    // `cli:Search`; MCP tools as `dreamgraph:query_resource` or
+    // `<server>:<tool>` for any third-party MCP server.
+    const displayTool = `${call.server}:${call.tool}`;
+    return {
+      tool: displayTool,
+      argsSummary: this._summarizeToolArgs(parsedArgs),
+      filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
+      durationMs: Math.max(0, Math.floor(call.durationMs)),
+      status: call.isError ? 'failed' : 'completed',
+    };
+  }
+
+  /**
+   * Stable dedup key shared by the live tail and the post-run
+   * reconciliation. Matches the key format the chat-panel uses to
+   * REPLACE provisional entries with authoritative ones.
+   */
+  private static _toolCallDedupKey(
+    runId: string,
+    server: string,
+    tool: string,
+    startedAtEpochMs: number,
+  ): string {
+    return `${runId}:${server}:${tool}:${startedAtEpochMs}`;
   }
 
   private async _verifyEntities(names: string[]): Promise<Record<string, EntityVerification>> {

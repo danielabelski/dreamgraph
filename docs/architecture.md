@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **10.4.0**
+Version: **10.5.0**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -47,6 +47,20 @@ The `dg` CLI is responsible for:
 
 ### VS Code Extension
 The extension integrates DreamGraph into the editor and currently lives under `extensions/vscode/src/`. It surfaces the chat panel, dashboard, the Explorer (interactive graph with curated tension/candidate mutations — selectable 2D Sigma.js view or 3D Three.js view), and changed-files view. The Explorer SPA itself lives under `explorer/src/` and is bundled to `dist/explorer-spa/`, served by the daemon at `/explorer/`.
+
+### Copilot CLI Inheritance Proxy
+
+When the Architect provider is set to `copilot-cli`, the extension spawns the GitHub Copilot CLI as a sub-process and must hand it an MCP server named `dreamgraph` so the CLI can reach the same knowledge graph the Architect is reading. Naively spawning a fresh `dreamgraph --transport stdio` child here would be wrong: it bypasses the extension's instance/session scoping, doubles store contention, and hides daemon-reachability failures from the user.
+
+Instead, the extension ships a bundled **inheritance proxy** at `dist/copilot-cli-bridge.js`. The proxy:
+
+1. Acts as a **stdio MCP server** toward Copilot CLI (this is what `mcp-config.json` points at).
+2. Opens a **Streamable HTTP MCP client** to the architect's already-running daemon at `<baseUrl>/mcp` (URL is injected via `DREAMGRAPH_HOST_MCP_URL`).
+3. Forwards every `tools/list`, `tools/call`, `resources/*`, and `prompts/*` request to that upstream verbatim, mirroring its advertised capabilities.
+4. Appends one NDJSON record per `tools/call` to `DREAMGRAPH_AUDIT_PATH` (server, tool, input, result, isError, duration, startedAt) for the Context Inspector trace.
+5. **Fails closed before MCP initialize completes** if the upstream cannot be reached or its `tools/list` health probe times out (exit 3, clear stderr) — the orchestrator's `mcp_servers_loaded` failure path then aborts the run instead of letting the model execute against a missing graph.
+
+Path: `extensions/vscode/src/architect-core/adapters/copilot-cli/host/bridge-entry.ts`. Tests: `extensions/vscode/src/test/copilot-cli-bridge-audit.test.ts`.
 
 ## Source Layout
 
