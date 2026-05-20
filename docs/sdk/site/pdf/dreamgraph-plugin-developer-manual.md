@@ -1,6 +1,6 @@
 ﻿---
 title: DreamGraph Plugin Developer Manual
-subtitle: Guide and Reference Manual --- v9.0.0 Lattice
+subtitle: Guide and Reference Manual --- v10.5.0 Renata
 ---
 
 # Part I --- Plugin Developer Guide
@@ -11,7 +11,7 @@ subtitle: Guide and Reference Manual --- v9.0.0 Lattice
 # DreamGraph Plugin Developer Guide
 
 **Audience:** Engineers writing third-party plugins against `@dreamgraph/sdk`.
-**Engine baseline:** v9.0.0 "Lattice" (M0–M6 implemented; M5 webhooks shipped; M4 schedule actions deferred).
+**Engine baseline:** v10.5.0 "Renata" (M0–M6 implemented; M5 webhooks shipped; M4 schedule actions deferred).
 **Companion:** see the [Plugin Reference Manual](../plugin-reference/00-index.md) for strict, normative tables.
 
 This guide is task-oriented. It walks you from "what is a plugin" through a working
@@ -1152,7 +1152,7 @@ Before publishing a plugin:
 # DreamGraph Plugin Reference Manual
 
 **Audience:** Plugin authors and host implementors needing strict, normative tables.
-**Engine baseline:** v9.0.0 "Lattice".
+**Engine baseline:** v10.5.0 "Renata".
 **Companion:** see the [Plugin Developer Guide](../plugin-developer-guide/00-index.md) for task-oriented walkthroughs.
 
 This reference is the source of truth. Where the guide and the reference disagree,

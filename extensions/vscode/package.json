@@ -2,7 +2,7 @@
   "name": "dreamgraph-vscode",
   "displayName": "DreamGraph",
   "description": "DreamGraph-native development agent — intentional context, architectural discipline, knowledge-grounded AI.",
-  "version": "10.1.0",
+  "version": "10.5.0",
   "icon": "media/dreamgraph-icon.png",
   "publisher": "siteledger-solutions",
   "homepage": "https://dreamgraph.nofs.ai/",
@@ -291,7 +291,7 @@
         },
         "dreamgraph.architect.debtCarryFraction": {
           "type": "number",
-          "default": 1.0,
+          "default": 1,
           "description": "Fraction of overspend that rolls into next turn's debt (0 = forget, 1 = full carry)."
         },
         "dreamgraph.architect.pressureSignalEnabled": {
@@ -306,31 +306,54 @@
         },
         "dreamgraph.architect.reportingMode": {
           "type": "string",
-          "enum": ["quiet", "standard", "deep", "forensic"],
+          "enum": [
+            "quiet",
+            "standard",
+            "deep",
+            "forensic"
+          ],
           "default": "standard",
           "description": "Controls Architect response verbosity."
         },
         "dreamgraph.architect.traceVisibility": {
           "type": "string",
-          "enum": ["hidden", "compact", "expanded"],
+          "enum": [
+            "hidden",
+            "compact",
+            "expanded"
+          ],
           "default": "compact",
           "description": "Controls how much tool trace detail Architect surfaces."
         },
         "dreamgraph.architect.openai.reasoningEffort": {
           "type": "string",
-          "enum": ["low", "medium", "high", "xhigh"],
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "default": "medium",
           "description": "OpenAI GPT-5.5 Responses API reasoning effort for Architect calls. Use low for efficient reasoning, medium for balanced latency/performance, high for complex agentic tasks, and xhigh for hardest asynchronous/evaluation workloads."
         },
         "dreamgraph.architect.openai.verbosity": {
           "type": "string",
-          "enum": ["low", "medium", "high"],
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
           "default": "low",
           "description": "OpenAI GPT-5.5 Responses API text verbosity for Architect calls. Low produces concise responses; medium and high allow progressively more detail."
         },
         "dreamgraph.architect.autonomyMode": {
           "type": "string",
-          "enum": ["cautious", "conscientious", "eager", "autonomous"],
+          "enum": [
+            "cautious",
+            "conscientious",
+            "eager",
+            "autonomous"
+          ],
           "default": "cautious",
           "description": "Default Architect autonomy mode for multi-pass continuation behavior."
         },

@@ -43,7 +43,7 @@ import { cmdSchedule } from "./commands/schedule.js";
 
 function printUsage(): void {
   console.log(`
-DreamGraph CLI — Instance Management (v10.0.1 Renata)
+DreamGraph CLI — Instance Management (v10.5.0 Renata)
 
 Usage:
   dg <command> [options]
@@ -80,7 +80,7 @@ Run 'dg <command> --help' for command-specific options.
 }
 
 function printVersion(): void {
-  console.log("DreamGraph CLI v10.0.1 (Renata)");
+  console.log("DreamGraph CLI v10.5.0 (Renata)");
 }
 
 /* ------------------------------------------------------------------ */

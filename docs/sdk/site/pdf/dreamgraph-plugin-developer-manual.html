@@ -95,7 +95,7 @@
 <body>
 <header id="title-block-header">
 <h1 class="title">DreamGraph Plugin Developer Manual</h1>
-<p class="subtitle">Guide and Reference Manual --- v9.0.0 Lattice</p>
+<p class="subtitle">Guide and Reference Manual --- v10.5.0 Renata</p>
 </header>
 <nav id="TOC" role="doc-toc">
 <ul>
@@ -398,7 +398,7 @@ Guide</h1>
 Guide</h1>
 <p><strong>Audience:</strong> Engineers writing third-party plugins
 against <code>@dreamgraph/sdk</code>. <strong>Engine baseline:</strong>
-v9.0.0 "Lattice" (M0–M6 implemented; M5 webhooks shipped; M4 schedule
+v10.5.0 "Renata" (M0–M6 implemented; M5 webhooks shipped; M4 schedule
 actions deferred). <strong>Companion:</strong> see the <a
 href="../plugin-reference/00-index.md">Plugin Reference Manual</a> for
 strict, normative tables.</p>
@@ -623,6 +623,9 @@ transport:</p>
 <p>Expected output:</p>
 <pre><code>tool examples_hello_events_greet  →  { &quot;greeting&quot;: &quot;Hello, world!&quot; }
 resource plugin://examples.hello-events/manifest  →  { id: &quot;...&quot;, version: &quot;0.2.0&quot;, seams: [...] }</code></pre>
+<p>Note: exposed tool names must use model-safe characters. The example
+tool is <code>examples_hello_events_greet</code>, not the older dotted
+form.</p>
 <h2 id="27-verify-the-closure-seam-side-effects">2.7 Verify the
 closure-seam side-effects</h2>
 <p>Each closure seam writes through a host-locked store and prunes on
@@ -1848,7 +1851,7 @@ Reference Manual</h1>
 Manual</h1>
 <p><strong>Audience:</strong> Plugin authors and host implementors
 needing strict, normative tables. <strong>Engine baseline:</strong>
-v9.0.0 "Lattice". <strong>Companion:</strong> see the <a
+v10.5.0 "Renata". <strong>Companion:</strong> see the <a
 href="../plugin-developer-guide/00-index.md">Plugin Developer Guide</a>
 for task-oriented walkthroughs.</p>
 <p>This reference is the source of truth. Where the guide and the

@@ -34,8 +34,8 @@
     "docs:primary-workflows": "node scripts/generate-primary-workflow-docs.mjs"
   },
   "dependencies": {
-    "@dreamgraph/host": "10.0.1",
-    "@dreamgraph/sdk": "10.0.1",
+    "@dreamgraph/host": "10.5.0",
+    "@dreamgraph/sdk": "10.5.0",
     "@modelcontextprotocol/sdk": "^1.17.4",
     "chalk": "^5.3.0",
     "cheerio": "^1.2.0",

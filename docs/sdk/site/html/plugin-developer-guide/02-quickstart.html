@@ -122,6 +122,9 @@ transport:</p>
 <p>Expected output:</p>
 <pre><code>tool examples_hello_events_greet  →  { &quot;greeting&quot;: &quot;Hello, world!&quot; }
 resource plugin://examples.hello-events/manifest  →  { id: &quot;...&quot;, version: &quot;0.2.0&quot;, seams: [...] }</code></pre>
+<p>Note: exposed tool names must use model-safe characters. The example
+tool is <code>examples_hello_events_greet</code>, not the older dotted
+form.</p>
 <h2 id="27-verify-the-closure-seam-side-effects">2.7 Verify the
 closure-seam side-effects</h2>
 <p>Each closure seam writes through a host-locked store and prunes on
