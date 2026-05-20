@@ -137,6 +137,15 @@ export interface CopilotCliSpawnInput {
    * if exceeded. Zero or negative is a programmer error.
    */
   readonly timeoutMs: number;
+  /**
+   * Optional idle-output cap. When set (> 0), the port MUST kill the
+   * child if no stdout/stderr chunk has been received for this long.
+   * Each chunk resets the idle window. Use this to short-circuit
+   * stalled runs without making the wall-clock cap so tight that a
+   * legitimately long pass (many tool calls) gets killed. Zero or
+   * undefined disables idle-based termination.
+   */
+  readonly idleTimeoutMs?: number;
   /** Optional cancellation signal. The port forwards it to `spawn`. */
   readonly abortSignal?: AbortSignal;
   /** Live stdout chunk callback; receives decoded UTF-8 strings. */
@@ -228,9 +237,9 @@ export interface CopilotMcpBridgeSpawn {
 
 export interface CopilotCliRegistryPort {
   /**
-   * Names of the tools the live in-process DreamGraph MCP server
-   * actually exposes RIGHT NOW. The orchestrator uses this to verify
-   * `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS` is satisfied before spawn.
+   * Names of the tools the live DreamGraph MCP bridge actually exposes
+   * RIGHT NOW. The orchestrator uses this to verify every minimum
+   * grounding tool is satisfied before spawn.
    */
   listAuthoritativeToolNames(): Promise<readonly string[]>;
 

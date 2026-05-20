@@ -21,7 +21,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+  COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+  COPILOT_MINIMUM_AUTHORITATIVE_TOOLS,
   createCopilotCliProviderPort,
   type CopilotCliClockPort,
   type CopilotCliCryptoPort,
@@ -146,10 +147,10 @@ function makeFakeClock(): CopilotCliClockPort {
   };
 }
 
-function makeFakeRegistry(): CopilotCliRegistryPort {
+function makeFakeRegistry(liveTools: readonly string[] = COPILOT_AUTHORITATIVE_TOOL_CATALOG): CopilotCliRegistryPort {
   return {
     async listAuthoritativeToolNames() {
-      return [...COPILOT_REQUIRED_AUTHORITATIVE_TOOLS];
+      return [...liveTools];
     },
     async describeBridgeSpawn() {
       return { command: "node", args: ["./mcp-bridge.js"], env: {} };
@@ -261,6 +262,73 @@ test("provider-port: callProvider serializes the conversation into --prompt", as
   assert.equal(proposal.response.stopReason, "end_turn");
   assert.equal(proposal.response.content, "Plan complete.");
   assert.equal(proposal.response.toolCalls.length, 0);
+});
+
+test("provider-port: advertises the live authoritative tool catalog to Copilot CLI", async () => {
+  const proc = makeFakeProcess();
+  const port = createCopilotCliProviderPort({
+    hostLlm: FAKE_LLM,
+    invocationCwd: "/work/run",
+    timeoutMs: 30_000,
+    baseEnv: { PATH: "/usr/bin" },
+    deps: makeDeps({ process: proc.port }),
+    cliToolsManifest: {
+      server: "dreamgraph",
+      tools: COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+    },
+  });
+
+  await port.callProvider(makeCallInput());
+
+  const spawn = proc.log.spawnCalls[0]!;
+  const promptValue = spawn.args[spawn.args.findIndex((a) => a === "--prompt") + 1]!;
+  assert.match(promptValue, /Available dreamgraph tools/);
+  assert.match(promptValue, /  - query_resource/);
+  assert.match(promptValue, /  - edit_entity/);
+  assert.match(promptValue, /  - patch_markdown_chapter/);
+  assert.match(promptValue, /  - run_command/);
+  assert.doesNotMatch(promptValue, /cli:powershell .*available/);
+  assert.match(promptValue, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
+  assert.match(promptValue, /File\/entity mutations\s+→ prefer dreamgraph:edit_entity/);
+  assert.match(promptValue, /Verification \/ build \/ tests\s+→ dreamgraph:run_command/);
+  assert.match(promptValue, /Copilot CLI adapter authority override/);
+  assert.match(promptValue, /ADR-aware task policy: for every repository task/);
+  assert.match(promptValue, /Graph sync policy: after any source or project-state mutation/);
+  assert.match(promptValue, /HARD DENIAL .* DO NOT EXIST in this run .* cli:powershell, cli:bash, cli:cmd/);
+  assert.ok(!spawn.args.includes("powershell"));
+  assert.ok(spawn.args.includes("dreamgraph(edit_entity)"));
+  assert.ok(spawn.args.includes("dreamgraph(patch_markdown_chapter)"));
+  assert.ok(spawn.args.includes("dreamgraph(run_command)"));
+});
+
+test("provider-port: keeps bridge-local run_command visible with read-only upstream tools", async () => {
+  const proc = makeFakeProcess();
+  const port = createCopilotCliProviderPort({
+    hostLlm: FAKE_LLM,
+    invocationCwd: "/work/run",
+    timeoutMs: 30_000,
+    baseEnv: { PATH: "/usr/bin" },
+    deps: makeDeps({
+      process: proc.port,
+      registry: makeFakeRegistry(COPILOT_MINIMUM_AUTHORITATIVE_TOOLS),
+    }),
+    cliToolsManifest: {
+      server: "dreamgraph",
+      tools: COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+    },
+  });
+
+  await port.callProvider(makeCallInput());
+
+  const spawn = proc.log.spawnCalls[0]!;
+  const promptValue = spawn.args[spawn.args.findIndex((a) => a === "--prompt") + 1]!;
+  assert.match(promptValue, /  - query_resource/);
+  assert.match(promptValue, /  - run_command/);
+  assert.doesNotMatch(promptValue, /cli:powershell .*available/);
+  assert.match(promptValue, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
+  assert.match(promptValue, /Verification \/ build \/ tests\s+→ dreamgraph:run_command/);
+  assert.ok(!spawn.args.includes("powershell"));
+  assert.ok(spawn.args.includes("dreamgraph(run_command)"));
 });
 
 test("provider-port: callProvider forwards onStreamChunk with full assistant text", async () => {

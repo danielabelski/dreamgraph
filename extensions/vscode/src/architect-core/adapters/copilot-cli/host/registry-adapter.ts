@@ -8,10 +8,10 @@
 //   1. `listAuthoritativeToolNames()` — open a short-lived MCP
 //      client against the architect's already-running DreamGraph
 //      daemon (Streamable HTTP at `<hostMcpUrl>`), ask `tools/list`,
-//      and return the names. The orchestrator uses this to verify
-//      `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS` is satisfied BEFORE
-//      spawning Copilot CLI. Probing the SAME endpoint the bridge
-//      will forward to means a green probe is a real guarantee, not
+//      add bridge-local support tools, and return the names. The
+//      orchestrator uses this to verify the minimum grounding tools are
+//      satisfied BEFORE spawning Copilot CLI. Probing the SAME endpoint
+//      the bridge will forward to means a green probe is a real guarantee, not
 //      a "different process happens to work" coincidence.
 //
 //   2. `describeBridgeSpawn()` — return the concrete spawn config
@@ -62,6 +62,11 @@ export interface HostRegistryOptions {
    */
   readonly auditDirAbsPath: string;
   /**
+   * Workspace root used by the bridge-local `run_command` tool. Commands
+   * may choose a relative cwd, but the bridge rejects cwd escapes.
+   */
+  readonly workspaceRootAbsPath: string;
+  /**
    * Optional extra env to merge into the bridge spawn. The orchestrator
    * already overlays `DREAMGRAPH_RUN_ID` and the resolved audit path
    * on top of whatever is returned from `describeBridgeSpawn`.
@@ -87,9 +92,11 @@ export function createHostRegistry(opts: HostRegistryOptions): CopilotCliRegistr
 
   return Object.freeze({
     async listAuthoritativeToolNames(): Promise<readonly string[]> {
-      return Object.freeze(
-        await probeHostMcpToolNames({ url: hostMcpUrl, timeoutMs: toolListTimeoutMs }),
-      );
+      const upstreamNames = await probeHostMcpToolNames({
+        url: hostMcpUrl,
+        timeoutMs: toolListTimeoutMs,
+      });
+      return Object.freeze(includeBridgeLocalToolNames(upstreamNames));
     },
 
     async describeBridgeSpawn(): Promise<CopilotMcpBridgeSpawn> {
@@ -101,6 +108,7 @@ export function createHostRegistry(opts: HostRegistryOptions): CopilotCliRegistr
         // per-run via `bridgeEnvForRun`.
         DREAMGRAPH_HOST_MCP_URL: hostMcpUrl,
         DREAMGRAPH_BRIDGE_AUDIT_DIR: opts.auditDirAbsPath,
+        DREAMGRAPH_WORKSPACE_ROOT: opts.workspaceRootAbsPath,
       };
       return Object.freeze({
         command: opts.nodeExecPath,
@@ -139,6 +147,14 @@ export async function probeDreamgraphHttpMcp(opts: {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TOOL_LIST_TIMEOUT_MS;
   const names = await probeHostMcpToolNames({ url: opts.url, timeoutMs });
   return Object.freeze({ toolCount: names.length });
+}
+
+function includeBridgeLocalToolNames(upstreamNames: readonly string[]): string[] {
+  const names = [...upstreamNames];
+  if (!names.includes("run_command")) {
+    names.push("run_command");
+  }
+  return names;
 }
 
 async function probeHostMcpToolNames(opts: {
@@ -203,6 +219,7 @@ function validate(opts: HostRegistryOptions): void {
     "bridgeEntryPath",
     "nodeExecPath",
     "auditDirAbsPath",
+    "workspaceRootAbsPath",
   ] as const) {
     const v = opts[key];
     if (typeof v !== "string" || v.length === 0) {

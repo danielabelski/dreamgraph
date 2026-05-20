@@ -52,8 +52,9 @@
 //     results. If we cannot reach the daemon, exit non-zero so the
 //     CLI reports the server failed.
 
+import { spawn as spawnChild } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -67,12 +68,20 @@ import {
   ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
+  type CallToolResult,
   type ServerCapabilities,
+  type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 
 const HOST_MCP_URL = process.env["DREAMGRAPH_HOST_MCP_URL"] ?? "";
-const AUDIT_PATH = process.env["DREAMGRAPH_AUDIT_PATH"] ?? "";
+const AUDIT_DIR = process.env["DREAMGRAPH_BRIDGE_AUDIT_DIR"] ?? "";
+const RUN_ID = process.env["DREAMGRAPH_RUN_ID"] ?? "";
+const AUDIT_PATH = process.env["DREAMGRAPH_AUDIT_PATH"]
+  ?? (AUDIT_DIR.length > 0 && RUN_ID.length > 0
+    ? join(AUDIT_DIR, `${RUN_ID.replace(/[^A-Za-z0-9._-]/g, "_")}.ndjson`)
+    : "");
 const SERVER_NAME = process.env["DREAMGRAPH_BRIDGE_SERVER_NAME"] ?? "dreamgraph";
+const WORKSPACE_ROOT = process.env["DREAMGRAPH_WORKSPACE_ROOT"] ?? process.cwd();
 const HEALTH_TIMEOUT_MS = Number.parseInt(
   process.env["DREAMGRAPH_BRIDGE_HEALTH_TIMEOUT_MS"] ?? "",
   10,
@@ -200,18 +209,28 @@ async function main(): Promise<void> {
     },
   );
 
-  // tools/list — pure forward.
+  // tools/list — upstream DreamGraph tools plus bridge-local support tools.
   server.setRequestHandler(ListToolsRequestSchema, async (req) => {
-    return upstream.listTools(req.params);
+    const result = await upstream.listTools(req.params);
+    if (result.tools.some((tool) => tool.name === RUN_COMMAND_TOOL.name)) {
+      return result;
+    }
+    return {
+      ...result,
+      tools: [...result.tools, RUN_COMMAND_TOOL],
+    };
   });
 
-  // tools/call — forward + audit. Audit failures must not corrupt
-  // the proxied response, so we wrap appendAudit in try/catch.
+  // tools/call — bridge-local support tools or upstream forward + audit.
+  // Audit failures must not corrupt the proxied response, so we wrap
+  // appendAudit in try/catch.
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const startedAtEpochMs = Date.now();
     const inputJson = safeStringify(req.params.arguments ?? {});
     try {
-      const result = await upstream.callTool(req.params);
+      const result = req.params.name === RUN_COMMAND_TOOL.name
+        ? await runLocalCommand(req.params.arguments ?? {})
+        : await upstream.callTool(req.params);
       auditCallResult({
         tool: req.params.name,
         inputJson,
@@ -301,6 +320,158 @@ function safeStringify(value: unknown): string {
   } catch {
     return JSON.stringify(String(value));
   }
+}
+
+const RUN_COMMAND_TOOL: Tool = Object.freeze({
+  name: "run_command",
+  description:
+    "[DreamGraph bridge support tool] Execute a shell command inside the workspace for build/test/verification tasks. " +
+    "Use this instead of provider-inline shell tools; cwd is constrained to the workspace root.",
+  inputSchema: {
+    type: "object" as const,
+    properties: {
+      command: {
+        type: "string",
+        description: "Shell command to execute, for example npm run build.",
+      },
+      cwd: {
+        type: "string",
+        description: "Working directory, relative to the workspace root. Defaults to the workspace root.",
+      },
+      timeoutMs: {
+        type: "number",
+        description: "Timeout in milliseconds. Defaults to 60000, capped at 300000.",
+      },
+    },
+    required: ["command"],
+  },
+});
+
+const RUN_COMMAND_DEFAULT_TIMEOUT_MS = 60_000;
+const RUN_COMMAND_MAX_TIMEOUT_MS = 300_000;
+const RUN_COMMAND_OUTPUT_LIMIT = 64 * 1024;
+
+type LocalToolResult = CallToolResult;
+
+async function runLocalCommand(args: unknown): Promise<LocalToolResult> {
+  const input = args && typeof args === "object" && !Array.isArray(args)
+    ? args as Record<string, unknown>
+    : {};
+  const command = typeof input["command"] === "string" ? input["command"].trim() : "";
+  if (command.length === 0) {
+    return localTextResult({ error: "run_command requires a non-empty command" }, true);
+  }
+
+  const cwd = resolveWorkspaceCwd(input["cwd"]);
+  const requestedTimeout = typeof input["timeoutMs"] === "number" && Number.isFinite(input["timeoutMs"])
+    ? input["timeoutMs"]
+    : RUN_COMMAND_DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Math.min(
+    RUN_COMMAND_MAX_TIMEOUT_MS,
+    Math.max(1_000, Math.trunc(requestedTimeout)),
+  );
+
+  const startedAt = Date.now();
+  const result = await spawnShellCommand(command, cwd, timeoutMs);
+  return localTextResult({
+    command,
+    cwd,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    timedOut: result.timedOut,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    stdout: result.stdout,
+    stderr: result.stderr,
+  }, result.timedOut || result.exitCode !== 0);
+}
+
+function resolveWorkspaceCwd(value: unknown): string {
+  const root = resolve(WORKSPACE_ROOT);
+  const requested = typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : ".";
+  const abs = isAbsolute(requested) ? resolve(requested) : resolve(root, requested);
+  const rel = relative(root, abs);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    return abs;
+  }
+  throw new Error(`run_command cwd must stay inside workspace root ${root}`);
+}
+
+function spawnShellCommand(command: string, cwd: string, timeoutMs: number): Promise<{
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly timedOut: boolean;
+}> {
+  return new Promise((resolvePromise, reject) => {
+    const isWin = process.platform === "win32";
+    // On Windows, cmd.exe /S /C strips one outer pair of quotes from the
+    // command tail. If the user's command itself begins and ends with a
+    // quoted token (e.g. a quoted path to node.exe), cmd will strip THOSE
+    // quotes and break the call. Wrapping the entire command in an extra
+    // outer pair preserves user-supplied quoting verbatim.
+    const child = isWin
+      ? spawnChild(
+          process.env["ComSpec"] ?? "cmd.exe",
+          ["/d", "/s", "/c", `"${command}"`],
+          {
+            cwd,
+            env: process.env,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+            windowsVerbatimArguments: true,
+          },
+        )
+      : spawnChild(
+          process.env["SHELL"] ?? "/bin/sh",
+          ["-lc", command],
+          {
+            cwd,
+            env: process.env,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+          },
+        );
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
+    timer.unref?.();
+
+    child.stdout.on("data", (chunk) => {
+      stdout = appendLimited(stdout, String(chunk));
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = appendLimited(stderr, String(chunk));
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (exitCode, signal) => {
+      clearTimeout(timer);
+      resolvePromise({ stdout, stderr, exitCode, signal, timedOut });
+    });
+  });
+}
+
+function appendLimited(current: string, next: string): string {
+  const combined = current + next;
+  if (combined.length <= RUN_COMMAND_OUTPUT_LIMIT) return combined;
+  return combined.slice(0, RUN_COMMAND_OUTPUT_LIMIT) + "\n[output truncated]";
+}
+
+function localTextResult(value: unknown, isError: boolean): LocalToolResult {
+  return {
+    content: [{ type: "text", text: `${JSON.stringify(value, null, 2)}\n` }],
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
 function auditCallResult(rec: {

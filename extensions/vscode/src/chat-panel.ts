@@ -44,7 +44,7 @@ import {
   HOST_PROCESS,
   createHostAudit,
   createHostRegistry,
-  COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+  COPILOT_AUTHORITATIVE_TOOL_CATALOG,
   DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
   type ClassifiedToolCall,
   type CopilotCliProviderPortOptions,
@@ -1188,14 +1188,23 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           if (!fullContent && passResult.assistantMessage.content) {
             fullContent = passResult.assistantMessage.content;
           }
-          if (passResult.stopReason === 'error') {
-            throw new Error(`runPassViaCore reported error stopReason: ${passResult.assistantMessage.content}`);
-          }
-          // The seam's `host.persistAssistantMessage` already pushed the
-          // assistant message, persisted, and broadcast verdict/toolTrace/
-          // summary card. Mark the inline post-LLM block to skip so we
-          // don't double-write or double-broadcast.
+          // The seam's `host.persistAssistantMessage` already pushed an
+          // assistant bubble that fully describes the outcome (including
+          // any "Pass aborted: ..." / "[TIMEOUT] ..." text plus the tool
+          // trace). Mark the inline post-LLM block to skip so we don't
+          // double-write or double-broadcast.
           seamOwnedAssistant = true;
+          // Re-throwing here on stopReason === 'error' would make the
+          // outer catch push a SECOND assistant bubble ("Error:
+          // runPassViaCore reported error stopReason: ...") on top of
+          // the seam-pushed one — a pure duplicate that wipes the
+          // visible streamed prose. The seam-pushed bubble already
+          // carries the error text, so do nothing here.
+          if (passResult.stopReason === 'error') {
+            console.warn(
+              '[DreamGraph] runPassViaCore stopReason=error — seam-pushed assistant message owns the error surface; not re-throwing.',
+            );
+          }
         } finally {
           req.dispose();
         }
@@ -1378,9 +1387,21 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       );
     }
     const hostMcpUrl = this.mcpClient.mcpUrl;
+    // Wall-clock cap per turn. Default 30 min (long Copilot CLI runs
+    // can chain 100+ tool calls). The orchestrator's idle-output cap
+    // (`idleTimeoutMs` below) is what actually catches stalled runs;
+    // this wall-clock value is a backstop.
     const timeoutMsRaw = cfg.get<number>('copilotCli.timeoutMs');
     const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
       ? timeoutMsRaw
+      : 1_800_000;
+    // Idle-output cap: kill the run if no stdout/stderr chunk has
+    // been observed for this long. Each tool event / assistant delta
+    // resets the window, so a productive pass keeps running even if
+    // the total elapsed time exceeds the legacy 3-minute default.
+    const idleTimeoutMsRaw = cfg.get<number>('copilotCli.idleTimeoutMs');
+    const idleTimeoutMs = typeof idleTimeoutMsRaw === 'number' && Number.isFinite(idleTimeoutMsRaw) && idleTimeoutMsRaw > 0
+      ? idleTimeoutMsRaw
       : 180_000;
     const toolListTimeoutMsRaw = cfg.get<number>('copilotCli.toolListTimeoutMs');
     const toolListTimeoutMs = typeof toolListTimeoutMsRaw === 'number' && Number.isFinite(toolListTimeoutMsRaw) && toolListTimeoutMsRaw > 0
@@ -1396,6 +1417,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       bridgeEntryPath,
       nodeExecPath: process.execPath,
       auditDirAbsPath,
+      workspaceRootAbsPath: workspaceCwd,
       ...(toolListTimeoutMs !== undefined ? { toolListTimeoutMs } : {}),
     });
     const mcpAudit = createHostAudit({ auditDirAbsPath });
@@ -1415,6 +1437,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       hostLlm: llm,
       invocationCwd: workspaceCwd,
       timeoutMs,
+      idleTimeoutMs,
       baseEnv: process.env,
       // Skip the `--model` flag when the user picked `auto` so the
       // CLI applies its own routing heuristic.
@@ -1426,13 +1449,13 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // into the model's focus (see CURRENT TURN markers below).
       historyKeepLast: 10,
       markCurrentTurn: true,
-      // Advertise the dreamgraph MCP tools the orchestrator's
-      // allowlist guarantees. The serializer appends a directive
-      // telling the model to prefer these over inline CLI tools
-      // for repo/graph queries.
+      // Advertise the audited DreamGraph MCP catalogue the orchestrator
+      // intersects with the live bridge registry. This includes native
+      // graph/markdown/edit tools plus bridge-local run_command so the
+      // CLI can act through DreamGraph authority instead of inline shell.
       cliToolsManifest: {
         server: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
-        tools: COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+        tools: COPILOT_AUTHORITATIVE_TOOL_CATALOG,
       },
       deps: {
         fs: HOST_FS,
@@ -1611,7 +1634,22 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // bubble's enter animation and the user's scroll state — also
       // matches v1 continuation's broadcast.
       persistAssistantMessage: async (args) => {
-        const rawContent = (args.content ?? '').trim() || '(No response)';
+        // Preserve the model's pre-abort prose. When the pass driver
+        // aborts (user stop, wrapper timeout, orchestrator TIMEOUT,
+        // host abort, etc.) it passes only the synthetic "Pass aborted:
+        // ..." text. But the model may have already streamed real prose
+        // before the abort fired — that content lives in
+        // `panel.streamingContent` and would otherwise be wiped when the
+        // seam-pushed bubble replaces the streaming placeholder. Merge
+        // it in so the user keeps the partial reasoning + tool log.
+        const rawArgContent = args.content ?? '';
+        const looksLikeAbort = /^\s*(Pass aborted:|\[TIMEOUT\]|\[COPILOT_CLI_)/i.test(rawArgContent);
+        const streamed = (panel.streamingContent ?? '').trim();
+        const merged =
+          looksLikeAbort && streamed.length > 0 && !rawArgContent.includes(streamed)
+            ? `${streamed}\n\n---\n\n${rawArgContent.trim()}`
+            : rawArgContent;
+        const rawContent = merged.trim() || '(No response)';
         // Per-chunk redaction already happened in onStreamChunk; this is
         // an idempotent safety net for the assembled string and any
         // non-streamed (tool-loop) content path that didn't pass through.
@@ -1883,7 +1921,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     if (provider === 'copilot-cli') {
       const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
       const raw = cfg.get<number>('copilotCli.timeoutMs');
-      const base = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 180_000;
+      const base = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1_800_000;
       let budget = base + 30_000;
       if (options.toolCount && options.toolCount > 12) budget += 30_000;
       if (options.reducedContext) budget = Math.max(60_000, budget - 30_000);

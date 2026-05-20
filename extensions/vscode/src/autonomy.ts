@@ -50,6 +50,12 @@ export interface PassOutcomeSignal {
    * envelope summary, and no recommended actions — i.e. the model
    * "reported" only autonomy counters. */
   isEmptyPass?: boolean;
+  /** True when the assistant's final text addresses the user with a
+   * choice / confirmation prompt (e.g. "let me know if you want X",
+   * "should I proceed with Y?", "would you like me to..."). The
+   * autonomy loop must NOT auto-continue past such a prompt — that
+   * would talk over the user and discard their authority. */
+  awaitingUserInput?: boolean;
 }
 
 export interface RecommendedAction {
@@ -224,6 +230,15 @@ export function shouldContinueAfterPass(
 ): ContinuationDecision {
   if (signal.goalSufficientlyReached) {
     return { shouldContinue: false, reason: 'Stopped: original goal sufficiently reached.', selectionMode: 'none' };
+  }
+  if (signal.awaitingUserInput) {
+    // The assistant explicitly handed control back to the user (asked
+    // a confirmation question, presented a final report and offered
+    // follow-up options, etc.). Auto-continuation here would talk
+    // over the user and run another full pass while they are still
+    // composing a reply. Surface action chips if any were broadcast,
+    // but do NOT spawn the next pass.
+    return { shouldContinue: false, reason: 'Paused: assistant is awaiting user input.', selectionMode: 'user' };
   }
   if (signal.progressStatus === 'stalled') {
     return { shouldContinue: false, reason: 'Stopped: progress has stalled.', selectionMode: 'none' };

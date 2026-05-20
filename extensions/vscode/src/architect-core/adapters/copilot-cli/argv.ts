@@ -46,6 +46,7 @@
 // Argv ordering is stable for snapshot testing.
 
 import {
+  COPILOT_NATIVE_COMMAND_TOOLS,
   type CopilotArgvInput,
   type CopilotArgvPlan,
 } from "./types.js";
@@ -98,7 +99,18 @@ export function buildCopilotArgv(input: CopilotArgvInput): CopilotArgvPlan {
     deniedSpecs.push(inline);
   }
 
-  // 4. Authoritative MCP allows. One flag per tool — keeps each spec
+  // 4. CLI-native command allows. Currently none: shell execution is
+  //    routed exclusively through the audited `dreamgraph:run_command`
+  //    bridge tool, and the CLI's only native shell tool (`shell`) is
+  //    denied above. If COPILOT_NATIVE_COMMAND_TOOLS is ever
+  //    repopulated, this loop emits one `--allow-tool` per entry.
+  const allowedNativeSpecs: string[] = [];
+  for (const tool of COPILOT_NATIVE_COMMAND_TOOLS) {
+    args.push("--allow-tool", tool);
+    allowedNativeSpecs.push(tool);
+  }
+
+  // 5. Authoritative MCP allows. One flag per tool — keeps each spec
   //    individually auditable in the spawned argv. Copilot CLI's
   //    permission grammar uses the `<server>(<tool>)` form (see
   //    `copilot --help` examples, e.g. `--allow-tool='MyMCP(my_tool)'`).
@@ -147,6 +159,7 @@ export function buildCopilotArgv(input: CopilotArgvInput): CopilotArgvPlan {
       inlineShellDenied: true,
       inlineWriteDenied: true,
       allowAllToolsEnabled,
+      allowedNativeToolSpecs: Object.freeze(allowedNativeSpecs),
       allowedToolSpecs: Object.freeze(allowedSpecs),
       deniedToolSpecs: Object.freeze(deniedSpecs),
       addedDirs: Object.freeze(addedDirs),

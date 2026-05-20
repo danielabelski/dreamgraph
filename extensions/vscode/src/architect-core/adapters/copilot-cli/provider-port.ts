@@ -64,6 +64,8 @@ import {
   type CopilotCliDeps,
   type CopilotCliRunResult,
 } from "./orchestrator.js";
+import { buildAuthoritativeAllowlist } from "./allowlist.js";
+import { COPILOT_NATIVE_COMMAND_TOOLS } from "./types.js";
 import type {
   CliJsonEvent,
   CliJsonToolStartEvent,
@@ -77,6 +79,25 @@ import {
   serializeConversationForCopilotCli,
   type CliToolsManifest,
 } from "./prompt-serializer.js";
+
+/**
+ * Tool names the model sometimes hallucinates from training memory
+ * of older Copilot CLI builds. The current CLI does not expose any
+ * of these — calls fail in milliseconds with "tool not found". They
+ * carry no signal worth surfacing to the chat trace or verdict, so
+ * the provider-port drops their failed-completion events. Compared
+ * lowercase, against the resolved tool name (no `cli:` prefix).
+ */
+const PHANTOM_CLI_SHELL_TOOLS: ReadonlySet<string> = new Set([
+  "powershell",
+  "pwsh",
+  "bash",
+  "cmd",
+  "zsh",
+  "sh",
+  "exec",
+  "run",
+]);
 
 export interface CopilotCliProviderPortOptions {
   /**
@@ -95,6 +116,15 @@ export interface CopilotCliProviderPortOptions {
    * implicit infinite runs).
    */
   readonly timeoutMs: number;
+  /**
+   * Optional idle-output cap per turn, in milliseconds. When > 0,
+   * the run is killed if no stdout/stderr chunk has been observed
+   * for this long; each chunk (tool event, assistant delta, etc.)
+   * resets the window. Lets a long pass with many sequential tool
+   * calls keep running past `timeoutMs` as long as it is still
+   * producing output. Omit / 0 disables idle-based termination.
+   */
+  readonly idleTimeoutMs?: number;
   /**
    * Base process environment. Forwarded to the orchestrator, which
    * overlays `COPILOT_HOME` and the per-run MCP token without
@@ -252,6 +282,26 @@ function projectProposal(
   });
 }
 
+async function resolveLiveToolsManifest(
+  options: CopilotCliProviderPortOptions,
+): Promise<CliToolsManifest> {
+  const manifest = options.cliToolsManifest;
+  if (!manifest) {
+    throw new Error("resolveLiveToolsManifest: cliToolsManifest is required");
+  }
+  const liveToolNames = await options.deps.registry.listAuthoritativeToolNames();
+  const allowlist = buildAuthoritativeAllowlist(liveToolNames);
+  const live = new Set(allowlist.tools);
+  // `run_command` is served by the Copilot bridge, not the upstream daemon;
+  // keep it visible in the prompt manifest even when the daemon tool list is read-only.
+  live.add("run_command");
+  return {
+    server: manifest.server,
+    tools: Object.freeze(manifest.tools.filter((tool) => live.has(tool))),
+    nativeCommandTools: Object.freeze([...COPILOT_NATIVE_COMMAND_TOOLS]),
+  };
+}
+
 export function createCopilotCliProviderPort(
   options: CopilotCliProviderPortOptions,
 ): ProviderPort {
@@ -265,20 +315,23 @@ export function createCopilotCliProviderPort(
     },
 
     async callProvider(input: CallProviderInput): Promise<ProviderProposal> {
+      const cliToolsManifest = options.cliToolsManifest
+        ? await resolveLiveToolsManifest(options)
+        : undefined;
       const promptText = serializeConversationForCopilotCli(input.prompt.conversation, {
         ...(options.historyKeepLast !== undefined
           ? { historyKeepLast: options.historyKeepLast }
           : {}),
         markCurrentTurn: options.markCurrentTurn ?? true,
-        ...(options.cliToolsManifest ? { cliToolsManifest: options.cliToolsManifest } : {}),
+        ...(cliToolsManifest ? { cliToolsManifest } : {}),
       });
       if (options.onPromptComposed) {
         try {
           options.onPromptComposed({
             promptByteLength: Buffer.byteLength(promptText, "utf8"),
             historyMessageCount: input.prompt.conversation.length,
-            mcpToolsAdvertised: options.cliToolsManifest?.tools.length ?? 0,
-            mcpServerAdvertised: options.cliToolsManifest?.server ?? null,
+            mcpToolsAdvertised: cliToolsManifest?.tools.length ?? 0,
+            mcpServerAdvertised: cliToolsManifest?.server ?? null,
             markCurrentTurn: options.markCurrentTurn ?? true,
             model: options.model ?? null,
           });
@@ -363,6 +416,13 @@ export function createCopilotCliProviderPort(
         if (onRunIdAssigned) onRunIdAssigned(runId);
       };
       const onCliEvent = (event: CliJsonEvent): void => {
+        // After abort, drop every CLI event silently. The child is
+        // being killed by the process adapter; any tool-call or
+        // assistant-delta the host still emits while it dies must
+        // not be surfaced to the chat panel (would render as a
+        // ghost reply after the user pressed stop) or to the tool
+        // trace (would record activity past the cancellation point).
+        if (internalAbort.signal.aborted) return;
         if (event.type === "tool.execution_start") {
           startsByCallId.set(event.toolCallId, event);
           return;
@@ -381,6 +441,21 @@ export function createCopilotCliProviderPort(
           // complete event's name and finally to "unknown" so the
           // chat trace never renders an empty `cli:` label.
           const tool = start?.mcpToolName ?? start?.toolName ?? event.toolName ?? "unknown";
+          // Drop phantom CLI shell-tool failures. The model
+          // sometimes hallucinates tool names like `powershell`,
+          // `bash`, `cmd`, `pwsh`, etc. from its training memory of
+          // older Copilot CLI builds. Current CLI rejects them in
+          // milliseconds (no such tool). They never produced useful
+          // output, the model has already seen the failure in its
+          // own message history, and forwarding them only pollutes
+          // the chat trace and verdict ("N tool calls failed").
+          if (
+            !event.success &&
+            start?.mcpServerName == null &&
+            PHANTOM_CLI_SHELL_TOOLS.has(tool.toLowerCase())
+          ) {
+            return;
+          }
           const call: RecordedMcpToolCall = {
             server,
             tool,
@@ -468,6 +543,9 @@ export function createCopilotCliProviderPort(
             model: options.model,
             invocationCwd: options.invocationCwd,
             timeoutMs: options.timeoutMs,
+            ...(typeof options.idleTimeoutMs === "number" && options.idleTimeoutMs > 0
+              ? { idleTimeoutMs: options.idleTimeoutMs }
+              : {}),
             abortSignal: internalAbort.signal,
             baseEnv: options.baseEnv,
             binaryName: options.binaryName,
@@ -516,6 +594,51 @@ export function createCopilotCliProviderPort(
         throw err;
       }
 
+      // User cancellation takes precedence over any other failure.
+      // Throw a typed AbortError so the pass driver / chat panel can
+      // distinguish "user pressed stop" from "Copilot CLI exited
+      // non-zero" and skip autonomy continuation.
+      //
+      // Attribution: prefer the EXTERNAL signal's reason (set by the
+      // chat-panel: either the user clicking Stop, or the wrapper
+      // watchdog timing out). The internal `result.failure?.code ===
+      // "CANCELLED"` path covers spawn-side aborts that never carried
+      // an external reason (rare; mostly host-driven teardown).
+      if (internalAbort.signal.aborted || (!result.ok && result.failure?.code === "CANCELLED")) {
+        const externalAborted = externalSignal?.aborted === true;
+        const externalReason = externalSignal?.reason;
+        let humanMessage: string;
+        let code: string;
+        if (externalAborted) {
+          const reasonText =
+            externalReason instanceof Error
+              ? externalReason.message
+              : typeof externalReason === "string"
+                ? externalReason
+                : "";
+          if (/timed out|timeout/i.test(reasonText)) {
+            humanMessage = `Copilot CLI run aborted by the chat-panel watchdog (${reasonText}). The model did not finish before the wrapper's wall-clock budget expired.`;
+            code = "CHAT_WRAPPER_TIMEOUT";
+          } else {
+            humanMessage = "Copilot CLI run cancelled by user.";
+            code = "USER_CANCELLED";
+          }
+        } else if (!result.ok && result.failure?.code === "CANCELLED") {
+          humanMessage = `Copilot CLI run cancelled by the orchestrator: ${result.failure.message}`;
+          code = "HOST_ABORTED";
+        } else {
+          humanMessage = "Copilot CLI run cancelled (cause unknown).";
+          code = "CANCELLED";
+        }
+        const cancelErr = new Error(humanMessage) as Error & {
+          name: string;
+          copilotCliFailureCode?: string;
+        };
+        cancelErr.name = "AbortError";
+        cancelErr.copilotCliFailureCode = code;
+        throw cancelErr;
+      }
+
       if (!result.ok) {
         throw buildFailureError(result);
       }
@@ -523,10 +646,15 @@ export function createCopilotCliProviderPort(
       const proposal = projectProposal(result, result.toolCalls);
 
       // Only emit the full-transcript chunk when NO per-token deltas
-      // were streamed. With `--output-format json` the deltas cover
-      // the entire message; emitting again would duplicate it in the
-      // chat bubble.
-      if (!deltasStreamed && input.onStreamChunk && proposal.response.content.length > 0) {
+      // were streamed AND the run was not cancelled. With
+      // `--output-format json` the deltas cover the entire message;
+      // emitting again would duplicate it in the chat bubble.
+      if (
+        !deltasStreamed &&
+        !internalAbort.signal.aborted &&
+        input.onStreamChunk &&
+        proposal.response.content.length > 0
+      ) {
         input.onStreamChunk(proposal.response.content);
       }
 

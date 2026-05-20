@@ -247,8 +247,13 @@
         },
         "dreamgraph.architect.copilotCli.timeoutMs": {
           "type": "number",
+          "default": 1800000,
+          "description": "Hard wall-clock cap (ms) for a single Copilot CLI invocation. Default 30 min. This is a backstop; the idle-output cap (`copilotCli.idleTimeoutMs`) is what normally catches stalled runs."
+        },
+        "dreamgraph.architect.copilotCli.idleTimeoutMs": {
+          "type": "number",
           "default": 180000,
-          "description": "Hard wall-clock cap (ms) for a single Copilot CLI invocation."
+          "description": "Idle-output cap (ms) for a single Copilot CLI invocation. The run is killed if no stdout/stderr chunk (tool event, assistant delta, etc.) has been received for this long; each chunk resets the window. Lets a long pass with many sequential tool calls keep running as long as it is producing output. Default 3 min."
         },
         "dreamgraph.architect.copilotCli.toolListTimeoutMs": {
           "type": "number",

@@ -385,9 +385,40 @@ test("bridge: forwards tools/list to the HTTP upstream", async () => {
   try {
     const result = await bridge.client.listTools();
     const names = result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ["boom", "list_directory", "query_resource"]);
+    assert.deepEqual(names, ["boom", "list_directory", "query_resource", "run_command"]);
     const lines = await readAuditLines(bridge.auditPath);
     assert.equal(lines.length, 0);
+  } finally {
+    await bridge.close();
+    await upstream.close();
+  }
+});
+
+test("bridge: run_command is bridge-local and does not call the upstream handler", async () => {
+  let upstreamCalls = 0;
+  const upstream = await startUpstreamHttpMcp({
+    toolHandler: () => {
+      upstreamCalls += 1;
+      return "unexpected-upstream";
+    },
+  });
+  const bridge = await startBridgeClient({ hostMcpUrl: upstream.url, withAudit: true });
+  try {
+    const command = `${JSON.stringify(process.execPath)} -e "process.stdout.write('bridge-local-ok')"`;
+    const result = await bridge.client.callTool({
+      name: "run_command",
+      arguments: { command, cwd: "." },
+    });
+    const text = ((result.content as Array<{ type: string; text: string }>)[0] ?? {}).text;
+    assert.match(text, /bridge-local-ok/);
+    assert.equal(upstreamCalls, 0);
+
+    const lines = await readAuditLines(bridge.auditPath);
+    assert.equal(lines.length, 1);
+    const rec = JSON.parse(lines[0]!);
+    assert.equal(rec.server, "dreamgraph");
+    assert.equal(rec.tool, "run_command");
+    assert.equal(rec.isError, false);
   } finally {
     await bridge.close();
     await upstream.close();

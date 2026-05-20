@@ -74,6 +74,8 @@ export const CURRENT_TURN_CLOSE_MARKER =
 export interface CliToolsManifest {
   readonly server: string;
   readonly tools: readonly string[];
+  readonly nativeCommandTools?: readonly string[];
+  readonly commandExecutionDisabledReason?: string;
 }
 
 export interface SerializeConversationOptions {
@@ -110,6 +112,11 @@ export interface SerializeConversationOptions {
 
 function renderToolsManifest(manifest: CliToolsManifest): string {
   const lines: string[] = [];
+  const nativeCommandTools = manifest.nativeCommandTools ?? [];
+  const hasDreamgraphRunCommand = manifest.tools.includes("run_command");
+  const commandExecutionAvailable =
+    nativeCommandTools.length > 0 || hasDreamgraphRunCommand;
+
   lines.push(
     `### REQUIRED FIRST STEP — DreamGraph MCP context economy`,
   );
@@ -123,6 +130,34 @@ function renderToolsManifest(manifest: CliToolsManifest): string {
     lines.push(`  - ${tool}`);
   }
   lines.push("");
+  lines.push("Exposed command execution routes:");
+  if (hasDreamgraphRunCommand) {
+    lines.push(
+      `  - ${manifest.server}:run_command — DreamGraph-mediated shell execution through MCP (available; workspace-constrained, timeout-bounded, output-limited, and audited). Call with { command, cwd?, timeoutMs? }. This is the ONLY supported shell execution route for this run.`,
+    );
+  } else {
+    lines.push(
+      `  - ${manifest.server}:run_command — unavailable: ${manifest.commandExecutionDisabledReason ?? "not present in the effective DreamGraph tool catalogue for this run"}.`,
+    );
+  }
+  for (const tool of nativeCommandTools) {
+    lines.push(
+      `  - cli:${tool} — Copilot-native command tool (available; subject to CLI permission policy).`,
+    );
+  }
+  lines.push(
+    `HARD DENIAL — the following tool names DO NOT EXIST in this run and WILL FAIL if called: cli:shell, cli:write, cli:powershell, cli:bash, cli:cmd, cli:pwsh, cli:zsh, cli:sh, cli:exec, cli:run, cli:edit, cli:read. Copilot CLI's only native shell tools are 'shell' and 'write', both denied by adapter policy. There is no inline 'powershell' / 'bash' / 'cmd' tool — those are training-memory hallucinations from older Copilot CLI builds. Every call to one of those names wastes a tool slot and pollutes the verdict. ${hasDreamgraphRunCommand ? `Use ${manifest.server}:run_command({ command, cwd?, timeoutMs? }) instead.` : "Command execution is disabled for this run; do not attempt it."}`,
+  );
+  if (commandExecutionAvailable) {
+    lines.push(
+      `If a task requires build, test, lint, or other shell execution, use ${hasDreamgraphRunCommand ? `${manifest.server}:run_command` : "an available command route above"}. Do not claim command execution is unavailable while a route is listed as available.`,
+    );
+  } else {
+    lines.push(
+      `Command execution is disabled by policy for this run; state that explicitly instead of claiming the tools do not exist.`,
+    );
+  }
+  lines.push("");
   lines.push(
     `MANDATORY POLICY — before answering ANY question about this repository, its architecture, its tools, its data model, its workflows, its ADRs, its UI registry, its dreams/insights, OR before reading any project file with a native tool (view/read/glob/rg), you MUST first ground yourself by calling at least ONE relevant ${manifest.server} tool. Suggested grounding calls:`,
   );
@@ -133,9 +168,24 @@ function renderToolsManifest(manifest: CliToolsManifest): string {
   lines.push(`  • Semantic code/graph search         → graph_rag_retrieve(query)`);
   lines.push(`  • Source inspection                  → read_source_code(repo, filePath, entity?/range?)`);
   lines.push(`  • Directory layout                   → list_directory(repo, dirPath?)`);
+  lines.push(`  • File/entity mutations              → prefer ${manifest.server}:edit_entity, ${manifest.server}:patch_file, ${manifest.server}:create_file, ${manifest.server}:edit_file, or markdown/ADR/project-state mutation tools`);
+  lines.push(`  • ADRs / graph / project state       → prefer ${manifest.server} mutation tools such as record_architecture_decision, enrich_seed_data, register_ui_element, and related listed tools before local fallbacks`);
+  lines.push(`  • Verification / build / tests       → ${hasDreamgraphRunCommand ? `${manifest.server}:run_command({ command, cwd?, timeoutMs? }) — there is no other shell route for this run` : "command execution is disabled for this run"}`);
   lines.push("");
   lines.push(
-    `Only fall back to native CLI tools (view, read, glob, rg, shell, powershell, report_intent, etc.) for actions ${manifest.server} cannot perform (live filesystem mutations, ad-hoc text grep across non-indexed paths, terminal output capture). For anything related to "what is this project", "how does X work", "where is Y defined", "what are the ADRs/workflows/tensions/insights" — ${manifest.server} tools are AUTHORITATIVE and must be used first. Skipping the grounding call is a protocol violation.`,
+    `Copilot CLI adapter authority override: if earlier generic Architect instructions mention local support tools such as write_file, modify_entity, read_local_file, or run_command, treat them as unavailable or last-resort fallbacks for this Copilot CLI run. Listed ${manifest.server} MCP tools take precedence because they are graph-aware, provenance/audit-preserving, and multi-repository aware.`,
+  );
+  lines.push("");
+  lines.push(
+    `Mutation routing policy: when modifying files, repositories, entities, ADRs, graph knowledge, or project state, prefer the listed ${manifest.server} MCP mutation tools first: source mutations through ${manifest.server}:edit_entity, ${manifest.server}:patch_file, ${manifest.server}:create_file, ${manifest.server}:edit_file, ${manifest.server}:rename_file, or ${manifest.server}:delete_file; knowledge mutations through ${manifest.server}:enrich_seed_data, ${manifest.server}:register_ui_element, ${manifest.server}:modify_api_surface, ${manifest.server}:record_architecture_decision, and related graph tools. Native CLI mutation tools (cli:write, cli:edit) are denied by adapter policy. Skipping the grounding call or bypassing an available DreamGraph mutation/verification tool is a protocol violation.`,
+  );
+  lines.push("");
+  lines.push(
+    `ADR-aware task policy: for every repository task, consider applicable accepted ADRs; before proposing or applying code, architecture, workflow, data-model, UI, command-execution, or tool-policy changes, query accepted ADRs with ${manifest.server}:query_resource("dream://adrs") or ${manifest.server}:query_architecture_decisions and include an ADR Review in the response. If the change establishes or revises a durable architectural rule, record it with ${manifest.server}:record_architecture_decision in the same task.`,
+  );
+  lines.push("");
+  lines.push(
+    `Graph sync policy: after any source or project-state mutation, assess whether the knowledge graph must change. If behavior, public API, workflow steps, data model, UI registry, capability definitions, or architectural rules changed, update the graph in the same task with the appropriate ${manifest.server} mutation tool before reporting completion.`,
   );
   return lines.join("\n");
 }

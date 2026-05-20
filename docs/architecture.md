@@ -50,15 +50,16 @@ The extension integrates DreamGraph into the editor and currently lives under `e
 
 ### Copilot CLI Inheritance Proxy
 
-When the Architect provider is set to `copilot-cli`, the extension spawns the GitHub Copilot CLI as a sub-process and must hand it an MCP server named `dreamgraph` so the CLI can reach the same knowledge graph the Architect is reading. Naively spawning a fresh `dreamgraph --transport stdio` child here would be wrong: it bypasses the extension's instance/session scoping, doubles store contention, and hides daemon-reachability failures from the user.
+When the Architect provider is set to `copilot-cli`, the extension spawns the GitHub Copilot CLI as a sub-process and must hand it an MCP server named `dreamgraph` so the CLI can reach the same knowledge graph and guarded host support surface the Architect is reading. Naively spawning a fresh `dreamgraph --transport stdio` child here would be wrong: it bypasses the extension's instance/session scoping, doubles store contention, and hides daemon-reachability failures from the user.
 
 Instead, the extension ships a bundled **inheritance proxy** at `dist/copilot-cli-bridge.js`. The proxy:
 
 1. Acts as a **stdio MCP server** toward Copilot CLI (this is what `mcp-config.json` points at).
 2. Opens a **Streamable HTTP MCP client** to the architect's already-running daemon at `<baseUrl>/mcp` (URL is injected via `DREAMGRAPH_HOST_MCP_URL`).
-3. Forwards every `tools/list`, `tools/call`, `resources/*`, and `prompts/*` request to that upstream verbatim, mirroring its advertised capabilities.
-4. Appends one NDJSON record per `tools/call` to `DREAMGRAPH_AUDIT_PATH` (server, tool, input, result, isError, duration, startedAt) for the Context Inspector trace.
-5. **Fails closed before MCP initialize completes** if the upstream cannot be reached or its `tools/list` health probe times out (exit 3, clear stderr) — the orchestrator's `mcp_servers_loaded` failure path then aborts the run instead of letting the model execute against a missing graph.
+3. Forwards upstream DreamGraph `resources/*` and `prompts/*` requests verbatim, and forwards upstream `tools/list` / `tools/call` while adding bridge-local `run_command` as a guarded DreamGraph MCP tool constrained to `DREAMGRAPH_WORKSPACE_ROOT`.
+4. Lets the orchestrator fail closed on the minimum graph/source grounding tools while exposing every live audited catalogue tool, including DreamGraph-native markdown, graph mutation, source-edit, ADR, cognitive, and verification tools. Copilot-native command/edit surfaces such as `cli:powershell`, `cli:write`, and `cli:edit` are advertised only as secondary provider-local fallbacks unless a task specifically requires provider-native execution.
+5. Appends one NDJSON record per `tools/call` to `DREAMGRAPH_AUDIT_PATH` or `<DREAMGRAPH_BRIDGE_AUDIT_DIR>/<DREAMGRAPH_RUN_ID>.ndjson` (server, tool, input, result, isError, duration, startedAt) for the Context Inspector trace.
+6. **Fails closed before MCP initialize completes** if the upstream cannot be reached or its `tools/list` health probe times out (exit 3, clear stderr) — the orchestrator's `mcp_servers_loaded` failure path then aborts the run instead of letting the model execute against a missing graph.
 
 Path: `extensions/vscode/src/architect-core/adapters/copilot-cli/host/bridge-entry.ts`. Tests: `extensions/vscode/src/test/copilot-cli-bridge-audit.test.ts`.
 

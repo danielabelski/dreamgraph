@@ -10,6 +10,35 @@ test('inferPassOutcomeSignal detects goal completion and stalled progress marker
   assert.equal(stalled.progressStatus, 'stalled');
 });
 
+test('inferPassOutcomeSignal detects awaiting-user prose at the message tail', () => {
+  // Trailing question mark.
+  const q = inferPassOutcomeSignal('I rebuilt the bridge. Should I proceed with the deployment step?');
+  assert.equal(q.awaitingUserInput, true);
+  // "Let me know" sign-off.
+  const lmk = inferPassOutcomeSignal('All changes applied. Let me know if you want me to also update the docs.');
+  assert.equal(lmk.awaitingUserInput, true);
+  // "Would you like me to" handoff.
+  const wyl = inferPassOutcomeSignal('Patch is ready. Would you like me to commit it?');
+  assert.equal(wyl.awaitingUserInput, true);
+  // Plain progress prose must NOT trip the detector.
+  const plain = inferPassOutcomeSignal('Edited the file and ran the tests. Recommended next step: run the build.');
+  assert.equal(plain.awaitingUserInput, false);
+});
+
+test('analyzePass pauses for user input when the assistant asks a question, even with action chips', () => {
+  const state = createAutonomyState('autonomous', 4);
+  const result = analyzePass(state, {
+    content: 'I prepared two patches. Which option would you like me to apply?',
+    actions: [
+      { id: 'a', label: 'Apply patch A', priority: 1, eligible: true, withinScope: true },
+      { id: 'b', label: 'Apply patch B', priority: 2, eligible: true, withinScope: true },
+    ],
+  });
+  assert.equal(result.decision.shouldContinue, false);
+  assert.match(result.decision.reason, /awaiting user input/i);
+  assert.equal(result.decision.selectionMode, 'user');
+});
+
 test('analyzePass selects continuation prompt when autonomous mode has a strong next step', () => {
   const state = createAutonomyState('autonomous', 4);
   const result = analyzePass(state, {

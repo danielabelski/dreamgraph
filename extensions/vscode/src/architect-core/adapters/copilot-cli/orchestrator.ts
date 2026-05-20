@@ -11,7 +11,7 @@
 //      missing required flags or the persistent Copilot config does
 //      not record an active GitHub login.
 //   2. Validate the live in-process DreamGraph MCP server actually
-//      exposes every tool in `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS`.
+//      exposes every minimum grounding tool and allowlisted catalog tool.
 //   3. Materialize a per-run scratch directory containing
 //      `mcp-config.json` (token-scoped, dreamgraph-only) and, when the
 //      prompt overflows the inline-argv budget, `prompt.txt`.
@@ -37,7 +37,7 @@
 // unit-testable with `node:test` and fake ports.
 
 import {
-  COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+  COPILOT_NATIVE_COMMAND_TOOLS,
   DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
   type CopilotArgvPlan,
   type CopilotCliErrorCode,
@@ -95,6 +95,14 @@ export interface CopilotCliRunInput {
    * Hard wall-clock cap. Required (no implicit infinite runs).
    */
   readonly timeoutMs: number;
+  /**
+   * Optional idle-output cap forwarded to the spawn port. When > 0,
+   * the port kills the child if no stdout/stderr chunk has been
+   * received for this long; each chunk resets the window. This lets
+   * a single LLM pass with many sequential tool calls keep running
+   * past the wall-clock cap as long as it is still producing output.
+   */
+  readonly idleTimeoutMs?: number;
   /**
    * Optional cancellation signal forwarded to the spawn port.
    */
@@ -412,6 +420,7 @@ export async function runCopilotCli(
         runId,
         authoritativeServer: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
         allowedTools: [...allowlist.tools],
+        allowedNativeTools: [...COPILOT_NATIVE_COMMAND_TOOLS],
         deniedInlineTools: ["shell", "write"],
       }, null, 2)}\n`,
       { mode: 0o600 },
@@ -503,6 +512,9 @@ export async function runCopilotCli(
       cwd: input.invocationCwd,
       env: spawnEnv,
       timeoutMs: input.timeoutMs,
+      ...(typeof input.idleTimeoutMs === "number" && input.idleTimeoutMs > 0
+        ? { idleTimeoutMs: input.idleTimeoutMs }
+        : {}),
       abortSignal: input.abortSignal,
       onStdoutChunk: stdoutTap,
       onStderrChunk: input.onStderrChunk,

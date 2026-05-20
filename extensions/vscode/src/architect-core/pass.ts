@@ -212,7 +212,8 @@ export async function runPass(input: RunPassInput): Promise<PassResult> {
       // messages so the model sees the running dialogue.
     }
   } catch (err) {
-    stopReason = "error";
+    const isAbort = err instanceof Error && err.name === "AbortError";
+    stopReason = isAbort ? "aborted" : "error";
     const message = err instanceof Error ? err.message : String(err);
     iterations.push(
       Object.freeze({

@@ -109,7 +109,21 @@ export function summarizeOutcomePayload(payloadText: string): string {
 
 export function deriveVerdict(content: string | undefined, trace: ToolTraceEntry[]): VerdictBanner {
   const normalized = (content ?? '').toLowerCase();
-  const failedCount = trace.filter((t) => t.status === 'failed').length;
+  // Count effective failures only: when the same (tool, argsSummary,
+  // filesAffected) was retried and the LATEST attempt completed, the
+  // earlier failure no longer counts against the verdict. This avoids
+  // marking a turn "partial" when, e.g., `dreamgraph:run_command`
+  // failed once with a bad flag and then succeeded on the corrected
+  // retry — the user-visible outcome was success.
+  const latestStatusByKey = new Map<string, 'completed' | 'failed'>();
+  for (const t of trace) {
+    const key = `${t.tool}\u0000${t.argsSummary}\u0000${t.filesAffected.join('|')}`;
+    latestStatusByKey.set(key, t.status);
+  }
+  let failedCount = 0;
+  for (const status of latestStatusByKey.values()) {
+    if (status === 'failed') failedCount++;
+  }
   if (normalized.includes('verified:') || normalized.includes('confirmed:') || (trace.length > 0 && failedCount === 0)) {
     return {
       level: 'verified',

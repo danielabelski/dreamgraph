@@ -14,8 +14,10 @@ import {
   buildCopilotArgv,
   buildCopilotMcpConfig,
   classifyToolCall,
+  COPILOT_AUTHORITATIVE_TOOL_CATALOG,
   COPILOT_INLINE_TOOL_SERVER,
-  COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+  COPILOT_MINIMUM_AUTHORITATIVE_TOOLS,
+  COPILOT_NATIVE_COMMAND_TOOLS,
   DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
   isHelpSurfaceSupported,
   parseCopilotHelpSurface,
@@ -114,37 +116,43 @@ test("help-probe: undefined help text yields zero-length surface, not throw", ()
 // allowlist
 // ---------------------------------------------------------------------------
 
-test("allowlist: live registry with all required tools is ok", () => {
+test("allowlist: live registry with all catalog tools is ok", () => {
   const a = buildAuthoritativeAllowlist([
-    ...COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+    ...COPILOT_AUTHORITATIVE_TOOL_CATALOG,
     "extra_unrelated_tool",
   ]);
   assert.equal(a.ok, true);
   assert.equal(a.missingRequired.length, 0);
   assert.deepEqual(
     [...a.tools].sort(),
-    [...COPILOT_REQUIRED_AUTHORITATIVE_TOOLS].sort(),
+    [...COPILOT_AUTHORITATIVE_TOOL_CATALOG].sort(),
   );
 });
 
-test("allowlist: missing required tool flips ok to false", () => {
-  const partial = COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.slice(0, -1);
+test("allowlist: bridge-local run_command is allowed even when absent upstream", () => {
+  const a = buildAuthoritativeAllowlist([
+    ...COPILOT_MINIMUM_AUTHORITATIVE_TOOLS,
+  ]);
+  assert.equal(a.ok, true);
+  assert.ok(a.tools.includes("run_command"));
+});
+
+test("allowlist: missing minimum grounding tool flips ok to false", () => {
+  const missing = COPILOT_MINIMUM_AUTHORITATIVE_TOOLS[
+    COPILOT_MINIMUM_AUTHORITATIVE_TOOLS.length - 1
+  ]!;
+  const partial = COPILOT_AUTHORITATIVE_TOOL_CATALOG.filter((tool) => tool !== missing);
   const a = buildAuthoritativeAllowlist(partial);
   assert.equal(a.ok, false);
-  assert.deepEqual(
-    [...a.missingRequired],
-    [COPILOT_REQUIRED_AUTHORITATIVE_TOOLS[
-      COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.length - 1
-    ]],
-  );
+  assert.deepEqual([...a.missingRequired], [missing]);
 });
 
-test("allowlist: empty registry reports all required as missing", () => {
+test("allowlist: empty registry reports all minimum tools as missing", () => {
   const a = buildAuthoritativeAllowlist([]);
   assert.equal(a.ok, false);
   assert.equal(
     a.missingRequired.length,
-    COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.length,
+    COPILOT_MINIMUM_AUTHORITATIVE_TOOLS.length,
   );
 });
 
@@ -175,6 +183,8 @@ test("mcp-config: builds a deterministic single-server artifact", () => {
   assert.equal(dg.env.DREAMGRAPH_RUN_ID, "run-abc");
 
   assert.equal(artifact.content._dreamgraph_meta.runId, "run-abc");
+  assert.notEqual(dg.command, "dg");
+  assert.doesNotMatch(dg.command, /dreamgraph/i);
   assert.deepEqual(
     [...artifact.content._dreamgraph_meta.allowlist],
     ["query_resource", "read_source_code"],
@@ -260,7 +270,7 @@ test("mcp-config: rejects empty inputs with explicit messages", () => {
 const FULL_SURFACE: CopilotHelpSurface = parseCopilotHelpSurface(FULL_HELP);
 const MINIMAL_SURFACE: CopilotHelpSurface = parseCopilotHelpSurface(MINIMAL_HELP);
 
-test("argv: emits model, allow-all-tools, deny-shell, deny-write, allow-tool per allowlist, prompt", () => {
+test("argv: emits model, allow-all-tools, native shell allow, deny-write, allow-tool per allowlist, prompt", () => {
   const plan = buildCopilotArgv({
     prompt: "Plan a refactor.",
     model: "claude-sonnet-4.5",
@@ -293,7 +303,27 @@ test("argv: emits model, allow-all-tools, deny-shell, deny-write, allow-tool per
     [...plan.policy.allowedToolSpecs],
     ["dreamgraph(query_resource)", "dreamgraph(read_source_code)"],
   );
+  assert.deepEqual([...plan.policy.allowedNativeToolSpecs], []);
   assert.deepEqual([...plan.policy.deniedToolSpecs], ["shell", "write"]);
+});
+
+test("argv: no native command tools are advertised; shell execution is routed exclusively through dreamgraph:run_command", () => {
+  const plan = buildCopilotArgv({
+    prompt: "Run tests.",
+    authoritativeServer: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+    authoritativeAllowlist: ["run_command"],
+    helpSurface: FULL_SURFACE,
+  });
+
+  assert.deepEqual([...COPILOT_NATIVE_COMMAND_TOOLS], []);
+  assert.ok(!plan.args.includes("powershell"), "powershell must not be advertised: Copilot CLI 1.x has no such native tool");
+  assert.ok(plan.args.includes("--deny-tool"));
+  // shell is the real native shell tool; it must remain denied so the model is forced through dreamgraph:run_command
+  const denyIdxs = plan.args.reduce<number[]>((acc, v, i) => (v === "--deny-tool" ? [...acc, i] : acc), []);
+  const deniedVals = denyIdxs.map((i) => plan.args[i + 1]);
+  assert.ok(deniedVals.includes("shell"));
+  assert.deepEqual([...plan.policy.allowedNativeToolSpecs], []);
+  assert.ok(plan.args.includes("dreamgraph(run_command)"));
 });
 
 test("argv: emits one --add-dir per addDirs entry, ordered, after --disallow-temp-dir and before --prompt", () => {

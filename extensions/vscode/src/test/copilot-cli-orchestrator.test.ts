@@ -10,7 +10,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+  COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+  COPILOT_MINIMUM_AUTHORITATIVE_TOOLS,
   DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
   normalizeCopilotTranscript,
   runCopilotCli,
@@ -209,7 +210,7 @@ interface FakeRegistryOptions {
 function makeFakeRegistry(opts: FakeRegistryOptions = {}): CopilotCliRegistryPort {
   return {
     async listAuthoritativeToolNames() {
-      return opts.liveTools ?? [...COPILOT_REQUIRED_AUTHORITATIVE_TOOLS];
+      return opts.liveTools ?? [...COPILOT_AUTHORITATIVE_TOOL_CATALOG];
     },
     async describeBridgeSpawn() {
       return {
@@ -287,7 +288,7 @@ test("orchestrator: happy path runs all six steps and returns ok=true", async ()
     },
     {
       server: "dreamgraph",
-      tool: "edit_file", // not allowlisted
+      tool: "bootstrap_instance", // not in COPILOT_AUTHORITATIVE_TOOL_CATALOG
       inputJson: "{}",
       resultJson: "{}",
       isError: true,
@@ -383,7 +384,11 @@ test("orchestrator: happy path runs all six steps and returns ok=true", async ()
   assert.equal(spawned.env.PATH, "/usr/bin");
   assert.deepEqual([...spawned.args], [...result.argvPlan!.args]);
   assert.ok(spawned.args.includes("--allow-tool"));
+  assert.ok(!spawned.args.includes("powershell"), "Copilot CLI 1.x has no native powershell tool; it must not be advertised");
   assert.ok(spawned.args.includes("dreamgraph(query_resource)"));
+  assert.ok(spawned.args.includes("dreamgraph(edit_entity)"));
+  assert.ok(spawned.args.includes("dreamgraph(patch_markdown_chapter)"));
+  assert.ok(spawned.args.includes("dreamgraph(run_command)"));
   assert.ok(spawned.args.includes("--allow-all-tools"));
   // No `--additional-mcp-config` on argv — MCP config travels by file.
   assert.equal(spawned.args.includes("--additional-mcp-config"), false);
@@ -482,21 +487,17 @@ test("orchestrator: COPILOT_HOME env override is honoured by the login check", a
   assert.ok(fsLog.reads.includes("/custom/copilot/config.json"));
 });
 
-test("orchestrator: missing required MCP tool → DREAMGRAPH_TOOL_REGISTRY_MISMATCH", async () => {
-  const partial = COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.slice(0, -1);
+test("orchestrator: missing minimum MCP tool → DREAMGRAPH_TOOL_REGISTRY_MISMATCH", async () => {
+  const missing = COPILOT_MINIMUM_AUTHORITATIVE_TOOLS[
+    COPILOT_MINIMUM_AUTHORITATIVE_TOOLS.length - 1
+  ]!;
+  const partial = COPILOT_AUTHORITATIVE_TOOL_CATALOG.filter((tool) => tool !== missing);
   const registry = makeFakeRegistry({ liveTools: partial });
   const { process, log } = makeFakeProcess();
   const result = await runCopilotCli(defaultInput(), makeDeps({ process, registry }));
   assert.equal(result.ok, false);
   assert.equal(result.failure?.code, "DREAMGRAPH_TOOL_REGISTRY_MISMATCH");
-  assert.match(
-    result.failure!.message,
-    new RegExp(
-      COPILOT_REQUIRED_AUTHORITATIVE_TOOLS[
-        COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.length - 1
-      ]!,
-    ),
-  );
+  assert.match(result.failure!.message, new RegExp(missing));
   assert.equal(log.spawnCalls.length, 0);
 });
 
