@@ -20,6 +20,11 @@ const node_path_1 = require("node:path");
 const HELP_PROBE_TIMEOUT_MS = 5_000;
 // Best-effort version probe — same short cap, and absorbed silently.
 const VERSION_PROBE_TIMEOUT_MS = 5_000;
+// Grace period between the polite interrupt (SIGINT / Ctrl+C) and the
+// hard SIGTERM/SIGKILL escalation. Mirrors the wall-clock budget a
+// human user would give a CLI to flush its NDJSON stream and exit
+// cleanly after pressing Ctrl+C.
+const SIGINT_GRACE_MS = 1_500;
 // Grace period between SIGTERM and SIGKILL when we kill for timeout.
 const SIGTERM_GRACE_MS = 1_500;
 const IS_WINDOWS = process.platform === "win32";
@@ -272,8 +277,10 @@ function captureRun(opts) {
         let timedOut = false;
         let aborted = false;
         let settled = false;
-        let killTimer = null;
+        let sigtermTimer = null;
+        let sigkillTimer = null;
         let timeoutTimer = null;
+        let idleTimer = null;
         let child;
         try {
             // Windows shim handling. We MUST keep `shell:false` so:
@@ -382,32 +389,87 @@ function captureRun(opts) {
             settled = true;
             if (timeoutTimer)
                 clearTimeout(timeoutTimer);
-            if (killTimer)
-                clearTimeout(killTimer);
+            if (idleTimer)
+                clearTimeout(idleTimer);
+            if (sigtermTimer)
+                clearTimeout(sigtermTimer);
+            if (sigkillTimer)
+                clearTimeout(sigkillTimer);
             if (opts.abortSignal)
                 opts.abortSignal.removeEventListener("abort", onAbort);
             resolve({ ...result, durationMs: Date.now() - startedAt });
         };
-        const killHard = () => {
-            if (killTimer)
-                return;
+        // Cancellation escalation:
+        //   step 1: SIGINT  — equivalent to Ctrl+C; lets the CLI flush
+        //                     its NDJSON stream and exit cleanly.
+        //                     On Windows there is no real SIGINT for
+        //                     spawned children, so we go straight to
+        //                     the tree-kill path below.
+        //   step 2: SIGTERM — polite termination after a short grace.
+        //   step 3: SIGKILL — unconditional kill if the child is still
+        //                     up; on Windows we additionally invoke
+        //                     `taskkill /T /F /PID <pid>` so the whole
+        //                     process tree dies with the cmd.exe shim
+        //                     (otherwise `copilot.cmd → node copilot.js`
+        //                     leaves the node grandchild orphaned and
+        //                     still emitting stdout).
+        const tryKill = (signal) => {
             try {
-                child.kill("SIGTERM");
+                child.kill(signal);
             }
             catch {
                 /* child may already be dead */
             }
-            killTimer = setTimeout(() => {
-                try {
-                    child.kill("SIGKILL");
-                }
-                catch {
-                    /* ignore */
-                }
-            }, SIGTERM_GRACE_MS);
-            // Detach the grace timer from the event loop so it never holds
-            // Node open if the child has already exited.
-            killTimer.unref?.();
+        };
+        const taskkillTreeOnWindows = () => {
+            if (!IS_WINDOWS)
+                return;
+            const pid = child.pid;
+            if (typeof pid !== "number" || pid <= 0)
+                return;
+            try {
+                // /T = tree, /F = force. Detached + ignore stdio so this
+                // helper neither blocks on the kill nor pollutes our stdout
+                // capture with taskkill's own status text.
+                const k = (0, node_child_process_1.spawn)("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
+                    windowsHide: true,
+                    detached: true,
+                    stdio: "ignore",
+                });
+                k.on("error", () => {
+                    /* taskkill missing or denied — best effort */
+                });
+                k.unref();
+            }
+            catch {
+                /* swallow — best effort */
+            }
+        };
+        const killHard = () => {
+            if (sigtermTimer || sigkillTimer)
+                return;
+            // Step 1: polite interrupt. On POSIX this is SIGINT (the same
+            // signal a human Ctrl+C produces). On Windows child.kill()
+            // does not implement SIGINT for non-console grandchildren, so
+            // we still invoke it (no-op on most shims) and rely on the
+            // SIGTERM step below to begin actual termination.
+            tryKill("SIGINT");
+            sigtermTimer = setTimeout(() => {
+                tryKill("SIGTERM");
+                sigkillTimer = setTimeout(() => {
+                    tryKill("SIGKILL");
+                    // On Windows, child.kill maps to TerminateProcess(handle)
+                    // for the immediate PID only — that kills cmd.exe but
+                    // leaves the npm/node grandchild that copilot.cmd actually
+                    // launched. taskkill /T walks the parent-child relationship
+                    // recorded by the OS and terminates the whole subtree, which
+                    // is the only reliable way to stop a long-running Copilot
+                    // CLI run on Windows.
+                    taskkillTreeOnWindows();
+                }, SIGTERM_GRACE_MS);
+                sigkillTimer.unref?.();
+            }, SIGINT_GRACE_MS);
+            sigtermTimer.unref?.();
         };
         const onAbort = () => {
             aborted = true;
@@ -428,14 +490,34 @@ function captureRun(opts) {
             }, opts.timeoutMs);
             timeoutTimer.unref?.();
         }
+        // Idle-output timer. Reset on every stdout/stderr chunk so a long
+        // pass that keeps streaming tool events / assistant deltas is
+        // allowed to run past the wall-clock cap; a stalled run (no
+        // output for `idleTimeoutMs`) is killed and surfaces as a
+        // timeout to the caller.
+        const idleBudget = opts.idleTimeoutMs;
+        const armIdleTimer = () => {
+            if (!Number.isFinite(idleBudget) || idleBudget <= 0)
+                return;
+            if (idleTimer)
+                clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+                timedOut = true;
+                killHard();
+            }, idleBudget);
+            idleTimer.unref?.();
+        };
+        armIdleTimer();
         child.stdout?.setEncoding("utf8");
         child.stderr?.setEncoding("utf8");
         child.stdout?.on("data", (chunk) => {
             stdout += chunk;
+            armIdleTimer();
             opts.onStdoutChunk?.(chunk);
         });
         child.stderr?.on("data", (chunk) => {
             stderr += chunk;
+            armIdleTimer();
             opts.onStderrChunk?.(chunk);
         });
         child.on("error", (err) => {
@@ -533,6 +615,9 @@ exports.HOST_PROCESS = Object.freeze({
             cwd: input.cwd,
             env: input.env,
             timeoutMs: input.timeoutMs,
+            ...(typeof input.idleTimeoutMs === "number" && input.idleTimeoutMs > 0
+                ? { idleTimeoutMs: input.idleTimeoutMs }
+                : {}),
             abortSignal: input.abortSignal,
             onStdoutChunk: input.onStdoutChunk,
             onStderrChunk: input.onStderrChunk,

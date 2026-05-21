@@ -224,6 +224,77 @@ const IS_WINDOWS = process.platform === "win32";
     }));
 });
 // ---------------------------------------------------------------------------
+// Cancellation escalation (SIGINT → SIGTERM → SIGKILL + Windows tree kill)
+// ---------------------------------------------------------------------------
+(0, node_test_1.default)("HOST_PROCESS.spawn: aborting twice is idempotent and still settles", async () => {
+    const ac = new AbortController();
+    // Abort immediately, then again 50ms later. The escalation timers
+    // must not double-fire and the spawn must still resolve.
+    ac.abort();
+    setTimeout(() => ac.abort(), 50).unref?.();
+    const result = await index_js_1.HOST_PROCESS.spawn({
+        command: process.execPath,
+        args: ["-e", "setTimeout(()=>{}, 30000)"],
+        cwd: process.cwd(),
+        env: filteredEnv(),
+        timeoutMs: 30_000,
+        abortSignal: ac.signal,
+    });
+    strict_1.default.equal(result.aborted, true);
+    strict_1.default.ok(result.durationMs < 10_000, `expected fast settle, got ${result.durationMs}ms`);
+});
+(0, node_test_1.default)("HOST_PROCESS.spawn: aborted child stops emitting stdout chunks before resolve", async () => {
+    // Child writes 'a' immediately, then would write 'b' after 5s. We
+    // abort before 'b' is sent. The collected chunks must contain 'a'
+    // and must not contain 'b'.
+    const ac = new AbortController();
+    const chunks = [];
+    setTimeout(() => ac.abort(), 100).unref?.();
+    const result = await index_js_1.HOST_PROCESS.spawn({
+        command: process.execPath,
+        args: [
+            "-e",
+            "process.stdout.write('a');setTimeout(()=>{process.stdout.write('b')},5000);setTimeout(()=>{},30000)",
+        ],
+        cwd: process.cwd(),
+        env: filteredEnv(),
+        timeoutMs: 30_000,
+        abortSignal: ac.signal,
+        onStdoutChunk: (c) => chunks.push(c),
+    });
+    strict_1.default.equal(result.aborted, true);
+    strict_1.default.ok(chunks.join("").includes("a"));
+    strict_1.default.ok(!chunks.join("").includes("b"), `late chunk leaked: ${chunks.join("")}`);
+});
+(0, node_test_1.default)("HOST_PROCESS.spawn: cooperative SIGINT child exits cleanly inside the escalation window", async () => {
+    // POSIX-only: child installs a SIGINT handler that writes a marker
+    // and exits 0. On Windows there is no SIGINT for spawned children,
+    // so this test is skipped — the SIGTERM/taskkill path is exercised
+    // by the abort tests above.
+    if (IS_WINDOWS)
+        return;
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 50).unref?.();
+    const result = await index_js_1.HOST_PROCESS.spawn({
+        command: process.execPath,
+        args: [
+            "-e",
+            "process.on('SIGINT',()=>{process.stdout.write('caught-sigint');process.exit(0)});setTimeout(()=>{},30000)",
+        ],
+        cwd: process.cwd(),
+        env: filteredEnv(),
+        timeoutMs: 30_000,
+        abortSignal: ac.signal,
+    });
+    strict_1.default.equal(result.aborted, true);
+    // Child must have caught SIGINT — proves we send the polite signal
+    // first, before escalating to SIGTERM/SIGKILL.
+    strict_1.default.ok(result.stdout.includes("caught-sigint"), `expected SIGINT handler to fire, got stdout=${JSON.stringify(result.stdout)}`);
+    // Clean exit through SIGINT handler → exitCode 0, no signal.
+    strict_1.default.equal(result.exitCode, 0);
+    strict_1.default.equal(result.signal, null);
+});
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 function filteredEnv() {

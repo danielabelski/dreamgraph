@@ -106,8 +106,23 @@ function inferPassOutcomeSignal(content) {
     // Continuation passes can legitimately contain no assistant text (the model
     // emitted only tool calls, or the response was cancelled). Treat that as a
     // neutral signal rather than crashing on `undefined.toLowerCase()`.
-    const lower = (content ?? '').toLowerCase();
+    const raw = content ?? '';
+    const lower = raw.toLowerCase();
     const goalSufficientlyReached = /ready for commit|done and verified|goal sufficiently reached|completed successfully/.test(lower);
+    // Awaiting-user detection. Catches the most common "the assistant
+    // handed control back to the user" patterns: explicit confirmation
+    // requests, choice prompts, "let me know" / "should I" sign-offs,
+    // and trailing question marks near the end of the message. We
+    // intentionally only check the tail of the message — phrases like
+    // "should I" can appear mid-explanation; only the closing prose
+    // is the actual hand-off to the user.
+    const tail = raw.slice(Math.max(0, raw.length - 600)).toLowerCase().trim();
+    const awaitingUserInput = /\blet me know\b|\bplease confirm\b|\bawaiting your\b|\bawait(?:ing)? confirmation\b|\bdo you want me\b|\bwould you like me\b|\bshall i\b|\bshould i (?:proceed|continue|go ahead|apply|run|commit|implement|fix|patch|delete|remove|create)\b|\bcan i (?:proceed|continue|go ahead)\b|\bwhich (?:option|approach|path) (?:do|would) you\b|\bplease (?:choose|select|pick|decide)\b/.test(tail)
+        // Question-mark handoff: the message ends with a question (allowing
+        // for trailing whitespace / closing markdown). Pure rhetorical
+        // questions inside long explanations are not matched because we
+        // anchor on the message tail.
+        || /\?\s*[)*_`'"\]]*\s*$/.test(tail);
     // Intentionally narrow — broad terms like "error:" and standalone "failed" fire
     // on too much normal prose ("error: none", "what failed was"). Only trigger on
     // phrases that unambiguously indicate an unrecoverable stop condition.
@@ -131,6 +146,7 @@ function inferPassOutcomeSignal(content) {
         progressStatus,
         nextStepIsNearTrivial,
         nextStepIsDefining,
+        awaitingUserInput,
     };
 }
 function buildContinuationPrompt(selectedAction, options = {}) {

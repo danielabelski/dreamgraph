@@ -93,25 +93,33 @@ const EMPTY_HELP = "";
 // ---------------------------------------------------------------------------
 // allowlist
 // ---------------------------------------------------------------------------
-(0, node_test_1.default)("allowlist: live registry with all required tools is ok", () => {
+(0, node_test_1.default)("allowlist: live registry with all catalog tools is ok", () => {
     const a = (0, index_js_1.buildAuthoritativeAllowlist)([
-        ...index_js_1.COPILOT_REQUIRED_AUTHORITATIVE_TOOLS,
+        ...index_js_1.COPILOT_AUTHORITATIVE_TOOL_CATALOG,
         "extra_unrelated_tool",
     ]);
     strict_1.default.equal(a.ok, true);
     strict_1.default.equal(a.missingRequired.length, 0);
-    strict_1.default.deepEqual([...a.tools].sort(), [...index_js_1.COPILOT_REQUIRED_AUTHORITATIVE_TOOLS].sort());
+    strict_1.default.deepEqual([...a.tools].sort(), [...index_js_1.COPILOT_AUTHORITATIVE_TOOL_CATALOG].sort());
 });
-(0, node_test_1.default)("allowlist: missing required tool flips ok to false", () => {
-    const partial = index_js_1.COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.slice(0, -1);
+(0, node_test_1.default)("allowlist: bridge-local run_command is allowed even when absent upstream", () => {
+    const a = (0, index_js_1.buildAuthoritativeAllowlist)([
+        ...index_js_1.COPILOT_MINIMUM_AUTHORITATIVE_TOOLS,
+    ]);
+    strict_1.default.equal(a.ok, true);
+    strict_1.default.ok(a.tools.includes("run_command"));
+});
+(0, node_test_1.default)("allowlist: missing minimum grounding tool flips ok to false", () => {
+    const missing = index_js_1.COPILOT_MINIMUM_AUTHORITATIVE_TOOLS[index_js_1.COPILOT_MINIMUM_AUTHORITATIVE_TOOLS.length - 1];
+    const partial = index_js_1.COPILOT_AUTHORITATIVE_TOOL_CATALOG.filter((tool) => tool !== missing);
     const a = (0, index_js_1.buildAuthoritativeAllowlist)(partial);
     strict_1.default.equal(a.ok, false);
-    strict_1.default.deepEqual([...a.missingRequired], [index_js_1.COPILOT_REQUIRED_AUTHORITATIVE_TOOLS[index_js_1.COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.length - 1]]);
+    strict_1.default.deepEqual([...a.missingRequired], [missing]);
 });
-(0, node_test_1.default)("allowlist: empty registry reports all required as missing", () => {
+(0, node_test_1.default)("allowlist: empty registry reports all minimum tools as missing", () => {
     const a = (0, index_js_1.buildAuthoritativeAllowlist)([]);
     strict_1.default.equal(a.ok, false);
-    strict_1.default.equal(a.missingRequired.length, index_js_1.COPILOT_REQUIRED_AUTHORITATIVE_TOOLS.length);
+    strict_1.default.equal(a.missingRequired.length, index_js_1.COPILOT_MINIMUM_AUTHORITATIVE_TOOLS.length);
 });
 // ---------------------------------------------------------------------------
 // mcp-config
@@ -135,6 +143,8 @@ const EMPTY_HELP = "";
     strict_1.default.equal(dg.env.DREAMGRAPH_MCP_TOKEN, "tok-xyz");
     strict_1.default.equal(dg.env.DREAMGRAPH_RUN_ID, "run-abc");
     strict_1.default.equal(artifact.content._dreamgraph_meta.runId, "run-abc");
+    strict_1.default.notEqual(dg.command, "dg");
+    strict_1.default.doesNotMatch(dg.command, /dreamgraph/i);
     strict_1.default.deepEqual([...artifact.content._dreamgraph_meta.allowlist], ["query_resource", "read_source_code"]);
 });
 (0, node_test_1.default)("mcp-config: caller env wins for arbitrary keys, never for token", () => {
@@ -197,7 +207,7 @@ const EMPTY_HELP = "";
 // ---------------------------------------------------------------------------
 const FULL_SURFACE = (0, index_js_1.parseCopilotHelpSurface)(FULL_HELP);
 const MINIMAL_SURFACE = (0, index_js_1.parseCopilotHelpSurface)(MINIMAL_HELP);
-(0, node_test_1.default)("argv: emits model, allow-all-tools, deny-shell, deny-write, allow-tool per allowlist, prompt", () => {
+(0, node_test_1.default)("argv: emits model, allow-all-tools, native shell allow, deny-write, allow-tool per allowlist, prompt", () => {
     const plan = (0, index_js_1.buildCopilotArgv)({
         prompt: "Plan a refactor.",
         model: "claude-sonnet-4.5",
@@ -208,6 +218,7 @@ const MINIMAL_SURFACE = (0, index_js_1.parseCopilotHelpSurface)(MINIMAL_HELP);
     strict_1.default.deepEqual([...plan.args], [
         "--model", "claude-sonnet-4.5",
         "--allow-all-tools",
+        "--output-format", "json",
         "--deny-tool", "shell",
         "--deny-tool", "write",
         "--allow-tool", "dreamgraph(query_resource)",
@@ -221,7 +232,25 @@ const MINIMAL_SURFACE = (0, index_js_1.parseCopilotHelpSurface)(MINIMAL_HELP);
     strict_1.default.equal(plan.policy.allowAllToolsEnabled, true);
     strict_1.default.equal(plan.policy.availableToolsRestricted, false);
     strict_1.default.deepEqual([...plan.policy.allowedToolSpecs], ["dreamgraph(query_resource)", "dreamgraph(read_source_code)"]);
+    strict_1.default.deepEqual([...plan.policy.allowedNativeToolSpecs], []);
     strict_1.default.deepEqual([...plan.policy.deniedToolSpecs], ["shell", "write"]);
+});
+(0, node_test_1.default)("argv: no native command tools are advertised; shell execution is routed exclusively through dreamgraph:run_command", () => {
+    const plan = (0, index_js_1.buildCopilotArgv)({
+        prompt: "Run tests.",
+        authoritativeServer: index_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+        authoritativeAllowlist: ["run_command"],
+        helpSurface: FULL_SURFACE,
+    });
+    strict_1.default.deepEqual([...index_js_1.COPILOT_NATIVE_COMMAND_TOOLS], []);
+    strict_1.default.ok(!plan.args.includes("powershell"), "powershell must not be advertised: Copilot CLI 1.x has no such native tool");
+    strict_1.default.ok(plan.args.includes("--deny-tool"));
+    // shell is the real native shell tool; it must remain denied so the model is forced through dreamgraph:run_command
+    const denyIdxs = plan.args.reduce((acc, v, i) => (v === "--deny-tool" ? [...acc, i] : acc), []);
+    const deniedVals = denyIdxs.map((i) => plan.args[i + 1]);
+    strict_1.default.ok(deniedVals.includes("shell"));
+    strict_1.default.deepEqual([...plan.policy.allowedNativeToolSpecs], []);
+    strict_1.default.ok(plan.args.includes("dreamgraph(run_command)"));
 });
 (0, node_test_1.default)("argv: emits one --add-dir per addDirs entry, ordered, after --disallow-temp-dir and before --prompt", () => {
     const plan = (0, index_js_1.buildCopilotArgv)({

@@ -48,6 +48,12 @@ export interface PassOutcomeSignal {
      * envelope summary, and no recommended actions — i.e. the model
      * "reported" only autonomy counters. */
     isEmptyPass?: boolean;
+    /** True when the assistant's final text addresses the user with a
+     * choice / confirmation prompt (e.g. "let me know if you want X",
+     * "should I proceed with Y?", "would you like me to..."). The
+     * autonomy loop must NOT auto-continue past such a prompt — that
+     * would talk over the user and discard their authority. */
+    awaitingUserInput?: boolean;
 }
 export interface RecommendedAction {
     id: string;

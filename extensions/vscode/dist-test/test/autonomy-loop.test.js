@@ -13,6 +13,33 @@ const autonomy_loop_js_1 = require("../autonomy-loop.js");
     const stalled = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('Stalled progress. Cannot proceed.');
     strict_1.default.equal(stalled.progressStatus, 'stalled');
 });
+(0, node_test_1.default)('inferPassOutcomeSignal detects awaiting-user prose at the message tail', () => {
+    // Trailing question mark.
+    const q = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('I rebuilt the bridge. Should I proceed with the deployment step?');
+    strict_1.default.equal(q.awaitingUserInput, true);
+    // "Let me know" sign-off.
+    const lmk = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('All changes applied. Let me know if you want me to also update the docs.');
+    strict_1.default.equal(lmk.awaitingUserInput, true);
+    // "Would you like me to" handoff.
+    const wyl = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('Patch is ready. Would you like me to commit it?');
+    strict_1.default.equal(wyl.awaitingUserInput, true);
+    // Plain progress prose must NOT trip the detector.
+    const plain = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('Edited the file and ran the tests. Recommended next step: run the build.');
+    strict_1.default.equal(plain.awaitingUserInput, false);
+});
+(0, node_test_1.default)('analyzePass pauses for user input when the assistant asks a question, even with action chips', () => {
+    const state = (0, autonomy_js_1.createAutonomyState)('autonomous', 4);
+    const result = (0, autonomy_loop_js_1.analyzePass)(state, {
+        content: 'I prepared two patches. Which option would you like me to apply?',
+        actions: [
+            { id: 'a', label: 'Apply patch A', priority: 1, eligible: true, withinScope: true },
+            { id: 'b', label: 'Apply patch B', priority: 2, eligible: true, withinScope: true },
+        ],
+    });
+    strict_1.default.equal(result.decision.shouldContinue, false);
+    strict_1.default.match(result.decision.reason, /awaiting user input/i);
+    strict_1.default.equal(result.decision.selectionMode, 'user');
+});
 (0, node_test_1.default)('analyzePass selects continuation prompt when autonomous mode has a strong next step', () => {
     const state = (0, autonomy_js_1.createAutonomyState)('autonomous', 4);
     const result = (0, autonomy_loop_js_1.analyzePass)(state, {

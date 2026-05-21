@@ -115,10 +115,10 @@ function makeFakeClock() {
         },
     };
 }
-function makeFakeRegistry() {
+function makeFakeRegistry(liveTools = index_js_1.COPILOT_AUTHORITATIVE_TOOL_CATALOG) {
     return {
         async listAuthoritativeToolNames() {
-            return [...index_js_1.COPILOT_REQUIRED_AUTHORITATIVE_TOOLS];
+            return [...liveTools];
         },
         async describeBridgeSpawn() {
             return { command: "node", args: ["./mcp-bridge.js"], env: {} };
@@ -198,7 +198,11 @@ function makeCallInput(over = {}) {
     strict_1.default.ok(promptArgIdx >= 0);
     const promptValue = spawn.args[promptArgIdx + 1];
     strict_1.default.match(promptValue, /\[system\]\nyou are an architect/);
-    strict_1.default.match(promptValue, /\[user\]\ndesign a queue/);
+    // Provider-port defaults `markCurrentTurn=true`; the final user turn
+    // is wrapped with the CURRENT TURN markers so the single-shot CLI
+    // model can identify the active request even when prior turns are
+    // also in the file.
+    strict_1.default.match(promptValue, /\[user\]\n===== CURRENT TURN[\s\S]*\ndesign a queue\n===== END CURRENT TURN =====/);
     // Model flag forwarded.
     strict_1.default.ok(spawn.args.includes("--model"));
     strict_1.default.ok(spawn.args.includes("claude-sonnet-4.5"));
@@ -215,6 +219,67 @@ function makeCallInput(over = {}) {
     strict_1.default.equal(proposal.response.stopReason, "end_turn");
     strict_1.default.equal(proposal.response.content, "Plan complete.");
     strict_1.default.equal(proposal.response.toolCalls.length, 0);
+});
+(0, node_test_1.default)("provider-port: advertises the live authoritative tool catalog to Copilot CLI", async () => {
+    const proc = makeFakeProcess();
+    const port = (0, index_js_1.createCopilotCliProviderPort)({
+        hostLlm: FAKE_LLM,
+        invocationCwd: "/work/run",
+        timeoutMs: 30_000,
+        baseEnv: { PATH: "/usr/bin" },
+        deps: makeDeps({ process: proc.port }),
+        cliToolsManifest: {
+            server: "dreamgraph",
+            tools: index_js_1.COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+        },
+    });
+    await port.callProvider(makeCallInput());
+    const spawn = proc.log.spawnCalls[0];
+    const promptValue = spawn.args[spawn.args.findIndex((a) => a === "--prompt") + 1];
+    strict_1.default.match(promptValue, /Available dreamgraph tools/);
+    strict_1.default.match(promptValue, /  - query_resource/);
+    strict_1.default.match(promptValue, /  - edit_entity/);
+    strict_1.default.match(promptValue, /  - patch_markdown_chapter/);
+    strict_1.default.match(promptValue, /  - run_command/);
+    strict_1.default.doesNotMatch(promptValue, /cli:powershell .*available/);
+    strict_1.default.match(promptValue, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
+    strict_1.default.match(promptValue, /File\/entity mutations\s+→ prefer dreamgraph:edit_entity/);
+    strict_1.default.match(promptValue, /Verification \/ build \/ tests\s+→ dreamgraph:run_command/);
+    strict_1.default.match(promptValue, /Copilot CLI adapter authority override/);
+    strict_1.default.match(promptValue, /ADR-aware task policy: for every repository task/);
+    strict_1.default.match(promptValue, /Graph sync policy: after any source or project-state mutation/);
+    strict_1.default.match(promptValue, /HARD DENIAL .* DO NOT EXIST in this run .* cli:powershell, cli:bash, cli:cmd/);
+    strict_1.default.ok(!spawn.args.includes("powershell"));
+    strict_1.default.ok(spawn.args.includes("dreamgraph(edit_entity)"));
+    strict_1.default.ok(spawn.args.includes("dreamgraph(patch_markdown_chapter)"));
+    strict_1.default.ok(spawn.args.includes("dreamgraph(run_command)"));
+});
+(0, node_test_1.default)("provider-port: keeps bridge-local run_command visible with read-only upstream tools", async () => {
+    const proc = makeFakeProcess();
+    const port = (0, index_js_1.createCopilotCliProviderPort)({
+        hostLlm: FAKE_LLM,
+        invocationCwd: "/work/run",
+        timeoutMs: 30_000,
+        baseEnv: { PATH: "/usr/bin" },
+        deps: makeDeps({
+            process: proc.port,
+            registry: makeFakeRegistry(index_js_1.COPILOT_MINIMUM_AUTHORITATIVE_TOOLS),
+        }),
+        cliToolsManifest: {
+            server: "dreamgraph",
+            tools: index_js_1.COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+        },
+    });
+    await port.callProvider(makeCallInput());
+    const spawn = proc.log.spawnCalls[0];
+    const promptValue = spawn.args[spawn.args.findIndex((a) => a === "--prompt") + 1];
+    strict_1.default.match(promptValue, /  - query_resource/);
+    strict_1.default.match(promptValue, /  - run_command/);
+    strict_1.default.doesNotMatch(promptValue, /cli:powershell .*available/);
+    strict_1.default.match(promptValue, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
+    strict_1.default.match(promptValue, /Verification \/ build \/ tests\s+→ dreamgraph:run_command/);
+    strict_1.default.ok(!spawn.args.includes("powershell"));
+    strict_1.default.ok(spawn.args.includes("dreamgraph(run_command)"));
 });
 (0, node_test_1.default)("provider-port: callProvider forwards onStreamChunk with full assistant text", async () => {
     const port = (0, index_js_1.createCopilotCliProviderPort)({
@@ -239,7 +304,16 @@ function makeCallInput(over = {}) {
     });
     const ac = new AbortController();
     await port.callProvider(makeCallInput({ abortSignal: ac.signal }));
-    strict_1.default.equal(proc.log.spawnCalls[0].abortSignal, ac.signal);
+    // The provider-port wraps the external signal in an internal
+    // controller so it can additionally abort on dreamgraph-MCP-failed
+    // events. Reference equality no longer holds; assert propagation
+    // instead: aborting the external signal must abort the forwarded
+    // one.
+    const forwarded = proc.log.spawnCalls[0].abortSignal;
+    strict_1.default.ok(forwarded instanceof AbortSignal, "spawn port received an AbortSignal");
+    strict_1.default.equal(forwarded.aborted, false);
+    ac.abort();
+    strict_1.default.equal(forwarded.aborted, true);
 });
 (0, node_test_1.default)("provider-port: callProvider throws annotated Error when orchestrator returns ok=false", async () => {
     const port = (0, index_js_1.createCopilotCliProviderPort)({

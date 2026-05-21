@@ -12,7 +12,7 @@
 //      missing required flags or the persistent Copilot config does
 //      not record an active GitHub login.
 //   2. Validate the live in-process DreamGraph MCP server actually
-//      exposes every tool in `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS`.
+//      exposes every minimum grounding tool and allowlisted catalog tool.
 //   3. Materialize a per-run scratch directory containing
 //      `mcp-config.json` (token-scoped, dreamgraph-only) and, when the
 //      prompt overflows the inline-argv budget, `prompt.txt`.
@@ -45,6 +45,7 @@ const mcp_config_js_1 = require("./mcp-config.js");
 const argv_js_1 = require("./argv.js");
 const transcript_classifier_js_1 = require("./transcript-classifier.js");
 const transcript_js_1 = require("./transcript.js");
+const event_stream_js_1 = require("./event-stream.js");
 // ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
@@ -75,12 +76,10 @@ function buildPromptFileDirective(promptFilePath) {
     // with no stdout or stderr captured. Keeping the directive on one
     // line avoids that landmine entirely; the model parses it just
     // as easily as a multi-paragraph version.
-    return ("The user's actual prompt is stored verbatim in the file at this path: " +
+    return ("The full conversation (system instructions, prior turns, and the CURRENT user turn) is stored verbatim in the file at this path: " +
         promptFilePath +
         " . Use your read tool (or equivalent file-reading capability) to load" +
-        " the file's full contents, then respond to it as if those contents were" +
-        " the user's message in this conversation. Do not mention this directive," +
-        " do not summarize the prompt, and do not paraphrase it before engaging.");
+        " the file's full contents. The file may contain many prior `[user]` and `[assistant]` blocks; respond ONLY to the message wrapped between the markers `===== CURRENT TURN — RESPOND ONLY TO THIS MESSAGE =====` and `===== END CURRENT TURN =====`, using earlier turns and any `[system]` block strictly as background context. Do not mention this directive, do not summarize the prompt, and do not paraphrase the current turn before engaging.");
 }
 async function runCopilotCli(input, deps) {
     if (!input.prompt) {
@@ -95,6 +94,14 @@ async function runCopilotCli(input, deps) {
     const startedAtEpochMs = deps.clock.nowMs();
     const runId = deps.crypto.randomRunId();
     const binaryName = input.binaryName ?? DEFAULT_BINARY_NAME;
+    if (input.onRunIdAssigned) {
+        try {
+            input.onRunIdAssigned(runId);
+        }
+        catch {
+            // Observer failures must not crash the orchestrator.
+        }
+    }
     let runScratchDir = null;
     let auditRecording = false;
     try {
@@ -222,6 +229,7 @@ async function runCopilotCli(input, deps) {
             runId,
             authoritativeServer: types_js_1.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
             allowedTools: [...allowlist.tools],
+            allowedNativeTools: [...types_js_1.COPILOT_NATIVE_COMMAND_TOOLS],
             deniedInlineTools: ["shell", "write"],
         }, null, 2)}\n`, { mode: 0o600 });
         // Write the run request manifest. Re-states the run-shaping
@@ -266,6 +274,37 @@ async function runCopilotCli(input, deps) {
         });
         await deps.mcpAudit.startRecording(runId);
         auditRecording = true;
+        // Build the NDJSON event-stream parser BEFORE spawn so every
+        // stdout chunk — including chunks delivered during partial-line
+        // boundaries — flows through it. The user's original
+        // `onStdoutChunk` (if any) still receives the raw bytes for
+        // forensic/debug purposes; the parser is purely additive.
+        const cliEventStream = (0, event_stream_js_1.createCopilotCliEventStream)();
+        const dispatchEvent = (event) => {
+            if (!input.onCliEvent)
+                return;
+            try {
+                input.onCliEvent(event);
+            }
+            catch {
+                // observer failures must not break the spawn
+            }
+        };
+        const stdoutTap = (chunk) => {
+            // Forward to original observer first so a slow parser never
+            // delays raw chunk visibility.
+            if (input.onStdoutChunk) {
+                try {
+                    input.onStdoutChunk(chunk);
+                }
+                catch {
+                    // observer failures must not break the spawn
+                }
+            }
+            for (const ev of cliEventStream.feed(chunk)) {
+                dispatchEvent(ev);
+            }
+        };
         const spawnEnv = buildSpawnEnv(input.baseEnv, runHomeDir);
         const spawnInput = {
             command: resolved.executablePath,
@@ -273,11 +312,18 @@ async function runCopilotCli(input, deps) {
             cwd: input.invocationCwd,
             env: spawnEnv,
             timeoutMs: input.timeoutMs,
+            ...(typeof input.idleTimeoutMs === "number" && input.idleTimeoutMs > 0
+                ? { idleTimeoutMs: input.idleTimeoutMs }
+                : {}),
             abortSignal: input.abortSignal,
-            onStdoutChunk: input.onStdoutChunk,
+            onStdoutChunk: stdoutTap,
             onStderrChunk: input.onStderrChunk,
         };
         const spawn = await deps.process.spawn(spawnInput);
+        // Drain any partial trailing line the spawn may have left buffered.
+        for (const ev of cliEventStream.flush()) {
+            dispatchEvent(ev);
+        }
         // ---- Step 5: snapshot audit + classify -------------------------------
         const recorded = await deps.mcpAudit.finishRecording(runId);
         auditRecording = false;
@@ -290,8 +336,21 @@ async function runCopilotCli(input, deps) {
             classification: (0, transcript_classifier_js_1.classifyToolCall)({ server: call.server, tool: call.tool }, ctx),
         }));
         // ---- Step 6: normalize transcript + envelope -------------------------
+        // With `--output-format json` (always emitted by argv.ts) the
+        // authoritative assistant text comes from the event stream's
+        // accumulator: `assistant.message_delta` events concatenated, or
+        // an `assistant.message` event verbatim when one arrives. The raw
+        // stdout NDJSON is intentionally NOT shown to users — they would
+        // see JSON envelopes. We still pass it through the transcript
+        // normalizer to populate `diagnostics` (stderr) and detect
+        // stderr-error patterns; the stdout argument is overridden with
+        // the parser snapshot. Falls back to raw stdout when the parser
+        // saw zero qualifying events (defensive: test fakes that feed
+        // plain text and any future CLI version that ignores the flag).
+        const parserSnapshot = cliEventStream.snapshotAssistantText();
+        const transcriptStdout = parserSnapshot.length > 0 ? parserSnapshot : spawn.stdout;
         const transcript = (0, transcript_js_1.normalizeCopilotTranscript)({
-            stdout: spawn.stdout,
+            stdout: transcriptStdout,
             stderr: spawn.stderr,
         });
         const endedAtEpochMs = deps.clock.nowMs();

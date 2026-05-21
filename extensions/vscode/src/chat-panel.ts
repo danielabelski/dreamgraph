@@ -1157,6 +1157,15 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             stopContextBlock: capturedStopContextBlock,
           },
         );
+        // Copilot CLI executes tools inside its own subprocess, so the
+        // native per-tool snapshot/record bookend in runAgenticLoop never
+        // fires. Take one workspace snapshot before the CLI turn starts
+        // and reconcile in `finally` (success, abort, or error) so any
+        // files written by MCP tools during the run register as pending
+        // reviews. Without this the diff view never appears for copilot-cli.
+        const copilotCliReviewSnapshot = copilotCliRoute
+          ? await changeReviewService.captureWorkspaceSnapshot()
+          : null;
         const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
         try {
           const passResult = copilotCliRoute
@@ -1206,6 +1215,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             );
           }
         } finally {
+          if (copilotCliReviewSnapshot) {
+            try {
+              const changedReviewPaths = await changeReviewService.recordWorkspaceChanges(copilotCliReviewSnapshot);
+              if (changedReviewPaths.length > 0) {
+                this._pendingReviewsCollapsed = true;
+                await this._postPendingReviews();
+              }
+            } catch (reviewErr) {
+              console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli turn:', reviewErr);
+            }
+          }
           req.dispose();
         }
       } else {
@@ -3116,6 +3136,12 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         // guard at line ~2328. Mirrors the inline path which resets the
         // flag immediately before its own recursive call (line ~2474).
         this._autonomyContinuing = false;
+        // See handleUserMessage for the rationale: copilot-cli tool calls
+        // happen inside the CLI subprocess, so the diff view requires a
+        // turn-level workspace snapshot bookend.
+        const copilotCliReviewSnapshot = copilotCliRoute
+          ? await changeReviewService.captureWorkspaceSnapshot()
+          : null;
         const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
         try {
           const passResult = copilotCliRoute
@@ -3152,6 +3178,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           }
           seamOwnedAssistant = true;
         } finally {
+          if (copilotCliReviewSnapshot) {
+            try {
+              const changedReviewPaths = await changeReviewService.recordWorkspaceChanges(copilotCliReviewSnapshot);
+              if (changedReviewPaths.length > 0) {
+                this._pendingReviewsCollapsed = true;
+                await this._postPendingReviews();
+              }
+            } catch (reviewErr) {
+              console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli continuation pass:', reviewErr);
+            }
+          }
           req.dispose();
         }
       } else if (tools.length > 0) {

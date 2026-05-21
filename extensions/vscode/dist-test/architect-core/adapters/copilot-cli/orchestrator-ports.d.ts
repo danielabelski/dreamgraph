@@ -98,6 +98,15 @@ export interface CopilotCliSpawnInput {
      * if exceeded. Zero or negative is a programmer error.
      */
     readonly timeoutMs: number;
+    /**
+     * Optional idle-output cap. When set (> 0), the port MUST kill the
+     * child if no stdout/stderr chunk has been received for this long.
+     * Each chunk resets the idle window. Use this to short-circuit
+     * stalled runs without making the wall-clock cap so tight that a
+     * legitimately long pass (many tool calls) gets killed. Zero or
+     * undefined disables idle-based termination.
+     */
+    readonly idleTimeoutMs?: number;
     /** Optional cancellation signal. The port forwards it to `spawn`. */
     readonly abortSignal?: AbortSignal;
     /** Live stdout chunk callback; receives decoded UTF-8 strings. */
@@ -173,9 +182,9 @@ export interface CopilotMcpBridgeSpawn {
 }
 export interface CopilotCliRegistryPort {
     /**
-     * Names of the tools the live in-process DreamGraph MCP server
-     * actually exposes RIGHT NOW. The orchestrator uses this to verify
-     * `COPILOT_REQUIRED_AUTHORITATIVE_TOOLS` is satisfied before spawn.
+     * Names of the tools the live DreamGraph MCP bridge actually exposes
+     * RIGHT NOW. The orchestrator uses this to verify every minimum
+     * grounding tool is satisfied before spawn.
      */
     listAuthoritativeToolNames(): Promise<readonly string[]>;
     /**
@@ -213,5 +222,34 @@ export interface CopilotCliMcpAuditPort {
      * frees its buffer on first finish).
      */
     finishRecording(runId: string): Promise<readonly RecordedMcpToolCall[]>;
+}
+/**
+ * Live tail of the per-run MCP audit NDJSON. Emits one event per
+ * tool-call the bridge appends, in append order, while the Copilot CLI
+ * subprocess is still running. Closing the subscription is idempotent
+ * and safe at any point in the run lifecycle.
+ *
+ * Purely additive to {@link CopilotCliMcpAuditPort}: `finishRecording`
+ * remains the authoritative source of the complete classified tool-call
+ * set. The live channel is a UX hint and may legally lose its last
+ * in-flight line if the spawn dies mid-write — `finishRecording` will
+ * see that line after the bridge flushes on exit.
+ */
+export interface CopilotCliMcpAuditLivePort {
+    /**
+     * Begin tailing the audit file for `runId`. The handler is invoked
+     * once per appended NDJSON line, in append order, with a parsed
+     * record. Malformed lines are skipped silently (same policy as the
+     * batch reader). Handler exceptions are swallowed so a buggy
+     * consumer cannot break the run.
+     *
+     * Records written between `startRecording` and `subscribe` are
+     * replayed as catch-up events before any new ones are delivered.
+     */
+    subscribe(runId: string, handler: (call: RecordedMcpToolCall) => void): Promise<CopilotCliMcpAuditLiveSubscription>;
+}
+export interface CopilotCliMcpAuditLiveSubscription {
+    /** Stop receiving events. Idempotent. Never throws. */
+    close(): Promise<void>;
 }
 //# sourceMappingURL=orchestrator-ports.d.ts.map

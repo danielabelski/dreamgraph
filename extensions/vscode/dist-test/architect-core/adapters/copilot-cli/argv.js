@@ -47,6 +47,7 @@
 // Argv ordering is stable for snapshot testing.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildCopilotArgv = buildCopilotArgv;
+const types_js_1 = require("./types.js");
 /**
  * Inline tool surfaces the adapter ALWAYS denies. These are the
  * well-known names Copilot CLI uses for shell execution and direct
@@ -74,6 +75,13 @@ function buildCopilotArgv(input) {
     //    runs; safety is preserved by the deny rules emitted next.
     args.push("--allow-all-tools");
     const allowAllToolsEnabled = true;
+    // 2b. Authoritative live UX channel. NDJSON event stream on stdout —
+    //     one JSON object per line covering tool starts/completes,
+    //     assistant message deltas, reasoning deltas, and the final
+    //     `result` event with session id + usage. Replaces the
+    //     ANSI-rendered TUI transcript as the runtime source of truth
+    //     for tool-call surfacing and per-token streaming.
+    args.push("--output-format", "json");
     // 3. Inline-tool denies. Emitted AFTER `--allow-all-tools` so the
     //    deny precedence is unambiguous in the argv ordering as well.
     const deniedSpecs = [];
@@ -81,7 +89,17 @@ function buildCopilotArgv(input) {
         args.push("--deny-tool", inline);
         deniedSpecs.push(inline);
     }
-    // 4. Authoritative MCP allows. One flag per tool — keeps each spec
+    // 4. CLI-native command allows. Currently none: shell execution is
+    //    routed exclusively through the audited `dreamgraph:run_command`
+    //    bridge tool, and the CLI's only native shell tool (`shell`) is
+    //    denied above. If COPILOT_NATIVE_COMMAND_TOOLS is ever
+    //    repopulated, this loop emits one `--allow-tool` per entry.
+    const allowedNativeSpecs = [];
+    for (const tool of types_js_1.COPILOT_NATIVE_COMMAND_TOOLS) {
+        args.push("--allow-tool", tool);
+        allowedNativeSpecs.push(tool);
+    }
+    // 5. Authoritative MCP allows. One flag per tool — keeps each spec
     //    individually auditable in the spawned argv. Copilot CLI's
     //    permission grammar uses the `<server>(<tool>)` form (see
     //    `copilot --help` examples, e.g. `--allow-tool='MyMCP(my_tool)'`).
@@ -127,6 +145,7 @@ function buildCopilotArgv(input) {
             inlineShellDenied: true,
             inlineWriteDenied: true,
             allowAllToolsEnabled,
+            allowedNativeToolSpecs: Object.freeze(allowedNativeSpecs),
             allowedToolSpecs: Object.freeze(allowedSpecs),
             deniedToolSpecs: Object.freeze(deniedSpecs),
             addedDirs: Object.freeze(addedDirs),

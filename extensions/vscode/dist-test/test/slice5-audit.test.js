@@ -16,7 +16,7 @@ const node_path_1 = require("node:path");
 });
 (0, node_test_1.default)('Slice 5 audit: action execution remains allowlisted and explicit-click only', () => {
     const source = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'chat-panel.ts'), 'utf8');
-    strict_1.default.match(source, /ACTION_ALLOWLIST = new Set\(\['tool', 'show_full'\]\)/);
+    strict_1.default.match(source, /ACTION_ALLOWLIST = new Set\(\['tool', 'show_full', 'copilot_login'\]\)/);
     strict_1.default.match(source, /addEventListener\('click', \(\) => \{/);
     strict_1.default.doesNotMatch(source, /runMessageAction[^\n]*onload/i);
 });

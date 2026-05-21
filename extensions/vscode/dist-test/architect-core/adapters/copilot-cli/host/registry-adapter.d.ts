@@ -1,16 +1,13 @@
 import type { CopilotCliRegistryPort } from "../orchestrator-ports.js";
 export interface HostRegistryOptions {
     /**
-     * Absolute path to the DreamGraph stdio MCP server entry point. On
-     * a packaged install this is typically the `dreamgraph` binary on
-     * PATH; in dev the host can point at `node <repo>/dist/index.js`.
+     * Full URL of the architect's already-open DreamGraph MCP endpoint
+     * (e.g. `http://127.0.0.1:7321/mcp`). This MUST be the same URL the
+     * extension's long-running `McpClient` is connected to, so probes
+     * and bridge forwards see the SAME daemon session the rest of the
+     * extension operates against.
      */
-    readonly dreamgraphCommand: string;
-    /**
-     * Args appended after `dreamgraphCommand`. Defaults to
-     * `["--transport", "stdio"]` so callers do not have to repeat it.
-     */
-    readonly dreamgraphArgs?: readonly string[];
+    readonly hostMcpUrl: string;
     /**
      * Absolute path to the bridge entry artifact (typically
      * `<extension>/dist/copilot-cli-bridge.js`). Copilot CLI will
@@ -31,15 +28,20 @@ export interface HostRegistryOptions {
      */
     readonly auditDirAbsPath: string;
     /**
+     * Workspace root used by the bridge-local `run_command` tool. Commands
+     * may choose a relative cwd, but the bridge rejects cwd escapes.
+     */
+    readonly workspaceRootAbsPath: string;
+    /**
      * Optional extra env to merge into the bridge spawn. The orchestrator
-     * already overlays `DREAMGRAPH_MCP_TOKEN` and `DREAMGRAPH_RUN_ID` on
-     * top of whatever is returned from `describeBridgeSpawn`.
+     * already overlays `DREAMGRAPH_RUN_ID` and the resolved audit path
+     * on top of whatever is returned from `describeBridgeSpawn`.
      */
     readonly extraBridgeEnv?: Readonly<Record<string, string>>;
     /**
      * Hard timeout (ms) for the one-shot `tools/list` probe. Defaults to
-     * 8 s — generous enough for a cold dreamgraph start, short enough
-     * that a wedged server cannot block run startup indefinitely.
+     * 15 s — generous enough for a slow round-trip while keeping the
+     * orchestrator startup bounded.
      */
     readonly toolListTimeoutMs?: number;
 }
@@ -55,15 +57,14 @@ export declare function bridgeEnvForRun(opts: {
     runId: string;
 }): Readonly<Record<string, string>>;
 /**
- * Quick liveness probe used by Slice 4 host wiring to verify the
- * DreamGraph stdio server actually starts before the orchestrator
- * begins a run. Throws on failure so the caller can fall back to a
- * disabled state with a clear error message instead of waiting for
- * Copilot CLI to fail mysteriously.
+ * Liveness probe used by host wiring to verify the architect's
+ * DreamGraph MCP endpoint is actually serving requests before the
+ * orchestrator begins a run. Throws on failure so the caller can
+ * fall back to a disabled state with a clear error message instead
+ * of waiting for Copilot CLI to fail mysteriously.
  */
-export declare function probeDreamgraphStdio(opts: {
-    command: string;
-    args?: readonly string[];
+export declare function probeDreamgraphHttpMcp(opts: {
+    url: string;
     timeoutMs?: number;
 }): Promise<{
     readonly toolCount: number;

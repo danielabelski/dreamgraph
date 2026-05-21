@@ -1,1 +1,1 @@
-{"version":3,"file":"allowlist.d.ts","sourceRoot":"","sources":["../../../../src/architect-core/adapters/copilot-cli/allowlist.ts"],"names":[],"mappings":"AAaA,OAAO,EACL,KAAK,sBAAsB,EAE5B,MAAM,YAAY,CAAC;AAEpB;;;;;;GAMG;AACH,wBAAgB,2BAA2B,CACzC,aAAa,EAAE,SAAS,MAAM,EAAE,GAC/B,sBAAsB,CAmBxB"}
+{"version":3,"file":"allowlist.d.ts","sourceRoot":"","sources":["../../../../src/architect-core/adapters/copilot-cli/allowlist.ts"],"names":[],"mappings":"AAcA,OAAO,EAIL,KAAK,sBAAsB,EAC5B,MAAM,YAAY,CAAC;AAEpB;;;;;;GAMG;AACH,wBAAgB,2BAA2B,CACzC,aAAa,EAAE,SAAS,MAAM,EAAE,GAC/B,sBAAsB,CA0BxB"}

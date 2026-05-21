@@ -55,6 +55,15 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
     private _webviewBundleUri;
     private _pendingReviewsCollapsed;
     private _lastToolTrace;
+    /**
+     * Per-run map keyed by `${runId}:${server}:${tool}:${startedAtEpochMs}`.
+     * Value is the index into `_lastToolTrace` of the live (provisional)
+     * entry pushed by the audit-live tail. `onRunResult` reconciles by
+     * REPLACING the entry at that index with the authoritative
+     * `ClassifiedToolCall`-derived entry, and appending only entries
+     * whose key has no live counterpart. Cleared at run start.
+     */
+    private _liveToolCallsSeen;
     /** Set when the report-required guard has already forced a final report
      * turn for the current run, so we don't loop forever asking for reports. */
     private _reportForcedThisRun;
@@ -256,16 +265,28 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      * model didn't emit a JSON envelope, so the card always has data to render.
      */
     /**
-     * Sign-off chip emitter. When the autonomy loop stops (budget exhausted,
-     * safety cap, decided to pause) we still know what the next concrete
-     * actions would have been. Surface them as clickable chips bound to the
-     * stop/system message so the user can resume continuation with one click.
+     * Sign-off resume-action registrar. When the autonomy loop stops
+     * (budget exhausted, safety cap, decided to pause) the assistant
+     * bubble immediately above the stop/system message already renders
+     * the SUMMARY card with the same recommended-action chip strip
+     * (built from the JSON envelope embedded in its `content`, so it
+     * survives webview re-renders). All this method needs to do is
+     * publish the action set into the shared `_lastRecommendedActions`
+     * slot so chip clicks on that surviving card route through
+     * `_executeRecommendedAction` correctly.
      *
-     * The chips reuse the same envelope the SUMMARY card emits, so the
-     * existing webview chip renderer + `_executeRecommendedAction` resolver
-     * (which keys off `_lastRecommendedActions`) work end-to-end without
-     * additional wiring. The recommended-action set is also persisted here
-     * so chip clicks survive the stop transition.
+     * HISTORICAL NOTE: a prior version of this method also posted a
+     * `summaryCard` message targeted at the system stop bubble, which
+     * caused the webview to append a SECOND, visually identical envelope
+     * card inside that bubble via DOM mutation. Because the duplicate
+     * was never persisted to `messages[]`, any re-render (scroll
+     * virtualization, tab switch, theme change) silently destroyed it —
+     * a glitchy, half-real card. Removed entirely; continuity is
+     * preserved end-to-end by the `_lastRecommendedActions` write below
+     * because the assistant card's chips invoke the same handler.
+     *
+     * @param _messageId Retained for call-site stability; intentionally unused.
+     * @param _envelope  Retained for call-site stability; intentionally unused.
      */
     private _broadcastSignOffActions;
     private _broadcastSummaryCard;
@@ -331,6 +352,36 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
     private _summarizeToolArgs;
     private _deriveVerdict;
     private _extractFilesAffected;
+    /**
+     * Project one `ClassifiedToolCall` (captured by the copilot-cli MCP
+     * audit bridge) into the `ToolTraceEntry` shape the webview already
+     * renders. Args are parsed from the audit's `inputJson`; failures to
+     * parse fall back to "no args" rather than aborting the projection
+     * (the bridge always emits valid JSON, but we never want a bad record
+     * to lose the whole turn's provenance).
+     *
+     * Tool name is prefixed with the MCP server when the call did not
+     * come from the authoritative DreamGraph server, so the provenance
+     * card visibly distinguishes `dreamgraph:query_resource` from
+     * `<inline>:write` (which never reaches us — denied — but kept in
+     * the projection so the same code handles future relaxations).
+     */
+    private _toolTraceEntryFromCopilotCall;
+    /**
+     * Build a ToolTraceEntry from a raw audit record (no classification
+     * available yet). Used by the live audit tail to surface tool
+     * activity in-flight. Treats `dreamgraph` server calls as
+     * authoritative for display; everything else gets the `server:tool`
+     * prefix. `onRunResult` later replaces these entries with the
+     * authoritative `ClassifiedToolCall`-derived equivalents.
+     */
+    private _toolTraceEntryFromRawCall;
+    /**
+     * Stable dedup key shared by the live tail and the post-run
+     * reconciliation. Matches the key format the chat-panel uses to
+     * REPLACE provisional entries with authoritative ones.
+     */
+    private static _toolCallDedupKey;
     private _verifyEntities;
     private getHtml;
 }

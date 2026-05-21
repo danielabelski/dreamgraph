@@ -34,7 +34,7 @@ class McpClient {
     async connect() {
         await this.disconnect();
         this._transport = new streamableHttp_js_1.StreamableHTTPClientTransport(new URL(`${this._baseUrl}/mcp`));
-        this._client = new index_js_1.Client({ name: "dreamgraph-vscode", version: "10.0.1" }, { capabilities: {} });
+        this._client = new index_js_1.Client({ name: "dreamgraph-vscode", version: "10.5.0" }, { capabilities: {} });
         await this._client.connect(this._transport);
         // Subscribe to server log notifications and forward to the external listener
         this._client.setNotificationHandler(types_js_1.LoggingMessageNotificationSchema, (notification) => {
@@ -65,6 +65,23 @@ class McpClient {
      */
     updateBaseUrl(url) {
         this._baseUrl = url;
+    }
+    /**
+     * Daemon base URL the client is currently configured against
+     * (e.g. `http://127.0.0.1:7321`). Does NOT include the `/mcp`
+     * path suffix.
+     */
+    get baseUrl() {
+        return this._baseUrl;
+    }
+    /**
+     * Fully qualified MCP endpoint (`<baseUrl>/mcp`). Use this when
+     * handing the URL to other MCP clients (e.g. the Copilot CLI
+     * inheritance bridge) so they connect to the SAME daemon session
+     * the extension host is already using.
+     */
+    get mcpUrl() {
+        return `${this._baseUrl}/mcp`;
     }
     /* ---- Tool Calls ---- */
     /**

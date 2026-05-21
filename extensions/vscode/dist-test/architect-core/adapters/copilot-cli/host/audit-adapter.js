@@ -30,6 +30,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.auditFilePathFor = auditFilePathFor;
 exports.createHostAudit = createHostAudit;
+exports.parseRecordOrNull = parseRecordOrNull;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 /**
@@ -116,6 +117,12 @@ function createHostAudit(opts) {
         },
     });
 }
+/**
+ * Parse one NDJSON line written by the bridge into a frozen
+ * `RecordedMcpToolCall`, or return `null` if the line is not a
+ * well-formed audit record. Shared with the live tail reader
+ * (`audit-live-adapter.ts`) so both readers agree on the wire format.
+ */
 function parseRecordOrNull(line) {
     let raw;
     try {

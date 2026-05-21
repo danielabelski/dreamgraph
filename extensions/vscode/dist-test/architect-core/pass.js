@@ -159,7 +159,8 @@ async function runPass(input) {
         }
     }
     catch (err) {
-        stopReason = "error";
+        const isAbort = err instanceof Error && err.name === "AbortError";
+        stopReason = isAbort ? "aborted" : "error";
         const message = err instanceof Error ? err.message : String(err);
         iterations.push(Object.freeze({
             index: iterations.length + 1,

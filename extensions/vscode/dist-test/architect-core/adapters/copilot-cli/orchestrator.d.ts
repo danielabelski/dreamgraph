@@ -1,5 +1,6 @@
 import { type CopilotArgvPlan, type CopilotCliErrorCode, type CopilotCliProviderId, type CopilotHelpSurface, type CopilotMcpConfigArtifact, type ToolCallClass } from "./types.js";
 import { type CopilotCliTranscript } from "./transcript.js";
+import { type CliJsonEvent } from "./event-stream.js";
 import { type CopilotCliClockPort, type CopilotCliCryptoPort, type CopilotCliFsPort, type CopilotCliMcpAuditPort, type CopilotCliProcessPort, type CopilotCliRegistryPort, type CopilotCliSpawnResult, type RecordedMcpToolCall } from "./orchestrator-ports.js";
 export interface CopilotCliRunInput {
     /**
@@ -22,6 +23,14 @@ export interface CopilotCliRunInput {
      * Hard wall-clock cap. Required (no implicit infinite runs).
      */
     readonly timeoutMs: number;
+    /**
+     * Optional idle-output cap forwarded to the spawn port. When > 0,
+     * the port kills the child if no stdout/stderr chunk has been
+     * received for this long; each chunk resets the window. This lets
+     * a single LLM pass with many sequential tool calls keep running
+     * past the wall-clock cap as long as it is still producing output.
+     */
+    readonly idleTimeoutMs?: number;
     /**
      * Optional cancellation signal forwarded to the spawn port.
      */
@@ -49,6 +58,24 @@ export interface CopilotCliRunInput {
      * and when packagers ship a renamed binary.
      */
     readonly binaryName?: string;
+    /**
+     * Optional callback invoked synchronously as soon as the orchestrator
+     * has minted the `runId` for this invocation, before the CLI is
+     * spawned and before `mcpAudit.startRecording` runs. Used by the
+     * provider-port layer to subscribe to the live audit NDJSON file at
+     * the earliest possible moment so no tool calls are missed.
+     */
+    readonly onRunIdAssigned?: (runId: string) => void;
+    /**
+     * Optional per-event callback for the CLI's `--output-format json`
+     * NDJSON stdout stream. Receives every parsed event (tool starts/
+     * completes, assistant message/reasoning deltas, the final
+     * `result` summary, plus any unrecognized event surfaced as
+     * `kind: "other"`). Always set by the production provider-port to
+     * drive the authoritative live UX. Handler exceptions are
+     * swallowed so a buggy consumer cannot break the run.
+     */
+    readonly onCliEvent?: (event: CliJsonEvent) => void;
 }
 export interface CopilotCliDeps {
     readonly fs: CopilotCliFsPort;

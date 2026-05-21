@@ -251,6 +251,15 @@ class ChatPanel {
     _webviewBundleUri = null;
     _pendingReviewsCollapsed = true;
     _lastToolTrace = [];
+    /**
+     * Per-run map keyed by `${runId}:${server}:${tool}:${startedAtEpochMs}`.
+     * Value is the index into `_lastToolTrace` of the live (provisional)
+     * entry pushed by the audit-live tail. `onRunResult` reconciles by
+     * REPLACING the entry at that index with the authoritative
+     * `ClassifiedToolCall`-derived entry, and appending only entries
+     * whose key has no live counterpart. Cleared at run start.
+     */
+    _liveToolCallsSeen = new Map();
     /** Set when the report-required guard has already forced a final report
      * turn for the current run, so we don't loop forever asking for reports. */
     _reportForcedThisRun = false;
@@ -297,7 +306,7 @@ class ChatPanel {
     _lastStopContext = null;
     static MAX_RENDERED_MESSAGE_CHARS = 100_000;
     static MAX_ENTITY_LINKS_PER_MESSAGE = 100;
-    static ACTION_ALLOWLIST = new Set(['tool', 'show_full']);
+    static ACTION_ALLOWLIST = new Set(['tool', 'show_full', 'copilot_login']);
     static MAX_TEXT_ATTACHMENT_BYTES = 100_000;
     static MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
     /** Hard timeout per LLM provider request (ms). Prevents infinite hangs.
@@ -620,6 +629,7 @@ class ChatPanel {
             await this.persistMessages();
         }
         this._lastToolTrace = [];
+        this._liveToolCallsSeen.clear();
         this._lastVerdict = null;
         this._reportForcedThisRun = false;
         await this.postState();
@@ -851,6 +861,15 @@ class ChatPanel {
                         attachmentSummary: capturedAttachmentSummary,
                         stopContextBlock: capturedStopContextBlock,
                     });
+                    // Copilot CLI executes tools inside its own subprocess, so the
+                    // native per-tool snapshot/record bookend in runAgenticLoop never
+                    // fires. Take one workspace snapshot before the CLI turn starts
+                    // and reconcile in `finally` (success, abort, or error) so any
+                    // files written by MCP tools during the run register as pending
+                    // reviews. Without this the diff view never appears for copilot-cli.
+                    const copilotCliReviewSnapshot = copilotCliRoute
+                        ? await change_review_service_1.changeReviewService.captureWorkspaceSnapshot()
+                        : null;
                     const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
                     try {
                         const passResult = copilotCliRoute
@@ -882,16 +901,35 @@ class ChatPanel {
                         if (!fullContent && passResult.assistantMessage.content) {
                             fullContent = passResult.assistantMessage.content;
                         }
-                        if (passResult.stopReason === 'error') {
-                            throw new Error(`runPassViaCore reported error stopReason: ${passResult.assistantMessage.content}`);
-                        }
-                        // The seam's `host.persistAssistantMessage` already pushed the
-                        // assistant message, persisted, and broadcast verdict/toolTrace/
-                        // summary card. Mark the inline post-LLM block to skip so we
-                        // don't double-write or double-broadcast.
+                        // The seam's `host.persistAssistantMessage` already pushed an
+                        // assistant bubble that fully describes the outcome (including
+                        // any "Pass aborted: ..." / "[TIMEOUT] ..." text plus the tool
+                        // trace). Mark the inline post-LLM block to skip so we don't
+                        // double-write or double-broadcast.
                         seamOwnedAssistant = true;
+                        // Re-throwing here on stopReason === 'error' would make the
+                        // outer catch push a SECOND assistant bubble ("Error:
+                        // runPassViaCore reported error stopReason: ...") on top of
+                        // the seam-pushed one — a pure duplicate that wipes the
+                        // visible streamed prose. The seam-pushed bubble already
+                        // carries the error text, so do nothing here.
+                        if (passResult.stopReason === 'error') {
+                            console.warn('[DreamGraph] runPassViaCore stopReason=error — seam-pushed assistant message owns the error surface; not re-throwing.');
+                        }
                     }
                     finally {
+                        if (copilotCliReviewSnapshot) {
+                            try {
+                                const changedReviewPaths = await change_review_service_1.changeReviewService.recordWorkspaceChanges(copilotCliReviewSnapshot);
+                                if (changedReviewPaths.length > 0) {
+                                    this._pendingReviewsCollapsed = true;
+                                    await this._postPendingReviews();
+                                }
+                            }
+                            catch (reviewErr) {
+                                console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli turn:', reviewErr);
+                            }
+                        }
                         req.dispose();
                     }
                 }
@@ -958,19 +996,49 @@ class ChatPanel {
             const recovered = await this._recoverFromLlmTimeout(err, trimmed, envelope);
             if (!recovered) {
                 const message = err instanceof Error ? err.message : String(err);
-                const assistantMessage = {
-                    id: this._createMessageId(),
-                    role: 'assistant',
-                    content: `Error: ${message}`,
-                    timestamp: new Date().toISOString(),
-                    instanceId: this.currentInstanceId,
-                    verdict: { level: 'speculative', summary: 'Request failed before completion' },
-                    toolTrace: this._lastToolTrace.length > 0 ? [...this._lastToolTrace] : undefined,
-                };
-                this.messages.push(assistantMessage);
-                await this.persistMessages();
-                await this.postState();
-                await this.postMessage({ type: 'error', error: message });
+                // Provider-auth recovery: copilot-cli surfaces "not logged in" as a
+                // structured failure with a stable code. When we see it, emit a
+                // dedicated system message carrying the `copilot_login_required`
+                // meta-tag — `_buildMessageActions` then attaches a clickable
+                // "Open Copilot login" button that opens the device-code page +
+                // an interactive `copilot login` terminal in one click. The tag
+                // is persisted on the message so the button survives reloads.
+                const failureCode = err?.copilotCliFailureCode;
+                if (failureCode === 'COPILOT_NOT_LOGGED_IN') {
+                    const loginMessage = {
+                        id: this._createMessageId(),
+                        role: 'system',
+                        content: `Copilot CLI is not logged in.\n\n` +
+                            `Click **Open Copilot login** below to (1) open the GitHub device-code page in your browser and (2) launch an interactive \`copilot login\` terminal. Paste the code the CLI prints into the browser page, then re-run your request.`,
+                        timestamp: new Date().toISOString(),
+                        instanceId: this.currentInstanceId,
+                        metaTag: 'copilot_login_required',
+                    };
+                    this.messages.push(loginMessage);
+                    await this.persistMessages();
+                    await this.postMessage({
+                        type: 'addMessage',
+                        message: loginMessage,
+                        actions: this._buildMessageActions(loginMessage),
+                        roleMeta: this._roleMetaFor(loginMessage),
+                        contextFooter: undefined,
+                    });
+                }
+                else {
+                    const assistantMessage = {
+                        id: this._createMessageId(),
+                        role: 'assistant',
+                        content: `Error: ${message}`,
+                        timestamp: new Date().toISOString(),
+                        instanceId: this.currentInstanceId,
+                        verdict: { level: 'speculative', summary: 'Request failed before completion' },
+                        toolTrace: this._lastToolTrace.length > 0 ? [...this._lastToolTrace] : undefined,
+                    };
+                    this.messages.push(assistantMessage);
+                    await this.persistMessages();
+                    await this.postState();
+                    await this.postMessage({ type: 'error', error: message });
+                }
             }
         }
         finally {
@@ -1018,10 +1086,31 @@ class ChatPanel {
         const llm = this.architectLlm;
         const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
         const binaryName = (cfg.get('copilotCli.command') ?? '').trim() || 'copilot';
-        const dreamgraphCommand = (cfg.get('copilotCli.dreamgraphCommand') ?? '').trim() || 'dreamgraph';
+        // The Copilot CLI bridge inherits the architect's existing MCP
+        // session by proxying to the SAME daemon URL the extension is
+        // already connected to. We read it from the long-lived McpClient
+        // so the bridge can never accidentally point at a different
+        // (or stale) instance.
+        if (!this.mcpClient) {
+            throw new Error('Cannot build Copilot CLI provider options: McpClient is not initialized. ' +
+                'The DreamGraph daemon must be running and connected before invoking Copilot CLI.');
+        }
+        const hostMcpUrl = this.mcpClient.mcpUrl;
+        // Wall-clock cap per turn. Default 30 min (long Copilot CLI runs
+        // can chain 100+ tool calls). The orchestrator's idle-output cap
+        // (`idleTimeoutMs` below) is what actually catches stalled runs;
+        // this wall-clock value is a backstop.
         const timeoutMsRaw = cfg.get('copilotCli.timeoutMs');
         const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
             ? timeoutMsRaw
+            : 1_800_000;
+        // Idle-output cap: kill the run if no stdout/stderr chunk has
+        // been observed for this long. Each tool event / assistant delta
+        // resets the window, so a productive pass keeps running even if
+        // the total elapsed time exceeds the legacy 3-minute default.
+        const idleTimeoutMsRaw = cfg.get('copilotCli.idleTimeoutMs');
+        const idleTimeoutMs = typeof idleTimeoutMsRaw === 'number' && Number.isFinite(idleTimeoutMsRaw) && idleTimeoutMsRaw > 0
+            ? idleTimeoutMsRaw
             : 180_000;
         const toolListTimeoutMsRaw = cfg.get('copilotCli.toolListTimeoutMs');
         const toolListTimeoutMs = typeof toolListTimeoutMsRaw === 'number' && Number.isFinite(toolListTimeoutMsRaw) && toolListTimeoutMsRaw > 0
@@ -1031,23 +1120,49 @@ class ChatPanel {
         const auditDirAbsPath = vscode.Uri.joinPath(this.context.globalStorageUri, 'copilot-cli-audit').fsPath;
         const bridgeEntryPath = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'copilot-cli-bridge.js').fsPath;
         const registry = (0, index_js_2.createHostRegistry)({
-            dreamgraphCommand,
+            hostMcpUrl,
             bridgeEntryPath,
             nodeExecPath: process.execPath,
             auditDirAbsPath,
+            workspaceRootAbsPath: workspaceCwd,
             ...(toolListTimeoutMs !== undefined ? { toolListTimeoutMs } : {}),
         });
         const mcpAudit = (0, index_js_2.createHostAudit)({ auditDirAbsPath });
+        // Bridge audit-live tail is kept as a secondary MCP-only
+        // provenance layer (see audit-live-adapter.ts); the authoritative
+        // live UX source is now the CLI's `--output-format json` stdout
+        // stream wired through `provider-port.onCliEvent`. We therefore
+        // no longer instantiate or pass `auditLive` here. The bridge
+        // still writes its per-run NDJSON file via `mcpAudit` for
+        // post-run forensic queries; future surfaces (e.g. an MCP-only
+        // forensic side panel) can subscribe to that file directly
+        // through `createHostAuditLive` without coupling to this code
+        // path.
         const model = llm.currentConfig?.model;
         return {
             hostLlm: llm,
             invocationCwd: workspaceCwd,
             timeoutMs,
+            idleTimeoutMs,
             baseEnv: process.env,
             // Skip the `--model` flag when the user picked `auto` so the
             // CLI applies its own routing heuristic.
             model: model && model !== 'auto' ? model : undefined,
             binaryName,
+            // Cap the history sent to the single-shot CLI prompt: keeps
+            // the architect-assembled context-economy block authoritative
+            // while preventing stale `[user]` blocks from drifting back
+            // into the model's focus (see CURRENT TURN markers below).
+            historyKeepLast: 10,
+            markCurrentTurn: true,
+            // Advertise the audited DreamGraph MCP catalogue the orchestrator
+            // intersects with the live bridge registry. This includes native
+            // graph/markdown/edit tools plus bridge-local run_command so the
+            // CLI can act through DreamGraph authority instead of inline shell.
+            cliToolsManifest: {
+                server: index_js_2.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+                tools: index_js_2.COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+            },
             deps: {
                 fs: index_js_2.HOST_FS,
                 process: index_js_2.HOST_PROCESS,
@@ -1056,10 +1171,60 @@ class ChatPanel {
                 registry,
                 mcpAudit,
             },
+            onPromptComposed: (info) => {
+                try {
+                    this.contextInspector?.appendContextLine(`Copilot CLI prompt composed: ${info.promptByteLength}B, ${info.historyMessageCount} msgs, mcp=${info.mcpServerAdvertised ?? 'none'}(${info.mcpToolsAdvertised} tools), markCurrentTurn=${info.markCurrentTurn}, model=${info.model ?? 'auto'}.`);
+                }
+                catch {
+                    // inspector failures must not affect the run
+                }
+            },
+            onCliDiagnostic: (line) => {
+                try {
+                    this.contextInspector?.appendContextLine(line);
+                }
+                catch {
+                    // inspector failures must not affect the run
+                }
+            },
+            onToolCall: (runId, call) => {
+                // Authoritative live tool entry, sourced from the CLI's
+                // `--output-format json` stdout stream (via provider-port's
+                // `onCliEvent` translation). Push a `ToolTraceEntry` and
+                // remember its index keyed by
+                // `(runId, server, tool, startedAtEpochMs)` so duplicate
+                // events from any future secondary source collapse onto the
+                // same row.
+                try {
+                    const key = ChatPanel._toolCallDedupKey(runId, call.server, call.tool, call.startedAtEpochMs);
+                    if (this._liveToolCallsSeen.has(key)) {
+                        return;
+                    }
+                    const entry = this._toolTraceEntryFromRawCall(call);
+                    const index = this._lastToolTrace.length;
+                    this._lastToolTrace.push(entry);
+                    this._liveToolCallsSeen.set(key, index);
+                    void this.postMessage({
+                        type: 'tool-progress',
+                        tool: entry.tool,
+                        message: `${entry.tool} ${entry.status === 'failed' ? 'failed' : 'done'} (${entry.durationMs}ms)`,
+                    });
+                }
+                catch (liveErr) {
+                    console.warn('[DreamGraph][copilot-cli] onToolCall handler failed:', liveErr);
+                }
+            },
             onRunResult: (result) => {
                 // Surface failures into the existing tool-trace channel so
                 // the user sees them next to MCP tool entries. Best-effort:
-                // never let observer code break the turn.
+                // never let observer code break the turn. The bridge's
+                // post-run `result.toolCalls` is intentionally NOT mirrored
+                // into the tool-trace here — the stdout JSON stream already
+                // surfaced every tool (CLI-native + MCP) live, so a second
+                // push would duplicate every MCP entry under a different
+                // dedup key (the bridge's clock differs from the CLI's).
+                // `result.toolCalls` remains available on the result for
+                // future post-run forensic surfaces.
                 try {
                     if (!result.ok) {
                         const code = result.failure?.code ?? 'COPILOT_CLI_UNKNOWN_FAILURE';
@@ -1067,8 +1232,8 @@ class ChatPanel {
                         console.warn(`[DreamGraph][copilot-cli] ${code}: ${message}`);
                     }
                 }
-                catch {
-                    // ignore
+                catch (observerErr) {
+                    console.warn('[DreamGraph][copilot-cli] onRunResult observer failed:', observerErr);
                 }
             },
         };
@@ -1156,7 +1321,21 @@ class ChatPanel {
             // bubble's enter animation and the user's scroll state — also
             // matches v1 continuation's broadcast.
             persistAssistantMessage: async (args) => {
-                const rawContent = (args.content ?? '').trim() || '(No response)';
+                // Preserve the model's pre-abort prose. When the pass driver
+                // aborts (user stop, wrapper timeout, orchestrator TIMEOUT,
+                // host abort, etc.) it passes only the synthetic "Pass aborted:
+                // ..." text. But the model may have already streamed real prose
+                // before the abort fired — that content lives in
+                // `panel.streamingContent` and would otherwise be wiped when the
+                // seam-pushed bubble replaces the streaming placeholder. Merge
+                // it in so the user keeps the partial reasoning + tool log.
+                const rawArgContent = args.content ?? '';
+                const looksLikeAbort = /^\s*(Pass aborted:|\[TIMEOUT\]|\[COPILOT_CLI_)/i.test(rawArgContent);
+                const streamed = (panel.streamingContent ?? '').trim();
+                const merged = looksLikeAbort && streamed.length > 0 && !rawArgContent.includes(streamed)
+                    ? `${streamed}\n\n---\n\n${rawArgContent.trim()}`
+                    : rawArgContent;
+                const rawContent = merged.trim() || '(No response)';
                 // Per-chunk redaction already happened in onStreamChunk; this is
                 // an idempotent safety net for the assembled string and any
                 // non-streamed (tool-loop) content path that didn't pass through.
@@ -1391,7 +1570,30 @@ class ChatPanel {
         return (0, timeout_js_1.createTimeoutAbortSignal)(this.abortController, timeoutMs);
     }
     _getLlmTimeoutMs(options) {
-        return (0, timeout_js_1.getLlmTimeoutMs)({ ...options, provider: this.architectLlm?.provider ?? 'anthropic' });
+        const provider = this.architectLlm?.provider ?? 'anthropic';
+        // The copilot-cli adapter has its own hard wall-clock cap (the
+        // orchestrator's spawn `timeoutMs`, sourced from the
+        // `dreamgraph.architect.copilotCli.timeoutMs` setting, default 180s).
+        // If the chat-panel wraps the call in a smaller AbortSignal, that
+        // signal will fire FIRST and the orchestrator surfaces it as
+        // `CANCELLED` — indistinguishable from the user clicking Stop.
+        // To keep the orchestrator's budget authoritative, derive the
+        // chat-panel wrapper from the same setting plus a 30s buffer so
+        // the spawn-side timeout always wins. The base PROVIDER_BUDGETS
+        // table doesn't cover copilot-cli (only API providers), which is
+        // why this branch is needed.
+        if (provider === 'copilot-cli') {
+            const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+            const raw = cfg.get('copilotCli.timeoutMs');
+            const base = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1_800_000;
+            let budget = base + 30_000;
+            if (options.toolCount && options.toolCount > 12)
+                budget += 30_000;
+            if (options.reducedContext)
+                budget = Math.max(60_000, budget - 30_000);
+            return budget;
+        }
+        return (0, timeout_js_1.getLlmTimeoutMs)({ ...options, provider });
     }
     _isTimeoutError(err) {
         return (0, timeout_js_1.isTimeoutError)(err);
@@ -1695,6 +1897,12 @@ class ChatPanel {
                 actions.push({ id: 'show-full', label: 'Show full', kind: 'primary', actionType: 'show_full' });
             }
         }
+        // Provider-auth recovery actions are reattached deterministically from
+        // the persisted `metaTag` so they survive webview rehydration (the
+        // original `addMessage` action list is not part of `messages[]`).
+        if (message.metaTag === 'copilot_login_required') {
+            actions.push({ id: 'copilot-login', label: 'Open Copilot login', kind: 'primary', actionType: 'copilot_login' });
+        }
         return actions;
     }
     _detectImplicitEntities(content) {
@@ -1745,6 +1953,35 @@ class ChatPanel {
             }
         }
         try {
+            if (action.actionType === 'copilot_login') {
+                // Provider-auth recovery: GitHub Copilot's `login` subcommand runs
+                // the OAuth device-code flow interactively (prints an 8-char code,
+                // expects the user to paste it at github.com/login/device). We
+                // can't wrap that headlessly, so:
+                //   1. Open the device-code page in the user's default browser
+                //      so it is ready to receive the code, then
+                //   2. Spawn an interactive terminal running `copilot login` so
+                //      the code is visible and the CLI can complete the handshake.
+                // The binary name honours the same setting the adapter uses, so
+                // a user who installed a non-default Copilot CLI still gets the
+                // right command.
+                const cfg = vscode.workspace.getConfiguration('dreamgraph.architect.copilotCli');
+                const binaryName = (cfg.get('binaryName') ?? 'copilot').trim() || 'copilot';
+                try {
+                    await vscode.env.openExternal(vscode.Uri.parse('https://github.com/login/device'));
+                }
+                catch (openErr) {
+                    // Browser open is best-effort — the device code printed by the
+                    // CLI also includes a URL the user can copy manually.
+                    console.warn('[DreamGraph] copilot_login: openExternal failed', openErr);
+                }
+                const terminal = vscode.window.createTerminal({ name: 'Copilot Login' });
+                terminal.show(true);
+                terminal.sendText(`${binaryName} login`);
+                this._actionLog.push({ timestamp: new Date().toISOString(), actionType: action.actionType, sourceMessageId: messageId, outcome: 'completed', detail: binaryName });
+                await this.postMessage({ type: 'messageActionState', messageId, actionId, status: 'completed' });
+                return;
+            }
             if (action.actionType === 'show_full') {
                 if (!message.fullContent || message.fullContent === message.content) {
                     throw new Error('Full response is not available for this message.');
@@ -2340,6 +2577,7 @@ class ChatPanel {
             this.streaming = true;
             this.streamingContent = '';
             this._lastToolTrace = [];
+            this._liveToolCallsSeen.clear();
             this._lastVerdict = null;
             this.abortController = new AbortController();
             const task = (0, index_js_1.inferTask)(envelope?.intentMode ?? 'ask_dreamgraph');
@@ -2422,7 +2660,13 @@ class ChatPanel {
             // below remains the source of truth for tool-using continuations
             // until Phase 3d wires `host.executeTool`.
             const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get('useCorePass') === true;
-            const seamRoute = useCorePass && tools.length === 0 && envelope !== null;
+            const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
+            // Copilot CLI handles its own tool selection internally — we must
+            // force the no-tools branch (tools=[]) and route through
+            // `runPassViaCopilotCli`. Without this, autonomy continuations
+            // fall through to `this.architectLlm!.stream(...)` which throws
+            // "Copilot CLI provider does not use ArchitectLlm transport".
+            const seamRoute = (useCorePass || copilotCliRoute) && envelope !== null;
             let seamOwnedAssistant = false;
             let fullContent = '';
             if (seamRoute) {
@@ -2438,20 +2682,40 @@ class ChatPanel {
                 // guard at line ~2328. Mirrors the inline path which resets the
                 // flag immediately before its own recursive call (line ~2474).
                 this._autonomyContinuing = false;
+                // See handleUserMessage for the rationale: copilot-cli tool calls
+                // happen inside the CLI subprocess, so the diff view requires a
+                // turn-level workspace snapshot bookend.
+                const copilotCliReviewSnapshot = copilotCliRoute
+                    ? await change_review_service_1.changeReviewService.captureWorkspaceSnapshot()
+                    : null;
                 const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
                 try {
-                    const passResult = await (0, runner_js_1.runPassViaCore)({
-                        host,
-                        text: prompt,
-                        tools: [],
-                        onStreamChunk: (chunk) => {
-                            const safeChunk = this._redactSecrets(chunk);
-                            fullContent += safeChunk;
-                            this.streamingContent += safeChunk;
-                            void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                        },
-                        abortSignal: req.signal,
-                    });
+                    const passResult = copilotCliRoute
+                        ? await (0, runner_js_1.runPassViaCopilotCli)({
+                            host,
+                            text: prompt,
+                            tools: [],
+                            providerOptions: this._buildCopilotCliProviderOptions(),
+                            onStreamChunk: (chunk) => {
+                                const safeChunk = this._redactSecrets(chunk);
+                                fullContent += safeChunk;
+                                this.streamingContent += safeChunk;
+                                void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                            },
+                            abortSignal: req.signal,
+                        })
+                        : await (0, runner_js_1.runPassViaCore)({
+                            host,
+                            text: prompt,
+                            tools: [],
+                            onStreamChunk: (chunk) => {
+                                const safeChunk = this._redactSecrets(chunk);
+                                fullContent += safeChunk;
+                                this.streamingContent += safeChunk;
+                                void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                            },
+                            abortSignal: req.signal,
+                        });
                     if (!fullContent && passResult.assistantMessage.content) {
                         fullContent = passResult.assistantMessage.content;
                     }
@@ -2461,6 +2725,18 @@ class ChatPanel {
                     seamOwnedAssistant = true;
                 }
                 finally {
+                    if (copilotCliReviewSnapshot) {
+                        try {
+                            const changedReviewPaths = await change_review_service_1.changeReviewService.recordWorkspaceChanges(copilotCliReviewSnapshot);
+                            if (changedReviewPaths.length > 0) {
+                                this._pendingReviewsCollapsed = true;
+                                await this._postPendingReviews();
+                            }
+                        }
+                        catch (reviewErr) {
+                            console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli continuation pass:', reviewErr);
+                        }
+                    }
                     req.dispose();
                 }
             }
@@ -2569,35 +2845,35 @@ class ChatPanel {
      * model didn't emit a JSON envelope, so the card always has data to render.
      */
     /**
-     * Sign-off chip emitter. When the autonomy loop stops (budget exhausted,
-     * safety cap, decided to pause) we still know what the next concrete
-     * actions would have been. Surface them as clickable chips bound to the
-     * stop/system message so the user can resume continuation with one click.
+     * Sign-off resume-action registrar. When the autonomy loop stops
+     * (budget exhausted, safety cap, decided to pause) the assistant
+     * bubble immediately above the stop/system message already renders
+     * the SUMMARY card with the same recommended-action chip strip
+     * (built from the JSON envelope embedded in its `content`, so it
+     * survives webview re-renders). All this method needs to do is
+     * publish the action set into the shared `_lastRecommendedActions`
+     * slot so chip clicks on that surviving card route through
+     * `_executeRecommendedAction` correctly.
      *
-     * The chips reuse the same envelope the SUMMARY card emits, so the
-     * existing webview chip renderer + `_executeRecommendedAction` resolver
-     * (which keys off `_lastRecommendedActions`) work end-to-end without
-     * additional wiring. The recommended-action set is also persisted here
-     * so chip clicks survive the stop transition.
+     * HISTORICAL NOTE: a prior version of this method also posted a
+     * `summaryCard` message targeted at the system stop bubble, which
+     * caused the webview to append a SECOND, visually identical envelope
+     * card inside that bubble via DOM mutation. Because the duplicate
+     * was never persisted to `messages[]`, any re-render (scroll
+     * virtualization, tab switch, theme change) silently destroyed it —
+     * a glitchy, half-real card. Removed entirely; continuity is
+     * preserved end-to-end by the `_lastRecommendedActions` write below
+     * because the assistant card's chips invoke the same handler.
+     *
+     * @param _messageId Retained for call-site stability; intentionally unused.
+     * @param _envelope  Retained for call-site stability; intentionally unused.
      */
-    _broadcastSignOffActions(messageId, envelope, actions) {
+    _broadcastSignOffActions(_messageId, _envelope, actions) {
         if (!actions || actions.length === 0)
             return;
         // Persist so chip clicks resolve via `_executeRecommendedAction`.
+        // This is the only side effect required for resume continuity.
         this._lastRecommendedActions = actions;
-        const eligibleCount = actions.filter((a) => a.eligible && a.withinScope).length;
-        void this.postMessage({
-            type: 'summaryCard',
-            messageId,
-            envelope: {
-                summary: envelope.summary ?? '',
-                goal_status: envelope.goalStatus,
-                progress_status: envelope.progressStatus,
-                uncertainty: envelope.uncertainty,
-                recommended_next_steps: actions.map((a) => ({ id: a.id, label: a.label, rationale: a.rationale })),
-                doAllEligible: eligibleCount > 1,
-            },
-        });
     }
     _broadcastSummaryCard(content, messageId) {
         try {
@@ -3294,6 +3570,78 @@ class ChatPanel {
     }
     _extractFilesAffected(toolNameOrInput, inputOrResult, maybeResult) {
         return helpers.extractFilesAffected(toolNameOrInput, inputOrResult, maybeResult);
+    }
+    /**
+     * Project one `ClassifiedToolCall` (captured by the copilot-cli MCP
+     * audit bridge) into the `ToolTraceEntry` shape the webview already
+     * renders. Args are parsed from the audit's `inputJson`; failures to
+     * parse fall back to "no args" rather than aborting the projection
+     * (the bridge always emits valid JSON, but we never want a bad record
+     * to lose the whole turn's provenance).
+     *
+     * Tool name is prefixed with the MCP server when the call did not
+     * come from the authoritative DreamGraph server, so the provenance
+     * card visibly distinguishes `dreamgraph:query_resource` from
+     * `<inline>:write` (which never reaches us — denied — but kept in
+     * the projection so the same code handles future relaxations).
+     */
+    _toolTraceEntryFromCopilotCall(classified) {
+        const { call } = classified;
+        let parsedArgs = {};
+        try {
+            parsedArgs = call.inputJson ? JSON.parse(call.inputJson) : {};
+        }
+        catch {
+            parsedArgs = {};
+        }
+        // Always prefix with the server name so the provenance card
+        // visibly distinguishes `dreamgraph:query_resource`,
+        // `cli:powershell`, and any third-party MCP server uniformly.
+        const displayTool = `${call.server}:${call.tool}`;
+        return {
+            tool: displayTool,
+            argsSummary: this._summarizeToolArgs(parsedArgs),
+            filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
+            durationMs: Math.max(0, Math.floor(call.durationMs)),
+            status: call.isError ? 'failed' : 'completed',
+        };
+    }
+    /**
+     * Build a ToolTraceEntry from a raw audit record (no classification
+     * available yet). Used by the live audit tail to surface tool
+     * activity in-flight. Treats `dreamgraph` server calls as
+     * authoritative for display; everything else gets the `server:tool`
+     * prefix. `onRunResult` later replaces these entries with the
+     * authoritative `ClassifiedToolCall`-derived equivalents.
+     */
+    _toolTraceEntryFromRawCall(call) {
+        let parsedArgs = {};
+        try {
+            parsedArgs = call.inputJson ? JSON.parse(call.inputJson) : {};
+        }
+        catch {
+            parsedArgs = {};
+        }
+        // Display convention (binding): always prefix the server name.
+        // CLI-native tools surface as e.g. `cli:powershell`, `cli:Read`,
+        // `cli:Search`; MCP tools as `dreamgraph:query_resource` or
+        // `<server>:<tool>` for any third-party MCP server.
+        const displayTool = `${call.server}:${call.tool}`;
+        return {
+            tool: displayTool,
+            argsSummary: this._summarizeToolArgs(parsedArgs),
+            filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
+            durationMs: Math.max(0, Math.floor(call.durationMs)),
+            status: call.isError ? 'failed' : 'completed',
+        };
+    }
+    /**
+     * Stable dedup key shared by the live tail and the post-run
+     * reconciliation. Matches the key format the chat-panel uses to
+     * REPLACE provisional entries with authoritative ones.
+     */
+    static _toolCallDedupKey(runId, server, tool, startedAtEpochMs) {
+        return `${runId}:${server}:${tool}:${startedAtEpochMs}`;
     }
     async _verifyEntities(names) {
         if (!this.mcpClient?.isConnected || !Array.isArray(names) || names.length === 0) {
