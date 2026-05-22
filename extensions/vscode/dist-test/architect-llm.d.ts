@@ -5,7 +5,7 @@
  * structured prompts assembled from the context orchestration layer.
  */
 import * as vscode from "vscode";
-export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio" | "copilot-cli";
+export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio" | "copilot-cli" | "codex-cli";
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export interface ArchitectConfig {
     provider: ArchitectProvider;
@@ -79,6 +79,7 @@ export type StreamCallback = (chunk: string) => void;
 export declare const ANTHROPIC_MODELS: string[];
 export declare const OPENAI_MODELS: string[];
 export declare const COPILOT_CLI_MODELS: string[];
+export declare const CODEX_CLI_MODELS: string[];
 /**
  * Optional sink that receives structured budget summaries.
  * Set by extension activation via `setRequestBudgetSink(inspector.logRequestBudget.bind(inspector))`

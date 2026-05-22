@@ -33,6 +33,11 @@ export const TOOL_GROUPS = {
     'search_source_code',
     'list_markdown_chapters',
     'read_markdown_chapter',
+    // cognitive_status is a parameterless read returning a tiny graph
+    // health snapshot. Keeping it in the always-on tier lets ad-hoc
+    // prompts like "is the graph healthy?" or "show graph health"
+    // resolve without needing a keyword overlay to fire.
+    'cognitive_status',
   ],
 
   /** File writes — only when intent is clearly mutating. */
@@ -264,6 +269,18 @@ const DOCS_KEYWORDS = [
   'generate_ui_migration_plan',
 ];
 
+// Health / status vocabulary — read-only inspection of the cognitive
+// graph. Activates cognitive_read so adjacent reads (dream insights,
+// narrative, tensions, remediation) become available when the user is
+// clearly asking about graph wellbeing.
+const HEALTH_KEYWORDS = [
+  'graph health', 'health check', 'is the graph healthy', 'is it healthy',
+  'are you ok', 'are you okay', 'graph status', 'system status',
+  'system narrative', 'narrative', 'tensions', 'open tensions',
+  'show health', 'show status', 'show graph health', 'show graph status',
+  'remediation', 'remediation plan',
+];
+
 const DISCIPLINE_KEYWORDS = [
   'discipline session', 'discipline_start_session', 'disciplined execution',
   'tdd session', 'plan-do-verify', 'plan do verify', 'plan and verify',
@@ -373,6 +390,10 @@ export function selectToolGroups(args: {
   if (_hasAny(prompt, COGNITIVE_RUN_KEYWORDS)) {
     groups.push('cognitive_read', 'cognitive_run', 'scheduler');
     reasons.push('keyword[cognitive] → cognitive_read+cognitive_run+scheduler');
+  }
+  if (_hasAny(prompt, HEALTH_KEYWORDS)) {
+    groups.push('cognitive_read');
+    reasons.push('keyword[health] → cognitive_read');
   }
   if (_hasAny(prompt, DOCS_KEYWORDS)) {
     groups.push('docs_visuals');

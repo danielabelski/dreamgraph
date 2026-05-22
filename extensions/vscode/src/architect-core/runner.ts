@@ -101,6 +101,10 @@ import {
   createCopilotCliProviderPort,
   type CopilotCliProviderPortOptions,
 } from "./adapters/copilot-cli/index.js";
+import {
+  createCodexCliProviderPort,
+  type CodexCliProviderPortOptions,
+} from "./adapters/codex-cli/index.js";
 
 export interface CopilotCliPortBundleOptions {
   readonly host: ChatPanelHost;
@@ -135,6 +139,60 @@ export async function runPassViaCopilotCli(
   input: RunPassViaCopilotCliInput,
 ): Promise<PassResult> {
   const ports = buildCopilotCliPorts({
+    host: input.host,
+    providerOptions: input.providerOptions,
+  });
+  const driverInput: RunPassInput = {
+    userIntent: {
+      text: input.text,
+      contentBlocks: input.host.contentBlocks,
+      stopContextBlock: input.host.stopContextBlock,
+    },
+    ports,
+    priorMessages: input.host.priorMessages,
+    task: input.host.task,
+    provider: input.host.architectLlm.provider ?? "anthropic",
+    tools: input.tools,
+    budgetCoordinator: input.host.budgetCoordinator,
+    onStreamChunk: input.onStreamChunk,
+    abortSignal: input.abortSignal,
+  };
+  return runPass(driverInput);
+}
+
+export interface CodexCliPortBundleOptions {
+  readonly host: ChatPanelHost;
+  readonly providerOptions: CodexCliProviderPortOptions;
+}
+
+/**
+ * Build a port set where the provider port is the Codex CLI wrapper.
+ * Every other port is reused from the v1 wiring. Pure construction -
+ * performs no I/O.
+ */
+export function buildCodexCliPorts(
+  options: CodexCliPortBundleOptions,
+): ArchitectCorePorts {
+  const v1 = buildV1Ports(options.host);
+  return Object.freeze({
+    ...v1,
+    provider: createCodexCliProviderPort(options.providerOptions),
+  });
+}
+
+export interface RunPassViaCodexCliInput extends RunPassViaCoreInput {
+  readonly providerOptions: CodexCliProviderPortOptions;
+}
+
+/**
+ * Drive one pass through `runPass()` with the Codex CLI provider port
+ * wired in. Chat routing remains a separate integration step; this
+ * function exposes the provider-neutral seam for that route.
+ */
+export async function runPassViaCodexCli(
+  input: RunPassViaCodexCliInput,
+): Promise<PassResult> {
+  const ports = buildCodexCliPorts({
     host: input.host,
     providerOptions: input.providerOptions,
   });

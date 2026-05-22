@@ -39,6 +39,15 @@ test('prefers structured json envelope when present', () => {
   assert.equal(envelope.nextSteps[0].batchGroup, 'release');
 });
 
+test('does not infer complete from successful tool-call prose alone', () => {
+  const envelope = extractStructuredPassEnvelope(
+    'The pass gathered evidence through 18 DreamGraph calls completed successfully, but the final adapter assessment remains undelivered.\n\nRecommended next step: Synthesize adapter state report',
+  );
+
+  assert.equal(envelope.goalStatus, 'partial');
+  assert.equal(envelope.nextSteps[0]?.label, 'Synthesize adapter state report');
+});
+
 test('ranks actions from assistant output', () => {
   const content = [
     '## Recommended next steps',

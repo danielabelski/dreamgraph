@@ -22,7 +22,7 @@ const ASSISTANT_SECTION_LABELS = [
   "findings",
 ];
 
-export type CompactionProvider = "anthropic" | "openai" | "ollama" | "lmstudio" | "copilot-cli";
+export type CompactionProvider = "anthropic" | "openai" | "ollama" | "lmstudio" | "copilot-cli" | "codex-cli";
 
 export interface CompactionBudgetDecision {
   level: 0 | 1 | 2 | 3;

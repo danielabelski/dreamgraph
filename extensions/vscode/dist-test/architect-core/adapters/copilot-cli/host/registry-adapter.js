@@ -57,6 +57,16 @@ function createHostRegistry(opts) {
                 DREAMGRAPH_HOST_MCP_URL: hostMcpUrl,
                 DREAMGRAPH_BRIDGE_AUDIT_DIR: opts.auditDirAbsPath,
                 DREAMGRAPH_WORKSPACE_ROOT: opts.workspaceRootAbsPath,
+                // When the architect is running inside VS Code, `nodeExecPath`
+                // is `process.execPath` of the Electron host (e.g. `Code.exe`),
+                // not a plain Node binary. Without this flag the spawned
+                // Electron process starts as a GUI app, never executes the
+                // bridge .js as a script, and closes stdio immediately — which
+                // the CLI then reports as "handshaking with MCP server failed:
+                // connection closed: initialize response". Setting the flag is
+                // a no-op for real Node binaries (they ignore unknown env vars),
+                // so it's safe to set unconditionally.
+                ELECTRON_RUN_AS_NODE: "1",
             };
             return Object.freeze({
                 command: opts.nodeExecPath,

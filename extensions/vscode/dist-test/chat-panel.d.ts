@@ -145,6 +145,7 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      * way the user expects.
      */
     private _buildCopilotCliProviderOptions;
+    private _buildCodexCliProviderOptions;
     /**
      * that the architect-core adapters bind to. The host projects the
      * already-constructed envelope, context, autonomy state, and bounded
@@ -367,6 +368,7 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      * the projection so the same code handles future relaxations).
      */
     private _toolTraceEntryFromCopilotCall;
+    private _reconcileCliAuditToolTrace;
     /**
      * Build a ToolTraceEntry from a raw audit record (no classification
      * available yet). Used by the live audit tail to surface tool

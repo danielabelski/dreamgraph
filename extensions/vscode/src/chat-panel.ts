@@ -20,6 +20,7 @@ import { getCardRendererScript } from './webview/card-renderer.js';
 import type { GraphSignalProvider } from './graph-signal';
 import {
   ANTHROPIC_MODELS,
+  CODEX_CLI_MODELS,
   COPILOT_CLI_MODELS,
   OPENAI_MODELS,
   type ArchitectContentBlock,
@@ -36,13 +37,14 @@ import { LOCAL_TOOL_DEFINITIONS, isLocalTool, executeLocalTool } from './local-t
 import { changeReviewService, type PendingChangeReview } from './change-review-service';
 import { assemblePrompt, inferTask } from './prompts/index.js';
 import { selectToolGroups } from './tool-groups.js';
-import { runPassViaCore, runPassViaCopilotCli } from './architect-core/runner.js';
+import { runPassViaCodexCli, runPassViaCore, runPassViaCopilotCli } from './architect-core/runner.js';
 import {
   HOST_CLOCK,
   HOST_CRYPTO,
   HOST_FS,
   HOST_PROCESS,
   createHostAudit,
+  createHostAuditLive,
   createHostRegistry,
   COPILOT_AUTHORITATIVE_TOOL_CATALOG,
   DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
@@ -52,6 +54,18 @@ import {
   type PromptComposedInfo,
   type RecordedMcpToolCall,
 } from './architect-core/adapters/copilot-cli/index.js';
+import {
+  CODEX_AUTHORITATIVE_TOOL_CATALOG,
+  DREAMGRAPH_AUTHORITATIVE_SERVER_NAME as CODEX_DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+  HOST_CLOCK as CODEX_HOST_CLOCK,
+  HOST_CRYPTO as CODEX_HOST_CRYPTO,
+  HOST_FS as CODEX_HOST_FS,
+  HOST_PROCESS as CODEX_HOST_PROCESS,
+  type ClassifiedToolCall as CodexClassifiedToolCall,
+  type CodexCliProviderPortOptions,
+  type CodexCliRunResult,
+  type PromptComposedInfo as CodexPromptComposedInfo,
+} from './architect-core/adapters/codex-cli/index.js';
 import type { ChatPanelHost } from './architect-core/adapters/host.js';
 import {
   createAutonomyState,
@@ -240,20 +254,18 @@ interface ChatMessage {
   attachments?: ReadonlyArray<ChatMessageAttachmentSnapshot>;
   /**
    * Stable, persisted tag used by `_buildMessageActions` to deterministically
-   * re-attach action buttons after a webview rehydration. Today only used
-   * for provider-auth recovery (`'copilot_login_required'`) but kept as an
-   * open string union so future provider-specific recoveries (Anthropic
-   * key missing, OpenAI org switch, etc.) can add entries without changing
-   * the renderer contract.
+   * re-attach action buttons after a webview rehydration. Used for
+   * provider-auth recovery (`'copilot_login_required'`,
+   * `'codex_login_required'`) while keeping the renderer contract explicit.
    */
-  metaTag?: 'copilot_login_required';
+  metaTag?: 'copilot_login_required' | 'codex_login_required';
 }
 
 interface MessageAction {
   id: string;
   label: string;
   kind: 'primary' | 'secondary';
-  actionType: 'tool' | 'show_full' | 'copilot_login';
+  actionType: 'tool' | 'show_full' | 'copilot_login' | 'codex_login';
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   destructive?: boolean;
@@ -552,7 +564,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private static readonly MAX_RENDERED_MESSAGE_CHARS = 100_000;
   private static readonly MAX_ENTITY_LINKS_PER_MESSAGE = 100;
-  private static readonly ACTION_ALLOWLIST = new Set(['tool', 'show_full', 'copilot_login']);
+  private static readonly ACTION_ALLOWLIST = new Set(['tool', 'show_full', 'copilot_login', 'codex_login']);
 
   private static readonly MAX_TEXT_ATTACHMENT_BYTES = 100_000;
   private static readonly MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -1098,8 +1110,11 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // tools twice and the CLI doesn't return ToolUseRequests anyway.
     // Force the no-tools branch and let `runPassViaCopilotCli` own
     // the turn end-to-end.
-    const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
-    let effectiveTools: ToolDefinition[] = copilotCliRoute ? [] : tools;
+    const nativeCliProvider = this.architectLlm?.currentConfig?.provider ?? '';
+    const copilotCliRoute = nativeCliProvider === 'copilot-cli';
+    const codexCliRoute = nativeCliProvider === 'codex-cli';
+    const nativeCliRoute = copilotCliRoute || codexCliRoute;
+    let effectiveTools: ToolDefinition[] = nativeCliRoute ? [] : tools;
 
     // Cross-turn write-pressure narrowing. The autonomy-continuation path
     // (see ~line 2459) already narrows the live tool catalog to write+verify
@@ -1116,7 +1131,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // falls back to the full catalog if narrowing would empty it, so
     // this is always safe.
     if (
-      !copilotCliRoute
+      !nativeCliRoute
       && effectiveTools.length > 0
       && this._autonomyState.lastPassWasLocateOnly === true
       && (this._autonomyState.lastAnchorPaths?.length ?? 0) > 0
@@ -1143,7 +1158,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // `capturedDroppedAttachmentNames`, `capturedAttachmentSummary`,
       // `capturedStopContextBlock`) is threaded into the host so the seam
       // sees the SAME multi-modal blocks the inline path would have shipped.
-      if (useCorePass || copilotCliRoute) {
+      if (useCorePass || nativeCliRoute) {
         const host = this._buildCorePassHost(
           envelope,
           task,
@@ -1166,23 +1181,36 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         const copilotCliReviewSnapshot = copilotCliRoute
           ? await changeReviewService.captureWorkspaceSnapshot()
           : null;
+        const codexCliReviewSnapshot = codexCliRoute
+          ? await changeReviewService.captureWorkspaceSnapshot()
+          : null;
         const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
         try {
+          const streamNativeCliChunk = (chunk: string): void => {
+            const safeChunk = this._redactSecrets(chunk);
+            fullContent += safeChunk;
+            this.streamingContent += safeChunk;
+            void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+          };
           const passResult = copilotCliRoute
             ? await runPassViaCopilotCli({
                 host,
                 text: trimmed,
                 tools: [],
                 providerOptions: this._buildCopilotCliProviderOptions(),
-                onStreamChunk: (chunk: string) => {
-                  const safeChunk = this._redactSecrets(chunk);
-                  fullContent += safeChunk;
-                  this.streamingContent += safeChunk;
-                  void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                },
+                onStreamChunk: streamNativeCliChunk,
                 abortSignal: req.signal,
               })
-            : await runPassViaCore({
+            : codexCliRoute
+              ? await runPassViaCodexCli({
+                  host,
+                  text: trimmed,
+                  tools: [],
+                  providerOptions: this._buildCodexCliProviderOptions(),
+                  onStreamChunk: streamNativeCliChunk,
+                  abortSignal: req.signal,
+                })
+              : await runPassViaCore({
                 host,
                 text: trimmed,
                 tools: [],
@@ -1224,6 +1252,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
               }
             } catch (reviewErr) {
               console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli turn:', reviewErr);
+            }
+          }
+          if (codexCliReviewSnapshot) {
+            try {
+              const changedReviewPaths = await changeReviewService.recordWorkspaceChanges(codexCliReviewSnapshot);
+              if (changedReviewPaths.length > 0) {
+                this._pendingReviewsCollapsed = true;
+                await this._postPendingReviews();
+              }
+            } catch (reviewErr) {
+              console.warn('[DreamGraph] Failed to record pending review changes for codex-cli turn:', reviewErr);
             }
           }
           req.dispose();
@@ -1293,24 +1332,23 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const recovered = await this._recoverFromLlmTimeout(err, trimmed, envelope);
     if (!recovered) {
       const message = err instanceof Error ? err.message : String(err);
-      // Provider-auth recovery: copilot-cli surfaces "not logged in" as a
-      // structured failure with a stable code. When we see it, emit a
-      // dedicated system message carrying the `copilot_login_required`
-      // meta-tag — `_buildMessageActions` then attaches a clickable
-      // "Open Copilot login" button that opens the device-code page +
-      // an interactive `copilot login` terminal in one click. The tag
-      // is persisted on the message so the button survives reloads.
-      const failureCode = (err as { copilotCliFailureCode?: unknown } | null)?.copilotCliFailureCode;
-      if (failureCode === 'COPILOT_NOT_LOGGED_IN') {
+      // Provider-auth recovery: native CLI providers surface "not logged in"
+      // as structured failures with stable codes. Emit a dedicated system
+      // message carrying a provider-specific meta-tag so the clickable login
+      // action survives webview reloads.
+      const failureCode = (err as { copilotCliFailureCode?: unknown; codexCliFailureCode?: unknown } | null)?.copilotCliFailureCode
+        ?? (err as { codexCliFailureCode?: unknown } | null)?.codexCliFailureCode;
+      if (failureCode === 'COPILOT_NOT_LOGGED_IN' || failureCode === 'CODEX_NOT_LOGGED_IN') {
+        const isCodex = failureCode === 'CODEX_NOT_LOGGED_IN';
         const loginMessage: ChatMessage = {
           id: this._createMessageId(),
           role: 'system',
-          content:
-            `Copilot CLI is not logged in.\n\n` +
-            `Click **Open Copilot login** below to (1) open the GitHub device-code page in your browser and (2) launch an interactive \`copilot login\` terminal. Paste the code the CLI prints into the browser page, then re-run your request.`,
+          content: isCodex
+            ? `Codex CLI is not logged in.\n\nClick **Run codex login** below to launch an interactive \`codex login\` terminal. Codex opens the browser-based OpenAI login flow from that user-visible terminal; complete the login, then re-run your request.`
+            : `Copilot CLI is not logged in.\n\nClick **Open Copilot login** below to (1) open the GitHub device-code page in your browser and (2) launch an interactive \`copilot login\` terminal. Paste the code the CLI prints into the browser page, then re-run your request.`,
           timestamp: new Date().toISOString(),
           instanceId: this.currentInstanceId,
-          metaTag: 'copilot_login_required',
+          metaTag: isCodex ? 'codex_login_required' : 'copilot_login_required',
         };
         this.messages.push(loginMessage);
         await this.persistMessages();
@@ -1556,6 +1594,120 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     };
   }
 
+  private _buildCodexCliProviderOptions(): CodexCliProviderPortOptions {
+    if (!this.architectLlm) {
+      throw new Error('Cannot build Codex CLI provider options: architectLlm is not initialized.');
+    }
+    const llm = this.architectLlm;
+    const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+    const binaryName = (cfg.get<string>('codexCli.command') ?? '').trim() || 'codex';
+    if (!this.mcpClient) {
+      throw new Error(
+        'Cannot build Codex CLI provider options: McpClient is not initialized. ' +
+        'The DreamGraph daemon must be running and connected before invoking Codex CLI.',
+      );
+    }
+    const hostMcpUrl = this.mcpClient.mcpUrl;
+    const timeoutMsRaw = cfg.get<number>('codexCli.timeoutMs');
+    const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+      ? timeoutMsRaw
+      : 1_800_000;
+    const idleTimeoutMsRaw = cfg.get<number>('codexCli.idleTimeoutMs');
+    const idleTimeoutMs = typeof idleTimeoutMsRaw === 'number' && Number.isFinite(idleTimeoutMsRaw) && idleTimeoutMsRaw > 0
+      ? idleTimeoutMsRaw
+      : 180_000;
+    const toolListTimeoutMsRaw = cfg.get<number>('codexCli.toolListTimeoutMs');
+    const toolListTimeoutMs = typeof toolListTimeoutMsRaw === 'number' && Number.isFinite(toolListTimeoutMsRaw) && toolListTimeoutMsRaw > 0
+      ? toolListTimeoutMsRaw
+      : undefined;
+
+    const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const auditDirAbsPath = vscode.Uri.joinPath(this.context.globalStorageUri, 'codex-cli-audit').fsPath;
+    const bridgeEntryPath = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'copilot-cli-bridge.js').fsPath;
+
+    const registry = createHostRegistry({
+      hostMcpUrl,
+      bridgeEntryPath,
+      nodeExecPath: process.execPath,
+      auditDirAbsPath,
+      workspaceRootAbsPath: workspaceCwd,
+      ...(toolListTimeoutMs !== undefined ? { toolListTimeoutMs } : {}),
+    });
+    const mcpAudit = createHostAudit({ auditDirAbsPath });
+    const auditLive = createHostAuditLive({ auditDirAbsPath });
+    const model = llm.currentConfig?.model;
+
+    return {
+      hostLlm: llm,
+      invocationCwd: workspaceCwd,
+      timeoutMs,
+      idleTimeoutMs,
+      baseEnv: process.env,
+      model: model && model !== 'auto' ? model : undefined,
+      binaryName,
+      historyKeepLast: 10,
+      markCurrentTurn: true,
+      cliToolsManifest: {
+        server: CODEX_DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+        tools: CODEX_AUTHORITATIVE_TOOL_CATALOG,
+      },
+      deps: {
+        fs: CODEX_HOST_FS,
+        process: CODEX_HOST_PROCESS,
+        crypto: CODEX_HOST_CRYPTO,
+        clock: CODEX_HOST_CLOCK,
+        registry,
+        mcpAudit,
+      },
+      auditLive,
+      onPromptComposed: (info: CodexPromptComposedInfo): void => {
+        try {
+          this.contextInspector?.appendContextLine(
+            `Codex CLI prompt composed: ${info.promptByteLength}B, ${info.historyMessageCount} msgs, mcp=${info.mcpServerAdvertised ?? 'none'}(${info.mcpToolsAdvertised} tools), markCurrentTurn=${info.markCurrentTurn}, model=${info.model ?? 'auto'}.`,
+          );
+        } catch {
+          // inspector failures must not affect the run
+        }
+      },
+      onToolCall: (runId: string, call: RecordedMcpToolCall): void => {
+        try {
+          const key = ChatPanel._toolCallDedupKey(
+            runId,
+            call.server,
+            call.tool,
+            call.startedAtEpochMs,
+          );
+          if (this._liveToolCallsSeen.has(key)) {
+            return;
+          }
+          const entry = this._toolTraceEntryFromRawCall(call);
+          const index = this._lastToolTrace.length;
+          this._lastToolTrace.push(entry);
+          this._liveToolCallsSeen.set(key, index);
+          void this.postMessage({
+            type: 'tool-progress',
+            tool: entry.tool,
+            message: `${entry.tool} ${entry.status === 'failed' ? 'failed' : 'done'} (${entry.durationMs}ms)`,
+          });
+        } catch (liveErr) {
+          console.warn('[DreamGraph][codex-cli] onToolCall handler failed:', liveErr);
+        }
+      },
+      onRunResult: (result: CodexCliRunResult): void => {
+        try {
+          this._reconcileCliAuditToolTrace(result.runId, result.toolCalls);
+          if (!result.ok) {
+            const code = result.failure?.code ?? 'CODEX_CLI_UNKNOWN_FAILURE';
+            const message = result.failure?.message ?? 'Codex CLI run failed';
+            console.warn(`[DreamGraph][codex-cli] ${code}: ${message}`);
+          }
+        } catch (observerErr) {
+          console.warn('[DreamGraph][codex-cli] onRunResult observer failed:', observerErr);
+        }
+      },
+    };
+  }
+
   /**
    * that the architect-core adapters bind to. The host projects the
    * already-constructed envelope, context, autonomy state, and bounded
@@ -1582,14 +1734,16 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       droppedAttachmentNames: readonly string[];
       attachmentSummary: string;
       stopContextBlock: string | undefined;
+      internalPrompt?: boolean;
     },
   ): ChatPanelHost {
     // The seam composer rebuilds `conversation` from prior + new turn,
     // so it only needs the prior slice. We strip the outer system message
     // and the trailing user turn that handleUserMessage already added.
-    const priorMessages: ArchitectMessage[] = conversation
-      .filter((m) => m.role !== 'system')
-      .slice(0, -1);
+    const visibleMessages = conversation.filter((m) => m.role !== 'system');
+    const priorMessages: ArchitectMessage[] = perTurn.internalPrompt === true
+      ? visibleMessages
+      : visibleMessages.slice(0, -1);
 
     const llm = this.architectLlm!;
     const cb = this.contextBuilder!;
@@ -1624,6 +1778,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // this method will push it before persisting. Real work both ways.
       persistUserMessage: async (text: string, _contentBlocks?: readonly unknown[]) => {
         void _contentBlocks;
+        if (perTurn.internalPrompt === true) {
+          return;
+        }
         const last = panel.messages[panel.messages.length - 1];
         const alreadyPushed = !!last && last.role === 'user' && (last.fullContent ?? last.content) === text;
         if (!alreadyPushed) {
@@ -1927,20 +2084,21 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private _getLlmTimeoutMs(options: { mode: 'stream' | 'tool'; toolCount?: number; reducedContext?: boolean }): number {
     const provider = this.architectLlm?.provider ?? 'anthropic';
-    // The copilot-cli adapter has its own hard wall-clock cap (the
-    // orchestrator's spawn `timeoutMs`, sourced from the
-    // `dreamgraph.architect.copilotCli.timeoutMs` setting, default 180s).
+    // Native CLI adapters have their own hard wall-clock caps (the
+    // orchestrator's spawn `timeoutMs`, sourced from the matching
+    // `dreamgraph.architect.<provider>.timeoutMs` setting, default 30 min).
     // If the chat-panel wraps the call in a smaller AbortSignal, that
     // signal will fire FIRST and the orchestrator surfaces it as
     // `CANCELLED` — indistinguishable from the user clicking Stop.
     // To keep the orchestrator's budget authoritative, derive the
     // chat-panel wrapper from the same setting plus a 30s buffer so
     // the spawn-side timeout always wins. The base PROVIDER_BUDGETS
-    // table doesn't cover copilot-cli (only API providers), which is
+    // table doesn't cover native CLI providers (only API providers), which is
     // why this branch is needed.
-    if (provider === 'copilot-cli') {
+    if (provider === 'copilot-cli' || provider === 'codex-cli') {
       const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
-      const raw = cfg.get<number>('copilotCli.timeoutMs');
+      const key = provider === 'copilot-cli' ? 'copilotCli.timeoutMs' : 'codexCli.timeoutMs';
+      const raw = cfg.get<number>(key);
       const base = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1_800_000;
       let budget = base + 30_000;
       if (options.toolCount && options.toolCount > 12) budget += 30_000;
@@ -2291,6 +2449,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     if (message.metaTag === 'copilot_login_required') {
       actions.push({ id: 'copilot-login', label: 'Open Copilot login', kind: 'primary', actionType: 'copilot_login' });
     }
+    if (message.metaTag === 'codex_login_required') {
+      actions.push({ id: 'codex-login', label: 'Run codex login', kind: 'primary', actionType: 'codex_login' });
+    }
     return actions;
   }
 
@@ -2375,6 +2536,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           console.warn('[DreamGraph] copilot_login: openExternal failed', openErr);
         }
         const terminal = vscode.window.createTerminal({ name: 'Copilot Login' });
+        terminal.show(true);
+        terminal.sendText(`${binaryName} login`);
+        this._actionLog.push({ timestamp: new Date().toISOString(), actionType: action.actionType, sourceMessageId: messageId, outcome: 'completed', detail: binaryName });
+        await this.postMessage({ type: 'messageActionState', messageId, actionId, status: 'completed' });
+        return;
+      }
+
+      if (action.actionType === 'codex_login') {
+        const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+        const binaryName = (cfg.get<string>('codexCli.command') ?? '').trim() || 'codex';
+        const terminal = vscode.window.createTerminal({ name: 'Codex Login' });
         terminal.show(true);
         terminal.sendText(`${binaryName} login`);
         this._actionLog.push({ timestamp: new Date().toISOString(), actionType: action.actionType, sourceMessageId: messageId, outcome: 'completed', detail: binaryName });
@@ -2580,11 +2752,12 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     const models = provider === 'anthropic' ? ANTHROPIC_MODELS
       : provider === 'openai' ? OPENAI_MODELS
       : provider === 'copilot-cli' ? COPILOT_CLI_MODELS
+      : provider === 'codex-cli' ? CODEX_CLI_MODELS
       : [];
     const capabilities = this.architectLlm?.getModelCapabilities(provider as ArchitectProvider, model) ?? { textAttachments: false, imageAttachments: false };
     void this.postMessage({
       type: 'updateModels',
-      providers: ['anthropic', 'openai', 'ollama', 'lmstudio', 'copilot-cli'],
+      providers: ['anthropic', 'openai', 'ollama', 'lmstudio', 'copilot-cli', 'codex-cli'],
       models,
       current: { provider, model },
       capabilities,
@@ -2610,6 +2783,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       case 'lmstudio':
         return 'http://localhost:1234/v1';
       case 'copilot-cli':
+      case 'codex-cli':
         return '';
       default:
         return '';
@@ -2622,6 +2796,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       const models = provider === 'anthropic' ? ANTHROPIC_MODELS
         : provider === 'openai' ? OPENAI_MODELS
         : provider === 'copilot-cli' ? COPILOT_CLI_MODELS
+        : provider === 'codex-cli' ? CODEX_CLI_MODELS
         : [];
       const previousModel = this.architectLlm.currentConfig?.model ?? '';
       const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
@@ -2629,12 +2804,12 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // Keyless providers: ollama (no auth), lmstudio (fixed literal
       // placeholder; the LM Studio server ignores the auth header but
       // the OpenAI-compat code path sends one regardless), and
-      // copilot-cli (the CLI uses its own local GitHub authentication
-      // and never sees a key from this extension).
+      // copilot-cli/codex-cli (the CLIs use their own local authentication
+      // and never see a key from this extension).
       let apiKey = '';
       if (provider === 'lmstudio') {
         apiKey = 'lm-studio';
-      } else if (provider !== 'ollama' && provider !== 'copilot-cli') {
+      } else if (provider !== 'ollama' && provider !== 'copilot-cli' && provider !== 'codex-cli') {
         apiKey = (await this.architectLlm.getApiKey(provider) ?? '');
       }
       this.architectLlm.applyConfig({
@@ -2933,11 +3108,14 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       const alreadyForcedReport = this._reportForcedThisRun === true;
       if (!hasReport && didRealWork && !alreadyForcedReport && !this.abortController?.signal.aborted) {
         this._reportForcedThisRun = true;
+        const evidenceDigest = this._formatToolTraceEvidenceForPrompt(this._lastToolTrace);
         const reportPrompt = [
           'STOP. You are about to end the session without a report.',
+          evidenceDigest ? `Evidence from the just-finished pass:\n${evidenceDigest}` : '',
+          'Important: audited tool calls prove progress/evidence only. They do not prove the original user prompt was fulfilled unless you actually delivered the requested answer.',
           'Emit ONLY the SUMMARY/structured-envelope report now: a one-paragraph plain-text summary of what you actually did this run, what changed, what is incomplete, and any blockers — followed by the standard json envelope fenced block (`goal_status`, `progress_status`, `uncertainty`, optional `recommended_next_steps`).',
           'Do NOT issue any tool calls in this turn. Reporting is mandatory before sign-off.',
-        ].join(' ');
+        ].filter(Boolean).join(' ');
         const notice: ChatMessage = {
           id: this._createMessageId(),
           role: 'system',
@@ -2948,7 +3126,10 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         this.messages.push(notice);
         await this.persistMessages();
         await this.postMessage({ type: 'addMessage', message: notice, actions: [], roleMeta: this._roleMetaFor(notice), contextFooter: undefined });
-        await this._runAutonomyContinuationPass(reportPrompt, llmMessages, tools);
+        await this._runAutonomyContinuationPass(reportPrompt, llmMessages, tools, [], {
+          internalPrompt: true,
+          preserveExistingToolTrace: true,
+        });
         return;
       }
 
@@ -2983,6 +3164,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     baseLlmMessages: ArchitectMessage[],
     tools: ToolDefinition[],
     nextStepActions: RecommendedAction[] = [],
+    options: { readonly internalPrompt?: boolean; readonly preserveExistingToolTrace?: boolean } = {},
   ): Promise<void> {
     if (this._autonomyContinuing) {
       console.warn('[DreamGraph] _runAutonomyContinuationPass: re-entrant call dropped — a continuation is already in progress.');
@@ -3003,20 +3185,24 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         ? await this.contextBuilder.buildEnvelope(prompt, undefined, this._currentBudgetCoordinator ?? undefined)
         : null;
       const liveAnchor = envelope?.activeFile?.selection?.anchor ?? envelope?.activeFile?.cursorAnchor;
-      const userMessage: ChatMessage = {
-        id: this._createMessageId(),
-        role: 'user',
-        content: prompt,
-        timestamp: new Date().toISOString(),
-        instanceId: this.currentInstanceId,
-        anchor: liveAnchor,
-      };
-      this.messages.push(userMessage);
-      await this._persistMessagesWithCanonicalAnchorRefresh(envelope);
+      if (options.internalPrompt !== true) {
+        const userMessage: ChatMessage = {
+          id: this._createMessageId(),
+          role: 'user',
+          content: prompt,
+          timestamp: new Date().toISOString(),
+          instanceId: this.currentInstanceId,
+          anchor: liveAnchor,
+        };
+        this.messages.push(userMessage);
+        await this._persistMessagesWithCanonicalAnchorRefresh(envelope);
+      }
 
       this.streaming = true;
       this.streamingContent = '';
-      this._lastToolTrace = [];
+      if (options.preserveExistingToolTrace !== true) {
+        this._lastToolTrace = [];
+      }
       this._liveToolCallsSeen.clear();
       this._lastVerdict = null;
       this.abortController = new AbortController();
@@ -3106,13 +3292,15 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // below remains the source of truth for tool-using continuations
       // until Phase 3d wires `host.executeTool`.
       const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get<boolean>('useCorePass') === true;
-      const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
-      // Copilot CLI handles its own tool selection internally — we must
-      // force the no-tools branch (tools=[]) and route through
-      // `runPassViaCopilotCli`. Without this, autonomy continuations
-      // fall through to `this.architectLlm!.stream(...)` which throws
-      // "Copilot CLI provider does not use ArchitectLlm transport".
-      const seamRoute = (useCorePass || copilotCliRoute) && envelope !== null;
+      const nativeCliProvider = this.architectLlm?.currentConfig?.provider ?? '';
+      const copilotCliRoute = nativeCliProvider === 'copilot-cli';
+      const codexCliRoute = nativeCliProvider === 'codex-cli';
+      const nativeCliRoute = copilotCliRoute || codexCliRoute;
+      // Native CLI providers handle tool selection internally - force
+      // the no-tools branch (tools=[]) and route through the selected
+      // ProviderPort. Without this, continuations fall through to
+      // `this.architectLlm!.stream(...)`, which rejects native CLI providers.
+      const seamRoute = (useCorePass || nativeCliRoute) && envelope !== null;
       let seamOwnedAssistant = false;
 
       let fullContent = '';
@@ -3128,6 +3316,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             droppedAttachmentNames: [],
             attachmentSummary: '',
             stopContextBlock: undefined,
+            internalPrompt: options.internalPrompt,
           },
         );
         // Reset the re-entrancy guard BEFORE the seam runs so the
@@ -3142,23 +3331,36 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         const copilotCliReviewSnapshot = copilotCliRoute
           ? await changeReviewService.captureWorkspaceSnapshot()
           : null;
+        const codexCliReviewSnapshot = codexCliRoute
+          ? await changeReviewService.captureWorkspaceSnapshot()
+          : null;
         const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
         try {
+          const streamNativeCliChunk = (chunk: string): void => {
+            const safeChunk = this._redactSecrets(chunk);
+            fullContent += safeChunk;
+            this.streamingContent += safeChunk;
+            void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+          };
           const passResult = copilotCliRoute
             ? await runPassViaCopilotCli({
                 host,
                 text: prompt,
                 tools: [],
                 providerOptions: this._buildCopilotCliProviderOptions(),
-                onStreamChunk: (chunk: string) => {
-                  const safeChunk = this._redactSecrets(chunk);
-                  fullContent += safeChunk;
-                  this.streamingContent += safeChunk;
-                  void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                },
+                onStreamChunk: streamNativeCliChunk,
                 abortSignal: req.signal,
               })
-            : await runPassViaCore({
+            : codexCliRoute
+              ? await runPassViaCodexCli({
+                  host,
+                  text: prompt,
+                  tools: [],
+                  providerOptions: this._buildCodexCliProviderOptions(),
+                  onStreamChunk: streamNativeCliChunk,
+                  abortSignal: req.signal,
+                })
+              : await runPassViaCore({
                 host,
                 text: prompt,
                 tools: [],
@@ -3189,11 +3391,28 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
               console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli continuation pass:', reviewErr);
             }
           }
+          if (codexCliReviewSnapshot) {
+            try {
+              const changedReviewPaths = await changeReviewService.recordWorkspaceChanges(codexCliReviewSnapshot);
+              if (changedReviewPaths.length > 0) {
+                this._pendingReviewsCollapsed = true;
+                await this._postPendingReviews();
+              }
+            } catch (reviewErr) {
+              console.warn('[DreamGraph] Failed to record pending review changes for codex-cli continuation pass:', reviewErr);
+            }
+          }
           req.dispose();
         }
       } else if (tools.length > 0) {
+        if (options.internalPrompt === true) {
+          llmMessages.push({ role: 'user', content: prompt });
+        }
         fullContent = await this.runAgenticLoop(llmMessages, tools);
       } else {
+        if (options.internalPrompt === true) {
+          llmMessages.push({ role: 'user', content: prompt });
+        }
         const req = this._createRequestSignal();
         try {
           await this.architectLlm!.stream(llmMessages, (chunk: string) => {
@@ -3397,6 +3616,33 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private _formatStopContextBlock(ctx: { summary?: string; nextSteps: Array<{ label: string; rationale?: string }> }): string {
     return helpers.formatStopContextBlock(ctx);
+  }
+
+  private _formatToolTraceEvidenceForPrompt(trace: readonly ToolTraceEntry[]): string {
+    if (!trace || trace.length === 0) return '';
+    const completed = trace.filter((entry) => entry.status !== 'failed').length;
+    const failed = trace.filter((entry) => entry.status === 'failed').length;
+    const counts = new Map<string, number>();
+    for (const entry of trace) {
+      counts.set(entry.tool, (counts.get(entry.tool) ?? 0) + 1);
+    }
+    const topTools = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 10)
+      .map(([tool, count]) => `${tool} x${count}`)
+      .join(', ');
+    const failedTools = trace
+      .filter((entry) => entry.status === 'failed')
+      .slice(0, 8)
+      .map((entry) => `${entry.tool}${entry.argsSummary ? ` (${entry.argsSummary})` : ''}`);
+    const lines = [
+      `- Tool trace: ${trace.length} executed call${trace.length === 1 ? '' : 's'} (${completed} completed, ${failed} failed).`,
+      topTools ? `- Tools observed: ${topTools}.` : '',
+      failedTools.length > 0 ? `- Failed calls to mention as blockers/limits, not as absence of work: ${failedTools.join('; ')}.` : '',
+      '- Treat these audited calls as already completed progress evidence; do not say no inspection occurred.',
+      '- Do not call the original prompt fulfilled unless the requested final answer/report was actually delivered.',
+    ];
+    return lines.filter(Boolean).join('\n');
   }
 
   private async _executeRecommendedAction(actionId: string, fallbackLabel?: string): Promise<void> {
@@ -4083,7 +4329,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
    * `<inline>:write` (which never reaches us — denied — but kept in
    * the projection so the same code handles future relaxations).
    */
-  private _toolTraceEntryFromCopilotCall(classified: ClassifiedToolCall): ToolTraceEntry {
+  private _toolTraceEntryFromCopilotCall(classified: ClassifiedToolCall | CodexClassifiedToolCall): ToolTraceEntry {
     const { call } = classified;
     let parsedArgs: unknown = {};
     try {
@@ -4102,6 +4348,24 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       durationMs: Math.max(0, Math.floor(call.durationMs)),
       status: call.isError ? 'failed' : 'completed',
     };
+  }
+
+  private _reconcileCliAuditToolTrace(
+    runId: string,
+    classifiedCalls: readonly (ClassifiedToolCall | CodexClassifiedToolCall)[],
+  ): void {
+    for (const classified of classifiedCalls) {
+      const { call } = classified;
+      const key = ChatPanel._toolCallDedupKey(runId, call.server, call.tool, call.startedAtEpochMs);
+      const authoritativeEntry = this._toolTraceEntryFromCopilotCall(classified);
+      const liveIndex = this._liveToolCallsSeen.get(key);
+      if (liveIndex !== undefined && liveIndex >= 0 && liveIndex < this._lastToolTrace.length) {
+        this._lastToolTrace[liveIndex] = authoritativeEntry;
+      } else {
+        this._liveToolCallsSeen.set(key, this._lastToolTrace.length);
+        this._lastToolTrace.push(authoritativeEntry);
+      }
+    }
   }
 
   /**

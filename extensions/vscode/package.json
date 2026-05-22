@@ -235,10 +235,11 @@
             "anthropic",
             "ollama",
             "lmstudio",
-            "copilot-cli"
+            "copilot-cli",
+            "codex-cli"
           ],
           "default": "anthropic",
-          "description": "LLM provider for the Architect model. Local options: ollama (default :11434), lmstudio (default :1234/v1), copilot-cli (spawns the GitHub Copilot CLI; uses your local copilot login, no API key)."
+          "description": "LLM provider for the Architect model. Local options: ollama (default :11434), lmstudio (default :1234/v1), copilot-cli (spawns the GitHub Copilot CLI; uses your local copilot login, no API key), codex-cli (spawns Codex CLI; uses your local codex login, no API key)."
         },
         "dreamgraph.architect.copilotCli.command": {
           "type": "string",
@@ -259,6 +260,26 @@
           "type": "number",
           "default": 30000,
           "description": "Hard wall-clock cap (ms) for the inheritance-proxy bridge's upstream MCP `tools/list` probe run before each Copilot CLI pass. Bump this if the architect's DreamGraph daemon is slow to respond on your machine."
+        },
+        "dreamgraph.architect.codexCli.command": {
+          "type": "string",
+          "default": "codex",
+          "description": "Executable name (or absolute path) for the Codex CLI binary. Must be runnable in PATH or given as an absolute path."
+        },
+        "dreamgraph.architect.codexCli.timeoutMs": {
+          "type": "number",
+          "default": 1800000,
+          "description": "Hard wall-clock cap (ms) for a single Codex CLI invocation. Default 30 min. This is a backstop; the idle-output cap (`codexCli.idleTimeoutMs`) is what normally catches stalled runs."
+        },
+        "dreamgraph.architect.codexCli.idleTimeoutMs": {
+          "type": "number",
+          "default": 180000,
+          "description": "Idle-output cap (ms) for a single Codex CLI invocation. The run is killed if no stdout/stderr chunk has been received for this long. Default 3 min."
+        },
+        "dreamgraph.architect.codexCli.toolListTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Hard wall-clock cap (ms) for the inheritance-proxy bridge's upstream MCP `tools/list` probe run before each Codex CLI pass."
         },
         "dreamgraph.architect.useCorePass": {
           "type": "boolean",

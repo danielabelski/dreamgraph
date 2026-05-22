@@ -2,6 +2,9 @@ import type { RecommendedAction, RecommendedActionSet } from './autonomy.js';
 import { rankRecommendedActions } from './autonomy.js';
 import { extractPrimaryJsonEnvelope } from './autonomy-contract.js';
 
+const GOAL_COMPLETION_RE =
+  /ready for commit|done and verified|goal sufficiently reached|\b(?:original goal|goal|task|request|assessment|implementation|change|work)\b[^.\n]{0,80}\bcompleted successfully\b/i;
+
 export interface StructuredPassEnvelope {
   summary?: string;
   goalStatus?: 'complete' | 'partial' | 'blocked';
@@ -38,7 +41,7 @@ export function extractStructuredPassEnvelope(content: string | undefined): Stru
 
   const nextSteps = extractRecommendedActions(safeContent);
   const lower = safeContent.toLowerCase();
-  const goalStatus = /goal sufficiently reached|done and verified|completed successfully|ready for commit/.test(lower)
+  const goalStatus = GOAL_COMPLETION_RE.test(lower)
     ? 'complete'
     : /blocked|cannot proceed|blocking failure/.test(lower)
       ? 'blocked'

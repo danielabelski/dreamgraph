@@ -6,6 +6,8 @@ import { advanceAutonomyStateIfContinued, analyzePass, inferPassOutcomeSignal } 
 test('inferPassOutcomeSignal detects goal completion and stalled progress markers', () => {
   const done = inferPassOutcomeSignal('Done and verified. Ready for commit.');
   assert.equal(done.goalSufficientlyReached, true);
+  const toolOnly = inferPassOutcomeSignal('18 DreamGraph tool calls completed successfully, but the report is still missing.');
+  assert.equal(toolOnly.goalSufficientlyReached, false);
   const stalled = inferPassOutcomeSignal('Stalled progress. Cannot proceed.');
   assert.equal(stalled.progressStatus, 'stalled');
 });
@@ -57,6 +59,31 @@ test('analyzePass stops when goal is sufficiently reached', () => {
   });
   assert.equal(result.decision.shouldContinue, false);
   assert.match(result.decision.reason, /goal sufficiently reached/i);
+});
+
+test('analyzePass lets partial structured envelope override broad completion prose', () => {
+  const state = createAutonomyState('eager', 20);
+  const result = analyzePass(state, {
+    content:
+      'The pass gathered evidence through 18 DreamGraph calls completed successfully, but the final adapter assessment remains undelivered.',
+    actions: [
+      { id: 'synthesize', label: 'Synthesize adapter state report', priority: 1, eligible: true, withinScope: true },
+    ],
+    envelope: {
+      summary: 'Evidence gathered, final report undelivered.',
+      goalStatus: 'partial',
+      progressStatus: 'advancing',
+      uncertainty: 'medium',
+      nextSteps: [
+        { id: 'synthesize', label: 'Synthesize adapter state report', priority: 1, eligible: true, withinScope: true },
+      ],
+    },
+    toolCallCount: 18,
+    toolNames: ['dreamgraph:read_source_code'],
+  });
+
+  assert.equal(result.signal.goalSufficientlyReached, false);
+  assert.doesNotMatch(result.decision.reason, /goal sufficiently reached/i);
 });
 
 test('advanceAutonomyStateIfContinued decrements visible counters only when continuing', () => {

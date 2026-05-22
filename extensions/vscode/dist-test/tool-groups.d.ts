@@ -16,7 +16,7 @@
 import type { ArchitectTask } from './prompts/index.js';
 export declare const TOOL_GROUPS: {
     /** Reads — always available. Cheap, safe. */
-    readonly core_read: readonly ["query_resource", "graph_rag_retrieve", "shortest_path", "query_api_surface", "read_source_code", "list_directory", "read_local_file", "search_source_code", "list_markdown_chapters", "read_markdown_chapter"];
+    readonly core_read: readonly ["query_resource", "graph_rag_retrieve", "shortest_path", "query_api_surface", "read_source_code", "list_directory", "read_local_file", "search_source_code", "list_markdown_chapters", "read_markdown_chapter", "cognitive_status"];
     /** File writes — only when intent is clearly mutating. */
     readonly core_write: readonly ["edit_file", "create_file", "rename_file", "delete_file", "write_file", "modify_entity", "run_command", "append_to_file", "patch_file", "edit_markdown_section", "patch_markdown_chapter"];
     /** Graph mutations — knowledge-graph editing. */

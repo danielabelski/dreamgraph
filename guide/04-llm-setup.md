@@ -99,7 +99,7 @@ Open VS Code settings (`Ctrl+,`) and search for `dreamgraph.architect`:
 
 | Setting | Purpose |
 |---------|---------|
-| `dreamgraph.architect.provider` | `openai`, `anthropic`, `ollama`, etc. |
+| `dreamgraph.architect.provider` | `openai`, `anthropic`, `ollama`, `lmstudio`, `copilot-cli`, or `codex-cli`. |
 | `dreamgraph.architect.model` | Model id (e.g. `gpt-5.5`, `claude-3-5-sonnet`). |
 | `dreamgraph.architect.baseUrl` | Override only when needed (custom proxy, Azure, etc.). |
 | `dreamgraph.architect.openai.reasoningEffort` | GPT-5.5 only: `low`, `medium`, `high`. |
@@ -139,6 +139,19 @@ Knobs:
 | `dreamgraph.architect.copilotCli.command` | Path to the `copilot` binary (default: `copilot` on `PATH`). |
 | `dreamgraph.architect.copilotCli.timeoutMs` | Hard wall-clock cap per pass (default 180000). |
 | `dreamgraph.architect.copilotCli.toolListTimeoutMs` | Bridge health-probe timeout against the daemon (default 30000). Bump if your daemon is slow to respond. |
+
+### Codex CLI (no API key)
+
+Set `dreamgraph.architect.provider` to `codex-cli` to route Architect chat turns through your locally-installed Codex CLI (`codex` binary on `PATH`, or set an absolute path in `dreamgraph.architect.codexCli.command`). This uses your existing Codex login and the same DreamGraph MCP inheritance proxy model as Copilot CLI: the extension validates the live tool registry, injects the audited `dreamgraph` MCP server, and fails closed if graph grounding is unavailable.
+
+Knobs:
+
+| Setting | Purpose |
+|---------|---------|
+| `dreamgraph.architect.codexCli.command` | Path to the `codex` binary (default: `codex` on `PATH`). |
+| `dreamgraph.architect.codexCli.timeoutMs` | Hard wall-clock cap per pass (default 1800000). |
+| `dreamgraph.architect.codexCli.idleTimeoutMs` | Idle-output cap per pass (default 180000). |
+| `dreamgraph.architect.codexCli.toolListTimeoutMs` | Bridge health-probe timeout against the daemon (default 30000). |
 
 ---
 

@@ -351,6 +351,10 @@ extensions/
       mcp-client.ts
       local-tools.ts
       tool-groups.ts
+      architect-core/
+        adapters/
+          copilot-cli/   # native GitHub Copilot CLI Architect adapter
+          codex-cli/     # native Codex CLI Architect adapter, runner/auth recovery, ProviderPort seam, chat routing, and live MCP tool traces
 
 explorer/
   src/

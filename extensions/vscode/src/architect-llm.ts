@@ -29,7 +29,7 @@ import {
   projectStrictEnvelopeToLegacy,
 } from "./architect-pass-projection.js";
 
-export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio" | "copilot-cli";
+export type ArchitectProvider = "anthropic" | "openai" | "ollama" | "lmstudio" | "copilot-cli" | "codex-cli";
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ArchitectConfig {
@@ -127,6 +127,16 @@ export const COPILOT_CLI_MODELS = [
   "gpt-5.4",
   "gpt-4o",
   "claude-sonnet-4.6",
+  "auto",
+];
+
+export const CODEX_CLI_MODELS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.3-codex",
+  "gpt-5.2-codex",
+  "gpt-5.2",
+  "gpt-5-mini",
   "auto",
 ];
 
@@ -257,9 +267,9 @@ export class ArchitectLlm implements vscode.Disposable {
       case "lmstudio":
         return { textAttachments: true, imageAttachments: false };
       case "copilot-cli":
-        // The CLI takes a single `--prompt` string. The provider port
-        // serializes attachments into placeholder text; no real binary
-        // attachment surface exists.
+      case "codex-cli":
+        // Native CLI provider ports serialize turns into a single prompt;
+        // no binary attachment surface exists.
         return { textAttachments: false, imageAttachments: false };
       default:
         return { textAttachments: false, imageAttachments: false };
@@ -353,7 +363,7 @@ export class ArchitectLlm implements vscode.Disposable {
       // sends `Authorization: Bearer <key>` unconditionally. A literal
       // placeholder avoids "Bearer " (empty) which some setups reject.
       apiKey = "lm-studio";
-    } else if (provider && provider !== "ollama") {
+    } else if (provider && provider !== "ollama" && provider !== "copilot-cli" && provider !== "codex-cli") {
       apiKey = (await this._secretStorage.get(`dreamgraph.apiKey.${provider}`)) ?? "";
     }
 
@@ -1262,6 +1272,7 @@ export class ArchitectLlm implements vscode.Disposable {
       case "lmstudio":
         return "http://localhost:1234/v1";
       case "copilot-cli":
+      case "codex-cli":
         // No HTTP transport; the CLI is invoked locally.
         return "";
       default:
@@ -1281,6 +1292,8 @@ export class ArchitectLlm implements vscode.Disposable {
         return "";
       case "copilot-cli":
         return COPILOT_CLI_MODELS[0] ?? "auto";
+      case "codex-cli":
+        return CODEX_CLI_MODELS[0] ?? "auto";
       default:
         return "";
     }
@@ -1297,17 +1310,18 @@ export class ArchitectLlm implements vscode.Disposable {
       this._config.provider !== "ollama" &&
       this._config.provider !== "lmstudio" &&
       this._config.provider !== "copilot-cli" &&
+      this._config.provider !== "codex-cli" &&
       !this._config.apiKey
     ) {
       throw new Error(`No API key stored for ${this._config.provider}. Use "DreamGraph: Set Architect API Key" to store one.`);
     }
-    if (this._config.provider === "copilot-cli") {
-      // Copilot CLI is not callable through ArchitectLlm. The chat
-      // panel must route turns through `runPassViaCopilotCli` instead
-      // of `architectLlm.stream`/`callWithTools`. Fail loudly if a
-      // call slips through.
+    if (this._config.provider === "copilot-cli" || this._config.provider === "codex-cli") {
+      // Native CLI providers are not callable through ArchitectLlm. The
+      // chat panel must route turns through their ProviderPort-backed
+      // runner instead of `architectLlm.stream`/`callWithTools`. Fail
+      // loudly if a call slips through.
       throw new Error(
-        "Copilot CLI provider does not use ArchitectLlm transport. Route this turn through runPassViaCopilotCli instead.",
+        `${this._config.provider} provider does not use ArchitectLlm transport. Route this turn through the native CLI ProviderPort instead.`,
       );
     }
   }

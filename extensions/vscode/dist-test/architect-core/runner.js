@@ -17,6 +17,8 @@ exports.buildV1Ports = buildV1Ports;
 exports.runPassViaCore = runPassViaCore;
 exports.buildCopilotCliPorts = buildCopilotCliPorts;
 exports.runPassViaCopilotCli = runPassViaCopilotCli;
+exports.buildCodexCliPorts = buildCodexCliPorts;
+exports.runPassViaCodexCli = runPassViaCodexCli;
 const pass_js_1 = require("./pass.js");
 const clock_js_1 = require("./adapters/clock.js");
 const v1_js_1 = require("./adapters/v1.js");
@@ -80,6 +82,7 @@ async function runPassViaCore(input) {
 // makes both wirings available behind matching entry points.
 // ---------------------------------------------------------------------------
 const index_js_1 = require("./adapters/copilot-cli/index.js");
+const index_js_2 = require("./adapters/codex-cli/index.js");
 /**
  * Build a port set where the provider port is the Copilot CLI wrapper.
  * Every other port is reused from the v1 wiring. Pure construction —
@@ -99,6 +102,45 @@ function buildCopilotCliPorts(options) {
  */
 async function runPassViaCopilotCli(input) {
     const ports = buildCopilotCliPorts({
+        host: input.host,
+        providerOptions: input.providerOptions,
+    });
+    const driverInput = {
+        userIntent: {
+            text: input.text,
+            contentBlocks: input.host.contentBlocks,
+            stopContextBlock: input.host.stopContextBlock,
+        },
+        ports,
+        priorMessages: input.host.priorMessages,
+        task: input.host.task,
+        provider: input.host.architectLlm.provider ?? "anthropic",
+        tools: input.tools,
+        budgetCoordinator: input.host.budgetCoordinator,
+        onStreamChunk: input.onStreamChunk,
+        abortSignal: input.abortSignal,
+    };
+    return (0, pass_js_1.runPass)(driverInput);
+}
+/**
+ * Build a port set where the provider port is the Codex CLI wrapper.
+ * Every other port is reused from the v1 wiring. Pure construction -
+ * performs no I/O.
+ */
+function buildCodexCliPorts(options) {
+    const v1 = buildV1Ports(options.host);
+    return Object.freeze({
+        ...v1,
+        provider: (0, index_js_2.createCodexCliProviderPort)(options.providerOptions),
+    });
+}
+/**
+ * Drive one pass through `runPass()` with the Codex CLI provider port
+ * wired in. Chat routing remains a separate integration step; this
+ * function exposes the provider-neutral seam for that route.
+ */
+async function runPassViaCodexCli(input) {
+    const ports = buildCodexCliPorts({
         host: input.host,
         providerOptions: input.providerOptions,
     });

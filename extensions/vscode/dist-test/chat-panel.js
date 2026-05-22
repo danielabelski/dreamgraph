@@ -58,6 +58,7 @@ const index_js_1 = require("./prompts/index.js");
 const tool_groups_js_1 = require("./tool-groups.js");
 const runner_js_1 = require("./architect-core/runner.js");
 const index_js_2 = require("./architect-core/adapters/copilot-cli/index.js");
+const index_js_3 = require("./architect-core/adapters/codex-cli/index.js");
 const autonomy_js_1 = require("./autonomy.js");
 const autonomy_loop_js_1 = require("./autonomy-loop.js");
 const tool_classification_js_1 = require("./tool-classification.js");
@@ -306,7 +307,7 @@ class ChatPanel {
     _lastStopContext = null;
     static MAX_RENDERED_MESSAGE_CHARS = 100_000;
     static MAX_ENTITY_LINKS_PER_MESSAGE = 100;
-    static ACTION_ALLOWLIST = new Set(['tool', 'show_full', 'copilot_login']);
+    static ACTION_ALLOWLIST = new Set(['tool', 'show_full', 'copilot_login', 'codex_login']);
     static MAX_TEXT_ATTACHMENT_BYTES = 100_000;
     static MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
     /** Hard timeout per LLM provider request (ms). Prevents infinite hangs.
@@ -814,8 +815,11 @@ class ChatPanel {
             // tools twice and the CLI doesn't return ToolUseRequests anyway.
             // Force the no-tools branch and let `runPassViaCopilotCli` own
             // the turn end-to-end.
-            const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
-            let effectiveTools = copilotCliRoute ? [] : tools;
+            const nativeCliProvider = this.architectLlm?.currentConfig?.provider ?? '';
+            const copilotCliRoute = nativeCliProvider === 'copilot-cli';
+            const codexCliRoute = nativeCliProvider === 'codex-cli';
+            const nativeCliRoute = copilotCliRoute || codexCliRoute;
+            let effectiveTools = nativeCliRoute ? [] : tools;
             // Cross-turn write-pressure narrowing. The autonomy-continuation path
             // (see ~line 2459) already narrows the live tool catalog to write+verify
             // when both the prior and current pass were locate-only with a sticky
@@ -830,7 +834,7 @@ class ChatPanel {
             // is forced toward the write path. `narrowToWriteAndVerify` already
             // falls back to the full catalog if narrowing would empty it, so
             // this is always safe.
-            if (!copilotCliRoute
+            if (!nativeCliRoute
                 && effectiveTools.length > 0
                 && this._autonomyState.lastPassWasLocateOnly === true
                 && (this._autonomyState.lastAnchorPaths?.length ?? 0) > 0) {
@@ -854,7 +858,7 @@ class ChatPanel {
                 // `capturedDroppedAttachmentNames`, `capturedAttachmentSummary`,
                 // `capturedStopContextBlock`) is threaded into the host so the seam
                 // sees the SAME multi-modal blocks the inline path would have shipped.
-                if (useCorePass || copilotCliRoute) {
+                if (useCorePass || nativeCliRoute) {
                     const host = this._buildCorePassHost(envelope, task, contextResult, conversation, conversation, {
                         contentBlocks: capturedTurnBlocks,
                         droppedAttachmentNames: capturedDroppedAttachmentNames,
@@ -870,34 +874,47 @@ class ChatPanel {
                     const copilotCliReviewSnapshot = copilotCliRoute
                         ? await change_review_service_1.changeReviewService.captureWorkspaceSnapshot()
                         : null;
+                    const codexCliReviewSnapshot = codexCliRoute
+                        ? await change_review_service_1.changeReviewService.captureWorkspaceSnapshot()
+                        : null;
                     const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
                     try {
+                        const streamNativeCliChunk = (chunk) => {
+                            const safeChunk = this._redactSecrets(chunk);
+                            fullContent += safeChunk;
+                            this.streamingContent += safeChunk;
+                            void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                        };
                         const passResult = copilotCliRoute
                             ? await (0, runner_js_1.runPassViaCopilotCli)({
                                 host,
                                 text: trimmed,
                                 tools: [],
                                 providerOptions: this._buildCopilotCliProviderOptions(),
-                                onStreamChunk: (chunk) => {
-                                    const safeChunk = this._redactSecrets(chunk);
-                                    fullContent += safeChunk;
-                                    this.streamingContent += safeChunk;
-                                    void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                                },
+                                onStreamChunk: streamNativeCliChunk,
                                 abortSignal: req.signal,
                             })
-                            : await (0, runner_js_1.runPassViaCore)({
-                                host,
-                                text: trimmed,
-                                tools: [],
-                                onStreamChunk: (chunk) => {
-                                    const safeChunk = this._redactSecrets(chunk);
-                                    fullContent += safeChunk;
-                                    this.streamingContent += safeChunk;
-                                    void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                                },
-                                abortSignal: req.signal,
-                            });
+                            : codexCliRoute
+                                ? await (0, runner_js_1.runPassViaCodexCli)({
+                                    host,
+                                    text: trimmed,
+                                    tools: [],
+                                    providerOptions: this._buildCodexCliProviderOptions(),
+                                    onStreamChunk: streamNativeCliChunk,
+                                    abortSignal: req.signal,
+                                })
+                                : await (0, runner_js_1.runPassViaCore)({
+                                    host,
+                                    text: trimmed,
+                                    tools: [],
+                                    onStreamChunk: (chunk) => {
+                                        const safeChunk = this._redactSecrets(chunk);
+                                        fullContent += safeChunk;
+                                        this.streamingContent += safeChunk;
+                                        void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                                    },
+                                    abortSignal: req.signal,
+                                });
                         if (!fullContent && passResult.assistantMessage.content) {
                             fullContent = passResult.assistantMessage.content;
                         }
@@ -928,6 +945,18 @@ class ChatPanel {
                             }
                             catch (reviewErr) {
                                 console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli turn:', reviewErr);
+                            }
+                        }
+                        if (codexCliReviewSnapshot) {
+                            try {
+                                const changedReviewPaths = await change_review_service_1.changeReviewService.recordWorkspaceChanges(codexCliReviewSnapshot);
+                                if (changedReviewPaths.length > 0) {
+                                    this._pendingReviewsCollapsed = true;
+                                    await this._postPendingReviews();
+                                }
+                            }
+                            catch (reviewErr) {
+                                console.warn('[DreamGraph] Failed to record pending review changes for codex-cli turn:', reviewErr);
                             }
                         }
                         req.dispose();
@@ -996,23 +1025,23 @@ class ChatPanel {
             const recovered = await this._recoverFromLlmTimeout(err, trimmed, envelope);
             if (!recovered) {
                 const message = err instanceof Error ? err.message : String(err);
-                // Provider-auth recovery: copilot-cli surfaces "not logged in" as a
-                // structured failure with a stable code. When we see it, emit a
-                // dedicated system message carrying the `copilot_login_required`
-                // meta-tag — `_buildMessageActions` then attaches a clickable
-                // "Open Copilot login" button that opens the device-code page +
-                // an interactive `copilot login` terminal in one click. The tag
-                // is persisted on the message so the button survives reloads.
-                const failureCode = err?.copilotCliFailureCode;
-                if (failureCode === 'COPILOT_NOT_LOGGED_IN') {
+                // Provider-auth recovery: native CLI providers surface "not logged in"
+                // as structured failures with stable codes. Emit a dedicated system
+                // message carrying a provider-specific meta-tag so the clickable login
+                // action survives webview reloads.
+                const failureCode = err?.copilotCliFailureCode
+                    ?? err?.codexCliFailureCode;
+                if (failureCode === 'COPILOT_NOT_LOGGED_IN' || failureCode === 'CODEX_NOT_LOGGED_IN') {
+                    const isCodex = failureCode === 'CODEX_NOT_LOGGED_IN';
                     const loginMessage = {
                         id: this._createMessageId(),
                         role: 'system',
-                        content: `Copilot CLI is not logged in.\n\n` +
-                            `Click **Open Copilot login** below to (1) open the GitHub device-code page in your browser and (2) launch an interactive \`copilot login\` terminal. Paste the code the CLI prints into the browser page, then re-run your request.`,
+                        content: isCodex
+                            ? `Codex CLI is not logged in.\n\nClick **Run codex login** below to launch an interactive \`codex login\` terminal. Codex opens the browser-based OpenAI login flow from that user-visible terminal; complete the login, then re-run your request.`
+                            : `Copilot CLI is not logged in.\n\nClick **Open Copilot login** below to (1) open the GitHub device-code page in your browser and (2) launch an interactive \`copilot login\` terminal. Paste the code the CLI prints into the browser page, then re-run your request.`,
                         timestamp: new Date().toISOString(),
                         instanceId: this.currentInstanceId,
-                        metaTag: 'copilot_login_required',
+                        metaTag: isCodex ? 'codex_login_required' : 'copilot_login_required',
                     };
                     this.messages.push(loginMessage);
                     await this.persistMessages();
@@ -1234,6 +1263,110 @@ class ChatPanel {
                 }
                 catch (observerErr) {
                     console.warn('[DreamGraph][copilot-cli] onRunResult observer failed:', observerErr);
+                }
+            },
+        };
+    }
+    _buildCodexCliProviderOptions() {
+        if (!this.architectLlm) {
+            throw new Error('Cannot build Codex CLI provider options: architectLlm is not initialized.');
+        }
+        const llm = this.architectLlm;
+        const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+        const binaryName = (cfg.get('codexCli.command') ?? '').trim() || 'codex';
+        if (!this.mcpClient) {
+            throw new Error('Cannot build Codex CLI provider options: McpClient is not initialized. ' +
+                'The DreamGraph daemon must be running and connected before invoking Codex CLI.');
+        }
+        const hostMcpUrl = this.mcpClient.mcpUrl;
+        const timeoutMsRaw = cfg.get('codexCli.timeoutMs');
+        const timeoutMs = typeof timeoutMsRaw === 'number' && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+            ? timeoutMsRaw
+            : 1_800_000;
+        const idleTimeoutMsRaw = cfg.get('codexCli.idleTimeoutMs');
+        const idleTimeoutMs = typeof idleTimeoutMsRaw === 'number' && Number.isFinite(idleTimeoutMsRaw) && idleTimeoutMsRaw > 0
+            ? idleTimeoutMsRaw
+            : 180_000;
+        const toolListTimeoutMsRaw = cfg.get('codexCli.toolListTimeoutMs');
+        const toolListTimeoutMs = typeof toolListTimeoutMsRaw === 'number' && Number.isFinite(toolListTimeoutMsRaw) && toolListTimeoutMsRaw > 0
+            ? toolListTimeoutMsRaw
+            : undefined;
+        const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+        const auditDirAbsPath = vscode.Uri.joinPath(this.context.globalStorageUri, 'codex-cli-audit').fsPath;
+        const bridgeEntryPath = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'copilot-cli-bridge.js').fsPath;
+        const registry = (0, index_js_2.createHostRegistry)({
+            hostMcpUrl,
+            bridgeEntryPath,
+            nodeExecPath: process.execPath,
+            auditDirAbsPath,
+            workspaceRootAbsPath: workspaceCwd,
+            ...(toolListTimeoutMs !== undefined ? { toolListTimeoutMs } : {}),
+        });
+        const mcpAudit = (0, index_js_2.createHostAudit)({ auditDirAbsPath });
+        const auditLive = (0, index_js_2.createHostAuditLive)({ auditDirAbsPath });
+        const model = llm.currentConfig?.model;
+        return {
+            hostLlm: llm,
+            invocationCwd: workspaceCwd,
+            timeoutMs,
+            idleTimeoutMs,
+            baseEnv: process.env,
+            model: model && model !== 'auto' ? model : undefined,
+            binaryName,
+            historyKeepLast: 10,
+            markCurrentTurn: true,
+            cliToolsManifest: {
+                server: index_js_3.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+                tools: index_js_3.CODEX_AUTHORITATIVE_TOOL_CATALOG,
+            },
+            deps: {
+                fs: index_js_3.HOST_FS,
+                process: index_js_3.HOST_PROCESS,
+                crypto: index_js_3.HOST_CRYPTO,
+                clock: index_js_3.HOST_CLOCK,
+                registry,
+                mcpAudit,
+            },
+            auditLive,
+            onPromptComposed: (info) => {
+                try {
+                    this.contextInspector?.appendContextLine(`Codex CLI prompt composed: ${info.promptByteLength}B, ${info.historyMessageCount} msgs, mcp=${info.mcpServerAdvertised ?? 'none'}(${info.mcpToolsAdvertised} tools), markCurrentTurn=${info.markCurrentTurn}, model=${info.model ?? 'auto'}.`);
+                }
+                catch {
+                    // inspector failures must not affect the run
+                }
+            },
+            onToolCall: (runId, call) => {
+                try {
+                    const key = ChatPanel._toolCallDedupKey(runId, call.server, call.tool, call.startedAtEpochMs);
+                    if (this._liveToolCallsSeen.has(key)) {
+                        return;
+                    }
+                    const entry = this._toolTraceEntryFromRawCall(call);
+                    const index = this._lastToolTrace.length;
+                    this._lastToolTrace.push(entry);
+                    this._liveToolCallsSeen.set(key, index);
+                    void this.postMessage({
+                        type: 'tool-progress',
+                        tool: entry.tool,
+                        message: `${entry.tool} ${entry.status === 'failed' ? 'failed' : 'done'} (${entry.durationMs}ms)`,
+                    });
+                }
+                catch (liveErr) {
+                    console.warn('[DreamGraph][codex-cli] onToolCall handler failed:', liveErr);
+                }
+            },
+            onRunResult: (result) => {
+                try {
+                    this._reconcileCliAuditToolTrace(result.runId, result.toolCalls);
+                    if (!result.ok) {
+                        const code = result.failure?.code ?? 'CODEX_CLI_UNKNOWN_FAILURE';
+                        const message = result.failure?.message ?? 'Codex CLI run failed';
+                        console.warn(`[DreamGraph][codex-cli] ${code}: ${message}`);
+                    }
+                }
+                catch (observerErr) {
+                    console.warn('[DreamGraph][codex-cli] onRunResult observer failed:', observerErr);
                 }
             },
         };
@@ -1903,6 +2036,9 @@ class ChatPanel {
         if (message.metaTag === 'copilot_login_required') {
             actions.push({ id: 'copilot-login', label: 'Open Copilot login', kind: 'primary', actionType: 'copilot_login' });
         }
+        if (message.metaTag === 'codex_login_required') {
+            actions.push({ id: 'codex-login', label: 'Run codex login', kind: 'primary', actionType: 'codex_login' });
+        }
         return actions;
     }
     _detectImplicitEntities(content) {
@@ -1976,6 +2112,16 @@ class ChatPanel {
                     console.warn('[DreamGraph] copilot_login: openExternal failed', openErr);
                 }
                 const terminal = vscode.window.createTerminal({ name: 'Copilot Login' });
+                terminal.show(true);
+                terminal.sendText(`${binaryName} login`);
+                this._actionLog.push({ timestamp: new Date().toISOString(), actionType: action.actionType, sourceMessageId: messageId, outcome: 'completed', detail: binaryName });
+                await this.postMessage({ type: 'messageActionState', messageId, actionId, status: 'completed' });
+                return;
+            }
+            if (action.actionType === 'codex_login') {
+                const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
+                const binaryName = (cfg.get('codexCli.command') ?? '').trim() || 'codex';
+                const terminal = vscode.window.createTerminal({ name: 'Codex Login' });
                 terminal.show(true);
                 terminal.sendText(`${binaryName} login`);
                 this._actionLog.push({ timestamp: new Date().toISOString(), actionType: action.actionType, sourceMessageId: messageId, outcome: 'completed', detail: binaryName });
@@ -2178,11 +2324,12 @@ class ChatPanel {
         const models = provider === 'anthropic' ? architect_llm_1.ANTHROPIC_MODELS
             : provider === 'openai' ? architect_llm_1.OPENAI_MODELS
                 : provider === 'copilot-cli' ? architect_llm_1.COPILOT_CLI_MODELS
-                    : [];
+                    : provider === 'codex-cli' ? architect_llm_1.CODEX_CLI_MODELS
+                        : [];
         const capabilities = this.architectLlm?.getModelCapabilities(provider, model) ?? { textAttachments: false, imageAttachments: false };
         void this.postMessage({
             type: 'updateModels',
-            providers: ['anthropic', 'openai', 'ollama', 'lmstudio', 'copilot-cli'],
+            providers: ['anthropic', 'openai', 'ollama', 'lmstudio', 'copilot-cli', 'codex-cli'],
             models,
             current: { provider, model },
             capabilities,
@@ -2205,6 +2352,7 @@ class ChatPanel {
             case 'lmstudio':
                 return 'http://localhost:1234/v1';
             case 'copilot-cli':
+            case 'codex-cli':
                 return '';
             default:
                 return '';
@@ -2216,20 +2364,21 @@ class ChatPanel {
             const models = provider === 'anthropic' ? architect_llm_1.ANTHROPIC_MODELS
                 : provider === 'openai' ? architect_llm_1.OPENAI_MODELS
                     : provider === 'copilot-cli' ? architect_llm_1.COPILOT_CLI_MODELS
-                        : [];
+                        : provider === 'codex-cli' ? architect_llm_1.CODEX_CLI_MODELS
+                            : [];
             const previousModel = this.architectLlm.currentConfig?.model ?? '';
             const defaultModel = models.includes(previousModel) ? previousModel : (models[0] ?? '');
             const baseUrl = this._defaultArchitectBaseUrl(provider);
             // Keyless providers: ollama (no auth), lmstudio (fixed literal
             // placeholder; the LM Studio server ignores the auth header but
             // the OpenAI-compat code path sends one regardless), and
-            // copilot-cli (the CLI uses its own local GitHub authentication
-            // and never sees a key from this extension).
+            // copilot-cli/codex-cli (the CLIs use their own local authentication
+            // and never see a key from this extension).
             let apiKey = '';
             if (provider === 'lmstudio') {
                 apiKey = 'lm-studio';
             }
-            else if (provider !== 'ollama' && provider !== 'copilot-cli') {
+            else if (provider !== 'ollama' && provider !== 'copilot-cli' && provider !== 'codex-cli') {
                 apiKey = (await this.architectLlm.getApiKey(provider) ?? '');
             }
             this.architectLlm.applyConfig({
@@ -2660,13 +2809,15 @@ class ChatPanel {
             // below remains the source of truth for tool-using continuations
             // until Phase 3d wires `host.executeTool`.
             const useCorePass = vscode.workspace.getConfiguration('dreamgraph.architect').get('useCorePass') === true;
-            const copilotCliRoute = (this.architectLlm?.currentConfig?.provider ?? '') === 'copilot-cli';
-            // Copilot CLI handles its own tool selection internally — we must
-            // force the no-tools branch (tools=[]) and route through
-            // `runPassViaCopilotCli`. Without this, autonomy continuations
-            // fall through to `this.architectLlm!.stream(...)` which throws
-            // "Copilot CLI provider does not use ArchitectLlm transport".
-            const seamRoute = (useCorePass || copilotCliRoute) && envelope !== null;
+            const nativeCliProvider = this.architectLlm?.currentConfig?.provider ?? '';
+            const copilotCliRoute = nativeCliProvider === 'copilot-cli';
+            const codexCliRoute = nativeCliProvider === 'codex-cli';
+            const nativeCliRoute = copilotCliRoute || codexCliRoute;
+            // Native CLI providers handle tool selection internally - force
+            // the no-tools branch (tools=[]) and route through the selected
+            // ProviderPort. Without this, continuations fall through to
+            // `this.architectLlm!.stream(...)`, which rejects native CLI providers.
+            const seamRoute = (useCorePass || nativeCliRoute) && envelope !== null;
             let seamOwnedAssistant = false;
             let fullContent = '';
             if (seamRoute) {
@@ -2688,34 +2839,47 @@ class ChatPanel {
                 const copilotCliReviewSnapshot = copilotCliRoute
                     ? await change_review_service_1.changeReviewService.captureWorkspaceSnapshot()
                     : null;
+                const codexCliReviewSnapshot = codexCliRoute
+                    ? await change_review_service_1.changeReviewService.captureWorkspaceSnapshot()
+                    : null;
                 const req = this._createRequestSignal(this._getLlmTimeoutMs({ mode: 'stream' }));
                 try {
+                    const streamNativeCliChunk = (chunk) => {
+                        const safeChunk = this._redactSecrets(chunk);
+                        fullContent += safeChunk;
+                        this.streamingContent += safeChunk;
+                        void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                    };
                     const passResult = copilotCliRoute
                         ? await (0, runner_js_1.runPassViaCopilotCli)({
                             host,
                             text: prompt,
                             tools: [],
                             providerOptions: this._buildCopilotCliProviderOptions(),
-                            onStreamChunk: (chunk) => {
-                                const safeChunk = this._redactSecrets(chunk);
-                                fullContent += safeChunk;
-                                this.streamingContent += safeChunk;
-                                void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                            },
+                            onStreamChunk: streamNativeCliChunk,
                             abortSignal: req.signal,
                         })
-                        : await (0, runner_js_1.runPassViaCore)({
-                            host,
-                            text: prompt,
-                            tools: [],
-                            onStreamChunk: (chunk) => {
-                                const safeChunk = this._redactSecrets(chunk);
-                                fullContent += safeChunk;
-                                this.streamingContent += safeChunk;
-                                void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
-                            },
-                            abortSignal: req.signal,
-                        });
+                        : codexCliRoute
+                            ? await (0, runner_js_1.runPassViaCodexCli)({
+                                host,
+                                text: prompt,
+                                tools: [],
+                                providerOptions: this._buildCodexCliProviderOptions(),
+                                onStreamChunk: streamNativeCliChunk,
+                                abortSignal: req.signal,
+                            })
+                            : await (0, runner_js_1.runPassViaCore)({
+                                host,
+                                text: prompt,
+                                tools: [],
+                                onStreamChunk: (chunk) => {
+                                    const safeChunk = this._redactSecrets(chunk);
+                                    fullContent += safeChunk;
+                                    this.streamingContent += safeChunk;
+                                    void this.postMessage({ type: 'stream-chunk', chunk: safeChunk });
+                                },
+                                abortSignal: req.signal,
+                            });
                     if (!fullContent && passResult.assistantMessage.content) {
                         fullContent = passResult.assistantMessage.content;
                     }
@@ -2735,6 +2899,18 @@ class ChatPanel {
                         }
                         catch (reviewErr) {
                             console.warn('[DreamGraph] Failed to record pending review changes for copilot-cli continuation pass:', reviewErr);
+                        }
+                    }
+                    if (codexCliReviewSnapshot) {
+                        try {
+                            const changedReviewPaths = await change_review_service_1.changeReviewService.recordWorkspaceChanges(codexCliReviewSnapshot);
+                            if (changedReviewPaths.length > 0) {
+                                this._pendingReviewsCollapsed = true;
+                                await this._postPendingReviews();
+                            }
+                        }
+                        catch (reviewErr) {
+                            console.warn('[DreamGraph] Failed to record pending review changes for codex-cli continuation pass:', reviewErr);
                         }
                     }
                     req.dispose();
@@ -3605,6 +3781,21 @@ class ChatPanel {
             durationMs: Math.max(0, Math.floor(call.durationMs)),
             status: call.isError ? 'failed' : 'completed',
         };
+    }
+    _reconcileCliAuditToolTrace(runId, classifiedCalls) {
+        for (const classified of classifiedCalls) {
+            const { call } = classified;
+            const key = ChatPanel._toolCallDedupKey(runId, call.server, call.tool, call.startedAtEpochMs);
+            const authoritativeEntry = this._toolTraceEntryFromCopilotCall(classified);
+            const liveIndex = this._liveToolCallsSeen.get(key);
+            if (liveIndex !== undefined && liveIndex >= 0 && liveIndex < this._lastToolTrace.length) {
+                this._lastToolTrace[liveIndex] = authoritativeEntry;
+            }
+            else {
+                this._liveToolCallsSeen.set(key, this._lastToolTrace.length);
+                this._lastToolTrace.push(authoritativeEntry);
+            }
+        }
     }
     /**
      * Build a ToolTraceEntry from a raw audit record (no classification

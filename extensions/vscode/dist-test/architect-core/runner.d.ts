@@ -23,6 +23,7 @@ export declare function buildV1Ports(host: ChatPanelHost): ArchitectCorePorts;
  */
 export declare function runPassViaCore(input: RunPassViaCoreInput): Promise<PassResult>;
 import { type CopilotCliProviderPortOptions } from "./adapters/copilot-cli/index.js";
+import { type CodexCliProviderPortOptions } from "./adapters/codex-cli/index.js";
 export interface CopilotCliPortBundleOptions {
     readonly host: ChatPanelHost;
     readonly providerOptions: CopilotCliProviderPortOptions;
@@ -42,4 +43,23 @@ export interface RunPassViaCopilotCliInput extends RunPassViaCoreInput {
  * like `runPassViaCore`.
  */
 export declare function runPassViaCopilotCli(input: RunPassViaCopilotCliInput): Promise<PassResult>;
+export interface CodexCliPortBundleOptions {
+    readonly host: ChatPanelHost;
+    readonly providerOptions: CodexCliProviderPortOptions;
+}
+/**
+ * Build a port set where the provider port is the Codex CLI wrapper.
+ * Every other port is reused from the v1 wiring. Pure construction -
+ * performs no I/O.
+ */
+export declare function buildCodexCliPorts(options: CodexCliPortBundleOptions): ArchitectCorePorts;
+export interface RunPassViaCodexCliInput extends RunPassViaCoreInput {
+    readonly providerOptions: CodexCliProviderPortOptions;
+}
+/**
+ * Drive one pass through `runPass()` with the Codex CLI provider port
+ * wired in. Chat routing remains a separate integration step; this
+ * function exposes the provider-neutral seam for that route.
+ */
+export declare function runPassViaCodexCli(input: RunPassViaCodexCliInput): Promise<PassResult>;
 //# sourceMappingURL=runner.d.ts.map

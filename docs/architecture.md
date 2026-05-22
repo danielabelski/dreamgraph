@@ -63,6 +63,14 @@ Instead, the extension ships a bundled **inheritance proxy** at `dist/copilot-cl
 
 Path: `extensions/vscode/src/architect-core/adapters/copilot-cli/host/bridge-entry.ts`. Tests: `extensions/vscode/src/test/copilot-cli-bridge-audit.test.ts`.
 
+### Codex CLI Native Adapter
+
+The `codex-cli` Architect provider is implemented as a native adapter that follows the accepted Copilot CLI adapter architecture while keeping Codex-specific invocation, sandbox, approval, help-surface, TOML config, runner, prompt serialization, provider-port projection, event parsing, and host-process handling in its own adapter directory. Authoritative Codex runs are pinned to `codex exec --json --sandbox read-only` and receive prompts through stdin using the positional `-` argument; when the installed `codex exec` help surface advertises `--ask-for-approval`, the adapter also emits `--ask-for-approval never`. DreamGraph MCP remains the only authoritative route for repository grounding, mutation, and verification. The runner validates `codex login status` before non-interactive execution and preserves clickable `codex login` recovery metadata for unauthenticated failures. If the exec transcript reports MCP runtime failures but the bridge audit contains no DreamGraph MCP calls, the runner fails closed with `MCP_PROBE_FAILED` instead of accepting ungrounded provider-inline output without a trace. The provider is selectable through Architect settings/model routing, covers user turns and autonomy continuations, streams live DreamGraph MCP tool progress from the shared audit NDJSON bridge, projects Codex `item.completed` / `agent_message` events into final assistant text while routing non-JSON process output to diagnostics, reconciles final authoritative tool traces without duplicates, and keeps changed-file review reconciliation independent from provider-port tool projection while preserving Copilot CLI behavior.
+
+Path: `extensions/vscode/src/architect-core/adapters/codex-cli/`. Chat integration: `extensions/vscode/src/chat-panel.ts`, `extensions/vscode/src/architect-llm.ts`, `extensions/vscode/package.json`. Tests: `extensions/vscode/src/test/codex-cli-adapter.test.ts`, `extensions/vscode/src/test/codex-cli-orchestrator.test.ts`, `extensions/vscode/src/test/codex-cli-provider-port.test.ts`, `extensions/vscode/src/test/slice5-audit.test.ts`.
+
+Release note: `codex-cli` native Architect adapter support is covered by ADR-201 native-adapter constraints. No new ADR is required because the implementation reuses the accepted native CLI adapter pattern and only adds Codex-specific execution/configuration mechanics behind the adapter boundary.
+
 ## Source Layout
 
 This section is generated from the repository source tree. It should list all current files under the primary source roots.
@@ -196,6 +204,26 @@ extensions/vscode/src/
   extensions/vscode/src/intent-detector.ts
   extensions/vscode/src/local-tools.ts
   extensions/vscode/src/mcp-client.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/allowlist.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/argv.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/help-probe.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/host/clock-adapter.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/host/crypto-adapter.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/host/fs-adapter.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/host/index.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/host/process-adapter.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/index.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/mcp-config.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/orchestrator-ports.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/orchestrator.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/prompt-serializer.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/provider-port.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/transcript-classifier.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/transcript.ts
+  extensions/vscode/src/architect-core/adapters/codex-cli/types.ts
+  extensions/vscode/src/test/codex-cli-adapter.test.ts
+  extensions/vscode/src/test/codex-cli-orchestrator.test.ts
+  extensions/vscode/src/test/codex-cli-provider-port.test.ts
   extensions/vscode/src/prompts/architect-core.ts
   extensions/vscode/src/prompts/architect-explain.ts
   extensions/vscode/src/prompts/architect-patch.ts
