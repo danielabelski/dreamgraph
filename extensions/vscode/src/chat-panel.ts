@@ -68,11 +68,15 @@ import {
 } from './architect-core/adapters/codex-cli/index.js';
 import type { ChatPanelHost } from './architect-core/adapters/host.js';
 import {
+  applyRecommendedActionCapabilityGuards,
+  computeDoAllEligibility,
   createAutonomyState,
   deriveAutonomyStatusView,
+  isRecommendedActionRunnable,
   type AutonomyState,
   type AutonomyInstructionState,
   type RecommendedAction,
+  type RecommendedActionBlocker,
 } from './autonomy.js';
 import { analyzePass, advanceAutonomyStateIfContinued, buildContinuationPrompt, isReadOnlyTool } from './autonomy-loop.js';
 import { isWriteToolName, narrowToWriteAndVerify, pickPreferredWriteTool, APPLY_LABEL_PATTERN } from './tool-classification.js';
@@ -338,7 +342,7 @@ interface SummaryEnvelopeMessage {
   goal_status?: 'complete' | 'partial' | 'blocked';
   progress_status?: 'advancing' | 'slowing' | 'stalled';
   uncertainty?: 'low' | 'medium' | 'high';
-  recommended_next_steps: Array<{ id: string; label: string; rationale?: string }>;
+  recommended_next_steps: RecommendedActionMessage[];
   doAllEligible: boolean;
 }
 
@@ -378,6 +382,12 @@ interface RecommendedActionMessage {
   id: string;
   label: string;
   rationale?: string;
+  eligible?: boolean;
+  withinScope?: boolean;
+  requiresTools?: string[];
+  requiresSecrets?: string[];
+  blockers?: RecommendedActionBlocker[];
+  capabilityChecked?: boolean;
 }
 
 interface PendingReviewDiffLineViewModel {
@@ -787,18 +797,12 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         }
         case 'envelopeAction': {
           const envMsg = message as { type: 'envelopeAction'; label: string };
-          if (envMsg.label) await this.handleUserMessage(envMsg.label);
+          if (envMsg.label) await this._executeRecommendedAction('', envMsg.label);
           break;
         }
         case 'envelopeDoAll': {
           const envAllMsg = message as { type: 'envelopeDoAll'; labels: string[] };
-          const labels = Array.isArray(envAllMsg.labels) ? envAllMsg.labels : [];
-          if (labels.length === 1) {
-            await this.handleUserMessage(labels[0]);
-          } else if (labels.length > 1) {
-            const combined = `Execute these steps sequentially:\n${labels.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
-            await this.handleUserMessage(combined);
-          }
+          await this._executeAllRecommendedActions(Array.isArray(envAllMsg.labels) ? envAllMsg.labels : []);
           break;
         }
         case 'setAutonomyMode': {
@@ -2965,6 +2969,52 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     });
   }
 
+  private _guardRecommendedActions(actions: readonly RecommendedAction[]): RecommendedAction[] {
+    return applyRecommendedActionCapabilityGuards(actions, {
+      availableToolNames: this._lastAvailableToolNames,
+      env: {
+        VSCE_PAT: process.env.VSCE_PAT,
+        AZURE_DEVOPS_EXT_PAT: process.env.AZURE_DEVOPS_EXT_PAT,
+      },
+    });
+  }
+
+  private _toRecommendedActionMessage(action: RecommendedAction): RecommendedActionMessage {
+    return {
+      id: action.id,
+      label: action.label,
+      rationale: action.rationale,
+      eligible: action.eligible,
+      withinScope: action.withinScope,
+      requiresTools: action.requiresTools,
+      requiresSecrets: action.requiresSecrets,
+      blockers: action.blockers,
+      capabilityChecked: true,
+    };
+  }
+
+  private async _postRecommendedActionBlockedMessage(label: string, blockers: readonly RecommendedActionBlocker[]): Promise<void> {
+    const detail = blockers.length > 0
+      ? blockers.map((b) => `- ${b.label}`).join('\n')
+      : '- This suggested action is not runnable from the current chat context.';
+    const message: ChatMessage = {
+      id: this._createMessageId(),
+      role: 'system',
+      content: `Suggested action blocked: ${label}\n\n${detail}`,
+      timestamp: new Date().toISOString(),
+      instanceId: this.currentInstanceId,
+    };
+    this.messages.push(message);
+    await this.persistMessages();
+    await this.postMessage({
+      type: 'addMessage',
+      message,
+      actions: [],
+      roleMeta: this._roleMetaFor(message),
+      contextFooter: undefined,
+    });
+  }
+
   private async _handleAutonomyPassComplete(
     content: string,
     messageId: string,
@@ -2980,10 +3030,10 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     // on the next pass. This is the soft hint; Lever 1 (catalog
     // narrowing on the second sticky-anchor locate-only pass) is the
     // hard fallback. Both layers are token-economy at task level.
-    const actions: RecommendedAction[] = ChatPanel._bindWriteToolToAnchorActions(
+    const actions: RecommendedAction[] = this._guardRecommendedActions(ChatPanel._bindWriteToolToAnchorActions(
       envelope.nextSteps,
       tools,
-    );
+    ));
     this._lastRecommendedActions = actions;
 
     // Tool / file-edit accounting drives the empty-pass detector. Without
@@ -3551,7 +3601,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     if (!actions || actions.length === 0) return;
     // Persist so chip clicks resolve via `_executeRecommendedAction`.
     // This is the only side effect required for resume continuity.
-    this._lastRecommendedActions = actions;
+    this._lastRecommendedActions = this._guardRecommendedActions(actions);
   }
 
   private _broadcastSummaryCard(content: string, messageId: string): void {
@@ -3571,7 +3621,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // body-rendered card resolve via `_executeRecommendedAction`.
       if (extractPrimaryEnvelope(content)) {
         const env = extractStructuredPassEnvelope(content);
-        this._lastRecommendedActions = env.nextSteps;
+        this._lastRecommendedActions = this._guardRecommendedActions(env.nextSteps);
         return;
       }
       const env = extractStructuredPassEnvelope(content);
@@ -3584,10 +3634,11 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         || (env.progressStatus && env.progressStatus !== 'advancing')
         || (env.uncertainty && env.uncertainty !== 'low');
       if (!hasSignal) return;
-      const steps = env.nextSteps;
+      const steps = this._guardRecommendedActions(env.nextSteps);
       // Persist for chip-click resolution — _executeRecommendedAction uses this.
       this._lastRecommendedActions = steps;
-      const eligibleCount = steps.filter((s) => s.eligible && s.withinScope).length;
+      const runnableSteps = steps.filter(isRecommendedActionRunnable);
+      const allStepsRunnable = runnableSteps.length === steps.length;
       void this.postMessage({
         type: 'summaryCard',
         messageId,
@@ -3596,8 +3647,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           goal_status: env.goalStatus,
           progress_status: env.progressStatus,
           uncertainty: env.uncertainty,
-          recommended_next_steps: steps.map((s) => ({ id: s.id, label: s.label, rationale: s.rationale })),
-          doAllEligible: eligibleCount > 1,
+          recommended_next_steps: steps.map((s) => this._toRecommendedActionMessage(s)),
+          doAllEligible: allStepsRunnable && computeDoAllEligibility(runnableSteps),
         },
       });
     } catch (err) {
@@ -3646,9 +3697,25 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   private async _executeRecommendedAction(actionId: string, fallbackLabel?: string): Promise<void> {
-    const action = this._lastRecommendedActions.find((a) => a.id === actionId);
-    const label = action?.label || (typeof fallbackLabel === 'string' ? fallbackLabel.trim() : '');
+    const fallback = typeof fallbackLabel === 'string' ? fallbackLabel.trim() : '';
+    const stored = this._lastRecommendedActions.find((a) => a.id === actionId);
+    const action = stored
+      ? this._guardRecommendedActions([stored])[0]
+      : (fallback
+          ? this._guardRecommendedActions([{
+              id: actionId || `fallback-${Date.now()}`,
+              label: fallback,
+              priority: 1,
+              eligible: true,
+              withinScope: true,
+            }])[0]
+          : undefined);
+    const label = action?.label || fallback;
     if (!label) return;
+    if (action && !isRecommendedActionRunnable(action)) {
+      await this._postRecommendedActionBlockedMessage(label, action.blockers ?? []);
+      return;
+    }
     // If the action carries a structured tool binding, prime it so the
     // follow-up turn's selectToolGroups() definitely exposes it — the chip
     // label alone ("Run a dream cycle") often won't substring-match the
@@ -3660,17 +3727,31 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   private async _executeAllRecommendedActions(fallbackLabels?: string[]): Promise<void> {
-    const eligible = this._lastRecommendedActions.filter((a) => a.eligible && a.withinScope);
-    const liveLabels = eligible
+    const sourceActions = this._lastRecommendedActions.length > 0
+      ? this._guardRecommendedActions(this._lastRecommendedActions)
+      : this._guardRecommendedActions((Array.isArray(fallbackLabels) ? fallbackLabels : [])
+          .map((label, index) => ({
+            id: `fallback-${index + 1}`,
+            label: String(label || '').trim(),
+            priority: index + 1,
+            eligible: true,
+            withinScope: true,
+          }))
+          .filter((action) => action.label.length > 0));
+    const blocked = sourceActions.filter((a) => (a.blockers?.length ?? 0) > 0);
+    if (blocked.length > 0) {
+      await this._postRecommendedActionBlockedMessage('Do all', blocked.flatMap((a) => a.blockers ?? []));
+      return;
+    }
+    const runnable = sourceActions.filter(isRecommendedActionRunnable);
+    const liveLabels = runnable
       .map((a) => a.label)
       .filter((label) => typeof label === 'string' && label.trim().length > 0);
-    const labels = liveLabels.length > 0
-      ? liveLabels
-      : (Array.isArray(fallbackLabels) ? fallbackLabels.map((label) => String(label || '').trim()).filter(Boolean) : []);
+    const labels = liveLabels;
     if (labels.length === 0) return;
     // Prime every tool binding in the batch so the combined follow-up turn
     // has them all whitelisted.
-    for (const a of eligible) {
+    for (const a of runnable) {
       if (a.tool) this._primedTools.add(a.tool);
     }
     const combined = `Execute these steps sequentially:\n${labels.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
@@ -5014,7 +5095,9 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             // index-based reassignment from steps[] would mis-align after
             // skipped entries. Only set Do-all label list, which is whole-list.
             const steps = Array.isArray(obj.recommended_next_steps) ? obj.recommended_next_steps : [];
-            const labels = steps.map((step) => (step && typeof step.label === 'string' ? step.label : '')).filter(Boolean);
+            const labels = Array.from(rendered.querySelectorAll('.dg-envelope-action:not(:disabled)'))
+              .map((btn) => btn.getAttribute('data-action-label') || '')
+              .filter(Boolean);
             const doAllButton = rendered.querySelector('.dg-envelope-do-all');
             if (doAllButton && labels.length > 0) {
               doAllButton.setAttribute('data-action-labels', JSON.stringify(labels));
@@ -5057,6 +5140,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         node.querySelectorAll('.dg-envelope-action:not([data-wired])').forEach((btn) => {
           btn.setAttribute('data-wired', '1');
           btn.addEventListener('click', () => {
+            if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
             const actionId = btn.getAttribute('data-action-id') || '';
             const label = btn.getAttribute('data-action-label') || '';
             if (actionId || label) {
@@ -5067,6 +5151,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         node.querySelectorAll('.dg-envelope-do-all:not([data-wired])').forEach((btn) => {
           btn.setAttribute('data-wired', '1');
           btn.addEventListener('click', () => {
+            if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
             let labels = [];
             const raw = btn.getAttribute('data-action-labels') || '[]';
             try {
@@ -5705,7 +5790,15 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
               const chip = document.createElement('button');
               chip.className = 'action-chip';
               chip.textContent = action.label;
-              if (action.rationale) chip.title = action.rationale;
+              const blockers = Array.isArray(action.blockers) ? action.blockers : [];
+              if (blockers.length > 0 || action.eligible === false || action.withinScope === false) {
+                chip.disabled = true;
+                chip.setAttribute('aria-disabled', 'true');
+                chip.classList.add('action-chip-disabled');
+                chip.title = blockers.length > 0 ? blockers.map((b) => b.label).join('\\n') : 'This suggested action is not runnable from the current context.';
+              } else if (action.rationale) {
+                chip.title = action.rationale;
+              }
               chip.addEventListener('click', () => vscode.postMessage({ type: 'selectRecommendedAction', actionId: action.id }));
               wrapper.appendChild(chip);
             }
@@ -5745,12 +5838,15 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
             progress_status: env.progress_status,
             uncertainty: env.uncertainty,
             recommended_next_steps: steps,
+            doAllEligible: env.doAllEligible,
           });
           // Renderer now emits data-action-id/label directly per surviving
           // chip and skips dead "Step N" entries, so an index walk over the
           // raw steps[] array would mis-align after any drops. Only the
           // Do-all whole-list label set is patched here.
-          const labels = steps.map((s) => (s && typeof s.label === 'string' ? s.label : '')).filter(Boolean);
+          const labels = Array.from(host.querySelectorAll('.dg-envelope-action:not(:disabled)'))
+            .map((btn) => btn.getAttribute('data-action-label') || '')
+            .filter(Boolean);
           const doAllBtn = host.querySelector('.dg-envelope-do-all');
           if (doAllBtn) {
             if (env.doAllEligible && labels.length > 1) {
@@ -5763,6 +5859,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           host.querySelectorAll('.dg-envelope-action:not([data-wired])').forEach((btn) => {
             btn.setAttribute('data-wired', '1');
             btn.addEventListener('click', () => {
+              if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
               const actionId = btn.getAttribute('data-action-id') || '';
               const label = btn.getAttribute('data-action-label') || '';
               if (actionId || label) {
@@ -5773,6 +5870,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           host.querySelectorAll('.dg-envelope-do-all:not([data-wired])').forEach((btn) => {
             btn.setAttribute('data-wired', '1');
             btn.addEventListener('click', () => {
+              if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
               let labelsOut = [];
               try {
                 const parsed = JSON.parse(btn.getAttribute('data-action-labels') || '[]');

@@ -12,6 +12,9 @@ export interface StructuredActionEnvelope {
     within_scope?: boolean;
     mutually_exclusive_with?: string[];
     batch_group?: string;
+    requires_tools?: string[];
+    requires_secrets?: string[];
+    blockers?: Array<{ id?: string; label: string; kind?: string }>;
     /**
      * Exact MCP/local tool name that should run this step. When present,
      * the host primes this tool for the next turn so brief follow-ups
@@ -44,6 +47,9 @@ export function getStructuredResponseContractBlock(): string {
     '      "within_scope": true,',
     '      "mutually_exclusive_with": [],',
     '      "batch_group": "optional-group",',
+    '      "requires_tools": [],',
+    '      "requires_secrets": [],',
+    '      "blockers": [],',
     '      "tool": "exact_mcp_tool_name",',
     '      "tool_args": { "key": "value" }',
     '    }',
@@ -59,6 +65,7 @@ export function getStructuredResponseContractBlock(): string {
     '- Set progress_status to stalled when further pursuit is not making meaningful progress.',
     '- Keep ids stable and concise when possible.',
     '- When a step maps to a single tool call, set `tool` to the exact tool name (snake_case) and `tool_args` to its arguments. Omit both when the step is not a single-tool action.',
+    '- If a suggested action requires an unavailable tool, secret, or external user setup, set `eligible` false and include a concise `blockers` entry instead of presenting it as runnable.',
     '- Prefer the structured json values over prose when they differ.',
   ].join('\n');
 }

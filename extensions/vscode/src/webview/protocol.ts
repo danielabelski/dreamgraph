@@ -66,7 +66,22 @@ export type ExtensionToWebviewMessage =
   | { type: 'actionResult'; requestId: string; success: boolean; error?: string }
   // Autonomy
   | { type: 'autonomyStatus'; status: { mode: string; countingActive: boolean; completed: number; remaining: number; totalAuthorized?: number; summary: string } }
-  | { type: 'recommendedActions'; messageId: string; actions: { id: string; label: string; rationale?: string }[]; doAllEligible: boolean };
+  | {
+      type: 'recommendedActions';
+      messageId: string;
+      actions: {
+        id: string;
+        label: string;
+        rationale?: string;
+        eligible?: boolean;
+        withinScope?: boolean;
+        requiresTools?: string[];
+        requiresSecrets?: string[];
+        blockers?: Array<{ id: string; label: string; kind: string }>;
+        capabilityChecked?: boolean;
+      }[];
+      doAllEligible: boolean;
+    };
 
 // ── Webview → Extension ─────────────────────────────────────────────────────
 

@@ -49,20 +49,21 @@ This release aligns all first-party versioned surfaces to **10.6.0**:
 ## Upgrade notes
 
 - **Node 20+ remains required.**
-- Re-run the installer (`scripts/install.ps1 -Force` or `bash scripts/install.sh --force`) after pulling this release.
-- Reload VS Code after installing `dreamgraph-vscode-10.6.0.vsix`.
+- Re-run the installer (`scripts/install.ps1 -Force` or `bash scripts/install.sh --force`) after pulling this release. This is the primary DreamGraph install path because the product is the daemon, engine, CLI, instance registry, MCP-backed graph services, and companion editor surface together.
+- Install or update `dreamgraph-vscode-10.6.0.vsix` only after the local DreamGraph stack is installed. The VSIX is a VS Code companion surface, not a standalone DreamGraph distribution.
+- Reload VS Code after installing the companion VSIX.
 - Restart running DreamGraph daemons so the v10.6.0 CLI/daemon/runtime strings and adapter behavior are active.
 - **To use the Codex CLI adapter:** install Codex CLI separately and sign in with your ChatGPT account (`codex login`). DreamGraph will detect the existing login and use it. No API key required.
 - **To use the Copilot CLI adapter:** install Copilot CLI and sign in with your GitHub Copilot account. Same pattern — DreamGraph reuses the existing CLI login.
 
 ## Artifacts
 
-This release attaches the generated first-party artifacts:
+This release attaches the generated first-party artifacts for the full DreamGraph system and its companion surfaces:
 
 - `dreamgraph-10.6.0.tgz`
 - `dreamgraph-sdk-10.6.0.tgz`
 - `dreamgraph-host-10.6.0.tgz`
-- `dreamgraph-vscode-10.6.0.vsix`
+- `dreamgraph-vscode-10.6.0.vsix` — companion VS Code surface; requires the DreamGraph daemon/engine/CLI stack installed separately
 
 ## Commits since v10.5.0
 

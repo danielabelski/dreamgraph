@@ -193,6 +193,9 @@ function toActionFromStructured(step: {
   within_scope?: boolean;
   mutually_exclusive_with?: string[];
   batch_group?: string;
+  requires_tools?: string[];
+  requires_secrets?: string[];
+  blockers?: Array<{ id?: string; label: string; kind?: string }>;
   tool?: string;
   tool_args?: Record<string, unknown>;
 }, fallbackPriority: number): RecommendedAction | null {
@@ -207,6 +210,17 @@ function toActionFromStructured(step: {
     withinScope: step.within_scope ?? true,
     mutuallyExclusiveWith: step.mutually_exclusive_with,
     batchGroup: step.batch_group ?? normalized.batchGroup,
+    requiresTools: Array.isArray(step.requires_tools) ? step.requires_tools.filter((name): name is string => typeof name === 'string' && name.trim().length > 0).map((name) => name.trim()) : undefined,
+    requiresSecrets: Array.isArray(step.requires_secrets) ? step.requires_secrets.filter((name): name is string => typeof name === 'string' && name.trim().length > 0).map((name) => name.trim()) : undefined,
+    blockers: Array.isArray(step.blockers)
+      ? step.blockers
+          .filter((blocker): blocker is { id?: string; label: string; kind?: string } => !!blocker && typeof blocker.label === 'string' && blocker.label.trim().length > 0)
+          .map((blocker, index) => ({
+            id: blocker.id?.trim() || `structured_blocker_${index + 1}`,
+            label: blocker.label.trim(),
+            kind: blocker.kind === 'missing_tool' || blocker.kind === 'missing_secret' || blocker.kind === 'external' ? blocker.kind : 'external',
+          }))
+      : undefined,
     tool: typeof step.tool === 'string' && step.tool.trim() ? step.tool.trim() : undefined,
     toolArgs: step.tool_args && typeof step.tool_args === 'object' ? step.tool_args : undefined,
   };

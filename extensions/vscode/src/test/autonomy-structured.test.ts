@@ -59,3 +59,31 @@ test('ranks actions from assistant output', () => {
   assert.equal(set.actions.length, 2);
   assert.equal(set.topActionId, set.actions[0].id);
 });
+
+test('preserves structured action blockers and requirements', () => {
+  const content = [
+    '```json',
+    JSON.stringify({
+      summary: 'Marketplace publish is blocked',
+      goal_status: 'blocked',
+      progress_status: 'stalled',
+      uncertainty: 'low',
+      recommended_next_steps: [
+        {
+          id: 'publish',
+          label: 'Publish VSIX to VS Code Marketplace',
+          eligible: false,
+          within_scope: true,
+          requires_secrets: ['VSCE_PAT'],
+          blockers: [{ id: 'missing-pat', kind: 'missing_secret', label: 'Requires VSCE_PAT.' }],
+        },
+      ],
+    }),
+    '```',
+  ].join('\n');
+
+  const envelope = extractStructuredPassEnvelope(content);
+  assert.equal(envelope.nextSteps[0].requiresSecrets?.[0], 'VSCE_PAT');
+  assert.equal(envelope.nextSteps[0].blockers?.[0]?.kind, 'missing_secret');
+  assert.equal(buildRecommendedActionSetFromContent(content).actions.length, 0);
+});

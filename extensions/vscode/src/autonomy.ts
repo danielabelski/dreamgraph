@@ -67,10 +67,24 @@ export interface RecommendedAction {
   withinScope: boolean;
   mutuallyExclusiveWith?: string[];
   batchGroup?: string;
+  requiresTools?: string[];
+  requiresSecrets?: string[];
+  blockers?: RecommendedActionBlocker[];
   /** Exact MCP/local tool name to run for this action, when applicable. */
   tool?: string;
   /** Pre-bound arguments for `tool`. */
   toolArgs?: Record<string, unknown>;
+}
+
+export interface RecommendedActionBlocker {
+  id: string;
+  label: string;
+  kind: 'missing_tool' | 'missing_secret' | 'external';
+}
+
+export interface RecommendedActionCapabilityContext {
+  availableToolNames?: readonly string[];
+  env?: Record<string, string | undefined>;
 }
 
 export interface RecommendedActionSet {
@@ -189,7 +203,7 @@ export function applyModeProfileToState(mode: AutonomyMode, nowEpochMs: number =
 }
 
 export function rankRecommendedActions(actions: RecommendedAction[]): RecommendedActionSet {
-  const eligible = actions.filter((action) => action.eligible && action.withinScope);
+  const eligible = actions.filter((action) => isRecommendedActionRunnable(action));
   const sorted = [...eligible].sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
   return {
     actions: sorted,
@@ -201,7 +215,7 @@ export function rankRecommendedActions(actions: RecommendedAction[]): Recommende
 export function computeDoAllEligibility(actions: RecommendedAction[]): boolean {
   if (actions.length < 2) return false;
   for (const action of actions) {
-    if (!action.eligible || !action.withinScope) return false;
+    if (!isRecommendedActionRunnable(action)) return false;
     const mutex = new Set(action.mutuallyExclusiveWith ?? []);
     for (const other of actions) {
       if (other.id === action.id) continue;
@@ -209,6 +223,108 @@ export function computeDoAllEligibility(actions: RecommendedAction[]): boolean {
     }
   }
   return true;
+}
+
+export function isRecommendedActionRunnable(action: RecommendedAction): boolean {
+  return action.eligible && action.withinScope && (action.blockers?.length ?? 0) === 0;
+}
+
+export function applyRecommendedActionCapabilityGuards(
+  actions: readonly RecommendedAction[],
+  context: RecommendedActionCapabilityContext = {},
+): RecommendedAction[] {
+  const availableTools = new Set((context.availableToolNames ?? []).map((name) => name.toLowerCase()));
+  const hasTool = (name: string): boolean => availableTools.has(name.toLowerCase()) || availableTools.has(`dreamgraph:${name}`.toLowerCase());
+  const hasSecret = (name: string): boolean => {
+    const value = context.env?.[name];
+    return typeof value === 'string' && value.trim().length > 0;
+  };
+
+  return actions.map((action) => {
+    const label = action.label.trim();
+    const blockers = [...(action.blockers ?? [])];
+    const requiresTools = new Set(action.requiresTools ?? []);
+    const requiresSecrets = new Set(action.requiresSecrets ?? []);
+
+    if (requiresGraphReleaseWrite(label, action)) {
+      requiresTools.add('enrich_seed_data');
+    }
+    if (requiresMarketplacePublishSecret(label)) {
+      requiresSecrets.add('VSCE_PAT');
+    }
+    if (looksLikeExternalCredentialSetup(label)) {
+      blockers.push({
+        id: 'external_secret_setup',
+        kind: 'external',
+        label: 'Requires user-side credential setup outside this chat surface.',
+      });
+    }
+
+    for (const toolName of requiresTools) {
+      if (!hasTool(toolName)) {
+        blockers.push({
+          id: `missing_tool:${toolName}`,
+          kind: 'missing_tool',
+          label: `Requires MCP tool ${toolName}; the current tool surface cannot perform this action.`,
+        });
+      }
+    }
+
+    const marketplaceSecretSatisfied = hasSecret('VSCE_PAT') || hasSecret('AZURE_DEVOPS_EXT_PAT');
+    for (const secretName of requiresSecrets) {
+      if (secretName === 'VSCE_PAT' && marketplaceSecretSatisfied) continue;
+      if (!hasSecret(secretName)) {
+        blockers.push({
+          id: `missing_secret:${secretName}`,
+          kind: 'missing_secret',
+          label: `Requires ${secretName} in the host environment before this action can run.`,
+        });
+      }
+    }
+
+    const uniqueBlockers = dedupeBlockers(blockers);
+    return {
+      ...action,
+      requiresTools: requiresTools.size > 0 ? [...requiresTools] : action.requiresTools,
+      requiresSecrets: requiresSecrets.size > 0 ? [...requiresSecrets] : action.requiresSecrets,
+      blockers: uniqueBlockers.length > 0 ? uniqueBlockers : undefined,
+      eligible: uniqueBlockers.length > 0 ? false : action.eligible,
+    };
+  });
+}
+
+function dedupeBlockers(blockers: readonly RecommendedActionBlocker[]): RecommendedActionBlocker[] {
+  const seen = new Set<string>();
+  const out: RecommendedActionBlocker[] = [];
+  for (const blocker of blockers) {
+    const key = blocker.id || `${blocker.kind}:${blocker.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(blocker);
+  }
+  return out;
+}
+
+function requiresGraphReleaseWrite(label: string, action: RecommendedAction): boolean {
+  const text = `${label} ${action.rationale ?? ''}`.toLowerCase();
+  if (text.includes('enrich_seed_data')) return true;
+  const mentionsRelease = /\brelease\b|\bvsix\b|\bv\d+\.\d+\.\d+\b/.test(text);
+  const mentionsGraph = /\bknowledge graph\b|\bdreamgraph graph\b|\bgraph\b/.test(text);
+  const writeIntent = /\brecord\b|\bwrite\b|\badd\b|\bpatch\b|\bcurate\b|\benrich\b|\binvoke\b/.test(text);
+  return mentionsRelease && mentionsGraph && writeIntent;
+}
+
+function requiresMarketplacePublishSecret(label: string): boolean {
+  const text = label.toLowerCase();
+  return /\bpublish\b/.test(text)
+    && (/\bvsix\b/.test(text) || /\bmarketplace\b/.test(text) || /\bvs code marketplace\b/.test(text));
+}
+
+function looksLikeExternalCredentialSetup(label: string): boolean {
+  const text = label.toLowerCase();
+  return /\b(configure|generate|create|set)\b/.test(text)
+    && (/\bvsce_pat\b/.test(text) || /\bpersonal access token\b/.test(text) || /\bpat\b/.test(text))
+    && !/\bretry\b|\brun\b|\bpublish\b/.test(text);
 }
 
 export function chooseActionForMode(
