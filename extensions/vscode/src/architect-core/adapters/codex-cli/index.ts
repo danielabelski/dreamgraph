@@ -24,6 +24,8 @@ export {
   type CodexMcpConfigArtifact,
   type CodexMcpConfigInput,
   type CodexStructuredError,
+  type CodexToolCallWitness,
+  type CodexToolCallWitnessStatus,
   type CodexTokenUsage,
   type CodexTranscriptTurnStats,
   type CodexUsageLimitInfo,

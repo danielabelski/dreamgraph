@@ -9,6 +9,14 @@ import {
   type ToolCallObservation,
 } from "./types.js";
 
+const TOOL_NAME_ALIASES = Object.freeze(new Map<string, string>([
+  ["read_source_file", "read_source_code"],
+]));
+
+function normalizeToolName(tool: string): string {
+  return TOOL_NAME_ALIASES.get(tool) ?? tool;
+}
+
 export function classifyToolCall(
   observation: ToolCallObservation,
   ctx: ToolCallClassificationContext,
@@ -18,8 +26,9 @@ export function classifyToolCall(
   }
 
   if (observation.server === ctx.authoritativeServer) {
+    const tool = normalizeToolName(observation.tool);
     for (const allowed of ctx.allowlist) {
-      if (allowed === observation.tool) {
+      if (allowed === tool) {
         return "dreamgraph_authoritative";
       }
     }

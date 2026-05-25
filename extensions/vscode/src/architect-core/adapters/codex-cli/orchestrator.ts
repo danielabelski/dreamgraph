@@ -15,6 +15,7 @@ import {
   type CodexCliProviderId,
   type CodexCliTranscript,
   type CodexHelpSurface,
+  type CodexMcpBridgePlan,
   type CodexMcpConfigArtifact,
   type ToolCallClass,
 } from "./types.js";
@@ -27,12 +28,13 @@ import type {
   CodexCliRegistryPort,
   CodexCliSpawnInput,
   CodexCliSpawnResult,
+  CodexMcpBridgeSpawn,
   RecordedMcpToolCall,
 } from "./orchestrator-ports.js";
 
 export interface CodexCliRunInput {
   readonly prompt: string;
-  readonly invocationCwd: string;
+  readonly invocationCwd?: string;
   readonly timeoutMs: number;
   readonly idleTimeoutMs?: number;
   readonly model?: string;
@@ -77,6 +79,12 @@ export interface CodexCliFailure {
     | "usage-limit"
     | "model-unsupported"
     | "policy-denied"
+    | "missing-tool"
+    | "policy-blocked"
+    | "schema-args-failure"
+    | "provider-native-restriction"
+    | "continuation-authorization-needed"
+    | "runtime-mcp-failure"
     | "mcp-load-failed"
     | "registry-mismatch"
     | "user-cancelled"
@@ -102,6 +110,7 @@ export interface CodexCliRunResult {
   readonly spawn?: CodexCliSpawnResult;
   readonly transcript?: CodexCliTranscript;
   readonly toolCalls: readonly ClassifiedToolCall[];
+  readonly toolCallWitnesses: CodexCliTranscript["toolCallWitnesses"];
 }
 
 const DEFAULT_BINARY_NAME = "codex";
@@ -121,6 +130,17 @@ const CODEX_HOME_AUTH_ARTIFACTS = Object.freeze([
 // unambiguous load/start failures or explicit codex_mcp_server errors.
 const MCP_RUNTIME_FAILURE_RE = /\b(?:codex_mcp_server::|failed to load mcp|failed to start mcp|mcp bridge|mcp server (?:failed|crashed|errored)|tools\/list (?:failed|timeout|timed out))\b/i;
 const USER_CANCELLED_MCP_TOOL_CALL_RE = /\buser cancelled MCP tool call\b/i;
+const MCP_TOOL_FAILURE_LINE_RE = /\bmcp_tool_call\s+(?:failed|failure|error|cancelled|canceled)\s*:\s*([a-z0-9_-]+)\.([a-z0-9_.-]+)(?::\s*(.*))?$/i;
+const SCHEMA_ARGUMENT_FAILURE_RE =
+  /\b(?:invalid\s+(?:arguments?|args|input|params?)|schema(?:\s+validation)?|missing\s+required|required\s+(?:property|field)|unexpected\s+(?:argument|field|property)|unknown\s+(?:argument|field|property)|must\s+include|class_name)\b/i;
+const POLICY_BLOCKED_FAILURE_RE =
+  /\b(?:blocked by policy|policy denial|policy denied|not allowed by policy|read-only sandbox|writing is blocked|rejected by user approval settings|user approval settings)\b/i;
+const CONTINUATION_AUTH_FAILURE_RE =
+  /\b(?:requires?\s+(?:authorization|approval)|authorization\s+required|approval\s+required|not\s+authorized|manual\s+authorization|user\s+cancelled\s+MCP\s+tool\s+call)\b/i;
+const MISSING_TOOL_FAILURE_RE =
+  /\b(?:unknown tool|tool not found|no such tool|missing tool|tool .*not listed|not found.*tool|does not exist)\b/i;
+const RUNTIME_MCP_TOOL_FAILURE_RE =
+  /\b(?:mcp server (?:failed|crashed|errored)|connection (?:closed|reset)|transport|eof|timed?\s*out|timeout|runtime|failed to execute)\b/i;
 const LOGIN_RECOVERY: CodexCliRecoveryAction = Object.freeze({
   kind: "codex-login",
   label: "Run codex login",
@@ -134,9 +154,6 @@ export async function runCodexCli(
   if (!input.prompt) {
     throw new Error("runCodexCli: prompt is required");
   }
-  if (!input.invocationCwd) {
-    throw new Error("runCodexCli: invocationCwd is required");
-  }
   if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
     throw new Error("runCodexCli: timeoutMs must be > 0");
   }
@@ -144,6 +161,8 @@ export async function runCodexCli(
   const startedAtEpochMs = deps.clock.nowMs();
   const runId = deps.crypto.randomRunId();
   const binaryName = input.binaryName ?? DEFAULT_BINARY_NAME;
+  const normalizedInvocationCwd = normalizeOptionalCwd(input.invocationCwd);
+  const probeCwd = resolveProbeCwd(normalizedInvocationCwd, deps.fs);
   let runScratchDir: string | null = null;
   let auditRecording = false;
 
@@ -167,12 +186,12 @@ export async function runCodexCli(
 
     const rootHelp = await deps.process.runRootHelp({
       command: resolved.executablePath,
-      cwd: input.invocationCwd,
+      cwd: probeCwd,
       env: probeEnv,
     });
     const execHelp = await deps.process.runExecHelp({
       command: resolved.executablePath,
-      cwd: input.invocationCwd,
+      cwd: probeCwd,
       env: probeEnv,
     });
     const helpSurface = parseCodexHelpSurface({
@@ -196,7 +215,7 @@ export async function runCodexCli(
 
     const loginStatus = await deps.process.runLoginStatus({
       command: resolved.executablePath,
-      cwd: input.invocationCwd,
+      cwd: probeCwd,
       env: probeEnv,
     });
     const loginTranscript = normalizeCodexTranscript({
@@ -220,7 +239,7 @@ export async function runCodexCli(
     }
 
     let liveTools: readonly string[];
-    let bridgeSpawn;
+    let bridgeSpawn: CodexMcpBridgeSpawn;
     try {
       liveTools = await deps.registry.listAuthoritativeToolNames();
       bridgeSpawn = await deps.registry.describeBridgeSpawn();
@@ -238,7 +257,7 @@ export async function runCodexCli(
       });
     }
 
-    let bridgePlan;
+    let bridgePlan: CodexMcpBridgePlan;
     try {
       bridgePlan = buildCodexMcpBridgePlan({
         runId,
@@ -284,7 +303,8 @@ export async function runCodexCli(
         provider: CODEX_CLI_PROVIDER_ID,
         model: input.model ?? null,
         profile: input.profile ?? null,
-        invocationCwd: input.invocationCwd,
+        invocationCwd: normalizedInvocationCwd,
+        probeCwd,
         timeoutMs: input.timeoutMs,
         idleTimeoutMs: input.idleTimeoutMs ?? null,
         startedAtEpochMs,
@@ -297,14 +317,12 @@ export async function runCodexCli(
       { mode: 0o600 },
     );
 
-    // The MCP bridge server is written to `$CODEX_HOME/config.toml`, but we
-    // ALSO surface it as explicit `-c mcp_servers.<name>.{command,args,env}=...`
-    // CLI overrides so that `codex exec` reliably mounts it regardless of which
-    // config source the running Codex version prioritises. The bridge overrides
-    // are merged BEFORE caller-supplied ones so a caller can still tune behavior
-    // (e.g. timeouts) without being able to silently swap the bridge command.
+    // `$CODEX_HOME` points at the scratch run home, so loading config.toml here
+    // is isolated from the user's persistent Codex config. Codex 0.133 rejects
+    // some MCP server fields (notably args/env) when they are duplicated via
+    // `-c`, so the bridge server definition must come from this config file
+    // only. Caller overrides remain available for non-bridge settings.
     const mergedConfigOverrides = [
-      ...bridgePlan.configOverrides,
       ...(input.configOverrides ?? []),
     ];
 
@@ -320,7 +338,7 @@ export async function runCodexCli(
       outputLastMessagePath,
       configOverrides: mergedConfigOverrides,
       skipGitRepoCheck: true,
-      ignoreUserConfig: true,
+      ignoreRules: true,
       ephemeral: true,
       helpSurface,
     });
@@ -356,6 +374,7 @@ export async function runCodexCli(
         preSpawn: false,
         message: `Codex CLI spawn failed: ${errorMessage(err)}`,
       };
+      const transcript = normalizeCodexTranscript({ stdout: "", stderr: errorMessage(err) });
       return Object.freeze({
         provider: CODEX_CLI_PROVIDER_ID,
         runId,
@@ -367,8 +386,9 @@ export async function runCodexCli(
         helpSurface,
         argvPlan,
         mcpConfig: bridgePlan.config,
-        transcript: normalizeCodexTranscript({ stdout: "", stderr: errorMessage(err) }),
+        transcript,
         toolCalls: Object.freeze(classifyRecorded(recorded, bridgePlan.registry.allowedTools)),
+        toolCallWitnesses: transcript.toolCallWitnesses,
       });
     }
 
@@ -411,6 +431,7 @@ export async function runCodexCli(
       spawn,
       transcript,
       toolCalls,
+      toolCallWitnesses: transcript.toolCallWitnesses,
     });
   } finally {
     if (auditRecording) {
@@ -437,6 +458,18 @@ function notifyRunId(input: CodexCliRunInput, runId: string): void {
   } catch {
     // Observer failures must not break provider execution.
   }
+}
+
+function resolveProbeCwd(
+  invocationCwd: string | null,
+  fs: CodexCliFsPort,
+): string {
+  return invocationCwd ?? fs.homeDir();
+}
+
+function normalizeOptionalCwd(invocationCwd: string | undefined): string | null {
+  const cwd = invocationCwd?.trim();
+  return cwd && cwd.length > 0 ? cwd : null;
 }
 
 async function finishAudit(
@@ -510,7 +543,8 @@ function classifyRecorded(
 }
 
 function hasTranscriptDreamGraphToolCalls(transcript: CodexCliTranscript): boolean {
-  return transcript.toolCalls.some((call) => call.server === DREAMGRAPH_AUTHORITATIVE_SERVER_NAME);
+  return transcript.toolCalls.some((call) => call.server === DREAMGRAPH_AUTHORITATIVE_SERVER_NAME) ||
+    transcript.toolCallWitnesses.some((call) => call.server === DREAMGRAPH_AUTHORITATIVE_SERVER_NAME);
 }
 
 function hasCancelledMcpToolCallFailure(transcript: CodexCliTranscript): boolean {
@@ -533,6 +567,7 @@ function missingRequiredHelpFlagsMessage(surface: CodexHelpSurface): string {
   if (!exec.outputSchema) missing.push("--output-schema");
   if (!exec.skipGitRepoCheck) missing.push("--skip-git-repo-check");
   if (!exec.ignoreUserConfig) missing.push("--ignore-user-config");
+  if (!exec.ignoreRules) missing.push("--ignore-rules");
   if (!exec.ephemeral) missing.push("--ephemeral");
   if (!exec.positionalStdinPrompt) missing.push("positional stdin prompt '-' argument");
   return `Codex CLI help surface is missing required support: ${missing.join(", ")}`;
@@ -570,12 +605,17 @@ function spawnFailureFor(
       message: `Codex CLI rejected the selected model.${failureTail(transcript)}`,
     };
   }
+  const mcpToolFailure = detailedMcpToolFailureFor(transcript, successfulDreamGraphCalls);
+  if (mcpToolFailure) return mcpToolFailure;
   if (transcript.policyDenied) {
     return {
       code: "CODEX_POLICY_DENIED",
-      cause: "policy-denied",
+      cause: "provider-native-restriction",
       preSpawn: false,
-      message: `Codex CLI was blocked by a native policy denial.${failureTail(transcript)}`,
+      message:
+        "Codex provider-native shell/read/write execution was blocked by policy. " +
+        "This does not mean DreamGraph MCP tools are unavailable; use dreamgraph:run_command for verification when it is listed." +
+        failureTail(transcript),
     };
   }
   if (transcript.notLoggedIn && successfulDreamGraphCalls === 0) {
@@ -624,6 +664,114 @@ function spawnFailureFor(
     cause: "nonzero-exit",
     preSpawn: false,
     message: `Codex CLI exited with code ${spawn.exitCode}${progress}${tail}`,
+  };
+}
+
+function detailedMcpToolFailureFor(
+  transcript: CodexCliTranscript,
+  successfulDreamGraphCalls: number,
+): CodexCliFailure | undefined {
+  for (const line of transcript.diagnostics) {
+    const match = line.match(MCP_TOOL_FAILURE_LINE_RE);
+    if (!match) continue;
+    const server = match[1] ?? "unknown";
+    const rawTool = match[2] ?? "unknown";
+    const detail = match[3] ?? "";
+    const text = `${rawTool} ${detail}`;
+    const aliasedReadSource = rawTool === "read_source_file";
+
+    if (aliasedReadSource || SCHEMA_ARGUMENT_FAILURE_RE.test(text)) {
+      return dreamgraphToolFailure({
+        code: "DREAMGRAPH_TOOL_SCHEMA_ARGS",
+        cause: "schema-args-failure",
+        server,
+        tool: rawTool,
+        successfulDreamGraphCalls,
+        transcript,
+        guidance: aliasedReadSource
+          ? "read_source_file is not a DreamGraph/Codex tool name; retry as read_source_code with the required repo and filePath/entity/range arguments."
+          : schemaFailureGuidance(text),
+      });
+    }
+    if (CONTINUATION_AUTH_FAILURE_RE.test(text)) {
+      return dreamgraphToolFailure({
+        code: "DREAMGRAPH_TOOL_AUTHORIZATION_NEEDED",
+        cause: "continuation-authorization-needed",
+        server,
+        tool: rawTool,
+        successfulDreamGraphCalls,
+        transcript,
+        guidance:
+          "The tool exists, but the pass needs an explicit bounded continuation authorization rather than a missing-tool recovery.",
+      });
+    }
+    if (POLICY_BLOCKED_FAILURE_RE.test(text)) {
+      return dreamgraphToolFailure({
+        code: "DREAMGRAPH_TOOL_POLICY_BLOCKED",
+        cause: "policy-blocked",
+        server,
+        tool: rawTool,
+        successfulDreamGraphCalls,
+        transcript,
+        guidance:
+          "DreamGraph MCP policy blocked this tool call. Do not classify this as Codex provider-native shell denial.",
+      });
+    }
+    if (MISSING_TOOL_FAILURE_RE.test(text)) {
+      return dreamgraphToolFailure({
+        code: "DREAMGRAPH_TOOL_MISSING",
+        cause: "missing-tool",
+        server,
+        tool: rawTool,
+        successfulDreamGraphCalls,
+        transcript,
+        guidance:
+          "The named MCP tool was not available in the active DreamGraph tool surface.",
+      });
+    }
+    if (RUNTIME_MCP_TOOL_FAILURE_RE.test(text)) {
+      return dreamgraphToolFailure({
+        code: "DREAMGRAPH_MCP_RUNTIME_FAILURE",
+        cause: "runtime-mcp-failure",
+        server,
+        tool: rawTool,
+        successfulDreamGraphCalls,
+        transcript,
+        guidance:
+          "The DreamGraph MCP runtime failed while executing an available tool; preserve partial evidence and retry the bounded tool call if appropriate.",
+      });
+    }
+  }
+  return undefined;
+}
+
+function schemaFailureGuidance(text: string): string {
+  if (/\bclass_name\b/i.test(text)) {
+    return "The tool is present, but the call used invalid metadata arguments. For modify_api_surface property metadata updates, include class_name with the property member payload before retrying.";
+  }
+  return "The tool is present, but the call used invalid schema/arguments. Retry with the required arguments instead of treating the tool as missing.";
+}
+
+function dreamgraphToolFailure(args: {
+  readonly code: CodexCliErrorCode;
+  readonly cause: CodexCliFailure["cause"];
+  readonly server: string;
+  readonly tool: string;
+  readonly successfulDreamGraphCalls: number;
+  readonly transcript: CodexCliTranscript;
+  readonly guidance: string;
+}): CodexCliFailure {
+  const progress =
+    args.successfulDreamGraphCalls > 0
+      ? ` after ${args.successfulDreamGraphCalls === 1 ? "1 successful DreamGraph tool call" : `${args.successfulDreamGraphCalls} successful DreamGraph tool calls`}. Partial DreamGraph evidence was preserved`
+      : "";
+  return {
+    code: args.code,
+    cause: args.cause,
+    preSpawn: false,
+    message:
+      `DreamGraph MCP tool call ${args.server}:${args.tool} failed${progress}. ${args.guidance}` +
+      failureTail(args.transcript),
   };
 }
 
@@ -702,10 +850,12 @@ function failureTail(transcript: CodexCliTranscript): string {
 }
 
 const SALIENT_FAILURE_DIAGNOSTIC_RE =
-  /\b(?:turn error|usage limit|rate[_ -]?limit|insufficient[_ -]?quota|unsupported[_ -]?model|model_not_supported|unsupported_model|model_not_found|invalid[_ -]?model|not logged in|login required|authentication required|blocked by policy|mcp_tool_call failed|failed to load mcp|failed to start mcp|mcp server failed|mcp_tool_call\s+(?:failed|failure|error|cancelled|canceled))\b/i;
+  /\b(?:turn error|usage limit|rate[_ -]?limit|insufficient[_ -]?quota|unsupported[_ -]?model|model_not_supported|unsupported_model|model_not_found|invalid[_ -]?model|not logged in|login required|authentication required|blocked by policy|read-only sandbox|writing is blocked|user approval settings|mcp_tool_call failed|failed to load mcp|failed to start mcp|mcp server failed|mcp_tool_call\s+(?:failed|failure|error|cancelled|canceled))\b/i;
 const GENERIC_FAILURE_DIAGNOSTIC_RE = /\b(?:error|failed|failure|fatal|panic|exception)\b/i;
 const VERBOSE_CODEX_TELEMETRY_RE =
   /(?:^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+INFO\b)|(?:\bcodex_otel\.)|(?:\bsession_loop\{)|(?:\bmodel_client\.stream_responses_websocket\b)|(?:\bfeedback_tags\b)/i;
+const SOURCE_SNIPPET_DIAGNOSTIC_RE =
+  /^\s*(?:throw\s+new\s+Error|assert\.|const\s+\w+|let\s+\w+|return\s+fail\b|if\s*\()/;
 
 function salientFailureDiagnostics(transcript: CodexCliTranscript): readonly string[] {
   const out: string[] = [];
@@ -716,6 +866,7 @@ function salientFailureDiagnostics(transcript: CodexCliTranscript): readonly str
     pushSalient(out, warning);
   }
   for (const line of transcript.diagnostics) {
+    if (SOURCE_SNIPPET_DIAGNOSTIC_RE.test(line) && !SALIENT_FAILURE_DIAGNOSTIC_RE.test(line)) continue;
     if (VERBOSE_CODEX_TELEMETRY_RE.test(line) && !SALIENT_FAILURE_DIAGNOSTIC_RE.test(line)) continue;
     if (
       !SALIENT_FAILURE_DIAGNOSTIC_RE.test(line) &&
@@ -775,5 +926,6 @@ function fail(args: {
     failure,
     ...(args.helpSurface ? { helpSurface: args.helpSurface } : {}),
     toolCalls: Object.freeze([] as ClassifiedToolCall[]),
+    toolCallWitnesses: Object.freeze([]),
   });
 }

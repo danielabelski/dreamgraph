@@ -13,6 +13,8 @@ import {
   DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
 } from "./types.js";
 
+const CODEX_MCP_APPROVAL_MODE = "approve";
+
 function tomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -21,11 +23,27 @@ function tomlArray(values: readonly string[]): string {
   return `[${values.map(tomlString).join(", ")}]`;
 }
 
-function tomlInlineTable(values: Readonly<Record<string, string>>): string {
-  const entries = Object.keys(values)
-    .sort()
-    .map((key) => `${key} = ${tomlString(values[key] ?? "")}`);
-  return `{ ${entries.join(", ")} }`;
+function codexMcpEnvTableLines(env: Readonly<Record<string, string>>): readonly string[] {
+  const lines = [
+    "",
+    `[mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.env]`,
+  ];
+  for (const key of Object.keys(env).sort()) {
+    lines.push(`${key} = ${tomlString(env[key] ?? "")}`);
+  }
+  return Object.freeze(lines);
+}
+
+function codexMcpToolApprovalSections(allowlist: readonly string[]): readonly string[] {
+  const lines: string[] = [];
+  for (const tool of allowlist) {
+    lines.push(
+      "",
+      `[mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.tools.${tool}]`,
+      `approval_mode = ${tomlString(CODEX_MCP_APPROVAL_MODE)}`,
+    );
+  }
+  return Object.freeze(lines);
 }
 
 export function buildCodexMcpConfig(
@@ -40,10 +58,12 @@ export function buildCodexMcpConfig(
     `[mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}]`,
     `command = ${tomlString(input.dreamgraphCommand)}`,
     `args = ${tomlArray(input.dreamgraphArgs)}`,
-    `env = ${tomlInlineTable(env)}`,
-    `disabled_tools = ${tomlArray(["run_command"])}`,
+    `trust_level = ${tomlString("trusted")}`,
+    `disabled_tools = ${tomlArray([])}`,
     `default_tools_enabled = true`,
-    `default_tools_approval_mode = ${tomlString("approve")}`,
+    `default_tools_approval_mode = ${tomlString(CODEX_MCP_APPROVAL_MODE)}`,
+    ...codexMcpEnvTableLines(env),
+    ...codexMcpToolApprovalSections(input.allowlist),
     "",
   ].join("\n");
 
@@ -62,15 +82,11 @@ export function buildCodexMcpConfigOverrides(
   input: CodexMcpConfigInput,
 ): readonly CodexConfigOverride[] {
   validateCodexMcpConfigInput(input);
-  const env = codexMcpEnv(input);
-  return Object.freeze([
-    { key: `mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.command`, value: tomlString(input.dreamgraphCommand) },
-    { key: `mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.args`, value: tomlArray(input.dreamgraphArgs) },
-    { key: `mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.env`, value: tomlInlineTable(env) },
-    { key: `mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.disabled_tools`, value: tomlArray(["run_command"]) },
-    { key: `mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.default_tools_enabled`, value: true },
-    { key: `mcp_servers.${DREAMGRAPH_AUTHORITATIVE_SERVER_NAME}.default_tools_approval_mode`, value: tomlString("approve") },
-  ]);
+  // Codex 0.133 accepts stdio MCP `env` only as a nested TOML table in
+  // config.toml, and its strict config loader rejects array-valued
+  // `mcp_servers.<name>.args=[...]` overrides. Keep the bridge server as one
+  // isolated config.toml definition rather than duplicating it through `-c`.
+  return Object.freeze([]);
 }
 
 function validateCodexMcpConfigInput(input: CodexMcpConfigInput): void {

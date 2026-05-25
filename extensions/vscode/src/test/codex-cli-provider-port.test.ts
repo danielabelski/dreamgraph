@@ -35,6 +35,12 @@ Commands:
   exec    Run Codex non-interactively
   login   Manage login
   mcp     Manage MCP servers
+
+Options:
+  -a, --ask-for-approval <APPROVAL_POLICY>
+                                             Possible values:
+                                             - on-request: ask when needed
+                                             - never: never ask
 `;
 
 const EXEC_HELP = `
@@ -60,6 +66,7 @@ Options:
       --output-schema <PATH>
       --skip-git-repo-check
       --ignore-user-config
+      --ignore-rules
       --ephemeral
 `;
 
@@ -67,6 +74,7 @@ interface FakeProcessOptions {
   readonly resolve?: CodexCliResolveResult | null;
   readonly spawnResult?: Partial<CodexCliSpawnResult>;
   readonly stdoutChunks?: readonly string[];
+  readonly stderrChunks?: readonly string[];
 }
 
 interface FakeProcessLog {
@@ -150,6 +158,9 @@ function makeFakeProcess(opts: FakeProcessOptions = {}): {
       log.spawnCalls.push(input);
       for (const chunk of opts.stdoutChunks ?? []) {
         input.onStdoutChunk?.(chunk);
+      }
+      for (const chunk of opts.stderrChunks ?? []) {
+        input.onStderrChunk?.(chunk);
       }
       return spawnResult(opts.spawnResult);
     },
@@ -237,6 +248,26 @@ test("codex provider-port: getCapabilities reports text-only / images-disabled",
   assert.equal(port.llm, FAKE_LLM);
 });
 
+test("codex provider-port: invocation cwd is optional for multi-repo DreamGraph runs", async () => {
+  const proc = makeFakeProcess();
+  const port = createCodexCliProviderPort({
+    hostLlm: FAKE_LLM,
+    timeoutMs: 30_000,
+    baseEnv: { PATH: "C:\\bin" },
+    deps: makeDeps({ process: proc.process }),
+  });
+
+  await port.callProvider(makeCallInput());
+
+  assert.equal(proc.log.spawnCalls.length, 1);
+  assert.match(proc.log.spawnCalls[0]!.cwd, /^C:\\Temp\\dreamgraph-codex-cli-run-/);
+  assert.ok(proc.log.spawnCalls[0]!.args.includes("--cd"));
+  assert.match(
+    proc.log.spawnCalls[0]!.args[proc.log.spawnCalls[0]!.args.indexOf("--cd") + 1] ?? "",
+    /^C:\\Temp\\dreamgraph-codex-cli-run-/,
+  );
+});
+
 test("codex provider-port: serializes conversation to stdin and projects proposal", async () => {
   const proc = makeFakeProcess();
   const port = createCodexCliProviderPort({
@@ -292,10 +323,10 @@ test("codex provider-port: advertises DreamGraph prompt policies and diagnostics
   assert.match(prompt, /Available dreamgraph tools/);
   assert.match(prompt, /  - query_resource/);
   assert.match(prompt, /  - edit_entity/);
-  assert.doesNotMatch(prompt, /  - run_command/);
-  assert.match(prompt, /dreamgraph:run_command - unavailable/);
+  assert.match(prompt, /  - run_command/);
+  assert.match(prompt, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
   assert.match(prompt, /File\/entity mutations\s+-> prefer dreamgraph:edit_entity/);
-  assert.match(prompt, /Verification \/ build \/ tests\s+-> command execution is disabled for this run/);
+  assert.match(prompt, /Verification \/ build \/ tests\s+-> dreamgraph:run_command/);
   assert.match(prompt, /Codex CLI adapter authority override/);
   assert.match(prompt, /ADR-aware task policy: for every repository task/);
   assert.match(prompt, /Graph sync policy: after any source or project-state mutation/);
@@ -303,9 +334,10 @@ test("codex provider-port: advertises DreamGraph prompt policies and diagnostics
   assert.ok(!proc.log.spawnCalls[0]!.args.includes("--image"));
   assert.equal(diagnostics.length, 1);
   assert.equal((diagnostics[0] as { mcpServerAdvertised: string }).mcpServerAdvertised, "dreamgraph");
+  assert.ok((diagnostics[0] as { mcpToolsAdvertised: number }).mcpToolsAdvertised > CODEX_MINIMUM_AUTHORITATIVE_TOOLS.length);
 });
 
-test("codex provider-port: keeps bridge-local run_command hidden with read-only upstream tools", async () => {
+test("codex provider-port: keeps bridge-local run_command visible with read-only upstream tools", async () => {
   const proc = makeFakeProcess();
   const port = createCodexCliProviderPort({
     hostLlm: FAKE_LLM,
@@ -326,8 +358,9 @@ test("codex provider-port: keeps bridge-local run_command hidden with read-only 
 
   const prompt = proc.log.spawnCalls[0]!.stdin;
   assert.match(prompt, /  - query_resource/);
-  assert.doesNotMatch(prompt, /  - run_command/);
-  assert.match(prompt, /dreamgraph:run_command - unavailable/);
+  assert.match(prompt, /  - run_command/);
+  assert.match(prompt, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
+  assert.match(prompt, /Verification \/ build \/ tests\s+-> dreamgraph:run_command/);
 });
 
 test("codex provider-port: forwards assistant text through onStreamChunk", async () => {
@@ -462,6 +495,36 @@ test("codex provider-port: streams live audit calls before final run reconciliat
   ]);
 });
 
+test("codex provider-port: streams transcript MCP witnesses when audit records are absent", async () => {
+  const observed: string[] = [];
+  const stderr = "mcp_tool_call failed: dreamgraph.query_resource\n";
+  const proc = makeFakeProcess({
+    stderrChunks: [stderr],
+    spawnResult: {
+      stderr,
+      exitCode: 1,
+    },
+  });
+  const port = createCodexCliProviderPort({
+    hostLlm: FAKE_LLM,
+    invocationCwd: "C:\\work",
+    timeoutMs: 30_000,
+    baseEnv: {},
+    deps: makeDeps({ process: proc.process }),
+    onToolWitness: (runId, witness) =>
+      observed.push(`witness:${runId}:${witness.server}:${witness.tool}:${witness.status}`),
+    onRunResult: (result) =>
+      observed.push(`result:${result.runId}:${result.ok}:${result.toolCallWitnesses.length}`),
+  });
+
+  await assert.rejects(port.callProvider(makeCallInput()));
+
+  assert.deepEqual(observed, [
+    "witness:codex-run-provider:dreamgraph:query_resource:failed",
+    "result:codex-run-provider:false:1",
+  ]);
+});
+
 test("codex provider-port: onRunResult fires for ok and failed runs", async () => {
   const results: boolean[] = [];
   const okPort = createCodexCliProviderPort({
@@ -492,7 +555,8 @@ test("codex provider-port: rejects missing or malformed options", () => {
   assert.throws(() =>
     createCodexCliProviderPort({
       hostLlm: FAKE_LLM,
-      invocationCwd: "",
+      // @ts-expect-error testing invalid input
+      invocationCwd: 42,
       timeoutMs: 1,
       baseEnv: {},
       deps: makeDeps(),

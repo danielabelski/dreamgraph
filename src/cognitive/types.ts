@@ -1804,6 +1804,76 @@ export interface FileChange {
   rationale: string;
 }
 
+/** Stable reference vocabulary for evidence assembled by DreamGraph. */
+export type EvidenceAnchorKind =
+  | "graph_entity"
+  | "adr"
+  | "workflow"
+  | "api_member"
+  | "source_anchor"
+  | "compact_excerpt"
+  | "task";
+
+export interface EvidenceAnchor {
+  kind: EvidenceAnchorKind;
+  id: string;
+  summary?: string;
+}
+
+export interface VerificationStep {
+  id: string;
+  description: string;
+  command?: string;
+  evidence_anchor_ids: string[];
+}
+
+export interface GraphSyncImpact {
+  required: boolean;
+  targets: Array<"features" | "workflows" | "data_model" | "capabilities" | "system_overview" | "ui_registry" | "api_surface" | "adr">;
+  rationale: string;
+}
+
+export interface LearningHook {
+  source: "accepted" | "edited" | "rejected" | "overridden" | "reverted" | "explicit_preference" | "recurring_pattern" | "drift";
+  evidence_anchor_ids: string[];
+  confidence: number;
+}
+
+export interface FutureSignal {
+  id: string;
+  description: string;
+  source: LearningHook["source"];
+  evidence_anchor_ids: string[];
+  confidence: number;
+  observed_at: string;
+}
+
+export interface FutureObjection {
+  id: string;
+  description: string;
+  evidence_anchor_ids: string[];
+  severity: "low" | "medium" | "high";
+}
+
+export interface CandidateFuture {
+  id: string;
+  title: string;
+  action_class: RemediationInterventionType;
+  evidence_anchor_ids: string[];
+  verification_steps: VerificationStep[];
+  graph_sync_impact: GraphSyncImpact;
+  future_fit_score?: number;
+  objections: FutureObjection[];
+}
+
+export interface FutureOutcome {
+  candidate_id: string;
+  selected: boolean;
+  rejected_reason?: string;
+  evidence_anchor_ids: string[];
+  recorded_at: string;
+}
+
 /**
  * Classifier for the *kind* of intervention a plan represents.
  *
@@ -1821,6 +1891,49 @@ export type RemediationInterventionType =
   | "wont_fix"
   | "merge"
   | "rescan";
+
+export interface RemediationEvidenceBundle {
+  id: string;
+  tension_id: string;
+  tension_type: TensionSignal["type"];
+  urgency: number;
+  description: string;
+  entities: string[];
+  evidence_anchors: EvidenceAnchor[];
+  entity_summaries: Array<{
+    id: string;
+    exists: boolean;
+    source_files: string[];
+    domain: string;
+  }>;
+  adr_guard_rails: Array<{
+    adr_id: string;
+    title: string;
+    guard_rails: string[];
+  }>;
+  allowed_action_classes: RemediationInterventionType[];
+  deterministic_short_circuit: "phantom_entity" | "graph_enrichment" | "none";
+  verification_obligations: VerificationStep[];
+}
+
+export interface GeneratedRemediationPlanSet {
+  evidence_bundle_id: string;
+  candidates: CandidateFuture[];
+  model_layer: "connected" | "daemon" | "deterministic_fallback";
+  fallback_reason?: string;
+  validation_failures: string[];
+}
+
+export interface RemediationPlanOutcome {
+  tension_id: string;
+  evidence_bundle_id: string;
+  selected_plan_id: string;
+  model_layer: GeneratedRemediationPlanSet["model_layer"];
+  fallback_reason?: string;
+  graph_sync_impact: GraphSyncImpact;
+  verification_steps: VerificationStep[];
+  recorded_at: string;
+}
 
 /** Suggested follow-up call to close a tension via `resolve_tension`. */
 export interface RemediationResolutionCall {
@@ -1899,6 +2012,33 @@ export interface RemediationLogFile {
   current: Record<string, RemediationPlan>;
   /** Append-only history of superseded / closed plans. */
   history: RemediationPlan[];
+  /** Bounded advisory-memory sidecar for Adaptive Future remediation ranking. */
+  adaptive_future?: {
+    signals: FutureSignal[];
+    outcomes: RemediationPlanOutcome[];
+    candidate_runs: Array<{
+      evidence_bundle_id: string;
+      selected_candidate_id?: string;
+      rejected_candidate_ids: string[];
+      model_layer: GeneratedRemediationPlanSet["model_layer"];
+      fallback_reason?: string;
+      validation_failures: string[];
+      future_fit_score?: number;
+      objection_count: number;
+      future_signal_ids: string[];
+      recorded_at: string;
+    }>;
+    metrics: {
+      total_runs: number;
+      total_outcomes: number;
+      total_candidate_runs: number;
+      total_signals: number;
+      llm_selected_runs: number;
+      deterministic_fallback_runs: number;
+      average_future_fit_score: number | null;
+      last_recorded_at: string | null;
+    };
+  };
 }
 
 // ===========================================================================
@@ -2344,6 +2484,64 @@ export interface CognitivePreamble {
   recent_insights: string[];
   /** Approximate token count */
   token_count: number;
+}
+
+/** Evidence classes the Task Preamble Compiler may include. */
+export type TaskPreambleEvidenceKind =
+  | "graph_entity"
+  | "adr"
+  | "workflow"
+  | "api_surface"
+  | "tension"
+  | "prior_outcome"
+  | "verification_obligation"
+  | "context_signal";
+
+/** One bounded, engine-assembled evidence item for task preamble compilation. */
+export interface TaskPreambleEvidenceItem {
+  /** Stable semantic anchor such as feature id, ADR id, workflow id, API member, or tension id. */
+  anchor: string;
+  kind: TaskPreambleEvidenceKind;
+  /** Compact evidence text already owned by the engine; never raw prompt or provider payload text. */
+  summary: string;
+  confidence: number;
+  /** Larger numbers are preferred when trimming to budget. */
+  priority: number;
+}
+
+/** Input for the provider-neutral Task Preamble Compiler. */
+export interface TaskPreambleCompileRequest {
+  /** User task text used only for bounded relevance scoring, not persisted by the compiler. */
+  task: string;
+  /** Optional deterministic evidence supplied by caller; otherwise graph evidence is assembled locally. */
+  evidence?: TaskPreambleEvidenceItem[];
+  /** Maximum generated preamble tokens. Default: 300. */
+  max_tokens?: number;
+  /** Minimum matched relevance score required before adding context. Default: 0.12. */
+  min_relevance?: number;
+  /** Minimum estimated avoided-token cost required before adding context. Default: 64. */
+  min_expected_savings_tokens?: number;
+}
+
+export type TaskPreambleBudgetDecision =
+  | "include"
+  | "omit_no_evidence"
+  | "omit_not_economical"
+  | "omit_over_budget"
+  | "omit_validation_failed";
+
+/** Provider-neutral compiled task preamble, including compact ADR-203 provenance. */
+export interface CompiledTaskPreamble {
+  preamble_text: string;
+  evidence_anchors: string[];
+  token_count: number;
+  budget_decision: TaskPreambleBudgetDecision;
+  omitted_context_reasons: string[];
+  validation_failures: string[];
+  selected_model_layer: "connected" | "daemon" | "deterministic_fallback";
+  selected_model_provider: string | null;
+  selected_model: string | null;
+  fallback_reason?: string;
 }
 
 // ===========================================================================
