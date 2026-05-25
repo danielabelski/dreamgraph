@@ -26,6 +26,7 @@ import { withFileLock } from "../utils/mutex.js";
 import { loadJsonArray } from "../utils/cache.js";
 import { engine } from "./engine.js";
 import { logger } from "../utils/logger.js";
+import { llmRouteFailureReason, selectLlmRoute, type LlmMessage } from "./llm.js";
 import type { DataModelEntity } from "../types/index.js";
 import type {
   TensionSignal,
@@ -36,6 +37,11 @@ import type {
   RemediationPlanOutput,
   RemediationLogFile,
   RemediationInterventionType,
+  RemediationEvidenceBundle,
+  GeneratedRemediationPlanSet,
+  CandidateFuture,
+  FutureSignal,
+  RemediationPlanOutcome,
   RemediationResolutionCall,
   RemediationEnrichmentAction,
   FileChange,
@@ -246,8 +252,24 @@ async function loadRemediationLog(): Promise<RemediationLogFile> {
   }
 }
 
-async function persistRemediationPlans(plans: RemediationPlan[]): Promise<void> {
-  if (plans.length === 0) return;
+async function persistRemediationPlans(
+  plans: RemediationPlan[],
+  outcomes: RemediationPlanOutcome[] = [],
+  candidateRuns: Array<{
+    evidence_bundle_id: string;
+    selected_candidate_id?: string;
+    rejected_candidate_ids: string[];
+    model_layer: GeneratedRemediationPlanSet["model_layer"];
+    fallback_reason?: string;
+    validation_failures: string[];
+    future_fit_score?: number;
+    objection_count: number;
+    future_signal_ids: string[];
+    recorded_at: string;
+  }> = [],
+  futureSignals: FutureSignal[] = []
+): Promise<void> {
+  if (plans.length === 0 && outcomes.length === 0 && candidateRuns.length === 0 && futureSignals.length === 0) return;
   await withFileLock(REMEDIATION_LOG_FILENAME, async () => {
     const log = await loadRemediationLog();
     const now = new Date().toISOString();
@@ -260,6 +282,50 @@ async function persistRemediationPlans(plans: RemediationPlan[]): Promise<void> 
       }
       log.current[plan.tension_id] = plan;
     }
+
+    const adaptiveFuture = log.adaptive_future ?? {
+      signals: [],
+      outcomes: [],
+      candidate_runs: [],
+      metrics: {
+        total_runs: 0,
+        total_outcomes: 0,
+        total_candidate_runs: 0,
+        total_signals: 0,
+        llm_selected_runs: 0,
+        deterministic_fallback_runs: 0,
+        average_future_fit_score: null,
+        last_recorded_at: null,
+      },
+    };
+
+    const signalIds = new Set(adaptiveFuture.signals.map((signal) => signal.id));
+    for (const signal of futureSignals) {
+      if (!signalIds.has(signal.id)) {
+        adaptiveFuture.signals.push(signal);
+        signalIds.add(signal.id);
+      }
+    }
+    adaptiveFuture.outcomes.push(...outcomes);
+    adaptiveFuture.candidate_runs.push(...candidateRuns);
+
+    adaptiveFuture.signals = adaptiveFuture.signals.slice(-200);
+    adaptiveFuture.outcomes = adaptiveFuture.outcomes.slice(-200);
+    adaptiveFuture.candidate_runs = adaptiveFuture.candidate_runs.slice(-200);
+
+    const scoredRuns = adaptiveFuture.candidate_runs.filter((run) => typeof run.future_fit_score === "number");
+    const scoreSum = scoredRuns.reduce((sum, run) => sum + (run.future_fit_score ?? 0), 0);
+    adaptiveFuture.metrics = {
+      total_runs: adaptiveFuture.metrics.total_runs + 1,
+      total_outcomes: adaptiveFuture.outcomes.length,
+      total_candidate_runs: adaptiveFuture.candidate_runs.length,
+      total_signals: adaptiveFuture.signals.length,
+      llm_selected_runs: adaptiveFuture.candidate_runs.filter((run) => run.model_layer !== "deterministic_fallback" && run.selected_candidate_id).length,
+      deterministic_fallback_runs: adaptiveFuture.candidate_runs.filter((run) => run.model_layer === "deterministic_fallback").length,
+      average_future_fit_score: scoredRuns.length === 0 ? null : Number((scoreSum / scoredRuns.length).toFixed(3)),
+      last_recorded_at: now,
+    };
+    log.adaptive_future = adaptiveFuture;
     log.metadata.last_updated = now;
     log.metadata.schema_version = SCHEMA_VERSION;
     await atomicWriteFile(dataPath(REMEDIATION_LOG_FILENAME), JSON.stringify(log, null, 2), "utf-8");
@@ -277,6 +343,110 @@ interface DraftPlan {
   steps: RemediationStep[];
   /** Pre-built `resolve_tension` invocation. Populated by `withResolutionCall`. */
   resolution: RemediationResolutionCall;
+}
+
+const ALLOWED_REMEDIATION_ACTION_CLASSES: RemediationInterventionType[] = [
+  "source_change",
+  "graph_enrichment",
+  "wont_fix",
+  "merge",
+  "rescan",
+];
+
+function entityEvidenceSummary(entity: string, ctx: PlanContext): RemediationEvidenceBundle["entity_summaries"][number] {
+  const summary = lookupEntity(entity, ctx.dataModel);
+  return {
+    id: entity,
+    exists: summary.exists,
+    source_files: summary.source_files,
+    domain: summary.domain,
+  };
+}
+
+function deterministicShortCircuitForTension(
+  tension: TensionSignal,
+  ctx: PlanContext
+): RemediationEvidenceBundle["deterministic_short_circuit"] {
+  if (tension.entities.some((entity) => !ctx.dataModel.has(entity))) {
+    return "phantom_entity";
+  }
+
+  if (tension.entities.length === 2) {
+    const [aId, bId] = tension.entities;
+    const a = ctx.dataModel.get(aId);
+    const b = ctx.dataModel.get(bId);
+    if (a && b && !entitiesAlreadyConnected(a, b)) {
+      return "graph_enrichment";
+    }
+  }
+
+  return "none";
+}
+
+/**
+ * Build the deterministic evidence envelope used by remediation drafting.
+ * This is the engine-owned boundary: later LLM slices may compress or rank this
+ * evidence, but they may not invent anchors outside this bundle.
+ */
+function buildRemediationEvidenceBundle(
+  tension: TensionSignal,
+  adrs: AdrSummary[],
+  ctx: PlanContext
+): RemediationEvidenceBundle {
+  const entitySummaries = tension.entities.map((entity) => entityEvidenceSummary(entity, ctx));
+  const entityAnchors = entitySummaries.map((entity) => ({
+    kind: "graph_entity" as const,
+    id: entity.id,
+    summary: entity.exists
+      ? `data_model entity with ${entity.source_files.length} source file binding(s)`
+      : "entity absent from data_model.json",
+  }));
+
+  const adrGuardRails = adrs
+    .filter((adr) => adr.status === "accepted" && adr.affected_entities.some((entity) => tension.entities.includes(entity)))
+    .map((adr) => ({
+      adr_id: adr.id,
+      title: adr.title,
+      guard_rails: adr.guard_rails,
+    }));
+
+  return {
+    id: `remediation_evidence_${tension.id}`,
+    tension_id: tension.id,
+    tension_type: tension.type,
+    urgency: tension.urgency,
+    description: tension.description,
+    entities: tension.entities,
+    evidence_anchors: [
+      {
+        kind: "task",
+        id: `tension:${tension.id}`,
+        summary: tension.description,
+      },
+      ...entityAnchors,
+      ...adrGuardRails.map((adr) => ({
+        kind: "adr" as const,
+        id: adr.adr_id,
+        summary: adr.title,
+      })),
+      ...entitySummaries.flatMap((entity) => entity.source_files.map((file) => ({
+        kind: "source_anchor" as const,
+        id: file,
+        summary: `source binding for ${entity.id}`,
+      }))),
+    ],
+    entity_summaries: entitySummaries,
+    adr_guard_rails: adrGuardRails,
+    allowed_action_classes: ALLOWED_REMEDIATION_ACTION_CLASSES,
+    deterministic_short_circuit: deterministicShortCircuitForTension(tension, ctx),
+    verification_obligations: [
+      {
+        id: `verify_${tension.id}`,
+        description: "Run the narrowest available verification for the files or graph entries changed by the remediation.",
+        evidence_anchor_ids: [`tension:${tension.id}`, ...tension.entities],
+      },
+    ],
+  };
 }
 
 /**
@@ -833,6 +1003,339 @@ function withResolutionStep(plan: RemediationPlan, draft: DraftPlan): Remediatio
   return plan;
 }
 
+function selectRemediationCandidates(
+  tensions: TensionSignal[],
+  maxPlans: number,
+  minUrgency: number,
+  now: number
+): { allUnresolved: TensionSignal[]; fresh: TensionSignal[]; candidates: TensionSignal[]; skippedStale: number; skippedLowUrgency: number } {
+  const allUnresolved = tensions.filter((t) => !t.resolved);
+  const SEVEN_DAYS_MS = 7 * 24 * 3_600_000;
+  const fresh = allUnresolved.filter((t) => {
+    const tooOld = (now - Date.parse(t.last_seen)) > SEVEN_DAYS_MS;
+    const dyingTtl = (t.ttl ?? 30) < 5;
+    return !(tooOld && dyingTtl);
+  });
+  const candidates = fresh
+    .filter((t) => t.urgency >= minUrgency)
+    .sort((a, b) => b.urgency - a.urgency)
+    .slice(0, maxPlans);
+
+  return {
+    allUnresolved,
+    fresh,
+    candidates,
+    skippedStale: allUnresolved.length - fresh.length,
+    skippedLowUrgency: fresh.length - candidates.length,
+  };
+}
+
+const REMEDIATION_DRAFT_ALLOWED_GRAPH_TARGETS = new Set([
+  "features",
+  "workflows",
+  "data_model",
+  "capabilities",
+  "system_overview",
+  "ui_registry",
+  "api_surface",
+  "adr",
+]);
+
+function remediationDraftMessages(bundle: RemediationEvidenceBundle): LlmMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "Draft one or more remediation candidate futures as strict JSON. " +
+        "Return {\"candidates\":[...]} only. Each candidate must include id, title, action_class, " +
+        "evidence_anchor_ids, verification_steps, graph_sync_impact, future_fit_score, and objections. " +
+        "Use only evidence_anchor ids and action classes present in the provided bundle.",
+    },
+    {
+      role: "user",
+      content: JSON.stringify({ evidence_bundle: bundle }),
+    },
+  ];
+}
+
+function parseRemediationDraftJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end <= start) return undefined;
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) return undefined;
+  return value;
+}
+
+export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenceBundle): CandidateFuture | undefined {
+  if (!isRecord(raw)) return undefined;
+
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const title = typeof raw.title === "string" ? raw.title.trim() : "";
+  const actionClass = raw.action_class;
+  const evidenceAnchorIds = stringArray(raw.evidence_anchor_ids);
+  const anchorIds = new Set(bundle.evidence_anchors.map((anchor) => anchor.id));
+
+  if (!id || !title) return undefined;
+  if (typeof actionClass !== "string" || !bundle.allowed_action_classes.includes(actionClass as RemediationInterventionType)) {
+    return undefined;
+  }
+  if (!evidenceAnchorIds || evidenceAnchorIds.length === 0 || evidenceAnchorIds.some((anchor) => !anchorIds.has(anchor))) {
+    return undefined;
+  }
+
+  const verificationStepsRaw = Array.isArray(raw.verification_steps) ? raw.verification_steps : [];
+  const verificationSteps = verificationStepsRaw.flatMap((step): CandidateFuture["verification_steps"] => {
+    if (!isRecord(step)) return [];
+    const stepId = typeof step.id === "string" ? step.id.trim() : "";
+    const description = typeof step.description === "string" ? step.description.trim() : "";
+    const stepAnchors = stringArray(step.evidence_anchor_ids);
+    if (!stepId || !description || !stepAnchors || stepAnchors.some((anchor) => !anchorIds.has(anchor))) return [];
+    return [{
+      id: stepId,
+      description,
+      command: typeof step.command === "string" ? step.command : undefined,
+      evidence_anchor_ids: stepAnchors,
+    }];
+  });
+  if (verificationSteps.length === 0) return undefined;
+
+  const graphSync = isRecord(raw.graph_sync_impact) ? raw.graph_sync_impact : undefined;
+  const graphSyncTargets = stringArray(graphSync?.targets);
+  if (!graphSync || typeof graphSync.required !== "boolean" || !graphSyncTargets) return undefined;
+  if (graphSyncTargets.some((target) => !REMEDIATION_DRAFT_ALLOWED_GRAPH_TARGETS.has(target))) return undefined;
+
+  const objectionsRaw = Array.isArray(raw.objections) ? raw.objections : [];
+  const objections = objectionsRaw.flatMap((objection): CandidateFuture["objections"] => {
+    if (!isRecord(objection)) return [];
+    const objectionId = typeof objection.id === "string" ? objection.id.trim() : "";
+    const description = typeof objection.description === "string" ? objection.description.trim() : "";
+    const severity = objection.severity;
+    const objectionAnchors = stringArray(objection.evidence_anchor_ids);
+    if (
+      !objectionId ||
+      !description ||
+      !objectionAnchors ||
+      objectionAnchors.some((anchor) => !anchorIds.has(anchor)) ||
+      (severity !== "low" && severity !== "medium" && severity !== "high")
+    ) return [];
+    return [{ id: objectionId, description, evidence_anchor_ids: objectionAnchors, severity }];
+  });
+
+  const score = typeof raw.future_fit_score === "number" && Number.isFinite(raw.future_fit_score)
+    ? Math.max(0, Math.min(1, raw.future_fit_score))
+    : undefined;
+
+  return {
+    id,
+    title,
+    action_class: actionClass as RemediationInterventionType,
+    evidence_anchor_ids: evidenceAnchorIds,
+    verification_steps: verificationSteps,
+    graph_sync_impact: {
+      required: graphSync.required,
+      targets: graphSyncTargets as CandidateFuture["graph_sync_impact"]["targets"],
+      rationale: typeof graphSync.rationale === "string" ? graphSync.rationale : "LLM-drafted remediation candidate requires graph sync review.",
+    },
+    future_fit_score: score,
+    objections,
+  };
+}
+
+export function validateRemediationDraft(raw: unknown, bundle: RemediationEvidenceBundle): CandidateFuture[] {
+  if (!isRecord(raw) || !Array.isArray(raw.candidates)) return [];
+  return raw.candidates
+    .map((candidate) => validateCandidateFuture(candidate, bundle))
+    .filter((candidate): candidate is CandidateFuture => !!candidate);
+}
+
+export function harvestRemediationFutureSignals(
+  bundle: RemediationEvidenceBundle,
+  preferredActionClass: RemediationInterventionType
+): FutureSignal[] {
+  const now = new Date().toISOString();
+  const tensionAnchorId = `tension:${bundle.tension_id}`;
+  const hasTensionAnchor = bundle.evidence_anchors.some((anchor) => anchor.id === tensionAnchorId);
+  const signals: FutureSignal[] = [];
+
+  signals.push({
+    id: `future_signal:${bundle.id}:preferred_action`,
+    description: `Deterministic remediation strategy prefers ${preferredActionClass}.`,
+    source: "explicit_preference",
+    evidence_anchor_ids: hasTensionAnchor ? [tensionAnchorId] : bundle.evidence_anchors.slice(0, 1).map((anchor) => anchor.id),
+    confidence: 0.72,
+    observed_at: now,
+  });
+
+  for (const adr of bundle.adr_guard_rails) {
+    signals.push({
+      id: `future_signal:${bundle.id}:adr:${adr.adr_id}`,
+      description: `Accepted ADR guard rails favor candidates that preserve ${adr.title}.`,
+      source: "accepted",
+      evidence_anchor_ids: [adr.adr_id],
+      confidence: 0.95,
+      observed_at: now,
+    });
+  }
+
+  for (const entity of bundle.entity_summaries) {
+    if (entity.exists && entity.source_files.length > 0) {
+      signals.push({
+        id: `future_signal:${bundle.id}:entity:${entity.id}`,
+        description: `Existing source binding for ${entity.id} favors concrete, locally verifiable remediation.`,
+        source: "recurring_pattern",
+        evidence_anchor_ids: [entity.id, ...entity.source_files],
+        confidence: 0.68,
+        observed_at: now,
+      });
+    }
+  }
+
+  return signals.filter((signal) =>
+    signal.evidence_anchor_ids.length > 0 &&
+    signal.evidence_anchor_ids.every((anchorId) => bundle.evidence_anchors.some((anchor) => anchor.id === anchorId))
+  );
+}
+
+export function scoreCandidateFuture(
+  candidate: CandidateFuture,
+  bundle: RemediationEvidenceBundle,
+  signals: FutureSignal[],
+  preferredActionClass: RemediationInterventionType
+): CandidateFuture {
+  const candidateAnchors = new Set(candidate.evidence_anchor_ids);
+  const supportingSignals = signals.filter((signal) =>
+    signal.evidence_anchor_ids.some((anchorId) => candidateAnchors.has(anchorId))
+  );
+  const support = supportingSignals.length === 0
+    ? 0
+    : supportingSignals.reduce((sum, signal) => sum + signal.confidence, 0) / supportingSignals.length;
+  const objections = [...candidate.objections];
+  let score = candidate.future_fit_score ?? 0.5;
+
+  score += support * 0.25;
+  if (candidate.action_class === preferredActionClass) {
+    score += 0.2;
+  } else {
+    objections.push({
+      id: `future_objection:${candidate.id}:strategy_mismatch`,
+      description: `Candidate is valid but diverges from the deterministic ${preferredActionClass} remediation strategy.`,
+      evidence_anchor_ids: candidate.evidence_anchor_ids.slice(0, 1),
+      severity: "medium",
+    });
+    score -= 0.15;
+  }
+
+  if (candidate.action_class === "source_change") {
+    const hasSourceAnchor = candidate.evidence_anchor_ids.some((anchorId) =>
+      bundle.evidence_anchors.some((anchor) => anchor.id === anchorId && anchor.kind === "source_anchor")
+    );
+    if (!hasSourceAnchor) {
+      objections.push({
+        id: `future_objection:${candidate.id}:no_source_anchor`,
+        description: "Source-change candidate is technically valid but lacks a direct source anchor in the evidence bundle.",
+        evidence_anchor_ids: candidate.evidence_anchor_ids.slice(0, 1),
+        severity: "high",
+      });
+      score -= 0.25;
+    }
+  }
+
+  return {
+    ...candidate,
+    future_fit_score: Math.max(0, Math.min(1, score)),
+    objections,
+  };
+}
+
+function rankCandidateFutures(
+  candidates: CandidateFuture[],
+  bundle: RemediationEvidenceBundle,
+  preferredActionClass: RemediationInterventionType
+): CandidateFuture[] {
+  const signals = harvestRemediationFutureSignals(bundle, preferredActionClass);
+  return candidates
+    .map((candidate) => scoreCandidateFuture(candidate, bundle, signals, preferredActionClass))
+    .sort((a, b) => (b.future_fit_score ?? 0) - (a.future_fit_score ?? 0));
+}
+
+async function draftRemediationCandidateFutures(
+  evidenceBundles: RemediationEvidenceBundle[]
+): Promise<Map<string, GeneratedRemediationPlanSet>> {
+  const route = await selectLlmRoute({
+    task: "remediation_drafting",
+    daemon_component: "dreamer",
+    max_tokens: 1800,
+  });
+
+  const drafts = new Map<string, GeneratedRemediationPlanSet>();
+  for (const bundle of evidenceBundles) {
+    if (route.layer === "deterministic_fallback" || !route.provider) {
+      drafts.set(bundle.id, {
+        evidence_bundle_id: bundle.id,
+        candidates: [],
+        model_layer: "deterministic_fallback",
+        fallback_reason: route.provenance.fallback_reason,
+        validation_failures: [],
+      });
+      continue;
+    }
+
+    try {
+      const response = await route.provider.complete(remediationDraftMessages(bundle), route.options);
+      const candidates = validateRemediationDraft(parseRemediationDraftJson(response.text), bundle);
+      drafts.set(bundle.id, {
+        evidence_bundle_id: bundle.id,
+        candidates,
+        model_layer: route.layer,
+        fallback_reason: candidates.length === 0 ? llmRouteFailureReason("validation") : undefined,
+        validation_failures: candidates.length === 0 ? ["No schema-valid remediation candidates returned."] : [],
+      });
+    } catch (err) {
+      logger.warn(`remediation LLM drafting failed for ${bundle.tension_id}: ${(err as Error).message}`);
+      drafts.set(bundle.id, {
+        evidence_bundle_id: bundle.id,
+        candidates: [],
+        model_layer: "deterministic_fallback",
+        fallback_reason: llmRouteFailureReason("provider"),
+        validation_failures: [(err as Error).message],
+      });
+    }
+  }
+  return drafts;
+}
+
+/** Build remediation evidence bundles without drafting or invoking a model. */
+export async function buildRemediationEvidenceBundles(
+  maxPlans: number = 5,
+  minUrgency: number = 0.3
+): Promise<RemediationEvidenceBundle[]> {
+  const [tensionFile, adrs, dataModel, dreamGraph] = await Promise.all([
+    engine.loadTensions(),
+    loadAdrLog(),
+    loadDataModelMap(),
+    engine.loadDreamGraph(),
+  ]);
+  const ctx: PlanContext = { dataModel, recentDreams: dreamGraph.edges };
+  const { candidates } = selectRemediationCandidates(tensionFile.signals, maxPlans, minUrgency, Date.now());
+  return candidates.map((tension) => buildRemediationEvidenceBundle(tension, adrs, ctx));
+}
+
 /**
  * Generate remediation plans for the top N highest-urgency unresolved tensions.
  *
@@ -857,25 +1360,12 @@ export async function generateRemediationPlans(
   );
 
   const ctx: PlanContext = { dataModel, recentDreams: dreamGraph.edges };
-  const allUnresolved = tensionFile.signals.filter((t) => !t.resolved);
-
-  // Recency filter: drop tensions whose TTL has decayed below 5 cycles AND
-  // whose last_seen is older than 7 days. These are dying signals.
-  const now = Date.now();
-  const SEVEN_DAYS_MS = 7 * 24 * 3_600_000;
-  const fresh = allUnresolved.filter((t) => {
-    const tooOld = (now - Date.parse(t.last_seen)) > SEVEN_DAYS_MS;
-    const dyingTtl = (t.ttl ?? 30) < 5;
-    return !(tooOld && dyingTtl);
-  });
-  const skippedStale = allUnresolved.length - fresh.length;
-
-  const candidates = fresh
-    .filter((t) => t.urgency >= minUrgency)
-    .sort((a, b) => b.urgency - a.urgency)
-    .slice(0, maxPlans);
-
-  const skippedLowUrgency = fresh.length - candidates.length;
+  const {
+    allUnresolved,
+    candidates,
+    skippedStale,
+    skippedLowUrgency,
+  } = selectRemediationCandidates(tensionFile.signals, maxPlans, minUrgency, Date.now());
 
   if (candidates.length === 0) {
     logger.info("No tensions above urgency threshold — nothing to remediate");
@@ -890,16 +1380,59 @@ export async function generateRemediationPlans(
   }
 
   const plans: RemediationPlan[] = [];
-  for (const tension of candidates) {
+  const planOutcomes: RemediationPlanOutcome[] = [];
+  const futureSignalsForPersistence: FutureSignal[] = [];
+  const candidateRunAudit: Array<{
+    evidence_bundle_id: string;
+    selected_candidate_id?: string;
+    rejected_candidate_ids: string[];
+    model_layer: GeneratedRemediationPlanSet["model_layer"];
+    fallback_reason?: string;
+    validation_failures: string[];
+    future_fit_score?: number;
+    objection_count: number;
+    future_signal_ids: string[];
+    recorded_at: string;
+  }> = [];
+  const evidenceBundles = candidates.map((tension) => buildRemediationEvidenceBundle(tension, adrs, ctx));
+  const llmDrafts = await draftRemediationCandidateFutures(evidenceBundles);
+  logger.info(`Remediation planner assembled ${evidenceBundles.length} evidence bundle(s).`);
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const tension = candidates[index];
+    const evidenceBundle = evidenceBundles[index];
+    const generatedSet = llmDrafts.get(evidenceBundle.id);
     const draft = strategyForTension(tension, ctx);
+    const futureSignals = harvestRemediationFutureSignals(evidenceBundle, draft.intervention_type);
+    futureSignalsForPersistence.push(...futureSignals);
+    const rankedCandidates = generatedSet
+      ? generatedSet.candidates
+        .map((candidate) => scoreCandidateFuture(candidate, evidenceBundle, futureSignals, draft.intervention_type))
+        .sort((a, b) => (b.future_fit_score ?? 0) - (a.future_fit_score ?? 0))
+      : [];
+    const llmCandidate = rankedCandidates[0];
     const adrConflicts = findAdrConflicts(tension, adrs);
     const predictedTensions = predictNewTensions(tension, draft.steps);
-    const confidence = computeConfidence(tension, draft, adrConflicts);
+    const deterministicConfidence = computeConfidence(tension, draft, adrConflicts);
+    const confidence = llmCandidate?.future_fit_score == null
+      ? deterministicConfidence
+      : Math.max(0.1, Math.min(1.0, (deterministicConfidence + llmCandidate.future_fit_score) / 2));
+
+    if (generatedSet?.fallback_reason) {
+      logger.info(
+        `Remediation drafting used deterministic fallback for ${tension.id}: ${generatedSet.fallback_reason}`
+      );
+    } else if (llmCandidate) {
+      logger.info(
+        `Selected remediation candidate ${llmCandidate.id} for ${tension.id} with future-fit score ${llmCandidate.future_fit_score ?? 0} ` +
+        `and ${llmCandidate.objections.length} future objection(s).`
+      );
+    }
 
     const planBase: RemediationPlan = {
       id: `rem_${tension.id}_${Date.now().toString(36)}`,
       tension_id: tension.id,
-      title: draft.approach,
+      title: llmCandidate?.title ?? draft.approach,
       severity: severityFromUrgency(tension.urgency),
       intervention_type: draft.intervention_type,
       steps: draft.steps,
@@ -908,12 +1441,44 @@ export async function generateRemediationPlans(
       confidence,
       generated_at: new Date().toISOString(),
     };
-    plans.push(withResolutionStep(planBase, draft));
+    const completedPlan = withResolutionStep(planBase, draft);
+    plans.push(completedPlan);
+
+    candidateRunAudit.push({
+      evidence_bundle_id: evidenceBundle.id,
+      selected_candidate_id: llmCandidate?.id,
+      rejected_candidate_ids: rankedCandidates.slice(1).map((candidate) => candidate.id),
+      model_layer: generatedSet?.model_layer ?? "deterministic_fallback",
+      fallback_reason: generatedSet?.fallback_reason,
+      validation_failures: generatedSet?.validation_failures ?? [],
+      future_fit_score: llmCandidate?.future_fit_score,
+      objection_count: llmCandidate?.objections.length ?? 0,
+      future_signal_ids: futureSignals.map((signal) => signal.id),
+      recorded_at: planBase.generated_at,
+    });
+    planOutcomes.push({
+      tension_id: tension.id,
+      evidence_bundle_id: evidenceBundle.id,
+      selected_plan_id: completedPlan.id,
+      model_layer: generatedSet?.model_layer ?? "deterministic_fallback",
+      fallback_reason: generatedSet?.fallback_reason,
+      graph_sync_impact: llmCandidate?.graph_sync_impact ?? {
+        required: false,
+        targets: [],
+        rationale: "Deterministic remediation fallback did not require candidate graph-sync metadata.",
+      },
+      verification_steps: llmCandidate?.verification_steps ?? evidenceBundle.verification_obligations,
+      recorded_at: planBase.generated_at,
+    });
   }
+
+  logger.info(
+    `Recorded ${planOutcomes.length} remediation outcome(s) and ${candidateRunAudit.length} candidate-run audit item(s) for this planning run.`
+  );
 
   // Persist for cross-session continuity (item 6 of FIX_REMEDIATION_PLAN_ENGINE).
   try {
-    await persistRemediationPlans(plans);
+    await persistRemediationPlans(plans, planOutcomes, candidateRunAudit, futureSignalsForPersistence);
   } catch (err) {
     logger.warn(`persistRemediationPlans: ${(err as Error).message}`);
   }

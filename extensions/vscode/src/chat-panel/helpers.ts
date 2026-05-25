@@ -42,6 +42,7 @@ export interface ToolTraceEntry {
   filesAffected: string[];
   durationMs: number;
   status: 'completed' | 'failed';
+  provenance?: 'audit' | 'transcript-witness';
 }
 
 // ---------- Pure helpers ----------

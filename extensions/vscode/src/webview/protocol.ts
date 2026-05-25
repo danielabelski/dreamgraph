@@ -38,6 +38,8 @@ export interface ToolTraceEntry {
   argsSummary: string;
   filesAffected: string[];
   durationMs: number;
+  status?: 'completed' | 'failed';
+  provenance?: 'audit' | 'transcript-witness';
 }
 
 // ── Extension → Webview ─────────────────────────────────────────────────────

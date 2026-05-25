@@ -64,6 +64,7 @@ import {
   type ClassifiedToolCall as CodexClassifiedToolCall,
   type CodexCliProviderPortOptions,
   type CodexCliRunResult,
+  type CodexToolCallWitness,
   type PromptComposedInfo as CodexPromptComposedInfo,
 } from './architect-core/adapters/codex-cli/index.js';
 import type { ChatPanelHost } from './architect-core/adapters/host.js';
@@ -807,11 +808,11 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         }
         case 'setAutonomyMode': {
           const modeMsg = message as { type: 'setAutonomyMode'; mode: string };
-          this._setAutonomyMode(modeMsg.mode);
+          await this._setAutonomyMode(modeMsg.mode);
           break;
         }
         case 'resetAutonomy': {
-          this._resetAutonomy();
+          await this._resetAutonomy();
           break;
         }
         case 'refreshPendingReviews': {
@@ -1516,8 +1517,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       // graph/markdown/edit tools plus bridge-local run_command so the
       // CLI can act through DreamGraph authority instead of inline shell.
       cliToolsManifest: {
-        server: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
-        tools: COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+        server: CODEX_DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+        tools: CODEX_AUTHORITATIVE_TOOL_CATALOG,
       },
       deps: {
         fs: HOST_FS,
@@ -1697,9 +1698,18 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           console.warn('[DreamGraph][codex-cli] onToolCall handler failed:', liveErr);
         }
       },
+      onToolWitness: (runId: string, witness: CodexToolCallWitness): void => {
+        try {
+          this._appendCodexTranscriptWitnessToolTrace(runId, [witness]);
+        } catch (liveErr) {
+          console.warn('[DreamGraph][codex-cli] onToolWitness handler failed:', liveErr);
+        }
+      },
       onRunResult: (result: CodexCliRunResult): void => {
         try {
           this._reconcileCliAuditToolTrace(result.runId, result.toolCalls);
+          this._appendCodexTranscriptWitnessToolTrace(result.runId, result.toolCallWitnesses);
+          void this.postMessage({ type: 'toolTrace', calls: this._lastToolTrace });
           if (!result.ok) {
             const code = result.failure?.code ?? 'CODEX_CLI_UNKNOWN_FAILURE';
             const message = result.failure?.message ?? 'Codex CLI run failed';
@@ -2905,21 +2915,27 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     this._broadcastAutonomyStatus();
   }
 
-  private _setAutonomyMode(mode: string): void {
+  private async _setAutonomyMode(mode: string): Promise<void> {
     const valid = ['cautious', 'conscientious', 'eager', 'autonomous'] as const;
     const m = valid.find((v) => v === mode);
     if (!m) return;
+    const selected = m as AutonomyMode;
     // Per ADR-152/153: explicit mode selection from the header is a fresh
     // session under that mode's profile (PassBudget + TimeBudget reset). The
     // legacy `dreamgraph.architect.autoPassBudget` setting is honoured only
     // for the user-typed `parseAutonomyRequest` path — dropdown clicks always
     // apply the canonical mode profile so the budgets visibly mean something.
-    this._autonomyState = applyModeProfileToState(m as AutonomyMode);
+    this._autonomyState = applyModeProfileToState(selected);
     this._autonomyEnabled = true;
     this._broadcastAutonomyStatus();
+    await vscode.workspace.getConfiguration('dreamgraph.architect').update(
+      'autonomyMode',
+      selected,
+      this._architectSettingsTarget(),
+    );
   }
 
-  private _resetAutonomy(): void {
+  private async _resetAutonomy(): Promise<void> {
     // Reset to cautious profile so pills still show 3/3 + 2:00/2:00
     // rather than placeholders (per ADR-153, budgets are always visible).
     this._autonomyState = applyModeProfileToState('cautious');
@@ -2927,6 +2943,11 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     this._autonomyContinuing = false;
     this._lastRecommendedActions = [];
     this._broadcastAutonomyStatus();
+    await vscode.workspace.getConfiguration('dreamgraph.architect').update(
+      'autonomyMode',
+      'cautious',
+      this._architectSettingsTarget(),
+    );
   }
 
   private _broadcastAutonomyStatus(): void {
@@ -4428,6 +4449,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
       durationMs: Math.max(0, Math.floor(call.durationMs)),
       status: call.isError ? 'failed' : 'completed',
+      provenance: 'audit',
     };
   }
 
@@ -4447,6 +4469,41 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         this._lastToolTrace.push(authoritativeEntry);
       }
     }
+  }
+
+  private _appendCodexTranscriptWitnessToolTrace(
+    runId: string,
+    witnesses: readonly CodexToolCallWitness[] | undefined,
+  ): void {
+    if (!witnesses || witnesses.length === 0) return;
+    for (const witness of witnesses) {
+      const key = ChatPanel._toolWitnessDedupKey(runId, witness);
+      if (this._liveToolCallsSeen.has(key)) continue;
+      const entry = this._toolTraceEntryFromCodexWitness(witness);
+      this._liveToolCallsSeen.set(key, this._lastToolTrace.length);
+      this._lastToolTrace.push(entry);
+      void this.postMessage({
+        type: 'tool-progress',
+        tool: entry.tool,
+        message: `${entry.tool} ${entry.status === 'failed' ? 'failed' : 'observed'} (transcript witness)`,
+      });
+    }
+  }
+
+  private _toolTraceEntryFromCodexWitness(witness: CodexToolCallWitness): ToolTraceEntry {
+    const displayTool = `${witness.server}:${witness.tool}`;
+    const status = witness.status === 'completed' || witness.status === 'unknown'
+      ? 'completed'
+      : 'failed';
+    const detail = witness.detail?.trim();
+    return {
+      tool: displayTool,
+      argsSummary: detail ? `transcript witness: ${detail}` : `transcript witness: ${witness.status}`,
+      filesAffected: [],
+      durationMs: 0,
+      status,
+      provenance: 'transcript-witness',
+    };
   }
 
   /**
@@ -4475,6 +4532,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
       filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
       durationMs: Math.max(0, Math.floor(call.durationMs)),
       status: call.isError ? 'failed' : 'completed',
+      provenance: 'audit',
     };
   }
 
@@ -4490,6 +4548,17 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     startedAtEpochMs: number,
   ): string {
     return `${runId}:${server}:${tool}:${startedAtEpochMs}`;
+  }
+
+  private static _toolWitnessDedupKey(runId: string, witness: CodexToolCallWitness): string {
+    return [
+      runId,
+      'transcript-witness',
+      witness.server,
+      witness.tool,
+      witness.status,
+      witness.detail ?? '',
+    ].join(':');
   }
 
   private async _verifyEntities(names: string[]): Promise<Record<string, EntityVerification>> {
@@ -4916,7 +4985,8 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
         head.innerHTML = '<span>' + escapeHtml(entry.tool || 'tool') + '</span><span>' + escapeHtml(entry.status || '') + '</span>';
         const meta = document.createElement('div');
         meta.className = 'tool-trace-meta';
-        meta.textContent = (entry.argsSummary || '') + (entry.filesAffected?.length ? ' • ' + entry.filesAffected.join(', ') : '') + (Number.isFinite(entry.durationMs) ? ' • ' + entry.durationMs + 'ms' : '');
+        const provenance = entry.provenance === 'transcript-witness' ? 'transcript witness' : '';
+        meta.textContent = [entry.argsSummary || '', provenance, ...(entry.filesAffected?.length ? [entry.filesAffected.join(', ')] : []), ...(Number.isFinite(entry.durationMs) ? [entry.durationMs + 'ms'] : [])].filter(Boolean).join(' • ');
         item.appendChild(head);
         item.appendChild(meta);
         list.appendChild(item);
@@ -4928,9 +4998,13 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     function renderProvenance(message, trace) {
       const div = document.createElement('div');
       div.className = 'message-provenance';
-      div.textContent = trace && trace.length > 0
+      const audited = Array.isArray(trace) && trace.some((entry) => entry.provenance !== 'transcript-witness');
+      const witnessed = Array.isArray(trace) && trace.some((entry) => entry.provenance === 'transcript-witness');
+      div.textContent = audited
         ? 'Provenance: grounded in executed tools and rendered output.'
-        : 'Provenance: rendered output without executed tool trace.';
+        : witnessed
+          ? 'Provenance: Codex transcript reported tool attempts, but no audited DreamGraph execution was recorded.'
+          : 'Provenance: rendered output without executed tool trace.';
       return div;
     }
 

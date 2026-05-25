@@ -13,6 +13,11 @@ export type CodexCliErrorCode =
   | "CODEX_USAGE_LIMIT"
   | "CODEX_MODEL_UNSUPPORTED"
   | "CODEX_POLICY_DENIED"
+  | "DREAMGRAPH_TOOL_MISSING"
+  | "DREAMGRAPH_TOOL_POLICY_BLOCKED"
+  | "DREAMGRAPH_TOOL_SCHEMA_ARGS"
+  | "DREAMGRAPH_TOOL_AUTHORIZATION_NEEDED"
+  | "DREAMGRAPH_MCP_RUNTIME_FAILURE"
   | "MCP_PROBE_FAILED"
   | "MCP_ISOLATION_UNSUPPORTED"
   | "DREAMGRAPH_TOOL_REGISTRY_MISMATCH"
@@ -32,28 +37,35 @@ export type CodexCliErrorCode =
 
 export const CODEX_MINIMUM_AUTHORITATIVE_TOOLS = Object.freeze([
   "query_resource",
-  "query_api_surface",
-  "read_source_code",
-  "search_source_code",
-  "list_directory",
-  "list_markdown_chapters",
-  "read_markdown_chapter",
   "graph_rag_retrieve",
   "shortest_path",
-  "query_db_schema",
+  "query_api_surface",
+  "read_source_code",
+  "list_directory",
+  "search_source_code",
+  "list_markdown_chapters",
+  "read_markdown_chapter",
+  "cognitive_status",
 ] as const);
 
-// Codex must not rely on bridge-local command execution. Source and graph
-// mutations are routed through DreamGraph's repo-aware upstream tools; local
-// shell cwd constraints would break multi-repository instances.
-export const CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS = Object.freeze([] as const);
+// Bridge-local verification is explicitly exposed when the host policy allows
+// it. Source and graph reads/mutations prefer DreamGraph's repo-aware upstream
+// tools so multi-repository instances do not depend on a single VS Code
+// workspace root.
+export const CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS = Object.freeze([
+  "run_command",
+] as const);
 
 export const CODEX_AUTHORITATIVE_TOOL_CATALOG = Object.freeze([
   ...CODEX_MINIMUM_AUTHORITATIVE_TOOLS,
+  "read_local_file",
+  "run_command",
   "create_file",
   "edit_file",
   "delete_file",
   "rename_file",
+  "write_file",
+  "modify_entity",
   "edit_entity",
   "patch_file",
   "append_to_file",
@@ -67,7 +79,6 @@ export const CODEX_AUTHORITATIVE_TOOL_CATALOG = Object.freeze([
   "record_architecture_decision",
   "query_architecture_decisions",
   "deprecate_architecture_decision",
-  "cognitive_status",
   "get_dream_insights",
   "query_dreams",
   "get_causal_insights",
@@ -116,6 +127,7 @@ export interface CodexHelpSurface {
   readonly versionString: string | null;
   readonly root: {
     readonly execCommand: boolean;
+    readonly askForApproval: boolean;
   };
   readonly exec: {
     readonly json: boolean;
@@ -130,6 +142,7 @@ export interface CodexHelpSurface {
     readonly outputSchema: boolean;
     readonly skipGitRepoCheck: boolean;
     readonly ignoreUserConfig: boolean;
+    readonly ignoreRules: boolean;
     readonly ephemeral: boolean;
     readonly positionalStdinPrompt: boolean;
   };
@@ -202,6 +215,7 @@ export interface CodexArgvInput {
   readonly addDirs?: readonly string[];
   readonly skipGitRepoCheck?: boolean;
   readonly ignoreUserConfig?: boolean;
+  readonly ignoreRules?: boolean;
   readonly ephemeral?: boolean;
   readonly helpSurface: CodexHelpSurface;
 }
@@ -214,6 +228,7 @@ export interface CodexArgvPlan {
     readonly promptSource: "stdin-positional-dash";
     readonly jsonEventsEnabled: boolean;
     readonly userConfigIgnored: boolean;
+    readonly rulesIgnored: boolean;
     readonly ephemeral: boolean;
     readonly gitRepoCheckSkipped: boolean;
     readonly addedDirs: readonly string[];
@@ -230,6 +245,21 @@ export type ToolCallClass =
 export interface ToolCallObservation {
   readonly server: string;
   readonly tool: string;
+}
+
+export type CodexToolCallWitnessStatus =
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
+export interface CodexToolCallWitness {
+  readonly server: string;
+  readonly tool: string;
+  readonly status: CodexToolCallWitnessStatus;
+  readonly detail?: string;
+  readonly source: "structured-event" | "diagnostic";
+  readonly sequence: number;
 }
 
 export interface ToolCallClassificationContext {
@@ -273,6 +303,7 @@ export interface CodexCliTranscript {
   readonly hasStderrErrors: boolean;
   readonly notLoggedIn: boolean;
   readonly toolCalls: readonly ToolCallObservation[];
+  readonly toolCallWitnesses: readonly CodexToolCallWitness[];
   readonly usage: CodexTokenUsage | null;
   readonly structuredErrors: readonly CodexStructuredError[];
   readonly usageLimit: CodexUsageLimitInfo | null;
@@ -294,4 +325,5 @@ export interface CodexCliRunResult {
   readonly argv: readonly string[];
   readonly transcript: CodexCliTranscript;
   readonly toolCalls: readonly ToolCallObservation[];
+  readonly toolCallWitnesses: readonly CodexToolCallWitness[];
 }

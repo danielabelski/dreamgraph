@@ -17,6 +17,13 @@ test('chat panel contains Slice 5 action and render limit scaffolding', () => {
   assert.match(source, /\[Response truncated\]/);
 });
 
+test('chat panel persists header autonomy dropdown selections', () => {
+  const source = readFileSync(join(process.cwd(), 'src', 'chat-panel.ts'), 'utf8');
+  assert.match(source, /case 'setAutonomyMode':[\s\S]*await this\._setAutonomyMode\(modeMsg\.mode\)/);
+  assert.match(source, /private async _setAutonomyMode\(mode: string\): Promise<void>[\s\S]*update\(\s*'autonomyMode',\s*selected,\s*this\._architectSettingsTarget\(\)/);
+  assert.match(source, /private async _resetAutonomy\(\): Promise<void>[\s\S]*update\(\s*'autonomyMode',\s*'cautious',\s*this\._architectSettingsTarget\(\)/);
+});
+
 test('styles include role header, hover actions, and action block styles', () => {
   const css = readFileSync(join(process.cwd(), 'src', 'webview', 'styles.ts'), 'utf8');
   assert.match(css, /message-header/);

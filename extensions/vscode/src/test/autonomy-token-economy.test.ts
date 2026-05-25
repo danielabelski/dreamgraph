@@ -71,6 +71,22 @@ test('continuation prompt omits anchor preamble before any anchor', () => {
   assert.doesNotMatch(prompt, /Do NOT re-locate/i);
 });
 
+test('continuation prompt authorizes one bounded read_source_code action', () => {
+  const prompt = buildContinuationPrompt({
+    id: 'allow-focused-read',
+    label: 'Allow one target entity read',
+    rationale: 'The next pass only needs one bounded source read.',
+    priority: 1,
+    eligible: true,
+    withinScope: true,
+    blockers: [],
+    tool: 'read_source_code',
+    toolArgs: { repo: 'dreamgraph', filePath: 'extensions/vscode/src/tool-groups.ts', entity: 'TOOL_GROUPS' },
+  });
+  assert.match(prompt, /Authorized: one focused read_source_code call/);
+  assert.match(prompt, /Suggested args for the entry tool/);
+});
+
 test('post-anchor re-reading does NOT trigger a two-strike token-economy STOP', () => {
   // The architectural decision is "no failure: keep going until done".
   // Re-reading after an anchor was the canonical token-waste pattern, but
