@@ -98,6 +98,58 @@ export interface LlmProvider {
   complete(messages: LlmMessage[], options?: LlmCompletionOptions): Promise<LlmResponse>;
 }
 
+export type LlmRouteLayer = "connected" | "daemon" | "deterministic_fallback";
+
+export type LlmRouteFallbackReason =
+  | "no_connected_model"
+  | "connected_model_unavailable"
+  | "no_daemon_model"
+  | "daemon_model_unavailable"
+  | "provider_failed"
+  | "invalid_output"
+  | "validation_failed";
+
+export type LlmRouteTask =
+  | "remediation_drafting"
+  | "task_preamble_compilation"
+  | "graph_enrichment"
+  | "dream_generation"
+  | "normalization"
+  | "generic";
+
+export interface ConnectedLlmContext {
+  provider: LlmProvider;
+  /** Compact source label only; do not include prompt or secret material. */
+  source: "architect" | "external" | "caller" | "sampling";
+  model?: string;
+}
+
+export interface LlmRouteRequest {
+  task: LlmRouteTask;
+  /** Defaults to dreamer. Normalizer stays available for low-temperature validation tasks. */
+  daemon_component?: "dreamer" | "normalizer";
+  /** Task-specific daemon temperature required by ADR-203. */
+  daemon_temperature?: number;
+  max_tokens?: number;
+  connected?: ConnectedLlmContext | null;
+}
+
+export interface LlmRouteSelection {
+  layer: LlmRouteLayer;
+  provider: LlmProvider | null;
+  model: string | null;
+  options: LlmCompletionOptions;
+  provenance: {
+    task: LlmRouteTask;
+    layer: LlmRouteLayer;
+    provider: string | null;
+    model: string | null;
+    source: ConnectedLlmContext["source"] | "daemon" | "deterministic_fallback";
+    fallback_reason?: LlmRouteFallbackReason;
+    temperature?: number;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Ollama Provider — local model, no API key, autonomous
 // ---------------------------------------------------------------------------
@@ -763,6 +815,147 @@ export function getLlmConfig(): LlmConfig {
     _config = parseLlmConfig();
   }
   return _config;
+}
+
+function taskDefaultTemperature(task: LlmRouteTask): number {
+  switch (task) {
+    case "normalization":
+      return 0.1;
+    case "task_preamble_compilation":
+      return 0.2;
+    case "remediation_drafting":
+      return 0.3;
+    case "graph_enrichment":
+      return 0.4;
+    case "dream_generation":
+      return 0.7;
+    default:
+      return getDreamerLlmConfig().temperature;
+  }
+}
+
+function componentConfig(component: "dreamer" | "normalizer"): { model: string; temperature: number; maxTokens: number } {
+  return component === "normalizer" ? getNormalizerLlmConfig() : getDreamerLlmConfig();
+}
+
+function fallbackSelection(
+  request: LlmRouteRequest,
+  fallbackReason: LlmRouteFallbackReason,
+): LlmRouteSelection {
+  return {
+    layer: "deterministic_fallback",
+    provider: null,
+    model: null,
+    options: {},
+    provenance: {
+      task: request.task,
+      layer: "deterministic_fallback",
+      provider: null,
+      model: null,
+      source: "deterministic_fallback",
+      fallback_reason: fallbackReason,
+    },
+  };
+}
+
+/**
+ * Select the ADR-203 model route for an LLM-enabled tool.
+ *
+ * Order is connected/caller model, daemon-side configured model, then deterministic fallback.
+ * The returned provenance is intentionally compact and never includes prompt content or secrets.
+ */
+export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRouteSelection> {
+  const maxTokens = request.max_tokens;
+
+  if (request.connected) {
+    const available = await request.connected.provider.isAvailable().catch(() => false);
+    if (available) {
+      const model = request.connected.model ?? request.connected.provider.name;
+      return {
+        layer: "connected",
+        provider: request.connected.provider,
+        model,
+        options: { model, maxTokens },
+        provenance: {
+          task: request.task,
+          layer: "connected",
+          provider: request.connected.provider.name,
+          model,
+          source: request.connected.source,
+        },
+      };
+    }
+  }
+
+  const provider = getLlmProvider();
+  const cfg = getLlmConfig();
+
+  if (cfg.provider === "sampling") {
+    const available = await provider.isAvailable().catch(() => false);
+    if (available) {
+      return {
+        layer: "connected",
+        provider,
+        model: "client",
+        options: { model: "client", maxTokens },
+        provenance: {
+          task: request.task,
+          layer: "connected",
+          provider: provider.name,
+          model: "client",
+          source: "sampling",
+        },
+      };
+    }
+  } else if (cfg.provider !== "none") {
+    const component = request.daemon_component ?? "dreamer";
+    const componentCfg = componentConfig(component);
+    if (!componentCfg.model.trim()) {
+      return fallbackSelection(request, "no_daemon_model");
+    }
+
+    const available = await provider.isAvailable().catch(() => false);
+    if (available) {
+      const temperature = request.daemon_temperature ?? taskDefaultTemperature(request.task);
+      return {
+        layer: "daemon",
+        provider,
+        model: componentCfg.model,
+        options: {
+          model: componentCfg.model,
+          temperature,
+          maxTokens: maxTokens ?? componentCfg.maxTokens,
+        },
+        provenance: {
+          task: request.task,
+          layer: "daemon",
+          provider: provider.name,
+          model: componentCfg.model,
+          source: "daemon",
+          temperature,
+        },
+      };
+    }
+
+    return fallbackSelection(request, "daemon_model_unavailable");
+  }
+
+  return fallbackSelection(
+    request,
+    request.connected ? "connected_model_unavailable" : "no_connected_model",
+  );
+}
+
+/** Normalize an LLM route failure into compact fallback provenance. */
+export function llmRouteFailureReason(kind: "provider" | "invalid_output" | "validation"): LlmRouteFallbackReason {
+  switch (kind) {
+    case "provider":
+      return "provider_failed";
+    case "invalid_output":
+      return "invalid_output";
+    case "validation":
+      return "validation_failed";
+  }
 }
 
 /** Check if LLM dreaming is available */

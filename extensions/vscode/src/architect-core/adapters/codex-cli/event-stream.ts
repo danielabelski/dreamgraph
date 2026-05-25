@@ -19,7 +19,7 @@ const PLUGIN_SYNC_RE =
   /(?:\/backend-api\/(?:plugins\/featured|ps\/plugins\/installed)|remote plugin catalog|plugin catalog|cloudflare|cf-error|cf-ray|just a moment|attention required|checking your browser|403 forbidden)/i;
 const CODEX_TIMESTAMPED_INFO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+INFO\b/i;
 const SALIENT_INFO_RE =
-  /\b(?:turn error|usage limit|rate[_ -]?limit|insufficient[_ -]?quota|unsupported[_ -]?model|model_not_supported|unsupported_model|model_not_found|invalid[_ -]?model|not logged in|login required|authentication required|blocked by policy|mcp_tool_call failed|failed to load mcp|failed to start mcp|mcp server failed)\b/i;
+  /\b(?:turn error|usage limit|rate[_ -]?limit|insufficient[_ -]?quota|unsupported[_ -]?model|model_not_supported|unsupported_model|model_not_found|invalid[_ -]?model|not logged in|login required|authentication required|blocked by policy|read-only sandbox|writing is blocked|user approval settings|mcp_tool_call failed|failed to load mcp|failed to start mcp|mcp server failed)\b/i;
 
 export function createCodexCliEventStream(): CodexCliEventStream {
   let fragmentText = "";

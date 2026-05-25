@@ -636,6 +636,11 @@ export type {
   GraphRAGQuery,
   GraphRAGContext,
   CognitivePreamble,
+  TaskPreambleEvidenceKind,
+  TaskPreambleEvidenceItem,
+  TaskPreambleCompileRequest,
+  TaskPreambleBudgetDecision,
+  CompiledTaskPreamble,
   // v5.2 — Lucid Dreaming (Interactive Exploration)
   LucidHypothesis,
   LucidSignal,

@@ -17,6 +17,8 @@ import {
 import type {
   CodexCliTranscript,
   CodexStructuredError,
+  CodexToolCallWitness,
+  CodexToolCallWitnessStatus,
   CodexTokenUsage,
   CodexUsageLimitInfo,
   ToolCallObservation,
@@ -28,21 +30,28 @@ const STRAY_ESC_RE = /\x1B/g;
 const ERROR_LINE_RE = /\b(?:error|errors|failed|failure|fatal|panic|exception)\b/i;
 const NOT_LOGGED_IN_RE =
   /\b(?:not logged in|not signed in|login required|authentication required|auth required|please\s+run\s+codex\s+login)\b/i;
-const USAGE_LIMIT_RE =
-  /\b(?:you(?:'|’)ve hit your usage limit|usage limit|purchase more credits|try again at\s+[^.\n]+|rate[_ -]?limit|insufficient[_ -]?quota|http\s*429|status\s*429|too many requests)\b/i;
+const USAGE_LIMIT_RUNTIME_RE =
+  /\b(?:you(?:'|’|â€™)ve hit your usage limit|purchase more credits|try again at\s+[^.\n]+|rate[_ -]?limit(?:ed)?|insufficient[_ -]?quota|http\s*429|status\s*429|too many requests)\b/i;
+const USAGE_LIMIT_ERROR_CONTEXT_RE =
+  /\b(?:turn error|codex(?: cli)? error|error|fatal|quota|limit (?:was )?reached)\b/i;
+const USAGE_LIMIT_PHRASE_RE = /\busage limit\b/i;
 const MODEL_UNSUPPORTED_RE =
   /\b(?:unsupported[_ -]model|model_not_supported|unsupported_model|model_not_found|invalid[_ -]model)\b/i;
 const MODEL_UNSUPPORTED_PHRASE_RE =
   /\b(?:model\b[^.\n]{0,100}\b(?:not supported|not found|does not exist|is unavailable)|(?:unknown|unrecognized)\s+model\s*:)/i;
 const POLICY_DENIED_RE =
-  /\b(?:blocked by policy|policy denial|policy denied|rejected:\s*blocked by policy|not allowed by policy)\b/i;
+  /\b(?:blocked by policy|policy denial|policy denied|rejected:\s*blocked by policy|not allowed by policy|read-only sandbox|writing is blocked|rejected by user approval settings|user approval settings)\b/i;
 const MCP_FAILED_STATUSES = new Set(["failed", "failure", "error", "cancelled", "canceled"]);
+const MCP_TOOL_CALL_DIAGNOSTIC_RE =
+  /\bmcp_tool_call\s+(completed|succeeded|failed|failure|error|cancelled|canceled)\s*:\s*([a-z0-9_-]+)\.([a-z0-9_.-]+)(?::\s*(.*))?$/i;
+const SOURCE_LOCATION_SNIPPET_RE =
+  /^(?:stdout:\s*)?(?:(?:[A-Za-z]:\\|\.{0,2}\/|[A-Za-z0-9_.-]+\/)[^:\n]*\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt):\d+(?::\d+)?:|[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs):\d+(?::\d+)?:)\s*/i;
 // Lines that are clearly Codex/MCP runtime noise rather than login-status
 // answers. Strip these before the auth heuristic so unrelated tool-router,
 // policy, plugin-sync, or teardown diagnostics cannot trigger a false
 // CODEX_NOT_LOGGED_IN.
 const RUNTIME_NOISE_LINE_RE =
-  /(?:^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+)|(?:\b(?:rmcp::|codex_core::|codex_mcp_server::|tools::router|tracing::|tower::|hyper::|reqwest::)\S*)|(?:^SUCCESS:\s+The process with PID\b)|(?:\brejected:\s+blocked by policy\b)/i;
+  /(?:^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+)|(?:\b(?:rmcp::|codex_core::|codex_mcp_server::|tools::router|tracing::|tower::|hyper::|reqwest::)\S*)|(?:^SUCCESS:\s+The process with PID\b)|(?:\brejected:\s+blocked by policy\b)|(?:\bread-only sandbox\b)|(?:\buser approval settings\b)/i;
 
 function stripAnsi(text: string): string {
   return text.replace(ANSI_OSC_RE, "").replace(ANSI_CSI_RE, "").replace(STRAY_ESC_RE, "");
@@ -67,6 +76,7 @@ export function normalizeCodexTranscript(input: {
   const projectedAssistantText = projectCodexAssistantText(events, assistantDeltas);
   const assistantText = projectedAssistantText ?? cleanedStdout.replace(/[ \t]+\n/g, "\n").trim();
   const toolCalls = projectCodexToolCalls(events);
+  const structuredToolCallWitnesses = projectCodexToolCallWitnesses(events);
   const mcpFailureDiagnostics = projectMcpFailureDiagnostics(events);
   const usage = projectCodexUsage(events) ?? projectTelemetryUsage(`${cleanedStdout}\n${cleanedStderr}`);
   const structuredErrors = projectStructuredErrors(events);
@@ -76,6 +86,10 @@ export function normalizeCodexTranscript(input: {
     stderrDiagnostics,
     mcpFailureDiagnostics,
   });
+  const toolCallWitnesses = mergeToolCallWitnesses(
+    structuredToolCallWitnesses,
+    projectCodexToolCallWitnessesFromDiagnostics(diagnosticLines, structuredToolCallWitnesses.length),
+  );
   const pluginSyncWarnings = projectPluginSyncWarnings(diagnosticLines);
   const usageLimit = projectUsageLimitInfo({
     structuredErrors,
@@ -110,6 +124,7 @@ export function normalizeCodexTranscript(input: {
     hasStderrErrors,
     notLoggedIn,
     toolCalls,
+    toolCallWitnesses,
     usage,
     structuredErrors,
     usageLimit,
@@ -228,6 +243,117 @@ function projectCodexToolCalls(events: readonly unknown[]): readonly ToolCallObs
   return Object.freeze(calls);
 }
 
+export function projectCodexToolCallWitnesses(
+  events: readonly unknown[],
+  sequenceOffset = 0,
+): readonly CodexToolCallWitness[] {
+  if (events.length === 0) return Object.freeze([]);
+  const witnesses: CodexToolCallWitness[] = [];
+  let sequence = sequenceOffset;
+  for (const event of events) {
+    const record = asRecord(event);
+    const type = codexEventType(event);
+    const data = codexEventData(event);
+    if (type === "item.completed" || type === "response.output_item.done") {
+      const item = asRecord(record?.item) ?? asRecord(data?.item);
+      if (!isMcpToolItem(item)) continue;
+      const witness = projectMcpToolItemWitness(item, sequence);
+      if (witness) {
+        witnesses.push(witness);
+        sequence += 1;
+      }
+      continue;
+    }
+    if (
+      type === "mcp_tool_call.completed" ||
+      type === "mcp_tool_call" ||
+      type === "mcp_tool_call.end" ||
+      type === "mcp_tool_call_end" ||
+      type === "mcp_tool_call.failed" ||
+      type === "mcp_tool_call.error" ||
+      type === "mcp_tool_call.cancelled" ||
+      type === "mcp_tool_call.canceled"
+    ) {
+      const witness = projectQualifiedMcpToolWitness(record, type, sequence);
+      if (witness) {
+        witnesses.push(witness);
+        sequence += 1;
+      }
+      continue;
+    }
+    if (type === "tool.execution_complete") {
+      const server = recordString(data, "mcpServerName") ?? recordString(record, "mcpServerName");
+      const tool =
+        recordString(data, "mcpToolName") ??
+        recordString(record, "mcpToolName") ??
+        recordString(data, "toolName") ??
+        recordString(record, "toolName");
+      if (!server || !tool) continue;
+      const success = record?.success ?? data?.success;
+      const isError = record?.is_error ?? record?.isError ?? data?.is_error ?? data?.isError;
+      witnesses.push(Object.freeze({
+        server,
+        tool,
+        status: normalizeMcpToolStatus(undefined, success, isError, type),
+        source: "structured-event",
+        sequence,
+      }));
+      sequence += 1;
+    }
+  }
+  return Object.freeze(witnesses);
+}
+
+export function projectCodexToolCallWitnessesFromDiagnostics(
+  diagnostics: readonly string[],
+  sequenceOffset = 0,
+): readonly CodexToolCallWitness[] {
+  const witnesses: CodexToolCallWitness[] = [];
+  let sequence = sequenceOffset;
+  for (const line of diagnostics) {
+    const match = line.match(MCP_TOOL_CALL_DIAGNOSTIC_RE);
+    if (!match) continue;
+    const server = match[2] ?? "unknown";
+    const tool = match[3] ?? "unknown";
+    const detail = match[4]?.trim();
+    const status = normalizeToolStatusWithDetail(normalizeDiagnosticToolStatus(match[1]), detail);
+    witnesses.push(Object.freeze({
+      server,
+      tool,
+      status,
+      ...(detail ? { detail } : {}),
+      source: "diagnostic",
+      sequence,
+    }));
+    sequence += 1;
+  }
+  return Object.freeze(witnesses);
+}
+
+function mergeToolCallWitnesses(
+  primary: readonly CodexToolCallWitness[],
+  secondary: readonly CodexToolCallWitness[],
+): readonly CodexToolCallWitness[] {
+  const out: CodexToolCallWitness[] = [];
+  const seen = new Set<string>();
+  for (const witness of [...primary, ...secondary]) {
+    const key = toolCallWitnessKey(witness);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(witness);
+  }
+  return Object.freeze(out);
+}
+
+function toolCallWitnessKey(witness: CodexToolCallWitness): string {
+  return [
+    witness.server,
+    witness.tool,
+    witness.status,
+    witness.detail ?? "",
+  ].join("\0");
+}
+
 function projectMcpFailureDiagnostics(events: readonly unknown[]): readonly string[] {
   if (events.length === 0) return Object.freeze([]);
   const out: string[] = [];
@@ -340,14 +466,14 @@ function projectUsageLimitInfo(input: {
     }
   }
   for (const line of input.diagnostics) {
-    if (isUsageLimitText(line)) {
+    if (isDiagnosticUsageLimitText(line)) {
       return Object.freeze({
         message: line,
         ...(extractRetryAt(line) ? { retryAt: extractRetryAt(line)! } : {}),
       });
     }
   }
-  if (isUsageLimitText(input.assistantText)) {
+  if (isAssistantUsageLimitText(input.assistantText)) {
     return Object.freeze({
       message: input.assistantText,
       ...(extractRetryAt(input.assistantText) ? { retryAt: extractRetryAt(input.assistantText)! } : {}),
@@ -369,8 +495,13 @@ function collectDiagnostics(input: {
 }
 
 function pushDiagnostic(out: string[], line: string): void {
+  if (isSourceSnippetDiagnostic(line)) return;
   if (out.includes(line)) return;
   out.push(line);
+}
+
+function isSourceSnippetDiagnostic(line: string): boolean {
+  return SOURCE_LOCATION_SNIPPET_RE.test(line.trim());
 }
 
 function projectPluginSyncWarnings(diagnostics: readonly string[]): readonly string[] {
@@ -406,6 +537,38 @@ function projectMcpToolItem(record: Record<string, unknown> | undefined): ToolCa
   return projectQualifiedMcpTool(record);
 }
 
+function projectMcpToolItemWitness(
+  record: Record<string, unknown> | undefined,
+  sequence: number,
+): CodexToolCallWitness | null {
+  const server = recordString(record, "server") ?? recordString(record, "mcpServerName");
+  const tool =
+    recordString(record, "tool") ??
+    recordString(record, "tool_name") ??
+    recordString(record, "mcpToolName");
+  const qualified = server && tool ? null : projectQualifiedMcpTool(record);
+  const witnessServer = server ?? qualified?.server;
+  const witnessTool = tool ?? qualified?.tool;
+  if (!witnessServer || !witnessTool) return null;
+  const detail =
+    recordString(record, "aggregated_output") ??
+    recordString(record, "error") ??
+    recordString(record, "message");
+  const status = normalizeMcpToolStatus(
+    recordString(record, "status"),
+    record?.success,
+    record?.is_error ?? record?.isError,
+  );
+  return Object.freeze({
+    server: witnessServer,
+    tool: witnessTool,
+    status: normalizeToolStatusWithDetail(status, detail),
+    ...(detail ? { detail } : {}),
+    source: "structured-event",
+    sequence,
+  });
+}
+
 function projectQualifiedMcpTool(record: Record<string, unknown> | undefined): ToolCallObservation | null {
   const directServer = recordString(record, "server");
   const directTool = recordString(record, "tool") ?? recordString(record, "tool_name");
@@ -421,6 +584,68 @@ function projectQualifiedMcpTool(record: Record<string, unknown> | undefined): T
     server: qualified.slice(0, dot),
     tool: qualified.slice(dot + 1),
   };
+}
+
+function projectQualifiedMcpToolWitness(
+  record: Record<string, unknown> | undefined,
+  type: string | undefined,
+  sequence: number,
+): CodexToolCallWitness | null {
+  const observed = projectQualifiedMcpTool(record);
+  if (!observed) return null;
+  const detail =
+    recordString(record, "aggregated_output") ??
+    recordString(record, "error") ??
+    recordString(record, "message");
+  const status = normalizeMcpToolStatus(
+    recordString(record, "status"),
+    record?.success,
+    record?.is_error ?? record?.isError,
+    type,
+  );
+  return Object.freeze({
+    server: observed.server,
+    tool: observed.tool,
+    status: normalizeToolStatusWithDetail(status, detail),
+    ...(detail ? { detail } : {}),
+    source: "structured-event",
+    sequence,
+  });
+}
+
+function normalizeDiagnosticToolStatus(status: string | undefined): CodexToolCallWitnessStatus {
+  const normalized = status?.trim().toLowerCase();
+  if (normalized === "completed" || normalized === "succeeded") return "completed";
+  if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
+  if (normalized === "failed" || normalized === "failure" || normalized === "error") return "failed";
+  return "unknown";
+}
+
+function normalizeMcpToolStatus(
+  status: string | undefined,
+  success: unknown,
+  isError: unknown,
+  type?: string,
+): CodexToolCallWitnessStatus {
+  const normalized = normalizeDiagnosticToolStatus(status);
+  if (normalized !== "unknown") return normalized;
+  if (success === false || isError === true) return "failed";
+  if (success === true || type === "mcp_tool_call.completed" || type === "tool.execution_complete") {
+    return "completed";
+  }
+  if (typeof type === "string" && /cancelled|canceled/i.test(type)) return "cancelled";
+  if (typeof type === "string" && /failed|error/i.test(type)) return "failed";
+  return "unknown";
+}
+
+function normalizeToolStatusWithDetail(
+  status: CodexToolCallWitnessStatus,
+  detail: string | undefined,
+): CodexToolCallWitnessStatus {
+  if (status === "failed" && detail && /\buser cancelled MCP tool call\b/i.test(detail)) {
+    return "cancelled";
+  }
+  return status;
 }
 
 function firstNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
@@ -440,7 +665,18 @@ function countEvents(events: readonly unknown[], type: string): number {
 }
 
 function isUsageLimitText(text: string): boolean {
-  return USAGE_LIMIT_RE.test(text);
+  return USAGE_LIMIT_RUNTIME_RE.test(text) ||
+    (USAGE_LIMIT_PHRASE_RE.test(text) && USAGE_LIMIT_ERROR_CONTEXT_RE.test(text));
+}
+
+function isDiagnosticUsageLimitText(text: string): boolean {
+  if (isSourceSnippetDiagnostic(text)) return false;
+  return isUsageLimitText(text);
+}
+
+function isAssistantUsageLimitText(text: string): boolean {
+  return USAGE_LIMIT_RUNTIME_RE.test(text) &&
+    /(?:^|\b)(?:turn error|you(?:'|’|â€™)ve hit your usage limit|purchase more credits|try again at|rate[_ -]?limit|insufficient[_ -]?quota|too many requests)\b/i.test(text);
 }
 
 function isModelUnsupportedText(text: string): boolean {
@@ -460,7 +696,7 @@ function isModelUnsupportedDiagnostic(text: string): boolean {
 function isPolicyDeniedDiagnostic(text: string): boolean {
   if (!isPolicyDeniedText(text)) return false;
   return /(?:^|\b)(?:turn error|error|fatal|rejected|codex(?: cli)? error)\s*:/i.test(text)
-    || /\bblocked by policy\b/i.test(text);
+    || /\b(?:blocked by policy|read-only sandbox|writing is blocked|user approval settings)\b/i.test(text);
 }
 
 function extractRetryAt(text: string): string | undefined {

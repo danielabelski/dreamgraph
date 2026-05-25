@@ -22,6 +22,11 @@ import {
   codexAssistantDelta,
   createCodexCliEventStream,
 } from "./event-stream.js";
+import {
+  projectCodexToolCallWitnesses,
+  projectCodexToolCallWitnessesFromDiagnostics,
+} from "./transcript.js";
+import type { CodexToolCallWitness } from "./types.js";
 import type {
   CodexCliMcpAuditLivePort,
   CodexCliMcpAuditLiveSubscription,
@@ -30,7 +35,7 @@ import type {
 
 export interface CodexCliProviderPortOptions {
   readonly hostLlm: ArchitectLlm;
-  readonly invocationCwd: string;
+  readonly invocationCwd?: string;
   readonly timeoutMs: number;
   readonly idleTimeoutMs?: number;
   readonly baseEnv: Readonly<Record<string, string | undefined>>;
@@ -42,6 +47,7 @@ export interface CodexCliProviderPortOptions {
   readonly onRunResult?: (result: CodexCliRunResult) => void;
   readonly auditLive?: CodexCliMcpAuditLivePort;
   readonly onToolCall?: (runId: string, call: RecordedMcpToolCall) => void;
+  readonly onToolWitness?: (runId: string, witness: CodexToolCallWitness) => void;
   readonly historyKeepLast?: number;
   readonly markCurrentTurn?: boolean;
   readonly cliToolsManifest?: CliToolsManifest;
@@ -64,8 +70,8 @@ function validateOptions(opts: CodexCliProviderPortOptions): void {
   if (!opts.hostLlm) {
     throw new Error("createCodexCliProviderPort: hostLlm reference is required");
   }
-  if (typeof opts.invocationCwd !== "string" || opts.invocationCwd.length === 0) {
-    throw new Error("createCodexCliProviderPort: invocationCwd must be a non-empty string");
+  if (opts.invocationCwd !== undefined && typeof opts.invocationCwd !== "string") {
+    throw new Error("createCodexCliProviderPort: invocationCwd must be a string when provided");
   }
   if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0) {
     throw new Error("createCodexCliProviderPort: timeoutMs must be a positive finite number");
@@ -173,13 +179,35 @@ export function createCodexCliProviderPort(
       }
 
       const liveEnabled = Boolean(options.auditLive && options.onToolCall);
+      const witnessEnabled = Boolean(options.onToolWitness);
       const subHolder: { current: CodexCliMcpAuditLiveSubscription | null } = { current: null };
       const stdoutEvents = createCodexCliEventStream();
+      let currentRunId: string | null = null;
+      let witnessSequence = 0;
+      const liveWitnessesSeen = new Set<string>();
       let assistantStreamed = false;
       let deltasStreamed = false;
       let streamedSnapshot = "";
-      const onRunIdAssigned = liveEnabled
+      const emitToolWitness = (witness: CodexToolCallWitness): void => {
+        if (!witnessEnabled || !currentRunId || input.abortSignal?.aborted === true) return;
+        const key = [
+          witness.server,
+          witness.tool,
+          witness.status,
+          witness.detail ?? "",
+        ].join("\0");
+        if (liveWitnessesSeen.has(key)) return;
+        liveWitnessesSeen.add(key);
+        try {
+          options.onToolWitness?.(currentRunId, witness);
+        } catch {
+          // observer failures must not break the spawn
+        }
+      };
+      const onRunIdAssigned = liveEnabled || witnessEnabled
         ? (runId: string): void => {
+            currentRunId = runId;
+            if (!liveEnabled) return;
             const live = options.auditLive!;
             const handler = options.onToolCall!;
             void live
@@ -200,9 +228,15 @@ export function createCodexCliProviderPort(
           }
         : undefined;
 
-      const onStdoutChunk = input.onStreamChunk
+      const onStdoutChunk = input.onStreamChunk || witnessEnabled
         ? (chunk: string): void => {
             const events = stdoutEvents.feed(chunk);
+            if (witnessEnabled) {
+              const witnesses = projectCodexToolCallWitnesses(events, witnessSequence);
+              witnessSequence += witnesses.length;
+              for (const witness of witnesses) emitToolWitness(witness);
+            }
+            if (!input.onStreamChunk) return;
             for (const event of events) {
               const delta = codexAssistantDelta(event);
               if (delta) {
@@ -237,13 +271,26 @@ export function createCodexCliProviderPort(
             }
           }
         : undefined;
+      let stderrRemainder = "";
+      const onStderrChunk = witnessEnabled
+        ? (chunk: string): void => {
+            const normalized = `${stderrRemainder}${chunk}`.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+            const lines = normalized.split("\n");
+            stderrRemainder = lines.pop() ?? "";
+            const witnesses = projectCodexToolCallWitnessesFromDiagnostics(lines, witnessSequence);
+            witnessSequence += witnesses.length;
+            for (const witness of witnesses) emitToolWitness(witness);
+          }
+        : undefined;
 
       let result: CodexCliRunResult;
       try {
         result = await runCodexCli(
           {
             prompt: promptText,
-            invocationCwd: options.invocationCwd,
+            ...(typeof options.invocationCwd === "string" && options.invocationCwd.length > 0
+              ? { invocationCwd: options.invocationCwd.trim() }
+              : {}),
             timeoutMs: options.timeoutMs,
             ...(typeof options.idleTimeoutMs === "number" && options.idleTimeoutMs > 0
               ? { idleTimeoutMs: options.idleTimeoutMs }
@@ -255,6 +302,7 @@ export function createCodexCliProviderPort(
             ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
             ...(onRunIdAssigned ? { onRunIdAssigned } : {}),
             ...(onStdoutChunk ? { onStdoutChunk } : {}),
+            ...(onStderrChunk ? { onStderrChunk } : {}),
             baseEnv: options.baseEnv,
           },
           options.deps,

@@ -291,6 +291,9 @@ export function buildContinuationPrompt(
       }
     } else {
       lines.push(`- Suggested entry tool: \`${toolName}\`. Use additional tools in the same turn as needed to finish the step.`);
+      if (toolName === 'read_source_code') {
+        lines.push('- Authorized: one focused read_source_code call for the known target entity or bounded range; continue without requiring manual magic wording.');
+      }
       if (argsJson) {
         lines.push(`- Suggested args for the entry tool: \`${argsJson}\`. Adjust freely; they are a hint, not a contract.`);
       }
