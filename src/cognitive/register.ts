@@ -58,6 +58,7 @@ import { runMetacognitiveAnalysis, getMetaLog } from "./metacognition.js";
 import { dispatchEvent, checkTensionThresholds, getEventLog } from "./event-router.js";
 import { generateRemediationPlans } from "./intervention.js";
 import { graphRagRetrieve, getCognitivePreamble } from "./graph-rag.js";
+import { selectLlmRoute } from "./llm.js";
 import { findShortestPath } from "./graph-paths.js";
 import type { ShortestPathResult } from "./graph-paths.js";
 import { startLucidDream, handleLucidAction, wakeFromLucid, getLucidLog } from "./lucid.js";
@@ -104,6 +105,89 @@ import type {
   LucidResult,
   LucidLogFile,
 } from "../types/index.js";
+
+function surfaceAnchorIsValid(anchor: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:/#-]{1,160}$/.test(anchor);
+}
+
+function roundFutureFitScore(value: number): number {
+  return Math.round(Math.max(0, Math.min(1, value)) * 100) / 100;
+}
+
+function uniqueSurfaceAnchors(anchors: Array<string | undefined | null>): string[] {
+  return [...new Set(anchors.filter((anchor): anchor is string => !!anchor && surfaceAnchorIsValid(anchor)))];
+}
+
+function buildDeterministicAdaptiveFutureAdvice(params: {
+  surface: "dream_insights" | "causal_insights" | "temporal_insights" | "metacognitive_analysis";
+  route: Awaited<ReturnType<typeof selectLlmRoute>>;
+  summary: string;
+  nextSteps: Array<{
+    id: string;
+    label: string;
+    rationale: string;
+    evidence_anchor_ids: string[];
+    future_fit_score: number;
+  }>;
+  futureObjections?: Array<{
+    id: string;
+    description: string;
+    evidence_anchor_ids: string[];
+    severity: "low" | "medium" | "high";
+  }>;
+  validationFailures?: string[];
+  omittedContextReasons?: string[];
+}) {
+  const rawAnchors = [
+    ...params.nextSteps.flatMap((step) => step.evidence_anchor_ids),
+    ...(params.futureObjections ?? []).flatMap((objection) => objection.evidence_anchor_ids),
+  ];
+  const invalidAnchors = rawAnchors
+    .filter((anchor) => !surfaceAnchorIsValid(anchor))
+    .map((anchor) => `invalid_anchor:${anchor}`);
+
+  const next_steps = params.nextSteps
+    .map((step) => ({
+      ...step,
+      evidence_anchor_ids: uniqueSurfaceAnchors(step.evidence_anchor_ids),
+      future_fit_score: roundFutureFitScore(step.future_fit_score),
+    }))
+    .filter((step) => step.evidence_anchor_ids.length > 0 && step.rationale.trim().length > 0)
+    .slice(0, 3);
+
+  const future_objections = (params.futureObjections ?? [])
+    .map((objection) => ({
+      ...objection,
+      evidence_anchor_ids: uniqueSurfaceAnchors(objection.evidence_anchor_ids),
+    }))
+    .filter((objection) => objection.evidence_anchor_ids.length > 0 && objection.description.trim().length > 0)
+    .slice(0, 3);
+
+  const evidence_anchors = uniqueSurfaceAnchors([
+    ...next_steps.flatMap((step) => step.evidence_anchor_ids),
+    ...future_objections.flatMap((objection) => objection.evidence_anchor_ids),
+  ]);
+
+  const omitted_context_reasons = [...(params.omittedContextReasons ?? [])];
+  if (next_steps.length === 0 && omitted_context_reasons.length === 0) {
+    omitted_context_reasons.push("no bounded evidence qualified for adaptive future ranking");
+  }
+
+  return {
+    surface: params.surface,
+    advisory_generation: "deterministic" as const,
+    selected_model_layer: params.route.layer,
+    selected_model_provider: params.route.provenance.provider,
+    selected_model: params.route.provenance.model,
+    fallback_reason: params.route.provenance.fallback_reason,
+    summary: params.summary,
+    evidence_anchors,
+    next_steps,
+    future_objections,
+    omitted_context_reasons,
+    validation_failures: [...new Set([...(params.validationFailures ?? []), ...invalidAnchors])],
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Resource Registration
@@ -1317,6 +1401,73 @@ export function registerCognitiveTools(server: McpServer): void {
               : "System is healthy. Continue with dream_cycle to explore more connections.";
           }
 
+          const route = await selectLlmRoute({
+            task: "generic",
+            daemon_component: "normalizer",
+            daemon_temperature: 0.2,
+            max_tokens: 320,
+          });
+
+          const nextSteps = [
+            activeTensions[0]
+              ? {
+                id: `investigate-${activeTensions[0].id}`,
+                label: "Investigate top tension",
+                rationale: activeTensions[0].description,
+                evidence_anchor_ids: [activeTensions[0].id],
+                future_fit_score: activeTensions[0].urgency,
+              }
+              : null,
+            recurrentRejections[0]
+              ? {
+                id: `stabilize-${recurrentRejections[0].id}`,
+                label: "Resolve recurrent rejection",
+                rationale: `Repeated weak-connection rejection observed ${recurrentRejections[0].occurrences} times.`,
+                evidence_anchor_ids: [recurrentRejections[0].id],
+                future_fit_score: Math.min(1, recurrentRejections[0].occurrences / 5),
+              }
+              : null,
+            expiringSoon[0]
+              ? {
+                id: `refresh-${expiringSoon[0].id}`,
+                label: "Refresh expiring dream evidence",
+                rationale: `Dream edge ${expiringSoon[0].id} is close to expiry and may lose reinforcement.`,
+                evidence_anchor_ids: [expiringSoon[0].id],
+                future_fit_score: 0.55,
+              }
+              : null,
+          ].filter((step): step is NonNullable<typeof step> => step !== null);
+
+          const futureObjections = [
+            dreamHealth === "overloaded" && activeTensions[0]
+              ? {
+                id: "dream-overload",
+                description: "The dream graph is already overloaded; expanding exploration before pruning is likely to increase noise.",
+                evidence_anchor_ids: [activeTensions[0].id],
+                severity: "high" as const,
+              }
+              : null,
+            dreamHealth === "stale" && expiringSoon[0]
+              ? {
+                id: "dream-staleness",
+                description: "A large share of dream evidence is near expiry, so future-fit ranking may drift without refresh.",
+                evidence_anchor_ids: [expiringSoon[0].id],
+                severity: "medium" as const,
+              }
+              : null,
+          ].filter((objection): objection is NonNullable<typeof objection> => objection !== null);
+
+          const adaptiveFuture = buildDeterministicAdaptiveFutureAdvice({
+            surface: "dream_insights",
+            route,
+            summary: `Ranked ${nextSteps.length} evidence-backed next step(s) from dream health, tensions, and expiry signals.`,
+            nextSteps,
+            futureObjections,
+            omittedContextReasons: nextSteps.length === 0
+              ? ["dream insights did not contain bounded anchors strong enough for adaptive future ranking"]
+              : [],
+          });
+
           return success<DreamInsights>({
             recent_edges: recentEdges,
             strongest_hypotheses: strongestHypotheses,
@@ -1333,6 +1484,7 @@ export function registerCognitiveTools(server: McpServer): void {
               dream_health: dreamHealth,
               recommendation,
             },
+            adaptive_future: adaptiveFuture,
           });
         }
       );
@@ -1510,7 +1662,72 @@ export function registerCognitiveTools(server: McpServer): void {
       const result = await safeExecute<CausalInsights>(
         async (): Promise<ToolResponse<CausalInsights>> => {
           const insights = await analyzeCausality();
-          return success(insights);
+          const route = await selectLlmRoute({
+            task: "generic",
+            daemon_component: "normalizer",
+            daemon_temperature: 0.2,
+            max_tokens: 280,
+          });
+
+          const maxDownstream = insights.propagation_hotspots.reduce(
+            (max, hotspot) => Math.max(max, hotspot.downstream_count),
+            0
+          );
+          const validationFailures = insights.predicted_impacts
+            .filter((impact) => !surfaceAnchorIsValid(impact.if_changed))
+            .map((impact) => `invalid_anchor:${impact.if_changed}`);
+
+          const nextSteps = [
+            insights.propagation_hotspots[0]
+              ? {
+                id: `inspect-${insights.propagation_hotspots[0].entity}`,
+                label: "Inspect propagation hotspot",
+                rationale: `${insights.propagation_hotspots[0].entity} fans out to ${insights.propagation_hotspots[0].downstream_count} downstream entities.`,
+                evidence_anchor_ids: [insights.propagation_hotspots[0].entity],
+                future_fit_score: maxDownstream > 0
+                  ? insights.propagation_hotspots[0].downstream_count / maxDownstream
+                  : 0,
+              }
+              : null,
+            insights.predicted_impacts.find((impact) => surfaceAnchorIsValid(impact.if_changed) && impact.confidence >= 0.6)
+              ? {
+                id: `validate-${insights.predicted_impacts.find((impact) => surfaceAnchorIsValid(impact.if_changed) && impact.confidence >= 0.6)!.if_changed}`,
+                label: "Verify predicted impact chain",
+                rationale: `A validated change to ${insights.predicted_impacts.find((impact) => surfaceAnchorIsValid(impact.if_changed) && impact.confidence >= 0.6)!.if_changed} is likely to affect ${insights.predicted_impacts.find((impact) => surfaceAnchorIsValid(impact.if_changed) && impact.confidence >= 0.6)!.likely_affected.length} related entities.`,
+                evidence_anchor_ids: [insights.predicted_impacts.find((impact) => surfaceAnchorIsValid(impact.if_changed) && impact.confidence >= 0.6)!.if_changed],
+                future_fit_score: insights.predicted_impacts.find((impact) => surfaceAnchorIsValid(impact.if_changed) && impact.confidence >= 0.6)!.confidence,
+              }
+              : null,
+          ].filter((step): step is NonNullable<typeof step> => step !== null);
+
+          const lowConfidenceImpact = insights.predicted_impacts.find(
+            (impact) => surfaceAnchorIsValid(impact.if_changed) && impact.confidence < 0.6
+          );
+          const futureObjections = [
+            lowConfidenceImpact
+              ? {
+                id: `low-confidence-${lowConfidenceImpact.if_changed}`,
+                description: "Predicted downstream impact is below the confidence threshold for strong future-fit ranking.",
+                evidence_anchor_ids: [lowConfidenceImpact.if_changed],
+                severity: "medium" as const,
+              }
+              : null,
+          ].filter((objection): objection is NonNullable<typeof objection> => objection !== null);
+
+          return success({
+            ...insights,
+            adaptive_future: buildDeterministicAdaptiveFutureAdvice({
+              surface: "causal_insights",
+              route,
+              summary: `Ranked ${nextSteps.length} evidence-backed next step(s) from causal hotspots and predicted impacts.`,
+              nextSteps,
+              futureObjections,
+              validationFailures,
+              omittedContextReasons: nextSteps.length === 0
+                ? ["causal analysis did not contain strong, schema-valid anchors for adaptive future ranking"]
+                : [],
+            }),
+          });
         }
       );
 
@@ -1540,7 +1757,70 @@ export function registerCognitiveTools(server: McpServer): void {
       const result = await safeExecute<TemporalInsights>(
         async (): Promise<ToolResponse<TemporalInsights>> => {
           const insights = await analyzeTemporalPatterns();
-          return success(insights);
+          const route = await selectLlmRoute({
+            task: "generic",
+            daemon_component: "normalizer",
+            daemon_temperature: 0.2,
+            max_tokens: 280,
+          });
+
+          const nextPrediction = insights.predictions.find(
+            (prediction) => surfaceAnchorIsValid(prediction.entity_id) && prediction.confidence >= 0.6
+          );
+          const spikeTrajectory = insights.trajectories.find(
+            (trajectory) => trajectory.pattern === "spike" || trajectory.pattern === "rising"
+          );
+
+          const nextSteps = [
+            nextPrediction
+              ? {
+                id: `prepare-${nextPrediction.entity_id}`,
+                label: "Prepare for predicted tension",
+                rationale: `${nextPrediction.entity_id} is forecast to hit ${nextPrediction.predicted_tension_type} within ${nextPrediction.estimated_cycles_to_critical} cycle(s).`,
+                evidence_anchor_ids: [nextPrediction.entity_id],
+                future_fit_score: nextPrediction.confidence,
+              }
+              : null,
+            spikeTrajectory
+              ? {
+                id: `stabilize-${spikeTrajectory.tension_id}`,
+                label: "Stabilize rising tension",
+                rationale: `${spikeTrajectory.tension_id} shows a ${spikeTrajectory.pattern} trajectory with peak urgency ${spikeTrajectory.peak_urgency}.`,
+                evidence_anchor_ids: [spikeTrajectory.tension_id],
+                future_fit_score: spikeTrajectory.peak_urgency,
+              }
+              : null,
+          ].filter((step): step is NonNullable<typeof step> => step !== null);
+
+          const validationFailures = insights.predictions
+            .filter((prediction) => !surfaceAnchorIsValid(prediction.entity_id))
+            .map((prediction) => `invalid_anchor:${prediction.entity_id}`);
+
+          const futureObjections = [
+            insights.predictions.find((prediction) => surfaceAnchorIsValid(prediction.entity_id) && prediction.confidence < 0.6)
+              ? {
+                id: `uncertain-${insights.predictions.find((prediction) => surfaceAnchorIsValid(prediction.entity_id) && prediction.confidence < 0.6)!.entity_id}`,
+                description: "Temporal prediction exists but is below the confidence threshold for strong future-fit ranking.",
+                evidence_anchor_ids: [insights.predictions.find((prediction) => surfaceAnchorIsValid(prediction.entity_id) && prediction.confidence < 0.6)!.entity_id],
+                severity: "medium" as const,
+              }
+              : null,
+          ].filter((objection): objection is NonNullable<typeof objection> => objection !== null);
+
+          return success({
+            ...insights,
+            adaptive_future: buildDeterministicAdaptiveFutureAdvice({
+              surface: "temporal_insights",
+              route,
+              summary: `Ranked ${nextSteps.length} evidence-backed next step(s) from temporal predictions and tension trajectories.`,
+              nextSteps,
+              futureObjections,
+              validationFailures,
+              omittedContextReasons: nextSteps.length === 0
+                ? ["temporal analysis did not contain strong, schema-valid anchors for adaptive future ranking"]
+                : [],
+            }),
+          });
         }
       );
 
@@ -1735,7 +2015,65 @@ export function registerCognitiveTools(server: McpServer): void {
       const result = await safeExecute<MetaLogEntry>(
         async (): Promise<ToolResponse<MetaLogEntry>> => {
           const entry = await runMetacognitiveAnalysis(ws, aa);
-          return success(entry);
+          const route = await selectLlmRoute({
+            task: "generic",
+            daemon_component: "normalizer",
+            daemon_temperature: 0.2,
+            max_tokens: 280,
+          });
+
+          const leadingRecommendation = entry.threshold_recommendations[0];
+          const strugglingStrategy = [...entry.strategy_metrics]
+            .sort((a, b) => b.consecutive_zero_yield - a.consecutive_zero_yield)[0];
+
+          const nextSteps = [
+            leadingRecommendation
+              ? {
+                id: `threshold-${leadingRecommendation.parameter}`,
+                label: "Review threshold calibration",
+                rationale: `${String(leadingRecommendation.parameter)} is recommended to move from ${leadingRecommendation.current_value} based on recent calibration buckets.`,
+                evidence_anchor_ids: [`metacognitive.threshold.${String(leadingRecommendation.parameter)}`],
+                future_fit_score: Math.min(
+                  1,
+                  Math.abs(leadingRecommendation.current_value - (entry.calibration_buckets[0]?.validation_rate ?? leadingRecommendation.current_value))
+                ),
+              }
+              : null,
+            strugglingStrategy
+              ? {
+                id: `strategy-${strugglingStrategy.strategy}`,
+                label: "Inspect low-yield strategy",
+                rationale: `${strugglingStrategy.strategy} has ${strugglingStrategy.consecutive_zero_yield} consecutive zero-yield cycles.`,
+                evidence_anchor_ids: [`metacognitive.strategy.${strugglingStrategy.strategy}`],
+                future_fit_score: Math.min(1, strugglingStrategy.consecutive_zero_yield / 5),
+              }
+              : null,
+          ].filter((step): step is NonNullable<typeof step> => step !== null);
+
+          const futureObjections = [
+            entry.overall_health !== "healthy"
+              ? {
+                id: `overall-health-${entry.id}`,
+                description: `Metacognitive health is ${entry.overall_health}, so future-fit recommendations should be treated as advisory only.`,
+                evidence_anchor_ids: [entry.id],
+                severity: "medium" as const,
+              }
+              : null,
+          ].filter((objection): objection is NonNullable<typeof objection> => objection !== null);
+
+          return success({
+            ...entry,
+            adaptive_future: buildDeterministicAdaptiveFutureAdvice({
+              surface: "metacognitive_analysis",
+              route,
+              summary: `Ranked ${nextSteps.length} evidence-backed next step(s) from threshold recommendations and strategy health.`,
+              nextSteps,
+              futureObjections,
+              omittedContextReasons: nextSteps.length === 0
+                ? ["metacognitive analysis did not contain bounded signals strong enough for adaptive future ranking"]
+                : [],
+            }),
+          });
         }
       );
 

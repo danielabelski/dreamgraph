@@ -870,6 +870,8 @@ export interface DreamInsights {
     dream_health: "healthy" | "stale" | "overloaded" | "empty";
     recommendation: string;
   };
+  /** Advisory-only future ranking and fallback provenance for this surface. */
+  adaptive_future?: AdaptiveFutureSurfaceAdvice;
 }
 
 // ---------------------------------------------------------------------------
@@ -1417,6 +1419,59 @@ export interface MigrationGapElement {
   complexity_estimate: "trivial" | "moderate" | "complex";
 }
 
+export type UIMigrationFutureKind =
+  | "direct_port"
+  | "refactor"
+  | "split_component"
+  | "defer"
+  | "redesign";
+
+export interface UIMigrationElementMapping {
+  source_element_id: string;
+  target_element_id?: string;
+  proposed_new_element_id?: string;
+  action: UIMigrationFutureKind;
+  rationale: string;
+  registry_constraints: string[];
+  data_contract_changes: string[];
+  interaction_model_changes: string[];
+  composition_constraints: string[];
+}
+
+export interface UIMigrationPlanStep {
+  id: string;
+  title: string;
+  future: UIMigrationFutureKind;
+  element_ids: string[];
+  summary: string;
+  risks: string[];
+  verification: string[];
+  graph_updates: string[];
+  ui_registry_updates: string[];
+}
+
+export interface UIMigrationAdaptivePlan {
+  strategy_summary: string;
+  futures_compared: UIMigrationFutureKind[];
+  element_mappings: UIMigrationElementMapping[];
+  steps: UIMigrationPlanStep[];
+  risks: string[];
+  data_contract_changes: string[];
+  verification: string[];
+  graph_updates: string[];
+  ui_registry_updates: string[];
+}
+
+export interface UIMigrationPlanningMetadata {
+  route_layer: "connected" | "daemon" | "deterministic_fallback";
+  provider?: string;
+  model?: string;
+  fallback_reason?: string;
+  llm_calls: number;
+  tokens_used: number;
+  rejected_reasons: string[];
+}
+
 export interface GenerateUIMigrationOutput {
   source_platform: string;
   target_platform: string;
@@ -1426,6 +1481,8 @@ export interface GenerateUIMigrationOutput {
   ported_count: number;
   gap_count: number;
   coverage_percent: number;
+  adaptive_plan?: UIMigrationAdaptivePlan | null;
+  planning_metadata?: UIMigrationPlanningMetadata;
 }
 
 // ---------------------------------------------------------------------------
@@ -1513,6 +1570,8 @@ export interface CausalInsights {
     likely_affected: string[];
     confidence: number;
   }>;
+  /** Advisory-only future ranking and fallback provenance for this surface. */
+  adaptive_future?: AdaptiveFutureSurfaceAdvice;
 }
 
 // ===========================================================================
@@ -1637,6 +1696,8 @@ export interface TemporalInsights {
     oldest_data: string;
     newest_data: string;
   };
+  /** Advisory-only future ranking and fallback provenance for this surface. */
+  adaptive_future?: AdaptiveFutureSurfaceAdvice;
 }
 
 // ===========================================================================
@@ -1846,6 +1907,10 @@ export interface FutureSignal {
   evidence_anchor_ids: string[];
   confidence: number;
   observed_at: string;
+  status?: "active" | "stale" | "superseded";
+  reviewed_at?: string;
+  superseded_by?: string;
+  superseded_reason?: string;
 }
 
 export interface FutureObjection {
@@ -1914,12 +1979,23 @@ export interface RemediationEvidenceBundle {
   allowed_action_classes: RemediationInterventionType[];
   deterministic_short_circuit: "phantom_entity" | "graph_enrichment" | "none";
   verification_obligations: VerificationStep[];
+  learning_hooks?: LearningHook[];
+  prior_future_signals?: FutureSignal[];
 }
 
 export interface GeneratedRemediationPlanSet {
   evidence_bundle_id: string;
   candidates: CandidateFuture[];
   model_layer: "connected" | "daemon" | "deterministic_fallback";
+  model_provenance?: {
+    task: string;
+    layer: "connected" | "daemon" | "deterministic_fallback";
+    provider: string | null;
+    model: string | null;
+    source: string;
+    fallback_reason?: string;
+    temperature?: number;
+  };
   fallback_reason?: string;
   validation_failures: string[];
 }
@@ -1967,7 +2043,6 @@ export interface RemediationStep {
   action?: RemediationEnrichmentAction | RemediationResolutionCall;
 }
 
-/** A complete remediation plan for a validated tension */
 export interface RemediationPlan {
   id: string;
   tension_id: string;
@@ -1981,6 +2056,12 @@ export interface RemediationPlan {
   /** New tensions this fix might introduce */
   new_tensions_predicted: string[];
   confidence: number;
+  adaptive_future_review?: {
+    summary: string;
+    weakened_signal_ids: string[];
+    superseded_signal_ids: string[];
+    evidence_anchor_ids: string[];
+  };
   generated_at: string;
   /** Set when a previous plan for the same tension exists and is now stale. */
   supersedes?: string;
@@ -2115,6 +2196,8 @@ export interface MetaLogEntry {
     basis: string;
   }>;
   overall_health: string;
+  /** Advisory-only future ranking and fallback provenance for this surface. */
+  adaptive_future?: AdaptiveFutureSurfaceAdvice;
 }
 
 /** Meta log file persisted to disk */
@@ -2449,6 +2532,45 @@ export interface GraphRAGQuery {
   include_narrative: boolean;
 }
 
+export type AdaptiveFutureSurfaceName =
+  | "dream_insights"
+  | "causal_insights"
+  | "temporal_insights"
+  | "metacognitive_analysis"
+  | "graph_rag_retrieve"
+  | "get_cognitive_preamble";
+
+export interface AdaptiveFutureRankedStep {
+  id: string;
+  label: string;
+  rationale: string;
+  evidence_anchor_ids: string[];
+  future_fit_score: number;
+}
+
+export interface AdaptiveFutureObjection {
+  id: string;
+  description: string;
+  evidence_anchor_ids: string[];
+  severity: "low" | "medium" | "high";
+}
+
+export interface AdaptiveFutureSurfaceAdvice {
+  surface: AdaptiveFutureSurfaceName;
+  /** Current Slice 10 implementation remains deterministic even when an LLM route is available. */
+  advisory_generation: "deterministic";
+  selected_model_layer: "connected" | "daemon" | "deterministic_fallback";
+  selected_model_provider: string | null;
+  selected_model: string | null;
+  fallback_reason?: string;
+  summary: string;
+  evidence_anchors: string[];
+  next_steps: AdaptiveFutureRankedStep[];
+  future_objections: AdaptiveFutureObjection[];
+  omitted_context_reasons: string[];
+  validation_failures: string[];
+}
+
 /** Output of the graph_rag_retrieve tool */
 export interface GraphRAGContext {
   /** Token-budgeted context string for LLM injection */
@@ -2470,6 +2592,8 @@ export interface GraphRAGContext {
     entity_id: string;
     score: number;
   }>;
+  /** Advisory-only future ranking and fallback provenance for this surface. */
+  adaptive_future?: AdaptiveFutureSurfaceAdvice;
 }
 
 /** Cognitive preamble — compact system context for LLM injection */
@@ -2484,6 +2608,8 @@ export interface CognitivePreamble {
   recent_insights: string[];
   /** Approximate token count */
   token_count: number;
+  /** Advisory-only future ranking and fallback provenance for this surface. */
+  adaptive_future?: AdaptiveFutureSurfaceAdvice;
 }
 
 /** Evidence classes the Task Preamble Compiler may include. */

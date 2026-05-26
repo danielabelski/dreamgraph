@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAdaptiveFutureReview,
   harvestRemediationFutureSignals,
   scoreCandidateFuture,
   validateCandidateFuture,
@@ -169,6 +170,19 @@ describe("validateCandidateFuture", () => {
     ).toBeUndefined();
   });
 
+  it("rejects low-confidence LLM candidates", () => {
+    expect(validateCandidateFuture(validCandidate({ future_fit_score: 0.2 }), bundle)).toBeUndefined();
+  });
+
+  it("requires ADR guard-rail evidence anchors when guard rails are present", () => {
+    expect(
+      validateCandidateFuture(
+        validCandidate({ evidence_anchor_ids: ["feature_adaptive_future_engine"] }),
+        bundle,
+      ),
+    ).toBeUndefined();
+  });
+
   it("drops malformed objections instead of surfacing partial objection records", () => {
     const candidate = validateCandidateFuture(
       validCandidate({
@@ -189,12 +203,36 @@ describe("validateCandidateFuture", () => {
 
 describe("future-fit scoring", () => {
   it("harvests scoped future signals only from known evidence anchors", () => {
-    const signals = harvestRemediationFutureSignals(bundle, "source_change");
+    const bundleWithLearningHooks: RemediationEvidenceBundle = {
+      ...bundle,
+      learning_hooks: [
+        { source: "accepted", evidence_anchor_ids: ["ADR-203"], confidence: 0.9 },
+        { source: "edited", evidence_anchor_ids: ["src/cognitive/intervention.ts"], confidence: 0.7 },
+        { source: "rejected", evidence_anchor_ids: ["feature_adaptive_future_engine"], confidence: 0.8 },
+        { source: "overridden", evidence_anchor_ids: ["feature_adaptive_future_engine"], confidence: 0.6 },
+        { source: "reverted", evidence_anchor_ids: ["src/cognitive/intervention.ts"], confidence: 0.65 },
+        { source: "explicit_preference", evidence_anchor_ids: ["feature_adaptive_future_engine"], confidence: 0.75 },
+        { source: "recurring_pattern", evidence_anchor_ids: ["feature_adaptive_future_engine"], confidence: 0.7 },
+        { source: "drift", evidence_anchor_ids: ["ADR-203"], confidence: 0.55 },
+        { source: "edited", evidence_anchor_ids: ["missing-anchor"], confidence: 1 },
+      ],
+    };
+    const signals = harvestRemediationFutureSignals(bundleWithLearningHooks, "source_change");
 
     expect(signals.map((signal) => signal.source)).toEqual(
-      expect.arrayContaining(["explicit_preference", "accepted", "recurring_pattern"]),
+      expect.arrayContaining([
+        "accepted",
+        "edited",
+        "rejected",
+        "overridden",
+        "reverted",
+        "explicit_preference",
+        "recurring_pattern",
+        "drift",
+      ]),
     );
     expect(signals.every((signal) => signal.evidence_anchor_ids.length > 0)).toBe(true);
+    expect(signals.some((signal) => signal.evidence_anchor_ids.includes("missing-anchor"))).toBe(false);
     expect(
       signals.every((signal) =>
         signal.evidence_anchor_ids.every((anchorId) =>
@@ -250,6 +288,64 @@ describe("future-fit scoring", () => {
     expect(invalid).toBeUndefined();
   });
 
+  it("weakens candidate support when user rejection evidence matches candidate anchors", () => {
+    const candidate = validateCandidateFuture(
+      validCandidate({
+        evidence_anchor_ids: ["feature_adaptive_future_engine", "src/cognitive/intervention.ts", "ADR-203"],
+        future_fit_score: 0.6,
+      }),
+      bundle,
+    );
+
+    expect(candidate).toBeDefined();
+    const supportive = scoreCandidateFuture(
+      candidate!,
+      bundle,
+      [{
+        id: "future_signal:test:accepted",
+        description: "Accepted evidence supports this path.",
+        source: "accepted",
+        evidence_anchor_ids: ["feature_adaptive_future_engine"],
+        confidence: 0.8,
+        observed_at: "2026-05-25T00:00:00.000Z",
+      }],
+      "source_change",
+    );
+    const rejected = scoreCandidateFuture(
+      candidate!,
+      bundle,
+      [
+        {
+          id: "future_signal:test:accepted",
+          description: "Accepted evidence supports this path.",
+          source: "accepted",
+          evidence_anchor_ids: ["feature_adaptive_future_engine"],
+          confidence: 0.8,
+          observed_at: "2026-05-25T00:00:00.000Z",
+        },
+        {
+          id: "future_signal:test:rejected",
+          description: "The user rejected this kind of remediation previously.",
+          source: "rejected",
+          evidence_anchor_ids: ["feature_adaptive_future_engine"],
+          confidence: 0.8,
+          observed_at: "2026-05-25T00:00:00.000Z",
+        },
+      ],
+      "source_change",
+    );
+
+    expect(rejected.future_fit_score).toBeLessThan(supportive.future_fit_score ?? 0);
+    expect(rejected.objections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "future_objection:candidate-source-change:negative_signal",
+          severity: "high",
+        }),
+      ]),
+    );
+  });
+
   it("keeps rejected-but-valid candidates explainable with future objections", () => {
     const candidate = validateCandidateFuture(
       validCandidate({
@@ -277,6 +373,132 @@ describe("future-fit scoring", () => {
       ]),
     );
   });
+
+  it("marks aged prior future signals as stale and surfaces review metadata", () => {
+    const bundleWithPriorSignals: RemediationEvidenceBundle = {
+      ...bundle,
+      prior_future_signals: [
+        {
+          id: "future_signal:stale-preference",
+          description: "Older remediation preference favored this path.",
+          source: "explicit_preference",
+          evidence_anchor_ids: ["feature_adaptive_future_engine"],
+          confidence: 0.85,
+          observed_at: "2026-03-01T00:00:00.000Z",
+        },
+      ],
+    };
+    const candidate = validateCandidateFuture(
+      validCandidate({ evidence_anchor_ids: ["feature_adaptive_future_engine", "src/cognitive/intervention.ts", "ADR-203"] }),
+      bundleWithPriorSignals,
+    );
+
+    expect(candidate).toBeDefined();
+    const signals = harvestRemediationFutureSignals(bundleWithPriorSignals, "source_change");
+    expect(signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "future_signal:stale-preference",
+          status: "stale",
+        }),
+      ]),
+    );
+
+    const scored = scoreCandidateFuture(candidate!, bundleWithPriorSignals, signals, "source_change");
+    expect(scored.objections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "future_objection:candidate-source-change:stale_signal",
+          severity: "high",
+        }),
+      ]),
+    );
+    expect(buildAdaptiveFutureReview(candidate!, signals)).toEqual(
+      expect.objectContaining({
+        weakened_signal_ids: expect.arrayContaining(["future_signal:stale-preference"]),
+      }),
+    );
+  });
+
+  it("supersedes prior ADR-bound signals when newer accepted ADR state replaced their anchors", () => {
+    const bundleWithSupersededAdrSignal: RemediationEvidenceBundle = {
+      ...bundle,
+      prior_future_signals: [
+        {
+          id: "future_signal:old-adr-preference",
+          description: "A previous ADR preference favored this remediation path.",
+          source: "accepted",
+          evidence_anchor_ids: ["ADR-199"],
+          confidence: 0.9,
+          observed_at: "2026-05-01T00:00:00.000Z",
+        },
+      ],
+    };
+
+    const signals = harvestRemediationFutureSignals(bundleWithSupersededAdrSignal, "source_change");
+    expect(signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "future_signal:old-adr-preference",
+          status: "superseded",
+          superseded_by: "ADR-203",
+        }),
+      ]),
+    );
+  });
+
+  it("detects recurring negative evidence and records supersession review findings", () => {
+    const bundleWithRecurringDrift: RemediationEvidenceBundle = {
+      ...bundle,
+      prior_future_signals: [
+        {
+          id: "future_signal:negative-1",
+          description: "Previous remediation was rejected.",
+          source: "rejected",
+          evidence_anchor_ids: ["feature_adaptive_future_engine"],
+          confidence: 0.8,
+          observed_at: "2026-05-20T00:00:00.000Z",
+        },
+        {
+          id: "future_signal:negative-2",
+          description: "Previous remediation was reverted.",
+          source: "reverted",
+          evidence_anchor_ids: ["feature_adaptive_future_engine"],
+          confidence: 0.75,
+          observed_at: "2026-05-21T00:00:00.000Z",
+        },
+        {
+          id: "future_signal:negative-3",
+          description: "Previous remediation drifted again.",
+          source: "drift",
+          evidence_anchor_ids: ["feature_adaptive_future_engine"],
+          confidence: 0.7,
+          observed_at: "2026-05-22T00:00:00.000Z",
+        },
+      ],
+    };
+    const candidate = validateCandidateFuture(
+      validCandidate({ evidence_anchor_ids: ["feature_adaptive_future_engine", "src/cognitive/intervention.ts", "ADR-203"] }),
+      bundleWithRecurringDrift,
+    );
+
+    expect(candidate).toBeDefined();
+    const signals = harvestRemediationFutureSignals(bundleWithRecurringDrift, "source_change");
+    const recurringDriftSignal = signals.find((signal) => signal.id.startsWith("future_signal:bundle-tension-remediation:review:"));
+    expect(recurringDriftSignal).toMatchObject({
+      source: "drift",
+      status: "superseded",
+    });
+
+    const scored = scoreCandidateFuture(candidate!, bundleWithRecurringDrift, signals, "source_change");
+    expect(scored.objections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "future_objection:candidate-source-change:superseded_signal",
+        }),
+      ]),
+    );
+  });
 });
 
 describe("validateRemediationDraft", () => {
@@ -295,9 +517,62 @@ describe("validateRemediationDraft", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["valid-one"]);
   });
 
+  it("keeps at most three schema-valid LLM candidates", () => {
+    const candidates = validateRemediationDraft(
+      {
+        candidates: [
+          validCandidate({ id: "valid-one" }),
+          validCandidate({ id: "valid-two" }),
+          validCandidate({ id: "valid-three" }),
+          validCandidate({ id: "valid-four" }),
+        ],
+      },
+      bundle,
+    );
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["valid-one", "valid-two", "valid-three"]);
+  });
+
   it("rejects malformed draft envelopes", () => {
     expect(validateRemediationDraft({ candidates: "not-an-array" }, bundle)).toEqual([]);
     expect(validateRemediationDraft(undefined, bundle)).toEqual([]);
+  });
+});
+
+describe("Slice 3 remediation LLM drafting behind validation", () => {
+  it("routes remediation drafting through strict JSON-schema output", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile("src/cognitive/intervention.ts", "utf8");
+
+    expect(source).toContain("remediation_candidate_future_set");
+    expect(source).toContain("jsonSchema");
+    expect(source).toContain("maxItems: 3");
+    expect(source).toContain("parseRemediationDraftJson(response.text)");
+  });
+});
+
+describe("Slice 2 remediation evidence bundle extraction", () => {
+  it("exposes evidence bundle assembly without entering the drafting path", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile("src/cognitive/intervention.ts", "utf8");
+    const extractorStart = source.indexOf("export async function buildRemediationEvidenceBundles");
+    const plannerStart = source.indexOf("export async function generateRemediationPlans", extractorStart);
+    const extractorSource = source.slice(extractorStart, plannerStart);
+
+    expect(extractorStart).toBeGreaterThanOrEqual(0);
+    expect(plannerStart).toBeGreaterThan(extractorStart);
+    expect(extractorSource).toContain("buildRemediationEvidenceBundle(tension, adrs, ctx)");
+    expect(extractorSource).not.toContain("draftRemediationCandidateFutures");
+    expect(extractorSource).not.toContain("selectLlmRoute");
+  });
+
+  it("keeps hard short-circuits out of remediation LLM drafting", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile("src/cognitive/intervention.ts", "utf8");
+
+    expect(source).toContain("llmEligibleEvidenceBundles");
+    expect(source).toContain('bundle.deterministic_short_circuit === "none"');
+    expect(source).toContain("draftRemediationCandidateFutures(llmEligibleEvidenceBundles)");
   });
 });
 

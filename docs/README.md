@@ -20,6 +20,7 @@ This directory contains DreamGraph documentation, but the **canonical living doc
 
 Some files in this directory are hand-written narrative or reference documents. They may provide additional background, but they are not the authoritative inventory of the current system state unless explicitly regenerated.
 
+- [Adaptive Future Engine](adaptive-future-engine.md) — v11 advisory candidate-future ranking and audit-trail overview.
 - [Release Notes](release-notes.md) — manually curated implementation/release notes for notable features.
 
 For the current graph-grounded documentation, start here:

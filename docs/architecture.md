@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **10.6.0**
+Version: **11.0.0**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -12,8 +12,23 @@ Core architectural surfaces:
 - **Daemon runtime** — serves MCP tools, dashboard routes, orchestration, and cognitive workflows
 - **Instance subsystem** — isolates projects and runtime state by UUID-scoped instance boundaries
 - **Knowledge graph** — captures system structure, behavior, decisions, and unresolved tensions
+- **Adaptive Future Engine** — ranks compliant candidate futures with evidence-bounded scoring and compact audit trails
 - **CLI (`dg`)** — lifecycle management, status, scanning, and operational commands
 - **VS Code extension** — dashboard embedding, chat UX, daemon/MCP client integration, changed-files UX
+
+
+## Adaptive Future Engine
+
+The Adaptive Future Engine is the v11 advisory preference layer. It compares compliant candidate futures after higher-authority constraints have already been applied: accepted ADRs, workflow/lifecycle rules, API and data-model contracts, graph evidence, and current user intent.
+
+Architecturally it provides:
+
+- deterministic task-class inference for planning-doc, adapter, graph-tool, and cognitive-workflow changes;
+- future-fit score factors for evidence coverage, governance compatibility, workflow alignment, blast radius, reversibility, and fallback confidence;
+- compact objections for rejected candidates;
+- audit metadata that records selected/rejected candidate IDs, score factors, anchors, route/fallback provenance, and validation failures without storing raw prompts or full model responses.
+
+The engine is not an enforcement subsystem and does not add a cognitive lifecycle state. Its output remains advisory and must degrade to deterministic fallback behavior when evidence is insufficient.
 
 ## Instance Model
 

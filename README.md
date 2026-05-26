@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v10.6.0 — Renata
+# DreamGraph v11.0.0 — Adaptive Future Engine
 
-![Version](https://img.shields.io/badge/version-10.6.0-blue)
+![Version](https://img.shields.io/badge/version-11.0.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -91,6 +91,7 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 - **CLI (`dg`)** — instance creation, attach/detach, start/stop, status, scan, enrich, schedule, export, fork, and migration
 - **VS Code extension** — chat, dashboard, Explorer (interactive 2D/3D graph + curated mutations), changed-files view, daemon connection, and local support tools
 - **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, and dream-cycle reasoning
+- **Adaptive Future Engine** — advisory candidate-future ranking, future-fit scoring, compact objections, and bounded audit metadata for graph-tool and cognitive-workflow decisions
 - **Datastore-as-Hub** — first-class `datastore` entities, live schema introspection (`scan_database`), and the `schema_grounding` dream strategy for multi-repo SaaS projects sharing a backend (set `DATABASE_URL`; inert otherwise)
 - **Plugin host & SDK (v9.0.0 — stable seams M0–M6)** — in-process plugin runtime (`@dreamgraph/sdk` + `@dreamgraph/host`) with manifest discovery from `<instance>/plugins/<id>/plugin.json`, capability/effect gate registry, telemetry bridge, trust banner, and `dg plugin` CLI (`list`, `inspect`, `register`, `enable`, `disable`, `trust`, `reload`, `unload`). Hot reload/disable plus enriched `system://plugins` (activation, subscriptions, contributed tools/resources). Plugin-contributed MCP tools and resources via `ctx.tools.register` / `ctx.resources.register`, gated by `tools:register` / `resources:register` capabilities and naming/namespace prefix rules. M5 ships outbound webhooks as a *core* subsystem (`dg webhook` CLI; HMAC-signed delivery; persistent dead-letter; replay). M6 adds the UI/closure seams (archetypes, policies, markdown fences, UI hooks). Opt-in via `DG_ALLOW_INPROCESS_PLUGINS=true` plus per-plugin `trusted: true` in `instance.json`. See `examples/hello-events/` for a reference plugin and [`docs/sdk/`](docs/sdk/) for the developer guide and reference manual.
 
@@ -304,6 +305,7 @@ DreamGraph has six major surfaces:
 
 - **Knowledge graph** — features, workflows, data model, ADRs, UI registry, tensions, and validated edges
 - **Cognitive engine** — dream cycles, normalization, promotion, temporal/causal analysis, remediation planning
+- **Adaptive Future Engine** — ranks compliant candidate futures with graph evidence, ADR/workflow/API constraints, score factors, objections, and compact audit trails
 - **Daemon runtime** — the MCP-capable service layer exposed through stdio or HTTP
 - **CLI** — operational control over instances and daemon lifecycle
 - **VS Code extension** — the primary interactive editor experience for chat, dashboard, changed-files context, daemon connection, and local-tool execution
@@ -312,6 +314,7 @@ DreamGraph has six major surfaces:
 For deeper architectural detail, see:
 - [docs/architecture.md](docs/architecture.md)
 - [docs/cognitive-engine.md](docs/cognitive-engine.md)
+- [docs/adaptive-future-engine.md](docs/adaptive-future-engine.md)
 - [docs/tools-reference.md](docs/tools-reference.md)
 - [docs/workflows.md](docs/workflows.md)
 

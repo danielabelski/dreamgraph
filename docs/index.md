@@ -18,6 +18,7 @@
 - [Data Model](data-model/_index.md)
 - [Workflows](workflows/_index.md)
 - [Architecture Decisions](architecture/_index.md)
+- [Adaptive Future Engine](adaptive-future-engine.md)
 - [UI Registry](ui-registry/_index.md)
 - [API Reference](api-reference/_index.md)
 - [Cognitive Status](cognitive-status.md)

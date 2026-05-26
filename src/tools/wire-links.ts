@@ -26,7 +26,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { loadJsonArray } from "../utils/cache.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
-import { getLlmProvider, getDreamerLlmConfig, isLlmAvailable } from "../cognitive/llm.js";
+import { selectLlmRoute } from "../cognitive/llm.js";
 import type { LlmMessage } from "../cognitive/llm.js";
 import { executeEnrichSeedData } from "./enrich-seed-data.js";
 import type {
@@ -84,6 +84,56 @@ const SEED_TARGET: Record<EntityType, "features" | "workflows" | "data_model" | 
   workflow: "workflows",
   data_model: "data_model",
   capability: "capabilities",
+};
+
+const LINK_RELATIONSHIPS = [
+  "depends_on",
+  "implements",
+  "manages",
+  "reads_from",
+  "writes_to",
+  "realizes",
+  "composes",
+  "contains",
+  "uses",
+  "produces",
+  "consumes",
+  "configures",
+  "supports",
+  "documents",
+  "tests",
+  "related_to",
+] as const;
+
+const LINK_RELATIONSHIP_SET = new Set<string>(LINK_RELATIONSHIPS);
+const LINK_DIRECTIONS = new Set(["upstream", "downstream", "bidirectional"]);
+const LINK_STRENGTHS = new Set(["weak", "moderate", "strong"]);
+const MAX_LINKS_PER_ENTITY = 8;
+
+const LINK_SELECTION_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["links"],
+  properties: {
+    links: {
+      type: "array",
+      maxItems: MAX_LINKS_PER_ENTITY,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "relationship", "direction", "description", "evidence_excerpt", "confidence", "strength"],
+        properties: {
+          target: { type: "string" },
+          relationship: { type: "string", enum: LINK_RELATIONSHIPS },
+          direction: { type: "string", enum: Array.from(LINK_DIRECTIONS) },
+          description: { type: "string", minLength: 1 },
+          evidence_excerpt: { type: "string", minLength: 1 },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          strength: { type: "string", enum: Array.from(LINK_STRENGTHS) },
+        },
+      },
+    },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -164,10 +214,6 @@ function scoreCandidates(
   return rows.slice(0, topK);
 }
 
-// ---------------------------------------------------------------------------
-// LLM prompt
-// ---------------------------------------------------------------------------
-
 function buildPrompt(
   source: { type: EntityType; entity: AnyEntity },
   candidates: CandidateRow[],
@@ -187,28 +233,29 @@ function buildPrompt(
     type: c.type,
     name: c.name,
     description: c.description,
-    overlap_score: Number(c.score.toFixed(3)),
+    deterministic_score: Number(c.score.toFixed(3)),
   }));
 
   const system = [
     "You wire semantic links between knowledge-graph entities.",
-    "Given a SOURCE entity and a list of CANDIDATE entities, decide which candidates the source",
-    "is genuinely related to. Be conservative: only emit links you can justify from the names,",
-    "descriptions, source files, or domain context. Skip candidates with no clear relationship.",
-    "Each chosen link must specify a directional relationship (the source acts on / depends on / belongs to / etc. the target).",
-    "Output STRICT JSON: an array of link objects, no prose, no markdown. Empty array is valid.",
-    "Schema per link: { target: string (must be a candidate id), relationship: string (e.g. 'depends_on', 'implements', 'manages', 'reads_from', 'realizes', 'composes'), description: string (one short sentence), strength: 'weak' | 'moderate' | 'strong' }",
-    "Maximum 8 links. If nothing fits, return [].",
+    "Given a SOURCE entity and a deterministic CANDIDATE evidence list, decide which candidates the source",
+    "is genuinely related to. Be conservative: only emit links justified by names, descriptions, source files,",
+    "domain context, or the deterministic candidate score. Skip candidates with no clear relationship.",
+    "Each chosen link must use an allowed relationship, a direction, a compact evidence_excerpt, and confidence.",
+    "Output STRICT JSON: { \"links\": [...] }, no prose, no markdown. Empty links is valid.",
+    `Allowed relationships: ${LINK_RELATIONSHIPS.join(", ")}.`,
+    "Allowed directions: upstream, downstream, bidirectional.",
+    "Maximum 8 links. If nothing fits, return { \"links\": [] }.",
   ].join(" ");
 
   const user = [
     "SOURCE:",
     JSON.stringify(sourceJson, null, 2),
     "",
-    "CANDIDATES:",
+    "CANDIDATE EVIDENCE:",
     JSON.stringify(candJson, null, 2),
     "",
-    "Return JSON array of links only.",
+    "Return strict JSON object with a links array only.",
   ].join("\n");
 
   return [
@@ -217,57 +264,130 @@ function buildPrompt(
   ];
 }
 
-function parseLinkArray(text: string, candidateIds: Set<string>): GraphLink[] {
+export function parseLinkArray(
+  text: string,
+  candidates: CandidateRow[] | Set<string>,
+): { links: GraphLink[]; errors: string[] } {
+  const candidateMap = new Map<string, CandidateRow>();
+  if (Array.isArray(candidates)) {
+    for (const candidate of candidates) candidateMap.set(candidate.id, candidate);
+  } else {
+    for (const id of candidates) {
+      candidateMap.set(id, { id, type: "feature", name: id, description: "", score: 0 });
+    }
+  }
+
+  const errors: string[] = [];
   let payload: unknown = null;
-  // Try direct parse, then bracket extraction.
   try {
     payload = JSON.parse(text);
   } catch {
-    const m = text.match(/\[[\s\S]*\]/);
-    if (m) {
-      try {
-        payload = JSON.parse(m[0]);
-      } catch {
-        return [];
-      }
+    const objectMatch = text.match(/\{[\s\S]*\}/);
+    const arrayMatch = text.match(/\[[\s\S]*\]/);
+    const match = objectMatch ?? arrayMatch;
+    if (!match) {
+      return { links: [], errors: ["LLM did not return parseable JSON"] };
+    }
+    try {
+      payload = JSON.parse(match[0]);
+    } catch {
+      return { links: [], errors: ["LLM did not return parseable JSON"] };
     }
   }
-  if (!Array.isArray(payload)) {
-    // Some models wrap the array in { links: [...] }
-    if (payload && typeof payload === "object" && Array.isArray((payload as { links?: unknown[] }).links)) {
-      payload = (payload as { links: unknown[] }).links;
-    } else {
-      return [];
-    }
+
+  let rawLinks: unknown;
+  if (Array.isArray(payload)) {
+    rawLinks = payload;
+  } else if (payload && typeof payload === "object" && Array.isArray((payload as { links?: unknown[] }).links)) {
+    rawLinks = (payload as { links: unknown[] }).links;
+  } else {
+    return { links: [], errors: ["LLM response missing links array"] };
   }
+
+  if (!Array.isArray(rawLinks)) {
+    return { links: [], errors: ["LLM links payload was not an array"] };
+  }
+  if (rawLinks.length > MAX_LINKS_PER_ENTITY) {
+    return { links: [], errors: [`excessive edge count ${rawLinks.length} > ${MAX_LINKS_PER_ENTITY}`] };
+  }
+
   const out: GraphLink[] = [];
-  for (const entry of payload as unknown[]) {
-    if (!entry || typeof entry !== "object") continue;
+  for (const [index, entry] of rawLinks.entries()) {
+    if (!entry || typeof entry !== "object") {
+      errors.push(`link ${index}: not an object`);
+      continue;
+    }
     const e = entry as Record<string, unknown>;
-    const target = typeof e.target === "string" ? e.target : null;
-    if (!target || !candidateIds.has(target)) continue;
-    const relationship = typeof e.relationship === "string" && e.relationship.trim()
-      ? e.relationship.trim()
-      : "related_to";
+    const target = typeof e.target === "string" ? e.target.trim() : "";
+    if (!target || !candidateMap.has(target)) {
+      errors.push(`link ${index}: invalid target ${target || "(missing)"}`);
+      continue;
+    }
+
+    const relationship = typeof e.relationship === "string" ? e.relationship.trim() : "";
+    if (!LINK_RELATIONSHIP_SET.has(relationship)) {
+      errors.push(`link ${index}: invalid relationship ${relationship || "(missing)"}`);
+      continue;
+    }
+
+    const direction = typeof e.direction === "string" ? e.direction.trim() : "";
+    if (!LINK_DIRECTIONS.has(direction)) {
+      errors.push(`link ${index}: invalid direction ${direction || "(missing)"}`);
+      continue;
+    }
+
+    const evidenceExcerpt = typeof e.evidence_excerpt === "string" ? e.evidence_excerpt.trim() : "";
+    if (!evidenceExcerpt) {
+      errors.push(`link ${index}: missing evidence excerpt`);
+      continue;
+    }
+
+    const confidence = typeof e.confidence === "number" ? e.confidence : Number.NaN;
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      errors.push(`link ${index}: invalid confidence`);
+      continue;
+    }
+
     const description = typeof e.description === "string" ? e.description.trim() : "";
-    const rawStrength = typeof e.strength === "string" ? e.strength.toLowerCase() : "moderate";
-    const strength: GraphLink["strength"] =
-      rawStrength === "weak" || rawStrength === "strong" ? rawStrength : "moderate";
+    if (!description) {
+      errors.push(`link ${index}: missing description`);
+      continue;
+    }
+
+    const rawStrength = typeof e.strength === "string" ? e.strength.toLowerCase() : "";
+    if (!LINK_STRENGTHS.has(rawStrength)) {
+      errors.push(`link ${index}: invalid strength ${rawStrength || "(missing)"}`);
+      continue;
+    }
+
+    const candidate = candidateMap.get(target);
     out.push({
       target,
-      type: "feature",
+      type: candidate?.type ?? "feature",
       relationship,
       description,
-      strength,
+      strength: rawStrength,
+      meta: {
+        direction: direction as "upstream" | "downstream" | "bidirectional",
+        evidence_excerpt: evidenceExcerpt,
+        confidence,
+      },
     });
   }
-  // Dedupe by target.
+
+  if (errors.length > 0) {
+    return { links: [], errors };
+  }
+
   const seen = new Set<string>();
-  return out.filter((l) => {
-    if (seen.has(l.target)) return false;
-    seen.add(l.target);
-    return true;
-  });
+  return {
+    links: out.filter((l) => {
+      if (seen.has(l.target)) return false;
+      seen.add(l.target);
+      return true;
+    }),
+    errors: [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -312,12 +432,12 @@ export async function executeWireLinksProgrammatic(
 }
 
 async function executeWireLinks(opts: WireOptions): Promise<ToolResponse<WireLinksResult>> {
-  if (!isLlmAvailable()) {
-    return error("wire_links requires an LLM provider. Configure one before running.", "LLM_UNAVAILABLE");
-  }
-
-  const llm = getLlmProvider();
-  const cfg = getDreamerLlmConfig();
+  const route = await selectLlmRoute({
+    task: "graph_enrichment",
+    daemon_component: "dreamer",
+    daemon_temperature: 0.2,
+    max_tokens: 1500,
+  });
   const all = await loadAll();
 
   // Build the global pool of all entities (used as candidate space).
@@ -343,6 +463,14 @@ async function executeWireLinks(opts: WireOptions): Promise<ToolResponse<WireLin
     notes: [],
   };
 
+  if (route.layer === "deterministic_fallback") {
+    result.notes.push(
+      `ADR-203 route=deterministic_fallback reason=${route.provenance.fallback_reason ?? "unknown"}; wire_links uses safe no-op fallback.`,
+    );
+  } else {
+    result.notes.push(`ADR-203 route=${route.layer} provider=${route.provenance.provider ?? "unknown"} model=${route.model ?? "unknown"}.`);
+  }
+
   for (const targetType of opts.scope) {
     const orphans = all[targetType].filter((e) => e?.id && isOrphan(e));
     result.per_target[targetType].orphans_found = orphans.length;
@@ -358,6 +486,19 @@ async function executeWireLinks(opts: WireOptions): Promise<ToolResponse<WireLin
     }
     const slice = orphans.slice(0, remaining);
 
+    if (route.layer === "deterministic_fallback") {
+      result.attempted += slice.length;
+      result.notes.push(`Skipped ${slice.length} ${targetType} orphans — deterministic fallback does not invent graph links.`);
+      continue;
+    }
+
+    const provider = route.provider;
+    if (!provider) {
+      result.attempted += slice.length;
+      result.notes.push(`Skipped ${slice.length} ${targetType} orphans — selected route had no provider.`);
+      continue;
+    }
+
     // Group writes per type to issue one enrich call.
     const updatedEntries: Array<Record<string, unknown>> = [];
 
@@ -366,20 +507,33 @@ async function executeWireLinks(opts: WireOptions): Promise<ToolResponse<WireLin
       const candidates = scoreCandidates(orphan, pool, opts.candidateTopK);
       if (candidates.length === 0) continue;
 
-      const candidateIds = new Set(candidates.map((c) => c.id));
       const messages = buildPrompt({ type: targetType, entity: orphan }, candidates);
 
       let links: GraphLink[] = [];
       try {
-        const resp = await llm.complete(messages, {
-          model: cfg.model,
-          temperature: 0.2,
-          maxTokens: Math.min(cfg.maxTokens, 1500),
-          jsonMode: true,
+        const resp = await provider.complete(messages, {
+          ...route.options,
+          maxTokens: Math.min(route.options.maxTokens ?? 1500, 1500),
+          jsonSchema: {
+            name: "wire_link_selection",
+            schema: LINK_SELECTION_JSON_SCHEMA,
+          },
         });
         result.llm_calls++;
         result.tokens_used += resp.tokensUsed ?? 0;
-        links = parseLinkArray(resp.text, candidateIds);
+        const parsed = parseLinkArray(resp.text, candidates);
+        if (parsed.errors.length > 0) {
+          result.notes.push(`Rejected invalid link selection for ${orphan.id}: ${parsed.errors.join("; ")}`);
+          continue;
+        }
+        const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+        links = parsed.links.map((link) => ({
+          ...link,
+          meta: {
+            ...(link.meta ?? {}),
+            deterministic_score: Number((candidateById.get(link.target)?.score ?? 0).toFixed(3)),
+          },
+        }));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         result.notes.push(`LLM error for ${orphan.id}: ${msg}`);

@@ -21,6 +21,8 @@ import { dataPath } from "../utils/paths.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 import { withFileLock } from "../utils/mutex.js";
+import { selectLlmRoute } from "../cognitive/llm.js";
+import type { LlmMessage } from "../cognitive/llm.js";
 import type {
   UIRegistryFile,
   SemanticElement,
@@ -30,6 +32,11 @@ import type {
   GenerateUIMigrationOutput,
   MigrationPortedElement,
   MigrationGapElement,
+  UIMigrationAdaptivePlan,
+  UIMigrationElementMapping,
+  UIMigrationFutureKind,
+  UIMigrationPlanStep,
+  UIMigrationPlanningMetadata,
   ToolResponse,
 } from "../types/index.js";
 
@@ -371,6 +378,554 @@ function estimateComplexity(
   if (inputCount + outputCount >= 5) return "complex";
   if (inputCount + outputCount >= 2 || hasChildren) return "moderate";
   return "trivial";
+}
+
+interface GenerateUIMigrationParams {
+  source_platform: string;
+  target_platform: string;
+  scope?: string[];
+}
+
+interface UIMigrationEvidence {
+  sourcePlatform: string;
+  targetPlatform: string;
+  sourceElements: SemanticElement[];
+  targetElements: SemanticElement[];
+  deprecatedElements: SemanticElement[];
+  ported: MigrationPortedElement[];
+  gaps: MigrationGapElement[];
+}
+
+interface UIMigrationValidationContext {
+  sourceElementIds: Set<string>;
+  existingElementIds: Set<string>;
+}
+
+const UI_MIGRATION_FUTURES: UIMigrationFutureKind[] = [
+  "direct_port",
+  "refactor",
+  "split_component",
+  "defer",
+  "redesign",
+];
+
+const UI_MIGRATION_FUTURE_SET = new Set<string>(UI_MIGRATION_FUTURES);
+
+const UI_MIGRATION_PLAN_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "strategy_summary",
+    "futures_compared",
+    "element_mappings",
+    "steps",
+    "risks",
+    "data_contract_changes",
+    "verification",
+    "graph_updates",
+    "ui_registry_updates",
+  ],
+  properties: {
+    strategy_summary: { type: "string", minLength: 1 },
+    futures_compared: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string", enum: UI_MIGRATION_FUTURES },
+    },
+    element_mappings: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "source_element_id",
+          "action",
+          "rationale",
+          "registry_constraints",
+          "data_contract_changes",
+          "interaction_model_changes",
+          "composition_constraints",
+        ],
+        properties: {
+          source_element_id: { type: "string" },
+          target_element_id: { type: "string" },
+          proposed_new_element_id: { type: "string" },
+          action: { type: "string", enum: UI_MIGRATION_FUTURES },
+          rationale: { type: "string", minLength: 1 },
+          registry_constraints: { type: "array", minItems: 1, items: { type: "string" } },
+          data_contract_changes: { type: "array", minItems: 1, items: { type: "string" } },
+          interaction_model_changes: { type: "array", minItems: 1, items: { type: "string" } },
+          composition_constraints: { type: "array", minItems: 1, items: { type: "string" } },
+        },
+      },
+    },
+    steps: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "id",
+          "title",
+          "future",
+          "element_ids",
+          "summary",
+          "risks",
+          "verification",
+          "graph_updates",
+          "ui_registry_updates",
+        ],
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          future: { type: "string", enum: UI_MIGRATION_FUTURES },
+          element_ids: { type: "array", items: { type: "string" } },
+          summary: { type: "string", minLength: 1 },
+          risks: { type: "array", items: { type: "string" } },
+          verification: { type: "array", items: { type: "string" } },
+          graph_updates: { type: "array", items: { type: "string" } },
+          ui_registry_updates: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+    risks: { type: "array", items: { type: "string" } },
+    data_contract_changes: { type: "array", items: { type: "string" } },
+    verification: { type: "array", items: { type: "string" } },
+    graph_updates: { type: "array", items: { type: "string" } },
+    ui_registry_updates: { type: "array", items: { type: "string" } },
+  },
+};
+
+function dataContractSummary(el: SemanticElement): string {
+  const inputs = el.data_contract.inputs.map((i) => `${i.name}: ${i.type}`).join(", ") || "none";
+  const outputs = el.data_contract.outputs.map((o) => `${o.name}: ${o.type}`).join(", ") || "none";
+  const interactions = el.interactions.map((i) => i.action).join(", ") || "none";
+  return `inputs: ${inputs}; outputs: ${outputs}; interactions: ${interactions}`;
+}
+
+function buildUIMigrationEvidence(
+  params: GenerateUIMigrationParams,
+  registry: UIRegistryFile,
+): UIMigrationEvidence {
+  const sourcePlatform = params.source_platform.toLowerCase();
+  const targetPlatform = params.target_platform.toLowerCase();
+
+  let sourceElements = registry.elements.filter(
+    (e) =>
+      effectiveStatus(e) !== "deprecated" &&
+      e.implementations.some((i) => i.platform.toLowerCase() === sourcePlatform),
+  );
+
+  if (params.scope && params.scope.length > 0) {
+    const scopeSet = new Set(params.scope.map((s) => s.toLowerCase()));
+    sourceElements = sourceElements.filter((e) =>
+      e.used_by.some((u) => scopeSet.has(u.toLowerCase())),
+    );
+  }
+
+  const targetElements = registry.elements.filter(
+    (e) =>
+      effectiveStatus(e) !== "deprecated" &&
+      e.implementations.some((i) => i.platform.toLowerCase() === targetPlatform),
+  );
+  const deprecatedElements = registry.elements.filter((e) => effectiveStatus(e) === "deprecated");
+  const ported: MigrationPortedElement[] = [];
+  const gaps: MigrationGapElement[] = [];
+
+  for (const el of sourceElements) {
+    const srcImpl = el.implementations.find(
+      (i) => i.platform.toLowerCase() === sourcePlatform,
+    );
+    const tgtImpl = el.implementations.find(
+      (i) => i.platform.toLowerCase() === targetPlatform,
+    );
+
+    if (srcImpl && tgtImpl) {
+      ported.push({
+        element_id: el.id,
+        name: el.name,
+        source_component: srcImpl.component,
+        target_component: tgtImpl.component,
+      });
+    } else if (srcImpl) {
+      gaps.push({
+        element_id: el.id,
+        name: el.name,
+        purpose: el.purpose,
+        category: el.category,
+        source_component: srcImpl.component,
+        data_contract_summary: dataContractSummary(el),
+        complexity_estimate: estimateComplexity(el),
+      });
+    }
+  }
+
+  return {
+    sourcePlatform,
+    targetPlatform,
+    sourceElements,
+    targetElements,
+    deprecatedElements,
+    ported,
+    gaps,
+  };
+}
+
+function elementEvidence(el: SemanticElement): Record<string, unknown> {
+  return {
+    id: el.id,
+    name: el.name,
+    purpose: el.purpose,
+    category: el.category,
+    status: effectiveStatus(el),
+    data_contract: el.data_contract,
+    interactions: el.interactions,
+    children: el.children ?? [],
+    implementations: el.implementations.map((i) => ({
+      platform: i.platform,
+      component: i.component,
+      source_file: i.source_file,
+      notes: i.notes,
+    })),
+    visual_semantics: el.visual_semantics,
+    layout_semantics: el.layout_semantics,
+    used_by: el.used_by,
+    tags: el.tags,
+  };
+}
+
+function buildUIMigrationPrompt(evidence: UIMigrationEvidence): LlmMessage[] {
+  const system = [
+    "You draft advisory UI migration candidate plans for DreamGraph.",
+    "The UI registry is authoritative: do not bypass element purpose, data contracts, interactions, composition children, visual semantics, layout semantics, lifecycle status, or deprecated replacements.",
+    "Compare direct_port, refactor, split_component, defer, and redesign futures where applicable.",
+    "Every existing element id must come from the supplied registry evidence. Any new element id must be placed in proposed_new_element_id before it appears in a step.",
+    "Return strict JSON only, with no markdown or prose outside the JSON object.",
+  ].join(" ");
+
+  const userPayload = {
+    source_platform: evidence.sourcePlatform,
+    target_platform: evidence.targetPlatform,
+    source_elements: evidence.sourceElements.map(elementEvidence),
+    already_ported: evidence.ported,
+    target_gaps: evidence.gaps,
+    target_platform_capabilities: {
+      categories: [...new Set(evidence.targetElements.map((e) => e.category))],
+      components: evidence.targetElements.flatMap((e) =>
+        e.implementations
+          .filter((i) => i.platform.toLowerCase() === evidence.targetPlatform)
+          .map((i) => ({ element_id: e.id, component: i.component })),
+      ),
+    },
+    deprecated_elements: evidence.deprecatedElements.map((e) => ({
+      id: e.id,
+      name: e.name,
+      superseded_by: e.superseded_by,
+      deprecation_reason: e.deprecation_reason,
+    })),
+    required_output: {
+      strategy_summary: "string",
+      futures_compared: UI_MIGRATION_FUTURES,
+      element_mappings: [
+        {
+          source_element_id: "existing source element id",
+          target_element_id: "optional existing target element id",
+          proposed_new_element_id: "optional explicit new element id",
+          action: "direct_port|refactor|split_component|defer|redesign",
+          rationale: "string",
+          registry_constraints: ["registry purpose/data/interaction/layout constraints preserved"],
+          data_contract_changes: ["contract-preserving or explicit change"],
+          interaction_model_changes: ["interaction-preserving or explicit change"],
+          composition_constraints: ["children/layout/composition constraints preserved"],
+        },
+      ],
+      steps: [
+        {
+          id: "string",
+          title: "string",
+          future: "direct_port|refactor|split_component|defer|redesign",
+          element_ids: ["existing element id or proposed_new_element_id"],
+          summary: "string",
+          risks: ["string"],
+          verification: ["string"],
+          graph_updates: ["string"],
+          ui_registry_updates: ["string"],
+        },
+      ],
+      risks: ["string"],
+      data_contract_changes: ["string"],
+      verification: ["string"],
+      graph_updates: ["string"],
+      ui_registry_updates: ["string"],
+    },
+  };
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: JSON.stringify(userPayload, null, 2) },
+  ];
+}
+
+function parseJsonPayload(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fenced) return JSON.parse(fenced[1]);
+    const objectMatch = text.match(/\{[\s\S]*\}/);
+    if (!objectMatch) throw new Error("LLM did not return parseable JSON");
+    return JSON.parse(objectMatch[0]);
+  }
+}
+
+function readString(obj: Record<string, unknown>, key: string, errors: string[], path: string): string {
+  const value = obj[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    errors.push(`${path}.${key} must be a non-empty string`);
+    return "";
+  }
+  return value.trim();
+}
+
+function readStringArray(obj: Record<string, unknown>, key: string, errors: string[], path: string): string[] {
+  const value = obj[key];
+  if (!Array.isArray(value)) {
+    errors.push(`${path}.${key} must be an array`);
+    return [];
+  }
+  const strings = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  if (strings.length !== value.length) errors.push(`${path}.${key} must contain only non-empty strings`);
+  return strings;
+}
+
+function readFuture(obj: Record<string, unknown>, key: string, errors: string[], path: string): UIMigrationFutureKind {
+  const value = readString(obj, key, errors, path);
+  if (!UI_MIGRATION_FUTURE_SET.has(value)) {
+    errors.push(`${path}.${key} must be one of ${UI_MIGRATION_FUTURES.join(", ")}`);
+    return "defer";
+  }
+  return value as UIMigrationFutureKind;
+}
+
+function containsBypassLanguage(values: string[]): boolean {
+  return values.some((value) => /\b(bypass|ignore|skip)\b.*\b(registry|contract|interaction|composition|constraint)\b/i.test(value));
+}
+
+function validateNonBypassConstraints(
+  mapping: UIMigrationElementMapping,
+  errors: string[],
+  path: string,
+): void {
+  const constraintGroups: Array<[keyof UIMigrationElementMapping, string[]]> = [
+    ["registry_constraints", mapping.registry_constraints],
+    ["data_contract_changes", mapping.data_contract_changes],
+    ["interaction_model_changes", mapping.interaction_model_changes],
+    ["composition_constraints", mapping.composition_constraints],
+  ];
+  for (const [key, values] of constraintGroups) {
+    if (values.length === 0) errors.push(`${path}.${key} must document preserved constraints or explicit changes`);
+    if (containsBypassLanguage(values)) errors.push(`${path}.${key} attempts to bypass UI registry authority`);
+  }
+}
+
+export function parseUIMigrationPlanningDraft(
+  text: string,
+  context: UIMigrationValidationContext,
+): { plan: UIMigrationAdaptivePlan | null; errors: string[] } {
+  const errors: string[] = [];
+  let payload: unknown;
+  try {
+    payload = parseJsonPayload(text);
+  } catch (err) {
+    return { plan: null, errors: [err instanceof Error ? err.message : String(err)] };
+  }
+
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { plan: null, errors: ["LLM response must be a JSON object"] };
+  }
+
+  const root = payload as Record<string, unknown>;
+  const strategy_summary = readString(root, "strategy_summary", errors, "plan");
+  const futures_compared = readStringArray(root, "futures_compared", errors, "plan").filter((future) => {
+    if (UI_MIGRATION_FUTURE_SET.has(future)) return true;
+    errors.push(`plan.futures_compared contains invalid future ${future}`);
+    return false;
+  }) as UIMigrationFutureKind[];
+
+  const proposedElementIds = new Set<string>();
+  const rawMappings = Array.isArray(root.element_mappings) ? root.element_mappings : [];
+  if (!Array.isArray(root.element_mappings)) errors.push("plan.element_mappings must be an array");
+  const element_mappings: UIMigrationElementMapping[] = [];
+
+  rawMappings.forEach((entry, index) => {
+    const path = `plan.element_mappings[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      errors.push(`${path} must be an object`);
+      return;
+    }
+    const obj = entry as Record<string, unknown>;
+    const source_element_id = readString(obj, "source_element_id", errors, path);
+    if (source_element_id && !context.sourceElementIds.has(source_element_id)) {
+      errors.push(`${path}.source_element_id references unknown source element ${source_element_id}`);
+    }
+    const target_element_id = typeof obj.target_element_id === "string" && obj.target_element_id.trim().length > 0
+      ? obj.target_element_id.trim()
+      : undefined;
+    const proposed_new_element_id = typeof obj.proposed_new_element_id === "string" && obj.proposed_new_element_id.trim().length > 0
+      ? obj.proposed_new_element_id.trim()
+      : undefined;
+    if (target_element_id && !context.existingElementIds.has(target_element_id)) {
+      errors.push(`${path}.target_element_id references unknown UI element ${target_element_id}`);
+    }
+    if (proposed_new_element_id) proposedElementIds.add(proposed_new_element_id);
+    if (!target_element_id && !proposed_new_element_id) {
+      errors.push(`${path} must set target_element_id or proposed_new_element_id`);
+    }
+
+    const mapping: UIMigrationElementMapping = {
+      source_element_id,
+      ...(target_element_id ? { target_element_id } : {}),
+      ...(proposed_new_element_id ? { proposed_new_element_id } : {}),
+      action: readFuture(obj, "action", errors, path),
+      rationale: readString(obj, "rationale", errors, path),
+      registry_constraints: readStringArray(obj, "registry_constraints", errors, path),
+      data_contract_changes: readStringArray(obj, "data_contract_changes", errors, path),
+      interaction_model_changes: readStringArray(obj, "interaction_model_changes", errors, path),
+      composition_constraints: readStringArray(obj, "composition_constraints", errors, path),
+    };
+    validateNonBypassConstraints(mapping, errors, path);
+    element_mappings.push(mapping);
+  });
+
+  const validPlanElementIds = new Set([...context.existingElementIds, ...proposedElementIds]);
+  const rawSteps = Array.isArray(root.steps) ? root.steps : [];
+  if (!Array.isArray(root.steps)) errors.push("plan.steps must be an array");
+  const steps: UIMigrationPlanStep[] = [];
+
+  rawSteps.forEach((entry, index) => {
+    const path = `plan.steps[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      errors.push(`${path} must be an object`);
+      return;
+    }
+    const obj = entry as Record<string, unknown>;
+    const element_ids = readStringArray(obj, "element_ids", errors, path);
+    for (const id of element_ids) {
+      if (!validPlanElementIds.has(id)) errors.push(`${path}.element_ids references unregistered element ${id}`);
+    }
+    steps.push({
+      id: readString(obj, "id", errors, path),
+      title: readString(obj, "title", errors, path),
+      future: readFuture(obj, "future", errors, path),
+      element_ids,
+      summary: readString(obj, "summary", errors, path),
+      risks: readStringArray(obj, "risks", errors, path),
+      verification: readStringArray(obj, "verification", errors, path),
+      graph_updates: readStringArray(obj, "graph_updates", errors, path),
+      ui_registry_updates: readStringArray(obj, "ui_registry_updates", errors, path),
+    });
+  });
+
+  const plan: UIMigrationAdaptivePlan = {
+    strategy_summary,
+    futures_compared,
+    element_mappings,
+    steps,
+    risks: readStringArray(root, "risks", errors, "plan"),
+    data_contract_changes: readStringArray(root, "data_contract_changes", errors, "plan"),
+    verification: readStringArray(root, "verification", errors, "plan"),
+    graph_updates: readStringArray(root, "graph_updates", errors, "plan"),
+    ui_registry_updates: readStringArray(root, "ui_registry_updates", errors, "plan"),
+  };
+
+  if (plan.futures_compared.length === 0) errors.push("plan.futures_compared must include at least one future");
+  if (containsBypassLanguage([plan.strategy_summary, ...plan.risks, ...plan.data_contract_changes, ...plan.verification, ...plan.graph_updates, ...plan.ui_registry_updates])) {
+    errors.push("plan contains language that bypasses registry, data-contract, interaction, or composition constraints");
+  }
+
+  return errors.length > 0 ? { plan: null, errors } : { plan, errors: [] };
+}
+
+function planningMetadata(
+  route: Awaited<ReturnType<typeof selectLlmRoute>>,
+  llmCalls: number,
+  tokensUsed: number,
+  rejectedReasons: string[],
+): UIMigrationPlanningMetadata {
+  return {
+    route_layer: route.layer,
+    ...(route.provenance.provider ? { provider: route.provenance.provider } : {}),
+    ...(route.model ? { model: route.model } : {}),
+    ...(route.provenance.fallback_reason ? { fallback_reason: route.provenance.fallback_reason } : {}),
+    llm_calls: llmCalls,
+    tokens_used: tokensUsed,
+    rejected_reasons: rejectedReasons,
+  };
+}
+
+export async function generateUiMigrationPlanFromRegistry(
+  params: GenerateUIMigrationParams,
+  registry: UIRegistryFile,
+): Promise<ToolResponse<GenerateUIMigrationOutput>> {
+  const evidence = buildUIMigrationEvidence(params, registry);
+  const route = await selectLlmRoute({
+    task: "generic",
+    daemon_component: "normalizer",
+    daemon_temperature: 0.1,
+    max_tokens: 2500,
+  });
+  const rejectedReasons: string[] = [];
+  let adaptivePlan: UIMigrationAdaptivePlan | null = null;
+  let llmCalls = 0;
+  let tokensUsed = 0;
+
+  if (evidence.gaps.length === 0) {
+    rejectedReasons.push("No migration gaps were found; deterministic registry diff is sufficient.");
+  } else if (route.layer === "deterministic_fallback" || !route.provider) {
+    rejectedReasons.push(
+      `ADR-203 route=${route.layer} reason=${route.provenance.fallback_reason ?? "provider_unavailable"}; using deterministic UI registry diff fallback.`,
+    );
+  } else {
+    try {
+      const response = await route.provider.complete(buildUIMigrationPrompt(evidence), {
+        ...route.options,
+        maxTokens: Math.min(route.options.maxTokens ?? 2500, 2500),
+        jsonSchema: {
+          name: "ui_migration_candidate_plan",
+          schema: UI_MIGRATION_PLAN_JSON_SCHEMA,
+        },
+      });
+      llmCalls++;
+      tokensUsed += response.tokensUsed ?? 0;
+      const parsed = parseUIMigrationPlanningDraft(response.text, {
+        sourceElementIds: new Set(evidence.sourceElements.map((e) => e.id)),
+        existingElementIds: new Set(registry.elements.map((e) => e.id)),
+      });
+      if (parsed.errors.length > 0 || !parsed.plan) {
+        rejectedReasons.push(`Rejected invalid UI migration draft: ${parsed.errors.join("; ")}`);
+      } else {
+        adaptivePlan = parsed.plan;
+      }
+    } catch (err) {
+      rejectedReasons.push(`LLM UI migration planning failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return success({
+    source_platform: params.source_platform,
+    target_platform: params.target_platform,
+    already_ported: evidence.ported,
+    migration_needed: evidence.gaps,
+    total_elements: evidence.sourceElements.length,
+    ported_count: evidence.ported.length,
+    gap_count: evidence.gaps.length,
+    coverage_percent:
+      evidence.sourceElements.length === 0
+        ? 100
+        : Math.round((evidence.ported.length / evidence.sourceElements.length) * 100),
+    adaptive_plan: adaptivePlan,
+    planning_metadata: planningMetadata(route, llmCalls, tokensUsed, rejectedReasons),
+  });
 }
 
 const VALID_CATEGORIES = [
@@ -909,68 +1464,14 @@ export function registerUIRegistryTools(server: McpServer): void {
       const result = await safeExecute<GenerateUIMigrationOutput>(
         async (): Promise<ToolResponse<GenerateUIMigrationOutput>> => {
           const registry = await loadRegistry();
-          const src = params.source_platform.toLowerCase();
-          const tgt = params.target_platform.toLowerCase();
-
-          let sourceElements = registry.elements.filter(
-            (e) =>
-              effectiveStatus(e) !== "deprecated" &&
-              e.implementations.some((i) => i.platform.toLowerCase() === src)
+          return generateUiMigrationPlanFromRegistry(
+            {
+              source_platform: params.source_platform,
+              target_platform: params.target_platform,
+              scope: params.scope,
+            },
+            registry,
           );
-
-          if (params.scope && params.scope.length > 0) {
-            const scopeSet = new Set(
-              params.scope.map((s) => s.toLowerCase())
-            );
-            sourceElements = sourceElements.filter((e) =>
-              e.used_by.some((u) => scopeSet.has(u.toLowerCase()))
-            );
-          }
-
-          const ported: MigrationPortedElement[] = [];
-          const gaps: MigrationGapElement[] = [];
-
-          for (const el of sourceElements) {
-            const srcImpl = el.implementations.find(
-              (i) => i.platform.toLowerCase() === src
-            );
-            const tgtImpl = el.implementations.find(
-              (i) => i.platform.toLowerCase() === tgt
-            );
-
-            if (srcImpl && tgtImpl) {
-              ported.push({
-                element_id: el.id,
-                name: el.name,
-                source_component: srcImpl.component,
-                target_component: tgtImpl.component,
-              });
-            } else if (srcImpl) {
-              gaps.push({
-                element_id: el.id,
-                name: el.name,
-                purpose: el.purpose,
-                category: el.category,
-                source_component: srcImpl.component,
-                data_contract_summary: `inputs: ${el.data_contract.inputs.map((i) => `${i.name}: ${i.type}`).join(", ") || "none"}; outputs: ${el.data_contract.outputs.map((o) => `${o.name}: ${o.type}`).join(", ") || "none"}; interactions: ${el.interactions.map((i) => i.action).join(", ") || "none"}`,
-                complexity_estimate: estimateComplexity(el),
-              });
-            }
-          }
-
-          return success({
-            source_platform: params.source_platform,
-            target_platform: params.target_platform,
-            already_ported: ported,
-            migration_needed: gaps,
-            total_elements: sourceElements.length,
-            ported_count: ported.length,
-            gap_count: gaps.length,
-            coverage_percent:
-              sourceElements.length === 0
-                ? 100
-                : Math.round((ported.length / sourceElements.length) * 100),
-          });
         }
       );
 

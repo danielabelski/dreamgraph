@@ -132,9 +132,14 @@ afterEach(async () => {
 });
 
 // We need to wait for the fire-and-forget registry write to settle.
-async function flushRegistryWrite(): Promise<void> {
-  // Two macrotasks is enough for the chained .then() + atomic file write.
-  await new Promise((r) => setTimeout(r, 50));
+async function flushRegistryWrite(expectedCount?: number): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  do {
+    if (expectedCount === undefined || (await readRegistryElements()).length === expectedCount) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  } while (Date.now() < deadline);
 }
 
 describe("plugin UI seam (M6)", () => {
@@ -160,7 +165,7 @@ describe("plugin UI seam (M6)", () => {
     const { events, unsubscribe } = collectPluginEvents();
     try {
       await bootstrapPlugins();
-      await flushRegistryWrite();
+      await flushRegistryWrite(1);
 
       const elements = await readRegistryElements();
       expect(elements.length).toBe(1);
@@ -198,7 +203,7 @@ describe("plugin UI seam (M6)", () => {
     const { events, unsubscribe } = collectPluginEvents();
     try {
       await bootstrapPlugins();
-      await flushRegistryWrite();
+      await flushRegistryWrite(0);
       const elements = await readRegistryElements();
       expect(elements.length).toBe(0);
       const rejected = events.find(
@@ -229,7 +234,7 @@ describe("plugin UI seam (M6)", () => {
     const { events, unsubscribe } = collectPluginEvents();
     try {
       await bootstrapPlugins();
-      await flushRegistryWrite();
+      await flushRegistryWrite(0);
       const elements = await readRegistryElements();
       expect(elements.length).toBe(0);
       const rejected = events.find(
@@ -263,7 +268,7 @@ describe("plugin UI seam (M6)", () => {
     );
     vi.spyOn(lifecycle, "getActiveScope").mockReturnValue(scope);
     await bootstrapPlugins();
-    await flushRegistryWrite();
+    await flushRegistryWrite(2);
     expect((await readRegistryElements()).length).toBe(2);
 
     await unloadPluginById("examples.ui-prune", "disable");

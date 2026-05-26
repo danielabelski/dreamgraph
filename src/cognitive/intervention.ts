@@ -53,7 +53,13 @@ import type {
 // ---------------------------------------------------------------------------
 
 const REMEDIATION_LOG_FILENAME = "remediation_log.json";
+export const MAX_REMEDIATION_FUTURE_SIGNALS = 200;
+export const MAX_REMEDIATION_FUTURE_OUTCOMES = 200;
+export const MAX_REMEDIATION_CANDIDATE_RUNS = 100;
 const SCHEMA_VERSION = "1.0";
+const FUTURE_SIGNAL_STALE_WINDOW_MS = 1000 * 60 * 60 * 24 * 30;
+const ADR_ANCHOR_PATTERN = /^ADR-\d+$/;
+const NEGATIVE_FUTURE_SIGNAL_SOURCES = new Set<FutureSignal["source"]>(["rejected", "overridden", "reverted", "drift"]);
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -258,9 +264,11 @@ async function persistRemediationPlans(
   candidateRuns: Array<{
     evidence_bundle_id: string;
     selected_candidate_id?: string;
+    selected_source?: "llm" | "heuristic" | "fallback";
     rejected_candidate_ids: string[];
     model_layer: GeneratedRemediationPlanSet["model_layer"];
     fallback_reason?: string;
+    fallback_used?: boolean;
     validation_failures: string[];
     future_fit_score?: number;
     objection_count: number;
@@ -299,12 +307,18 @@ async function persistRemediationPlans(
       },
     };
 
-    const signalIds = new Set(adaptiveFuture.signals.map((signal) => signal.id));
+    const signalIndexes = new Map(adaptiveFuture.signals.map((signal, index) => [signal.id, index] as const));
     for (const signal of futureSignals) {
-      if (!signalIds.has(signal.id)) {
+      const existingIndex = signalIndexes.get(signal.id);
+      if (existingIndex == null) {
         adaptiveFuture.signals.push(signal);
-        signalIds.add(signal.id);
+        signalIndexes.set(signal.id, adaptiveFuture.signals.length - 1);
+        continue;
       }
+      adaptiveFuture.signals[existingIndex] = {
+        ...adaptiveFuture.signals[existingIndex],
+        ...signal,
+      };
     }
     adaptiveFuture.outcomes.push(...outcomes);
     adaptiveFuture.candidate_runs.push(...candidateRuns);
@@ -447,6 +461,24 @@ function buildRemediationEvidenceBundle(
       },
     ],
   };
+}
+
+function attachAdaptiveFutureMemory(
+  bundle: RemediationEvidenceBundle,
+  remediationLog: RemediationLogFile
+): RemediationEvidenceBundle {
+  const persistedSignals = remediationLog.adaptive_future?.signals ?? [];
+  if (persistedSignals.length === 0) return bundle;
+
+  const knownAnchorIds = new Set(bundle.evidence_anchors.map((anchor) => anchor.id));
+  const knownAdrAnchorIds = new Set(bundle.adr_guard_rails.map((adr) => adr.adr_id));
+  const priorFutureSignals = persistedSignals
+    .filter((signal) => signal.evidence_anchor_ids.some((anchorId) => knownAnchorIds.has(anchorId) || knownAdrAnchorIds.has(anchorId)))
+    .slice(-MAX_REMEDIATION_FUTURE_SIGNALS);
+
+  return priorFutureSignals.length === 0
+    ? bundle
+    : { ...bundle, prior_future_signals: priorFutureSignals };
 }
 
 /**
@@ -1046,10 +1078,11 @@ function remediationDraftMessages(bundle: RemediationEvidenceBundle): LlmMessage
     {
       role: "system",
       content:
-        "Draft one or more remediation candidate futures as strict JSON. " +
+        "Draft one to three remediation candidate futures as strict JSON. " +
         "Return {\"candidates\":[...]} only. Each candidate must include id, title, action_class, " +
         "evidence_anchor_ids, verification_steps, graph_sync_impact, future_fit_score, and objections. " +
-        "Use only evidence_anchor ids and action classes present in the provided bundle.",
+        "Use only evidence_anchor ids and action classes present in the provided bundle. " +
+        "Every candidate must cite ADR guard-rail anchors when guard rails are present and must score at least 0.35.",
     },
     {
       role: "user",
@@ -1062,14 +1095,7 @@ function parseRemediationDraftJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start < 0 || end <= start) return undefined;
-    try {
-      return JSON.parse(text.slice(start, end + 1));
-    } catch {
-      return undefined;
-    }
+    return undefined;
   }
 }
 
@@ -1099,6 +1125,29 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
     return undefined;
   }
 
+  const requiredAdrAnchorIds = new Set(
+    bundle.adr_guard_rails
+      .map((guardRail) => guardRail.adr_id)
+      .filter((adrId) => anchorIds.has(adrId))
+  );
+  if ([...requiredAdrAnchorIds].some((adrId) => !evidenceAnchorIds.includes(adrId))) {
+    return undefined;
+  }
+
+  const existingEntityIds = new Set(
+    bundle.entity_summaries
+      .filter((entity) => entity.exists)
+      .map((entity) => entity.id)
+  );
+  const knownSourceFiles = new Set(bundle.entity_summaries.flatMap((entity) => entity.source_files));
+  const selectedAnchors = bundle.evidence_anchors.filter((anchor) => evidenceAnchorIds.includes(anchor.id));
+  if (selectedAnchors.some((anchor) => anchor.kind === "graph_entity" && !existingEntityIds.has(anchor.id))) {
+    return undefined;
+  }
+  if (knownSourceFiles.size > 0 && selectedAnchors.some((anchor) => anchor.kind === "source_anchor" && !knownSourceFiles.has(anchor.id))) {
+    return undefined;
+  }
+
   const verificationStepsRaw = Array.isArray(raw.verification_steps) ? raw.verification_steps : [];
   const verificationSteps = verificationStepsRaw.flatMap((step): CandidateFuture["verification_steps"] => {
     if (!isRecord(step)) return [];
@@ -1106,10 +1155,11 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
     const description = typeof step.description === "string" ? step.description.trim() : "";
     const stepAnchors = stringArray(step.evidence_anchor_ids);
     if (!stepId || !description || !stepAnchors || stepAnchors.some((anchor) => !anchorIds.has(anchor))) return [];
+    const command = typeof step.command === "string" ? step.command.trim() : "";
     return [{
       id: stepId,
       description,
-      command: typeof step.command === "string" ? step.command : undefined,
+      command: command || undefined,
       evidence_anchor_ids: stepAnchors,
     }];
   });
@@ -1118,6 +1168,7 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
   const graphSync = isRecord(raw.graph_sync_impact) ? raw.graph_sync_impact : undefined;
   const graphSyncTargets = stringArray(graphSync?.targets);
   if (!graphSync || typeof graphSync.required !== "boolean" || !graphSyncTargets) return undefined;
+  if (graphSync.required && graphSyncTargets.length === 0) return undefined;
   if (graphSyncTargets.some((target) => !REMEDIATION_DRAFT_ALLOWED_GRAPH_TARGETS.has(target))) return undefined;
 
   const objectionsRaw = Array.isArray(raw.objections) ? raw.objections : [];
@@ -1140,6 +1191,7 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
   const score = typeof raw.future_fit_score === "number" && Number.isFinite(raw.future_fit_score)
     ? Math.max(0, Math.min(1, raw.future_fit_score))
     : undefined;
+  if (score == null || score < 0.35) return undefined;
 
   return {
     id,
@@ -1160,6 +1212,7 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
 export function validateRemediationDraft(raw: unknown, bundle: RemediationEvidenceBundle): CandidateFuture[] {
   if (!isRecord(raw) || !Array.isArray(raw.candidates)) return [];
   return raw.candidates
+    .slice(0, 3)
     .map((candidate) => validateCandidateFuture(candidate, bundle))
     .filter((candidate): candidate is CandidateFuture => !!candidate);
 }
@@ -1169,47 +1222,163 @@ export function harvestRemediationFutureSignals(
   preferredActionClass: RemediationInterventionType
 ): FutureSignal[] {
   const now = new Date().toISOString();
+  const knownAnchorIds = new Set(bundle.evidence_anchors.map((anchor) => anchor.id));
   const tensionAnchorId = `tension:${bundle.tension_id}`;
-  const hasTensionAnchor = bundle.evidence_anchors.some((anchor) => anchor.id === tensionAnchorId);
+  const hasTensionAnchor = knownAnchorIds.has(tensionAnchorId);
+  const currentAdrAnchorIds = bundle.adr_guard_rails
+    .map((adr) => adr.adr_id)
+    .filter((adrId) => knownAnchorIds.has(adrId));
+  const defaultReviewAnchorIds = currentAdrAnchorIds.length > 0
+    ? [currentAdrAnchorIds[0]]
+    : hasTensionAnchor
+      ? [tensionAnchorId]
+      : bundle.evidence_anchors.slice(0, 1).map((anchor) => anchor.id);
   const signals: FutureSignal[] = [];
+  const scopedAnchorIds = (anchorIds: string[]): boolean =>
+    anchorIds.length > 0 && anchorIds.every((anchorId) => knownAnchorIds.has(anchorId));
+  const pushSignal = (signal: FutureSignal): void => {
+    if (scopedAnchorIds(signal.evidence_anchor_ids)) {
+      signals.push(signal);
+    }
+  };
+  const createSignal = (
+    signal: Omit<FutureSignal, "observed_at">,
+    observedAt: string = now
+  ): void => {
+    pushSignal({
+      ...signal,
+      confidence: Math.max(0, Math.min(1, signal.confidence)),
+      observed_at: observedAt,
+    });
+  };
 
-  signals.push({
+  for (const signal of bundle.prior_future_signals ?? []) {
+    const missingAnchors = signal.evidence_anchor_ids.filter((anchorId) => !knownAnchorIds.has(anchorId));
+    const missingAdrAnchors = missingAnchors.filter((anchorId) => ADR_ANCHOR_PATTERN.test(anchorId));
+    if (missingAdrAnchors.length > 0 && defaultReviewAnchorIds.length > 0) {
+      pushSignal({
+        ...signal,
+        source: "drift",
+        evidence_anchor_ids: defaultReviewAnchorIds,
+        status: "superseded",
+        reviewed_at: now,
+        superseded_by: defaultReviewAnchorIds[0],
+        superseded_reason: `Newer accepted ADR state superseded missing anchors: ${missingAdrAnchors.join(", ")}.`,
+      });
+      continue;
+    }
+    if (!scopedAnchorIds(signal.evidence_anchor_ids)) {
+      continue;
+    }
+    const observedAtMs = Date.parse(signal.observed_at);
+    const isStale = Number.isFinite(observedAtMs) && (Date.now() - observedAtMs) > FUTURE_SIGNAL_STALE_WINDOW_MS;
+    pushSignal({
+      ...signal,
+      status: signal.status ?? (isStale ? "stale" : "active"),
+      reviewed_at: now,
+      superseded_reason: signal.superseded_reason ?? (isStale
+        ? "Signal aged past the remediation review window and now carries reduced weight."
+        : undefined),
+    });
+  }
+
+  const recurringNegativeGroups = new Map<string, FutureSignal[]>();
+  for (const signal of signals) {
+    if (!NEGATIVE_FUTURE_SIGNAL_SOURCES.has(signal.source)) continue;
+    const key = [...signal.evidence_anchor_ids].sort().join("|");
+    const group = recurringNegativeGroups.get(key);
+    if (group) {
+      group.push(signal);
+    } else {
+      recurringNegativeGroups.set(key, [signal]);
+    }
+  }
+  for (const [key, group] of recurringNegativeGroups.entries()) {
+    if (group.length < 2) continue;
+    const anchors = key.split("|").filter(Boolean);
+    const averageConfidence = group.reduce((sum, signal) => sum + signal.confidence, 0) / group.length;
+    const reviewState = group.length >= 3 ? "superseded" : "stale";
+    createSignal({
+      id: `future_signal:${bundle.id}:review:${anchors.join("_") || "bundle"}`,
+      description: "Repeated override, rejection, revert, or drift evidence weakens older remediation preferences.",
+      source: "drift",
+      evidence_anchor_ids: anchors.length > 0 ? anchors : defaultReviewAnchorIds,
+      confidence: Math.min(1, averageConfidence + 0.1),
+      status: reviewState,
+      reviewed_at: now,
+      superseded_reason: reviewState === "superseded"
+        ? "Repeated negative evidence superseded older remediation preferences."
+        : "Repeated negative evidence weakened older remediation preferences.",
+    });
+  }
+
+  createSignal({
     id: `future_signal:${bundle.id}:preferred_action`,
     description: `Deterministic remediation strategy prefers ${preferredActionClass}.`,
     source: "explicit_preference",
     evidence_anchor_ids: hasTensionAnchor ? [tensionAnchorId] : bundle.evidence_anchors.slice(0, 1).map((anchor) => anchor.id),
     confidence: 0.72,
-    observed_at: now,
+    status: "active",
+    reviewed_at: now,
   });
 
   for (const adr of bundle.adr_guard_rails) {
-    signals.push({
+    createSignal({
       id: `future_signal:${bundle.id}:adr:${adr.adr_id}`,
       description: `Accepted ADR guard rails favor candidates that preserve ${adr.title}.`,
       source: "accepted",
       evidence_anchor_ids: [adr.adr_id],
       confidence: 0.95,
-      observed_at: now,
+      status: "active",
+      reviewed_at: now,
     });
   }
 
   for (const entity of bundle.entity_summaries) {
     if (entity.exists && entity.source_files.length > 0) {
-      signals.push({
+      createSignal({
         id: `future_signal:${bundle.id}:entity:${entity.id}`,
         description: `Existing source binding for ${entity.id} favors concrete, locally verifiable remediation.`,
         source: "recurring_pattern",
         evidence_anchor_ids: [entity.id, ...entity.source_files],
         confidence: 0.68,
-        observed_at: now,
+        status: "active",
+        reviewed_at: now,
       });
     }
   }
 
-  return signals.filter((signal) =>
-    signal.evidence_anchor_ids.length > 0 &&
-    signal.evidence_anchor_ids.every((anchorId) => bundle.evidence_anchors.some((anchor) => anchor.id === anchorId))
-  );
+  for (const [index, hook] of (bundle.learning_hooks ?? []).entries()) {
+    if (!Number.isFinite(hook.confidence)) continue;
+    const missingAnchors = hook.evidence_anchor_ids.filter((anchorId) => !knownAnchorIds.has(anchorId));
+    const missingAdrAnchors = missingAnchors.filter((anchorId) => ADR_ANCHOR_PATTERN.test(anchorId));
+    if (missingAdrAnchors.length > 0 && defaultReviewAnchorIds.length > 0) {
+      createSignal({
+        id: `future_signal:${bundle.id}:learning_review:${index}`,
+        description: `Older preference evidence was excluded because newer accepted ADR state superseded ${missingAdrAnchors.join(", ")}.`,
+        source: "drift",
+        evidence_anchor_ids: defaultReviewAnchorIds,
+        confidence: hook.confidence,
+        status: "superseded",
+        reviewed_at: now,
+        superseded_by: defaultReviewAnchorIds[0],
+        superseded_reason: `Newer accepted ADR state superseded missing anchors: ${missingAdrAnchors.join(", ")}.`,
+      });
+      continue;
+    }
+    if (!scopedAnchorIds(hook.evidence_anchor_ids)) continue;
+    createSignal({
+      id: `future_signal:${bundle.id}:learning:${hook.source}:${index}`,
+      description: `Scoped ${hook.source.replace(/_/g, " ")} evidence informs remediation future fit.`,
+      source: hook.source,
+      evidence_anchor_ids: hook.evidence_anchor_ids,
+      confidence: hook.confidence,
+      status: NEGATIVE_FUTURE_SIGNAL_SOURCES.has(hook.source) ? "stale" : "active",
+      reviewed_at: now,
+    });
+  }
+
+  return signals;
 }
 
 export function scoreCandidateFuture(
@@ -1219,16 +1388,68 @@ export function scoreCandidateFuture(
   preferredActionClass: RemediationInterventionType
 ): CandidateFuture {
   const candidateAnchors = new Set(candidate.evidence_anchor_ids);
-  const supportingSignals = signals.filter((signal) =>
+  const matchingSignals = signals.filter((signal) =>
     signal.evidence_anchor_ids.some((anchorId) => candidateAnchors.has(anchorId))
   );
-  const support = supportingSignals.length === 0
+  const staleSignals = matchingSignals.filter((signal) => signal.status === "stale");
+  const supersededSignals = matchingSignals.filter((signal) => signal.status === "superseded");
+  const supportingSignals = matchingSignals.filter((signal) =>
+    !NEGATIVE_FUTURE_SIGNAL_SOURCES.has(signal.source) && signal.status !== "superseded"
+  );
+  const cautionarySignals = matchingSignals.filter((signal) => NEGATIVE_FUTURE_SIGNAL_SOURCES.has(signal.source));
+  const supportContributions = supportingSignals.map((signal) =>
+    signal.confidence * (signal.status === "stale" ? 0.35 : 1)
+  );
+  const support = supportContributions.length === 0
     ? 0
-    : supportingSignals.reduce((sum, signal) => sum + signal.confidence, 0) / supportingSignals.length;
+    : supportContributions.reduce((sum, confidence) => sum + confidence, 0) / supportContributions.length;
+  const caution = cautionarySignals.length === 0
+    ? 0
+    : cautionarySignals.reduce((sum, signal) => sum + signal.confidence, 0) / cautionarySignals.length;
+  const averageConfidence = (items: FutureSignal[]): number => items.length === 0
+    ? 0
+    : items.reduce((sum, signal) => sum + signal.confidence, 0) / items.length;
   const objections = [...candidate.objections];
   let score = candidate.future_fit_score ?? 0.5;
 
   score += support * 0.25;
+  if (staleSignals.length > 0) {
+    const objectionAnchors = Array.from(new Set(
+      staleSignals.flatMap((signal) => signal.evidence_anchor_ids).filter((anchorId) => candidateAnchors.has(anchorId))
+    )).slice(0, 3);
+    objections.push({
+      id: `future_objection:${candidate.id}:stale_signal`,
+      description: "Older remediation-memory evidence is still relevant but has weakened due to drift review.",
+      evidence_anchor_ids: objectionAnchors.length > 0 ? objectionAnchors : candidate.evidence_anchor_ids.slice(0, 1),
+      severity: averageConfidence(staleSignals) >= 0.75 ? "high" : "medium",
+    });
+    score -= averageConfidence(staleSignals) * 0.12;
+  }
+  if (supersededSignals.length > 0) {
+    const objectionAnchors = Array.from(new Set(
+      supersededSignals.flatMap((signal) => signal.evidence_anchor_ids).filter((anchorId) => candidateAnchors.has(anchorId))
+    )).slice(0, 3);
+    objections.push({
+      id: `future_objection:${candidate.id}:superseded_signal`,
+      description: "Some remediation-memory evidence was superseded by repeated drift or newer accepted ADR state.",
+      evidence_anchor_ids: objectionAnchors.length > 0 ? objectionAnchors : candidate.evidence_anchor_ids.slice(0, 1),
+      severity: averageConfidence(supersededSignals) >= 0.6 ? "high" : "medium",
+    });
+    score -= averageConfidence(supersededSignals) * 0.2;
+  }
+  if (caution > 0) {
+    const objectionAnchors = Array.from(new Set(
+      cautionarySignals.flatMap((signal) => signal.evidence_anchor_ids).filter((anchorId) => candidateAnchors.has(anchorId))
+    )).slice(0, 3);
+    objections.push({
+      id: `future_objection:${candidate.id}:negative_signal`,
+      description: "Prior rejection, override, revert, or drift evidence weakens this candidate's future fit.",
+      evidence_anchor_ids: objectionAnchors.length > 0 ? objectionAnchors : candidate.evidence_anchor_ids.slice(0, 1),
+      severity: caution >= 0.75 ? "high" : "medium",
+    });
+    score -= caution * 0.3;
+  }
+
   if (candidate.action_class === preferredActionClass) {
     score += 0.2;
   } else {
@@ -1263,6 +1484,48 @@ export function scoreCandidateFuture(
   };
 }
 
+export function buildAdaptiveFutureReview(
+  candidate: CandidateFuture | undefined,
+  signals: FutureSignal[]
+): RemediationPlan["adaptive_future_review"] | undefined {
+  if (!candidate) return undefined;
+
+  const candidateAnchors = new Set(candidate.evidence_anchor_ids);
+  const matchingSignals = signals.filter((signal) =>
+    signal.evidence_anchor_ids.some((anchorId) => candidateAnchors.has(anchorId))
+  );
+  const weakenedSignalIds = matchingSignals
+    .filter((signal) => signal.status === "stale" || NEGATIVE_FUTURE_SIGNAL_SOURCES.has(signal.source))
+    .map((signal) => signal.id);
+  const supersededSignalIds = matchingSignals
+    .filter((signal) => signal.status === "superseded")
+    .map((signal) => signal.id);
+
+  if (weakenedSignalIds.length === 0 && supersededSignalIds.length === 0) {
+    return undefined;
+  }
+
+  const evidenceAnchorIds = Array.from(new Set(
+    matchingSignals
+      .flatMap((signal) => signal.evidence_anchor_ids)
+      .filter((anchorId) => candidateAnchors.has(anchorId))
+  )).slice(0, 5);
+  const summaryParts: string[] = [];
+  if (weakenedSignalIds.length > 0) {
+    summaryParts.push(`${weakenedSignalIds.length} prior signal(s) carried reduced weight during ranking.`);
+  }
+  if (supersededSignalIds.length > 0) {
+    summaryParts.push(`${supersededSignalIds.length} signal(s) were superseded by drift review or newer accepted ADR state.`);
+  }
+
+  return {
+    summary: summaryParts.join(" "),
+    weakened_signal_ids: [...new Set(weakenedSignalIds)],
+    superseded_signal_ids: [...new Set(supersededSignalIds)],
+    evidence_anchor_ids: evidenceAnchorIds.length > 0 ? evidenceAnchorIds : candidate.evidence_anchor_ids.slice(0, 1),
+  };
+}
+
 function rankCandidateFutures(
   candidates: CandidateFuture[],
   bundle: RemediationEvidenceBundle,
@@ -1282,6 +1545,99 @@ async function draftRemediationCandidateFutures(
     daemon_component: "dreamer",
     max_tokens: 1800,
   });
+  const completionOptions = {
+    ...route.options,
+    jsonSchema: {
+      name: "remediation_candidate_future_set",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["candidates"],
+        properties: {
+          candidates: {
+            type: "array",
+            minItems: 1,
+            maxItems: 3,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "id",
+                "title",
+                "action_class",
+                "evidence_anchor_ids",
+                "verification_steps",
+                "graph_sync_impact",
+                "future_fit_score",
+                "objections",
+              ],
+              properties: {
+                id: { type: "string", minLength: 1 },
+                title: { type: "string", minLength: 1 },
+                action_class: { type: "string", minLength: 1 },
+                evidence_anchor_ids: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string", minLength: 1 },
+                },
+                verification_steps: {
+                  type: "array",
+                  minItems: 1,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "description", "evidence_anchor_ids"],
+                    properties: {
+                      id: { type: "string", minLength: 1 },
+                      description: { type: "string", minLength: 1 },
+                      command: { type: "string" },
+                      evidence_anchor_ids: {
+                        type: "array",
+                        minItems: 1,
+                        items: { type: "string", minLength: 1 },
+                      },
+                    },
+                  },
+                },
+                graph_sync_impact: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["required", "targets", "rationale"],
+                  properties: {
+                    required: { type: "boolean" },
+                    targets: {
+                      type: "array",
+                      items: { type: "string", minLength: 1 },
+                    },
+                    rationale: { type: "string", minLength: 1 },
+                  },
+                },
+                future_fit_score: { type: "number", minimum: 0, maximum: 1 },
+                objections: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "description", "evidence_anchor_ids", "severity"],
+                    properties: {
+                      id: { type: "string", minLength: 1 },
+                      description: { type: "string", minLength: 1 },
+                      evidence_anchor_ids: {
+                        type: "array",
+                        minItems: 1,
+                        items: { type: "string", minLength: 1 },
+                      },
+                      severity: { type: "string", enum: ["low", "medium", "high"] },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
 
   const drafts = new Map<string, GeneratedRemediationPlanSet>();
   for (const bundle of evidenceBundles) {
@@ -1290,6 +1646,7 @@ async function draftRemediationCandidateFutures(
         evidence_bundle_id: bundle.id,
         candidates: [],
         model_layer: "deterministic_fallback",
+        model_provenance: route.provenance,
         fallback_reason: route.provenance.fallback_reason,
         validation_failures: [],
       });
@@ -1297,12 +1654,13 @@ async function draftRemediationCandidateFutures(
     }
 
     try {
-      const response = await route.provider.complete(remediationDraftMessages(bundle), route.options);
+      const response = await route.provider.complete(remediationDraftMessages(bundle), completionOptions);
       const candidates = validateRemediationDraft(parseRemediationDraftJson(response.text), bundle);
       drafts.set(bundle.id, {
         evidence_bundle_id: bundle.id,
         candidates,
         model_layer: route.layer,
+        model_provenance: route.provenance,
         fallback_reason: candidates.length === 0 ? llmRouteFailureReason("validation") : undefined,
         validation_failures: candidates.length === 0 ? ["No schema-valid remediation candidates returned."] : [],
       });
@@ -1312,6 +1670,7 @@ async function draftRemediationCandidateFutures(
         evidence_bundle_id: bundle.id,
         candidates: [],
         model_layer: "deterministic_fallback",
+        model_provenance: route.provenance,
         fallback_reason: llmRouteFailureReason("provider"),
         validation_failures: [(err as Error).message],
       });
@@ -1325,15 +1684,16 @@ export async function buildRemediationEvidenceBundles(
   maxPlans: number = 5,
   minUrgency: number = 0.3
 ): Promise<RemediationEvidenceBundle[]> {
-  const [tensionFile, adrs, dataModel, dreamGraph] = await Promise.all([
+  const [tensionFile, adrs, dataModel, dreamGraph, remediationLog] = await Promise.all([
     engine.loadTensions(),
     loadAdrLog(),
     loadDataModelMap(),
     engine.loadDreamGraph(),
+    loadRemediationLog(),
   ]);
   const ctx: PlanContext = { dataModel, recentDreams: dreamGraph.edges };
   const { candidates } = selectRemediationCandidates(tensionFile.signals, maxPlans, minUrgency, Date.now());
-  return candidates.map((tension) => buildRemediationEvidenceBundle(tension, adrs, ctx));
+  return candidates.map((tension) => attachAdaptiveFutureMemory(buildRemediationEvidenceBundle(tension, adrs, ctx), remediationLog));
 }
 
 /**
@@ -1348,11 +1708,12 @@ export async function generateRemediationPlans(
 ): Promise<RemediationPlanOutput> {
   logger.info(`Generating remediation plans (max=${maxPlans}, minUrgency=${minUrgency})`);
 
-  const [tensionFile, adrs, dataModel, dreamGraph] = await Promise.all([
+  const [tensionFile, adrs, dataModel, dreamGraph, remediationLog] = await Promise.all([
     engine.loadTensions(),
     loadAdrLog(),
     loadDataModelMap(),
     engine.loadDreamGraph(),
+    loadRemediationLog(),
   ]);
 
   logger.info(
@@ -1394,9 +1755,15 @@ export async function generateRemediationPlans(
     future_signal_ids: string[];
     recorded_at: string;
   }> = [];
-  const evidenceBundles = candidates.map((tension) => buildRemediationEvidenceBundle(tension, adrs, ctx));
-  const llmDrafts = await draftRemediationCandidateFutures(evidenceBundles);
-  logger.info(`Remediation planner assembled ${evidenceBundles.length} evidence bundle(s).`);
+  const evidenceBundles = candidates.map((tension) => attachAdaptiveFutureMemory(buildRemediationEvidenceBundle(tension, adrs, ctx), remediationLog));
+  const llmEligibleEvidenceBundles = evidenceBundles.filter(
+    (bundle) => bundle.deterministic_short_circuit === "none"
+  );
+  const llmDrafts = await draftRemediationCandidateFutures(llmEligibleEvidenceBundles);
+  logger.info(
+    `Remediation planner assembled ${evidenceBundles.length} evidence bundle(s) ` +
+    `(${evidenceBundles.length - llmEligibleEvidenceBundles.length} deterministic short-circuit bypass(es)).`
+  );
 
   for (let index = 0; index < candidates.length; index += 1) {
     const tension = candidates[index];
@@ -1439,6 +1806,7 @@ export async function generateRemediationPlans(
       adr_conflicts: adrConflicts,
       new_tensions_predicted: predictedTensions,
       confidence,
+      adaptive_future_review: buildAdaptiveFutureReview(llmCandidate, futureSignals),
       generated_at: new Date().toISOString(),
     };
     const completedPlan = withResolutionStep(planBase, draft);

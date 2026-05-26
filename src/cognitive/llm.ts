@@ -870,7 +870,8 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
   if (request.connected) {
     const available = await request.connected.provider.isAvailable().catch(() => false);
     if (available) {
-      const model = request.connected.model ?? request.connected.provider.name;
+      const connectedModel = request.connected.model?.trim();
+      const model = connectedModel || request.connected.provider.name;
       return {
         layer: "connected",
         provider: request.connected.provider,
@@ -910,7 +911,8 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
   } else if (cfg.provider !== "none") {
     const component = request.daemon_component ?? "dreamer";
     const componentCfg = componentConfig(component);
-    if (!componentCfg.model.trim()) {
+    const daemonModel = componentCfg.model.trim();
+    if (!daemonModel) {
       return fallbackSelection(request, "no_daemon_model");
     }
 
@@ -920,9 +922,9 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
       return {
         layer: "daemon",
         provider,
-        model: componentCfg.model,
+        model: daemonModel,
         options: {
-          model: componentCfg.model,
+          model: daemonModel,
           temperature,
           maxTokens: maxTokens ?? componentCfg.maxTokens,
         },
@@ -930,7 +932,7 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
           task: request.task,
           layer: "daemon",
           provider: provider.name,
-          model: componentCfg.model,
+          model: daemonModel,
           source: "daemon",
           temperature,
         },

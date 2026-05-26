@@ -183,6 +183,29 @@ export class ContextInspector implements vscode.Disposable {
       `  - Token usage: ${packet.tokenUsage.used}/${packet.tokenUsage.budget} (reserved ${packet.tokenUsage.reserved}, graph ${packet.tokenUsage.usedGraph}/${packet.tokenUsage.reservedGraph})`,
     );
 
+    if (packet.taskPreamble) {
+      this._contextChannel.appendLine(`[${ts}] Task Preamble Compiler:`);
+      this._contextChannel.appendLine(`  - budget decision: ${packet.taskPreamble.budgetDecision}`);
+      this._contextChannel.appendLine(`  - token count: ${packet.taskPreamble.tokenCount}`);
+      this._contextChannel.appendLine(`  - evidence anchors: ${packet.taskPreamble.evidenceAnchors.join(", ") || "(none)"}`);
+      this._contextChannel.appendLine(`  - selected model layer: ${packet.taskPreamble.selectedModelLayer}`);
+      this._contextChannel.appendLine(`  - selected model: ${packet.taskPreamble.selectedModel ?? "(none)"}`);
+      this._contextChannel.appendLine(`  - fallback reason: ${packet.taskPreamble.fallbackReason ?? "(none)"}`);
+      this._contextChannel.appendLine(`  - omitted-context reasons: ${packet.taskPreamble.omittedContextReasons.join("; ") || "(none)"}`);
+      this._contextChannel.appendLine(`  - validation failures: ${packet.taskPreamble.validationFailures.join("; ") || "(none)"}`);
+    }
+
+    if (packet.adaptiveFutureJudgment) {
+      this._contextChannel.appendLine(`[${ts}] Adaptive Future Judgment:`);
+      this._contextChannel.appendLine(`  - state: ${packet.adaptiveFutureJudgment.state}`);
+      this._contextChannel.appendLine(`  - budget decision: ${packet.adaptiveFutureJudgment.budgetDecision}`);
+      this._contextChannel.appendLine(`  - evidence anchors: ${packet.adaptiveFutureJudgment.evidenceAnchors.join(", ") || "(none)"}`);
+      this._contextChannel.appendLine(`  - selected model layer: ${packet.adaptiveFutureJudgment.selectedModelLayer}`);
+      this._contextChannel.appendLine(`  - fallback reason: ${packet.adaptiveFutureJudgment.fallbackReason ?? "(none)"}`);
+      this._contextChannel.appendLine(`  - future objections: ${packet.adaptiveFutureJudgment.futureObjections.join("; ") || "(none)"}`);
+      this._contextChannel.appendLine(`  - validation failures: ${packet.adaptiveFutureJudgment.validationFailures.join("; ") || "(none)"}`);
+    }
+
     if (instrumentation) {
       this._contextChannel.appendLine(`[${ts}] Context packet layers:`);
       this._contextChannel.appendLine(

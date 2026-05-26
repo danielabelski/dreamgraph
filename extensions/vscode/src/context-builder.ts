@@ -1030,7 +1030,120 @@ export class ContextBuilder {
     if (safetyWarnings.length > 0) {
       evidenceParts.unshift(['## Patch Safety', ...safetyWarnings].join('\n'));
     }
-    const contextText = evidenceParts.join('\n\n');
+
+    const taskPreambleCandidates = included.filter((item) =>
+      isGraphEvidenceKind(item.kind) &&
+      (item.confidence ?? 1) >= 0.5 &&
+      Boolean(item.anchor ?? item.title),
+    );
+    const taskPreambleValidationFailures = taskPreambleCandidates
+      .filter((item) => item.anchor ? !/^[A-Za-z0-9_.:/#-]+$/.test(item.anchor) : false)
+      .map((item) => `invalid_anchor:${item.anchor}`);
+    const taskPreambleOmissions = omitted
+      .filter((entry) => GRAPH_EVIDENCE_KINDS.has(entry.kind as import("./types.js").ContextEvidenceKind))
+      .slice(0, 4)
+      .map((entry) => `${entry.title}: ${entry.reason}`);
+    const maxPreambleTokens = Math.min(300, Math.max(80, Math.floor(usableBudget * 0.05)));
+    let taskPreambleBlock = '';
+    let taskPreamble: import("./types.js").TaskPreambleCompilerDiagnostic;
+
+    if (taskPreambleValidationFailures.length > 0) {
+      taskPreamble = {
+        budgetDecision: 'omit_validation_failed',
+        evidenceAnchors: [],
+        tokenCount: 0,
+        omittedContextReasons: ['evidence failed schema or anchor validation'],
+        validationFailures: taskPreambleValidationFailures,
+        selectedModelLayer: 'deterministic_fallback',
+        selectedModelProvider: null,
+        selectedModel: null,
+        fallbackReason: 'no_connected_model',
+      };
+    } else if (taskPreambleCandidates.length === 0) {
+      taskPreamble = {
+        budgetDecision: included.length === 0 ? 'omit_no_evidence' : 'omit_not_economical',
+        evidenceAnchors: [],
+        tokenCount: 0,
+        omittedContextReasons: taskPreambleOmissions.length > 0
+          ? taskPreambleOmissions
+          : ['no sufficiently confident graph evidence justified preamble cost'],
+        validationFailures: [],
+        selectedModelLayer: 'deterministic_fallback',
+        selectedModelProvider: null,
+        selectedModel: null,
+        fallbackReason: 'no_connected_model',
+      };
+    } else {
+      const compactEvidence = taskPreambleCandidates.slice(0, 4).map((item) => {
+        const anchor = item.anchor ?? item.title;
+        const summary = item.content.replace(/\s+/g, ' ').slice(0, 160);
+        return `- ${anchor}: ${summary}`;
+      });
+      const candidateBlock = [
+        '## Task Preamble Compiler',
+        'Budget decision: include',
+        `Evidence anchors: ${taskPreambleCandidates.slice(0, 4).map((item) => item.anchor ?? item.title).join(', ')}`,
+        'Selected model layer: deterministic_fallback',
+        ...compactEvidence,
+      ].join('\n');
+      const candidateTokens = estimateTokens(candidateBlock);
+      if (candidateTokens > maxPreambleTokens) {
+        taskPreamble = {
+          budgetDecision: 'omit_over_budget',
+          evidenceAnchors: [],
+          tokenCount: 0,
+          omittedContextReasons: ['bounded evidence exceeded task preamble budget'],
+          validationFailures: [],
+          selectedModelLayer: 'deterministic_fallback',
+          selectedModelProvider: null,
+          selectedModel: null,
+          fallbackReason: 'no_connected_model',
+        };
+      } else {
+        taskPreambleBlock = candidateBlock;
+        taskPreamble = {
+          budgetDecision: 'include',
+          evidenceAnchors: taskPreambleCandidates.slice(0, 4).map((item) => item.anchor ?? item.title),
+          tokenCount: candidateTokens,
+          omittedContextReasons: [],
+          validationFailures: [],
+          selectedModelLayer: 'deterministic_fallback',
+          selectedModelProvider: null,
+          selectedModel: null,
+          fallbackReason: 'no_connected_model',
+        };
+      }
+    }
+
+    const adaptiveFutureSource = `${plan.taskSummary} ${taskPreambleCandidates
+      .map((item) => `${item.anchor ?? ''} ${item.title} ${item.content}`)
+      .join(' ')}`;
+    const hasAdaptiveFutureEvidence = /adaptive future|future-fit|remediation/i.test(adaptiveFutureSource);
+    const adaptiveFutureJudgment: import("./types.js").AdaptiveFutureJudgmentDiagnostic | undefined =
+      hasAdaptiveFutureEvidence || taskPreamble.budgetDecision !== 'omit_no_evidence'
+        ? {
+            state: taskPreamble.validationFailures.length > 0
+              ? 'validation_failed'
+              : taskPreamble.budgetDecision === 'include'
+                ? 'selected'
+                : taskPreamble.budgetDecision === 'omit_no_evidence'
+                  ? 'no_op'
+                  : taskPreamble.budgetDecision === 'omit_not_economical'
+                    ? 'omitted'
+                    : 'fallback',
+            evidenceAnchors: taskPreamble.evidenceAnchors,
+            selectedModelLayer: taskPreamble.selectedModelLayer,
+            fallbackReason: taskPreamble.fallbackReason,
+            validationFailures: taskPreamble.validationFailures,
+            budgetDecision: taskPreamble.budgetDecision,
+            futureObjections: [
+              ...taskPreamble.omittedContextReasons,
+              ...safetyWarnings,
+            ].slice(0, 6),
+          }
+        : undefined;
+
+    const contextText = [taskPreambleBlock, ...evidenceParts].filter(Boolean).join('\n\n');
 
     // Phase 1 NEVER_FAIL_BUDGET_DEBT_PLAN — report context tier component
     // actuals to the optional turn-scoped coordinator. Read-only path; no
@@ -1077,6 +1190,8 @@ export class ContextBuilder {
       },
       contextText,
       safetyWarnings,
+      taskPreamble,
+      adaptiveFutureJudgment,
       instrumentation: instrumentationResult.instrumentation,
       contextPressure,
     };
@@ -1158,6 +1273,16 @@ export class ContextBuilder {
         return `- ${a.label}${promotionNote}`;
       });
       parts.push(`## Secondary Anchors\n${lines.join("\n")}`);
+    }
+    if (packet.taskPreamble) {
+      parts.push(
+        `## Task Preamble Compiler\nBudget decision: ${packet.taskPreamble.budgetDecision}\nEvidence anchors: ${packet.taskPreamble.evidenceAnchors.join(", ") || "(none)"}\nSelected model layer: ${packet.taskPreamble.selectedModelLayer}\nFallback reason: ${packet.taskPreamble.fallbackReason ?? "(none)"}\nOmitted context reasons: ${packet.taskPreamble.omittedContextReasons.join("; ") || "(none)"}\nValidation failures: ${packet.taskPreamble.validationFailures.join("; ") || "(none)"}`,
+      );
+    }
+    if (packet.adaptiveFutureJudgment) {
+      parts.push(
+        `## Adaptive Future Judgment\nState: ${packet.adaptiveFutureJudgment.state}\nBudget decision: ${packet.adaptiveFutureJudgment.budgetDecision}\nEvidence anchors: ${packet.adaptiveFutureJudgment.evidenceAnchors.join(", ") || "(none)"}\nSelected model layer: ${packet.adaptiveFutureJudgment.selectedModelLayer}\nFallback reason: ${packet.adaptiveFutureJudgment.fallbackReason ?? "(none)"}\nFuture objections: ${packet.adaptiveFutureJudgment.futureObjections.join("; ") || "(none)"}\nValidation failures: ${packet.adaptiveFutureJudgment.validationFailures.join("; ") || "(none)"}`,
+      );
     }
     for (const item of packet.evidence) {
       if (item.kind === "task") continue;

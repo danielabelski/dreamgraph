@@ -41,6 +41,7 @@ You do **not** need to read the guide top-to-bottom. Jump to whichever page matc
 | [Multi-repo and monorepo setups](11-multi-repo.md) | You have more than one repository, or one big monorepo. |
 | [Troubleshooting & FAQ](12-troubleshooting-faq.md) | Something is wrong and you want a quick checklist. |
 | [Glossary](13-glossary.md) | "Wait, what's a *latent candidate* again?" |
+| [Adaptive Future Engine](14-adaptive-future-engine.md) | You want to understand v11 candidate-future ranking and audit trails. |
 
 ---
 

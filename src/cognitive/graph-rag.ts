@@ -55,6 +55,14 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+function roundFutureFitScore(value: number): number {
+  return Math.round(Math.max(0, Math.min(1, value)) * 100) / 100;
+}
+
+function uniqueEvidenceAnchors(anchors: Array<string | undefined | null>): string[] {
+  return [...new Set(anchors.filter((anchor): anchor is string => !!anchor && evidenceAnchorIsValid(anchor)))];
+}
+
 // ---------------------------------------------------------------------------
 // TF-IDF Engine (in-memory, lightweight)
 // ---------------------------------------------------------------------------
@@ -485,10 +493,6 @@ function serialize(input: SerializationInput): {
 // Public API: graph_rag_retrieve
 // ---------------------------------------------------------------------------
 
-/**
- * Retrieve token-budgeted knowledge context from the DreamGraph.
- * This is the primary Graph RAG entry point.
- */
 export async function graphRagRetrieve(input: GraphRAGQuery): Promise<GraphRAGContext> {
   const start = Date.now();
   const {
@@ -499,6 +503,13 @@ export async function graphRagRetrieve(input: GraphRAGQuery): Promise<GraphRAGCo
     include_tensions = true,
     include_narrative = true,
   } = input;
+
+  const route = await selectLlmRoute({
+    task: "generic",
+    daemon_component: "normalizer",
+    daemon_temperature: 0.2,
+    max_tokens: Math.min(400, token_budget),
+  });
 
   logger.info(`Graph RAG retrieve: mode=${mode}, budget=${token_budget}, depth=${depth}, query="${query.slice(0, 80)}"`);
 
@@ -604,6 +615,104 @@ export async function graphRagRetrieve(input: GraphRAGQuery): Promise<GraphRAGCo
     tokenBudget: token_budget,
   });
 
+  const futureEvidence: TaskPreambleEvidenceItem[] = [
+    ...topEntities.slice(0, 5).map((entity) => ({
+      anchor: entity.entity_id,
+      kind: "graph_entity" as const,
+      summary: `Resolved query entity ${entity.entity_id} with relevance ${entity.score.toFixed(2)}.`,
+      confidence: roundFutureFitScore(entity.score),
+      priority: roundFutureFitScore(entity.score),
+    })),
+    ...relevantTensions.slice(0, 3).map((tension) => ({
+      anchor: tension.id,
+      kind: "tension" as const,
+      summary: tension.description,
+      confidence: roundFutureFitScore(tension.urgency),
+      priority: roundFutureFitScore(tension.urgency),
+    })),
+  ];
+
+  const validationFailures = futureEvidence.flatMap((item) => {
+    const failures: string[] = [];
+    if (!evidenceAnchorIsValid(item.anchor)) failures.push(`invalid_anchor:${item.anchor}`);
+    if (!item.summary.trim()) failures.push(`empty_summary:${item.anchor}`);
+    if (item.confidence < 0 || item.confidence > 1) failures.push(`invalid_confidence:${item.anchor}`);
+    return failures;
+  });
+
+  const rankedFutureEvidence = validationFailures.length > 0
+    ? []
+    : futureEvidence
+      .map((item) => ({ item, relevance: taskRelevance(query, item) }))
+      .filter(({ item, relevance }) => item.confidence >= 0.5 && relevance >= 0.12)
+      .sort((a, b) => (b.item.priority + b.relevance) - (a.item.priority + a.relevance));
+
+  const advisoryBudget = Math.min(180, Math.max(96, Math.floor(token_budget * 0.2)));
+  const selectedFutureEvidence: TaskPreambleEvidenceItem[] = [];
+  for (const { item } of rankedFutureEvidence) {
+    const candidate = formatTaskPreambleEvidence([...selectedFutureEvidence, item]);
+    if (estimateTokens(candidate) <= advisoryBudget) selectedFutureEvidence.push(item);
+  }
+
+  const weakTopEntity = topEntities[0] && topEntities[0].score < 0.2 ? topEntities[0] : null;
+  const futureObjections = [
+    weakTopEntity
+      ? {
+        id: `weak-resolution-${weakTopEntity.entity_id}`,
+        description: "Entity resolution confidence is weak, so adaptive future ranking should not narrate speculative follow-up as fact.",
+        evidence_anchor_ids: [weakTopEntity.entity_id],
+        severity: "high" as const,
+      }
+      : null,
+    serialized.tokenCount >= token_budget && selectedFutureEvidence[0]
+      ? {
+        id: "context-budget-trim",
+        description: "Context serialization reached the token budget, so lower-priority adaptive future evidence was omitted.",
+        evidence_anchor_ids: [selectedFutureEvidence[0].anchor],
+        severity: "medium" as const,
+      }
+      : null,
+  ].filter((objection): objection is NonNullable<typeof objection> => objection !== null);
+
+  const nextSteps = selectedFutureEvidence.slice(0, 3).map((item) => ({
+    id: `follow-${item.anchor}`,
+    label: item.kind === "tension" ? "Investigate active tension" : "Inspect resolved entity",
+    rationale: item.summary,
+    evidence_anchor_ids: [item.anchor],
+    future_fit_score: roundFutureFitScore((item.priority + taskRelevance(query, item)) / 2),
+  }));
+
+  const omittedContextReasons: string[] = [];
+  if (validationFailures.length > 0) {
+    omittedContextReasons.push("future-fit evidence failed anchor or schema validation");
+  } else if (futureEvidence.length === 0) {
+    omittedContextReasons.push("no bounded graph evidence survived entity and tension assembly");
+  } else if (rankedFutureEvidence.length === 0) {
+    omittedContextReasons.push("future-fit evidence was too weak or irrelevant to rank");
+  } else if (selectedFutureEvidence.length === 0) {
+    omittedContextReasons.push("future-fit evidence exceeded the advisory token budget");
+  }
+
+  const adaptiveFuture = {
+    surface: "graph_rag_retrieve" as const,
+    advisory_generation: "deterministic" as const,
+    selected_model_layer: route.layer,
+    selected_model_provider: route.provenance.provider,
+    selected_model: route.provenance.model,
+    fallback_reason: route.provenance.fallback_reason,
+    summary: nextSteps.length > 0
+      ? `Ranked ${nextSteps.length} evidence-backed next step(s) for ${mode} retrieval.`
+      : `No evidence-backed adaptive future next step qualified for ${mode} retrieval.`,
+    evidence_anchors: uniqueEvidenceAnchors([
+      ...nextSteps.flatMap((step) => step.evidence_anchor_ids),
+      ...futureObjections.flatMap((objection) => objection.evidence_anchor_ids),
+    ]),
+    next_steps: nextSteps,
+    future_objections: futureObjections,
+    omitted_context_reasons: omittedContextReasons,
+    validation_failures: [...new Set(validationFailures)],
+  };
+
   const duration = Date.now() - start;
   logger.info(`Graph RAG complete: ${serialized.entitiesIncluded.length} entities, ${serialized.edgesIncluded} edges, ${serialized.tokenCount} tokens, ${duration}ms`);
 
@@ -616,6 +725,7 @@ export async function graphRagRetrieve(input: GraphRAGQuery): Promise<GraphRAGCo
     token_count: serialized.tokenCount,
     retrieval_mode: mode,
     relevance_scores: topEntities.map((e) => ({ entity_id: e.entity_id, score: e.score })),
+    adaptive_future: adaptiveFuture,
   };
 }
 
@@ -795,12 +905,15 @@ export async function compileTaskPreamble(request: TaskPreambleCompileRequest): 
 // Public API: get_cognitive_preamble
 // ---------------------------------------------------------------------------
 
-/**
- * Generate a compact cognitive preamble for automatic LLM injection.
- * Produces a concise system understanding summary within a tight token budget.
- */
 export async function getCognitivePreamble(maxTokens: number = 500): Promise<CognitivePreamble> {
   logger.info(`Generating cognitive preamble: max_tokens=${maxTokens}`);
+
+  const route = await selectLlmRoute({
+    task: "generic",
+    daemon_component: "normalizer",
+    daemon_temperature: 0.2,
+    max_tokens: Math.min(320, maxTokens),
+  });
 
   const kg = await loadKnowledgeGraph();
 
@@ -815,7 +928,9 @@ export async function getCognitivePreamble(maxTokens: number = 500): Promise<Cog
       const desc = overview?.description ?? "";
       systemSummary = `${name}: ${desc}. Knowledge graph contains ${kg.features.length} features, ${kg.workflows.length} workflows, ${kg.dataModels.length} data models, and ${kg.validatedEdges.length} validated connections.`;
     }
-  } catch { /* use default */ }
+  } catch {
+    /* use default */
+  }
 
   // Top architecture — highest confidence validated edges
   const topEdges = [...kg.validatedEdges]
@@ -841,6 +956,7 @@ export async function getCognitivePreamble(maxTokens: number = 500): Promise<Cog
 
   // Assemble and trim to budget
   const parts = [systemSummary, ...keyArchitecture, ...openQuestions, ...recentInsights];
+  const originalPartCount = parts.length;
   let assembled = parts.join("\n");
   let tokenCount = estimateTokens(assembled);
 
@@ -851,6 +967,80 @@ export async function getCognitivePreamble(maxTokens: number = 500): Promise<Cog
     tokenCount = estimateTokens(assembled);
   }
 
+  const trimmedForBudget = parts.length < originalPartCount;
+  const futureEvidence: TaskPreambleEvidenceItem[] = [
+    ...topTensions.map((tension) => ({
+      anchor: tension.id,
+      kind: "tension" as const,
+      summary: tension.description,
+      confidence: roundFutureFitScore(tension.urgency),
+      priority: roundFutureFitScore(tension.urgency),
+    })),
+    ...topEdges.slice(0, 3).map((edge) => ({
+      anchor: edge.from,
+      kind: "graph_entity" as const,
+      summary: `Validated architecture relation ${edge.relation} to ${edge.to}.`,
+      confidence: roundFutureFitScore(edge.confidence),
+      priority: roundFutureFitScore(edge.confidence),
+    })),
+  ];
+
+  const validationFailures = futureEvidence.flatMap((item) => {
+    const failures: string[] = [];
+    if (!evidenceAnchorIsValid(item.anchor)) failures.push(`invalid_anchor:${item.anchor}`);
+    if (!item.summary.trim()) failures.push(`empty_summary:${item.anchor}`);
+    return failures;
+  });
+
+  const rankedFutureEvidence = validationFailures.length > 0
+    ? []
+    : [...futureEvidence]
+      .filter((item) => item.confidence >= 0.5)
+      .sort((a, b) => b.priority - a.priority);
+
+  const advisoryBudget = Math.min(140, Math.max(72, Math.floor(maxTokens * 0.18)));
+  const selectedFutureEvidence: TaskPreambleEvidenceItem[] = [];
+  for (const item of rankedFutureEvidence) {
+    const candidate = formatTaskPreambleEvidence([...selectedFutureEvidence, item]);
+    if (estimateTokens(candidate) <= advisoryBudget) selectedFutureEvidence.push(item);
+  }
+
+  const nextSteps = selectedFutureEvidence.slice(0, 3).map((item) => ({
+    id: `preamble-${item.anchor}`,
+    label: item.kind === "tension" ? "Investigate open question" : "Inspect key architecture edge",
+    rationale: item.summary,
+    evidence_anchor_ids: [item.anchor],
+    future_fit_score: item.priority,
+  }));
+
+  const futureObjections = [
+    trimmedForBudget && selectedFutureEvidence[0]
+      ? {
+        id: "preamble-budget-trim",
+        description: "The cognitive preamble hit its token budget, so lower-priority adaptive future context was omitted.",
+        evidence_anchor_ids: [selectedFutureEvidence[0].anchor],
+        severity: "medium" as const,
+      }
+      : null,
+    topTensions[0] && topTensions[0].urgency >= 0.85
+      ? {
+        id: `urgent-open-question-${topTensions[0].id}`,
+        description: "An urgent unresolved tension is shaping the preamble and should be treated as an objection against overconfident narration.",
+        evidence_anchor_ids: [topTensions[0].id],
+        severity: "high" as const,
+      }
+      : null,
+  ].filter((objection): objection is NonNullable<typeof objection> => objection !== null);
+
+  const omittedContextReasons: string[] = [];
+  if (validationFailures.length > 0) {
+    omittedContextReasons.push("future-fit evidence failed anchor or summary validation");
+  } else if (rankedFutureEvidence.length === 0) {
+    omittedContextReasons.push("no bounded preamble evidence qualified for adaptive future ranking");
+  } else if (selectedFutureEvidence.length === 0) {
+    omittedContextReasons.push("adaptive future preamble evidence exceeded the advisory token budget");
+  }
+
   return {
     system_summary: systemSummary,
     key_architecture: keyArchitecture,
@@ -859,5 +1049,24 @@ export async function getCognitivePreamble(maxTokens: number = 500): Promise<Cog
     token_count: estimateTokens(
       [systemSummary, ...keyArchitecture, ...openQuestions, ...recentInsights].join("\n")
     ),
+    adaptive_future: {
+      surface: "get_cognitive_preamble" as const,
+      advisory_generation: "deterministic" as const,
+      selected_model_layer: route.layer,
+      selected_model_provider: route.provenance.provider,
+      selected_model: route.provenance.model,
+      fallback_reason: route.provenance.fallback_reason,
+      summary: nextSteps.length > 0
+        ? `Ranked ${nextSteps.length} evidence-backed next step(s) from open questions and validated architecture.`
+        : "No evidence-backed adaptive future next step qualified for the cognitive preamble.",
+      evidence_anchors: uniqueEvidenceAnchors([
+        ...nextSteps.flatMap((step) => step.evidence_anchor_ids),
+        ...futureObjections.flatMap((objection) => objection.evidence_anchor_ids),
+      ]),
+      next_steps: nextSteps,
+      future_objections: futureObjections,
+      omitted_context_reasons: omittedContextReasons,
+      validation_failures: [...new Set(validationFailures)],
+    },
   };
 }

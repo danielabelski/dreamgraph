@@ -40,24 +40,40 @@ const mockState: MockLlmState = {
 
 vi.mock("../../src/cognitive/llm.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/cognitive/llm.js")>();
+  const provider = {
+    name: "mock",
+    isAvailable: async () => mockState.available,
+    complete: async (messages: unknown, options: unknown) => {
+      const idx = mockState.calls.length;
+      mockState.calls.push({ messages, options });
+      if (mockState.throwAfter !== undefined && idx >= mockState.throwAfter) {
+        throw new Error("simulated LLM failure");
+      }
+      const r = mockState.responses[idx];
+      if (!r) throw new Error(`mock LLM: no response queued for call #${idx}`);
+      const resp = typeof r === "string" ? { text: r } : r;
+      return { text: resp.text, model: resp.model ?? "mock-model", tokensUsed: resp.tokensUsed ?? 0 };
+    },
+  };
   return {
     ...actual,
     isLlmAvailable: async () => mockState.available,
-    getLlmProvider: () => ({
-      name: "mock",
-      isAvailable: async () => mockState.available,
-      complete: async (messages: unknown, options: unknown) => {
-        const idx = mockState.calls.length;
-        mockState.calls.push({ messages, options });
-        if (mockState.throwAfter !== undefined && idx >= mockState.throwAfter) {
-          throw new Error("simulated LLM failure");
+    getLlmProvider: () => provider,
+    selectLlmRoute: async () => mockState.available
+      ? {
+          layer: "daemon",
+          provider,
+          model: "mock-model",
+          options: { model: "mock-model", temperature: 0.2, maxTokens: 4096 },
+          provenance: { task: "graph_enrichment", layer: "daemon", provider: "mock", model: "mock-model", source: "daemon", temperature: 0.2 },
         }
-        const r = mockState.responses[idx];
-        if (!r) throw new Error(`mock LLM: no response queued for call #${idx}`);
-        const resp = typeof r === "string" ? { text: r } : r;
-        return { text: resp.text, model: resp.model ?? "mock-model", tokensUsed: resp.tokensUsed ?? 0 };
-      },
-    }),
+      : {
+          layer: "deterministic_fallback",
+          provider: null,
+          model: null,
+          options: {},
+          provenance: { task: "graph_enrichment", layer: "deterministic_fallback", provider: null, model: null, source: "deterministic_fallback", fallback_reason: "daemon_model_unavailable" },
+        },
     getDreamerLlmConfig: () => ({ model: "mock-model", temperature: 0.3, maxTokens: 4096 }),
   };
 });
@@ -205,7 +221,7 @@ describe("parseLlmEnrichment", () => {
           intent: "i",
           purpose: "p",
           tags: ["t"],
-          feature_anchors: [{ target_id: "f1", relationship: "r", rationale: "x" }],
+          feature_anchors: [{ target_id: "f1", relationship: "implements", rationale: "x", evidence_excerpt: "Ride Management" }],
           confidence: 0.9,
         },
       ],
@@ -240,14 +256,14 @@ describe("parseLlmEnrichment", () => {
           id: "n4",
           description: "", intent: "", purpose: "", tags: [], confidence: 0.5,
           feature_anchors: [
-            { target_id: "", relationship: "r", rationale: "x" },
-            { target_id: "ok", relationship: "r", rationale: "x" },
+            { target_id: "", relationship: "implements", rationale: "x", evidence_excerpt: "node evidence" },
+            { target_id: "ok", relationship: "implements", rationale: "x", evidence_excerpt: "node evidence" },
           ],
         },
       ],
     });
     expect(parseLlmEnrichment(json)[0].feature_anchors).toEqual([
-      { target_id: "ok", relationship: "r", rationale: "x" },
+      { target_id: "ok", relationship: "implements", rationale: "x", evidence_excerpt: "node evidence" },
     ]);
   });
 
@@ -289,8 +305,8 @@ describe("mergeEnrichment", () => {
       description: "x", intent: "", purpose: "", tags: [],
       confidence: 0.5,
       feature_anchors: [
-        { target_id: "f-good", relationship: "r", rationale: "x" },
-        { target_id: "f-bogus", relationship: "r", rationale: "x" },
+        { target_id: "f-good", relationship: "implements", rationale: "x", evidence_excerpt: "node evidence" },
+        { target_id: "f-bogus", relationship: "implements", rationale: "x", evidence_excerpt: "node evidence" },
       ],
     };
     const { node: merged, anchorsAdded } = mergeEnrichment(
@@ -307,7 +323,7 @@ describe("mergeEnrichment", () => {
     });
     const e: PerNodeEnrichment = {
       id: node.id, description: "", intent: "", purpose: "", tags: [], confidence: 0.5,
-      feature_anchors: [{ target_id: "f1", relationship: "r", rationale: "r" }],
+      feature_anchors: [{ target_id: "f1", relationship: "implements", rationale: "r", evidence_excerpt: "node evidence" }],
     };
     const { anchorsAdded } = mergeEnrichment(node, e, new Set(["f1"]), undefined, "t");
     expect(anchorsAdded).toBe(0);
@@ -328,19 +344,27 @@ describe("mergeEnrichment", () => {
 // ---------------------------------------------------------------------------
 
 describe("enrichParserNodesProgrammatic — integration", () => {
-  it("returns LLM_UNAVAILABLE without writing when no provider is available", async () => {
+  it("uses deterministic structural fallback when no provider is available", async () => {
     mockState.available = false;
     await writeData("data_model.json", [parserNode()]);
     await writeData("features.json", []);
 
     const res = await enrichParserNodesProgrammatic();
-    expect(res.success).toBe(false);
-    if (!res.success) {
-      expect(res.error.code).toBe("LLM_UNAVAILABLE");
-    }
-    // Data file untouched.
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.llm_calls).toBe(0);
+    expect(res.data.total_enriched).toBe(1);
+    expect(res.data.notes.some((note) => /deterministic_fallback/.test(note))).toBe(true);
+    expect(res.data.adaptive_future_audit).toMatchObject({
+      audit_version: "slice12-scaffold-v1",
+      task_class: "graph_tool_change",
+      selected_candidate_id: "enrich_parser_nodes:all:semantic_enrichment",
+      route: "deterministic",
+      fallback: "deterministic_fallback",
+    });
     const after = await readData<ParserNodeRecord[]>("data_model.json");
-    expect(after[0].enrichment).toBeUndefined();
+    expect(after[0].enrichment?.model).toBe("deterministic_fallback");
+    expect(after[0].tags).toContain("structural-fallback");
   });
 
   it("filters non-parser-origin and already-enriched entries", async () => {
@@ -446,7 +470,7 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     await writeData("features.json", [f]);
     mockState.responses = [
       llmResponseFor([node], {
-        feature_anchors: [{ target_id: "f1", relationship: "implements", rationale: "covers" }],
+        feature_anchors: [{ target_id: "f1", relationship: "implements", rationale: "covers", evidence_excerpt: "Ride Management" }],
       }),
     ];
 
@@ -463,6 +487,60 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     expect(link?.relationship).toBe("implements");
   });
 
+  const invalidMutationCases: Array<{ name: string; response: string; expected: RegExp }> = [
+    {
+      name: "unknown feature anchors",
+      response: llmResponseFor([parserNode({ id: "n-invalid" })], {
+        feature_anchors: [{ target_id: "missing-feature", relationship: "implements", rationale: "x", evidence_excerpt: "Ride" }],
+      }),
+      expected: /unknown feature anchor/,
+    },
+    {
+      name: "invalid node ids",
+      response: llmResponseFor([parserNode({ id: "other-node" })]),
+      expected: /unknown node id|missing enrichment/,
+    },
+    {
+      name: "invalid relationship vocabulary",
+      response: llmResponseFor([parserNode({ id: "n-invalid" })], {
+        feature_anchors: [{ target_id: "f1", relationship: "not_allowed", rationale: "x", evidence_excerpt: "Ride" }],
+      } as Partial<PerNodeEnrichment>),
+      expected: /invalid feature anchor relationship/,
+    },
+    {
+      name: "excessive anchor counts",
+      response: llmResponseFor([parserNode({ id: "n-invalid" })], {
+        feature_anchors: Array.from({ length: 6 }, () => ({ target_id: "f1", relationship: "implements", rationale: "x", evidence_excerpt: "Ride" })),
+      }),
+      expected: /excessive feature anchors/,
+    },
+    {
+      name: "missing evidence excerpts",
+      response: llmResponseFor([parserNode({ id: "n-invalid" })], {
+        feature_anchors: [{ target_id: "f1", relationship: "implements", rationale: "x", evidence_excerpt: "" }],
+      }),
+      expected: /missing feature anchor evidence excerpt/,
+    },
+  ];
+
+  for (const scenario of invalidMutationCases) {
+    it(`rejects ${scenario.name} before persistence and uses structural fallback`, async () => {
+      const node = parserNode({ id: "n-invalid" });
+      await writeData("data_model.json", [node]);
+      await writeData("features.json", [feature({ id: "f1" })]);
+      mockState.responses = [scenario.response];
+
+      const res = await enrichParserNodesProgrammatic({ target: "data_model" });
+      expect(res.success).toBe(true);
+      if (!res.success) return;
+      expect(res.data.errors.some((entry) => scenario.expected.test(entry))).toBe(true);
+
+      const after = await readData<ParserNodeRecord[]>("data_model.json");
+      expect(after[0].links ?? []).toHaveLength(0);
+      expect(after[0].enrichment?.model).toBe("deterministic_fallback");
+    });
+  }
+
   it("malformed LLM response for a batch is recorded and run continues", async () => {
     const nodes = [parserNode({ id: "n1" }), parserNode({ id: "n2" })];
     await writeData("data_model.json", nodes);
@@ -476,11 +554,11 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     expect(res.success).toBe(true);
     if (!res.success) return;
     expect(res.data.batches_run).toBe(2);
-    expect(res.data.total_enriched).toBe(1);
+    expect(res.data.total_enriched).toBe(2);
     expect(res.data.errors.length).toBeGreaterThan(0);
 
     const after = await readData<ParserNodeRecord[]>("data_model.json");
-    expect(after.find((n) => n.id === "n1")?.enrichment).toBeUndefined();
+    expect(after.find((n) => n.id === "n1")?.enrichment?.model).toBe("deterministic_fallback");
     expect(after.find((n) => n.id === "n2")?.enrichment?.enriched).toBe(true);
   });
 
@@ -488,19 +566,19 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     const nodes = [parserNode({ id: "n1" }), parserNode({ id: "n2" })];
     await writeData("data_model.json", nodes);
     await writeData("features.json", []);
-    // Second batch throws — first batch must remain persisted.
+    // Second batch throws — first batch remains persisted and the second uses fallback.
     mockState.responses = [llmResponseFor([nodes[0]])];
     mockState.throwAfter = 1;
 
     const res = await enrichParserNodesProgrammatic({ target: "data_model", batchSize: 1 });
     expect(res.success).toBe(true);
     if (!res.success) return;
-    expect(res.data.total_enriched).toBe(1);
+    expect(res.data.total_enriched).toBe(2);
     expect(res.data.errors.length).toBeGreaterThan(0);
 
     const after = await readData<ParserNodeRecord[]>("data_model.json");
     expect(after.find((n) => n.id === "n1")?.enrichment?.enriched).toBe(true);
-    expect(after.find((n) => n.id === "n2")?.enrichment).toBeUndefined();
+    expect(after.find((n) => n.id === "n2")?.enrichment?.model).toBe("deterministic_fallback");
   });
 
   it("target=both processes features too", async () => {

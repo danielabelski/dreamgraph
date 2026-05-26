@@ -1,5 +1,11 @@
 # DreamGraph Release Notes
 
+## v11.0.0 - Adaptive Future Engine
+
+DreamGraph v11.0.0 ships the Adaptive Future Engine release line: advisory candidate-future ranking, future-fit scoring, compact objections, route/fallback provenance, and bounded audit metadata for graph-tool and cognitive-workflow consumers.
+
+See [`../RELEASE_NOTES_v11.0.0.md`](../RELEASE_NOTES_v11.0.0.md) for the full distribution notes.
+
 ## Codex CLI native Architect adapter
 
 The VS Code Architect now includes native `codex-cli` provider support following ADR-201's native CLI adapter constraints. The adapter keeps Codex-specific help probing, isolated `config.toml` generation, login-status validation, process execution, prompt serialization, and ProviderPort projection inside `extensions/vscode/src/architect-core/adapters/codex-cli/`.

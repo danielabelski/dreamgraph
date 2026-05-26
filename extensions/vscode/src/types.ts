@@ -374,6 +374,43 @@ export interface EvidenceItem {
   required: boolean;
 }
 
+export type TaskPreambleCompilerBudgetDecision =
+  | 'include'
+  | 'omit_no_evidence'
+  | 'omit_not_economical'
+  | 'omit_over_budget'
+  | 'omit_validation_failed';
+
+export interface TaskPreambleCompilerDiagnostic {
+  budgetDecision: TaskPreambleCompilerBudgetDecision;
+  evidenceAnchors: string[];
+  tokenCount: number;
+  omittedContextReasons: string[];
+  validationFailures: string[];
+  selectedModelLayer: 'connected' | 'daemon' | 'deterministic_fallback';
+  selectedModelProvider: string | null;
+  selectedModel: string | null;
+  fallbackReason?: string;
+}
+
+export type AdaptiveFutureJudgmentState =
+  | 'selected'
+  | 'omitted'
+  | 'fallback'
+  | 'no_op'
+  | 'rejected'
+  | 'validation_failed';
+
+export interface AdaptiveFutureJudgmentDiagnostic {
+  state: AdaptiveFutureJudgmentState;
+  evidenceAnchors: string[];
+  selectedModelLayer: 'connected' | 'daemon' | 'deterministic_fallback';
+  fallbackReason?: string;
+  validationFailures: string[];
+  budgetDecision: TaskPreambleCompilerBudgetDecision;
+  futureObjections: string[];
+}
+
 export interface ReasoningPacket {
   task: {
     intentMode: IntentMode;
@@ -403,6 +440,8 @@ export interface ReasoningPacket {
   };
   contextText: string;
   safetyWarnings: string[];
+  taskPreamble?: TaskPreambleCompilerDiagnostic;
+  adaptiveFutureJudgment?: AdaptiveFutureJudgmentDiagnostic;
   instrumentation?: ContextInstrumentation;
   /**
    * Phase 2 of NEVER_FAIL_BUDGET_DEBT_PLAN — read-only pressure label.

@@ -51,7 +51,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { getLlmProvider, getDreamerLlmConfig, isLlmAvailable } from "../cognitive/llm.js";
+import { llmRouteFailureReason, selectLlmRoute } from "../cognitive/llm.js";
+import { buildAdaptiveFutureAuditTrail } from "../cognitive/adaptive-future-scaffold.js";
 import { loadJsonArray, invalidateCache } from "../utils/cache.js";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { dataPath } from "../utils/paths.js";
@@ -68,6 +69,7 @@ import type {
   UIRegistryFile,
   SemanticElement,
 } from "../types/index.js";
+import type { AdaptiveFutureAuditTrail } from "../cognitive/adaptive-future-scaffold.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,6 +113,7 @@ interface PerNodeEnrichment {
     target_id: string;
     relationship: string;
     rationale: string;
+    evidence_excerpt: string;
   }>;
   confidence: number;
 }
@@ -129,11 +132,8 @@ interface EnrichResult {
   duration_ms: number;
   errors: string[];
   notes: string[];
+  adaptive_future_audit?: AdaptiveFutureAuditTrail;
 }
-
-// ---------------------------------------------------------------------------
-// LLM schema (strict — OpenAI Structured Outputs / Ollama JSON mode)
-// ---------------------------------------------------------------------------
 
 const ENRICHMENT_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -162,18 +162,34 @@ const ENRICHMENT_JSON_SCHEMA: Record<string, unknown> = {
           tags: { type: "array", items: { type: "string" } },
           feature_anchors: {
             type: "array",
+            maxItems: 5,
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["target_id", "relationship", "rationale"],
+              required: ["target_id", "relationship", "rationale", "evidence_excerpt"],
               properties: {
                 target_id: { type: "string" },
-                relationship: { type: "string" },
+                relationship: {
+                  type: "string",
+                  enum: [
+                    "implements",
+                    "supports",
+                    "belongs_to",
+                    "realizes",
+                    "documents",
+                    "tests",
+                    "uses",
+                    "depends_on",
+                    "composes",
+                    "related_to",
+                  ],
+                },
                 rationale: { type: "string" },
+                evidence_excerpt: { type: "string", minLength: 1 },
               },
             },
           },
-          confidence: { type: "number" },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
         },
       },
     },
@@ -193,10 +209,11 @@ Rules:
   3. 'intent': one short sentence — why this entity exists, what design need it serves.
   4. 'purpose': 1-3 word role tag (e.g. "configuration", "service-locator", "value-object", "request-payload", "domain-entity").
   5. 'tags': 1-5 short lowercase tokens for indexing. Do NOT repeat tokens already in the entity's keywords/tags unless they are essential.
-  6. 'feature_anchors': zero or more anchors to Feature entries supplied in the context. Each anchor uses a target_id that MUST exactly match one of the supplied feature ids. Emit an empty array when no anchor is justified — quality beats quantity.
+  6. 'feature_anchors': zero to five anchors to Feature entries supplied in the context. Each target_id MUST exactly match a supplied feature id, relationship MUST use the provided vocabulary, and evidence_excerpt MUST quote or summarize compact evidence from the supplied node or feature context. Emit an empty array when no anchor is justified.
   7. 'confidence': self-reported 0..1 score for the whole record.
   8. 'id': must echo the input id verbatim.
 
+Allowed feature anchor relationships: implements, supports, belongs_to, realizes, documents, tests, uses, depends_on, composes, related_to.
 Return strict JSON: { "results": [ ... ] } with one entry per input node, in the same order.`;
 
 // ---------------------------------------------------------------------------
@@ -325,10 +342,6 @@ function projectNodeForPrompt(n: ParserNodeRecord): Record<string, unknown> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// LLM response parsing
-// ---------------------------------------------------------------------------
-
 export function parseLlmEnrichment(text: string): PerNodeEnrichment[] {
   let payload: unknown;
   try {
@@ -362,9 +375,10 @@ export function parseLlmEnrichment(text: string): PerNodeEnrichment[] {
         ? rec.feature_anchors
             .filter((a): a is Record<string, unknown> => !!a && typeof a === "object")
             .map((a) => ({
-              target_id: typeof a.target_id === "string" ? a.target_id : "",
-              relationship: typeof a.relationship === "string" ? a.relationship : "related_to",
-              rationale: typeof a.rationale === "string" ? a.rationale : "",
+              target_id: typeof a.target_id === "string" ? a.target_id.trim() : "",
+              relationship: typeof a.relationship === "string" ? a.relationship.trim() : "",
+              rationale: typeof a.rationale === "string" ? a.rationale.trim() : "",
+              evidence_excerpt: typeof a.evidence_excerpt === "string" ? a.evidence_excerpt.trim() : "",
             }))
             .filter((a) => a.target_id.length > 0)
         : [],
@@ -377,9 +391,83 @@ export function parseLlmEnrichment(text: string): PerNodeEnrichment[] {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Entity merge
-// ---------------------------------------------------------------------------
+const FEATURE_ANCHOR_RELATIONSHIPS = new Set([
+  "implements",
+  "supports",
+  "belongs_to",
+  "realizes",
+  "documents",
+  "tests",
+  "uses",
+  "depends_on",
+  "composes",
+  "related_to",
+]);
+const MAX_FEATURE_ANCHORS_PER_NODE = 5;
+
+function validateBatchEnrichments(
+  enrichments: PerNodeEnrichment[],
+  batch: ParserNodeRecord[],
+  validAnchorIds: ReadonlySet<string>,
+): string[] {
+  const errors: string[] = [];
+  const expectedIds = new Set(batch.map((node) => node.id));
+  const seenIds = new Set<string>();
+
+  for (const enrichment of enrichments) {
+    if (!expectedIds.has(enrichment.id)) {
+      errors.push(`unknown node id ${enrichment.id}`);
+      continue;
+    }
+    if (seenIds.has(enrichment.id)) {
+      errors.push(`duplicate node id ${enrichment.id}`);
+    }
+    seenIds.add(enrichment.id);
+    if (enrichment.feature_anchors.length > MAX_FEATURE_ANCHORS_PER_NODE) {
+      errors.push(`${enrichment.id}: excessive feature anchors (${enrichment.feature_anchors.length} > ${MAX_FEATURE_ANCHORS_PER_NODE})`);
+    }
+    for (const anchor of enrichment.feature_anchors) {
+      if (!validAnchorIds.has(anchor.target_id)) {
+        errors.push(`${enrichment.id}: unknown feature anchor ${anchor.target_id}`);
+      }
+      if (!FEATURE_ANCHOR_RELATIONSHIPS.has(anchor.relationship)) {
+        errors.push(`${enrichment.id}: invalid feature anchor relationship ${anchor.relationship}`);
+      }
+      if (!anchor.evidence_excerpt.trim()) {
+        errors.push(`${enrichment.id}: missing feature anchor evidence excerpt for ${anchor.target_id}`);
+      }
+    }
+  }
+
+  for (const id of expectedIds) {
+    if (!seenIds.has(id)) {
+      errors.push(`missing enrichment for node ${id}`);
+    }
+  }
+
+  return errors;
+}
+
+function structuralEnrichmentFor(node: ParserNodeRecord): PerNodeEnrichment {
+  const kind = typeof node.model_kind === "string" && node.model_kind.trim()
+    ? node.model_kind.trim()
+    : "parser-node";
+  const name = typeof node.name === "string" && node.name.trim() ? node.name.trim() : node.id;
+  const source = Array.isArray(node.source_files) && node.source_files.length > 0
+    ? ` from ${node.source_files.slice(0, 2).join(", ")}`
+    : "";
+  return {
+    id: node.id,
+    description: typeof node.description === "string" && node.description.trim()
+      ? node.description.trim()
+      : `${kind} ${name}${source}`,
+    intent: `Structural parser-discovered ${kind} for ${name}; semantic intent requires validated model output.`,
+    purpose: kind.split(":").pop()?.replace(/[^a-z0-9_-]/gi, "-").toLowerCase() || "parser-node",
+    tags: ["parser-discovered", "structural-fallback"],
+    feature_anchors: [],
+    confidence: 0.3,
+  };
+}
 
 export function mergeEnrichment(
   node: ParserNodeRecord,
@@ -402,12 +490,16 @@ export function mergeEnrichment(
     if (norm && !newTags.includes(norm)) newTags.push(norm);
   }
 
-  // Build feature anchor GraphLinks, filtered to known target ids.
+  // Build feature anchor GraphLinks, filtered to known target ids. Validation
+  // happens before this function is called; these guards keep the merge safe
+  // if a caller uses the helper directly.
   const existingLinks: GraphLink[] = Array.isArray(node.links) ? [...node.links] : [];
   const existingTargets = new Set(existingLinks.map((l) => l.target));
   let anchorsAdded = 0;
   for (const a of e.feature_anchors) {
     if (!validAnchorIds.has(a.target_id)) continue;
+    if (!FEATURE_ANCHOR_RELATIONSHIPS.has(a.relationship)) continue;
+    if (!a.evidence_excerpt.trim()) continue;
     if (existingTargets.has(a.target_id)) continue;
     existingLinks.push({
       target: a.target_id,
@@ -415,6 +507,11 @@ export function mergeEnrichment(
       relationship: a.relationship || "related_to",
       description: a.rationale || `Feature anchor proposed by ${ENRICHER_ID}`,
       strength: "weak",
+      meta: {
+        evidence_excerpt: a.evidence_excerpt,
+        confidence: e.confidence,
+        selected_by: ENRICHER_ID,
+      },
     });
     existingTargets.add(a.target_id);
     anchorsAdded++;
@@ -461,17 +558,12 @@ async function executeEnrichParserNodes(
   opts: EnrichOptions,
 ): Promise<ToolResponse<EnrichResult>> {
   const started = Date.now();
-
-  const available = await isLlmAvailable();
-  if (!available) {
-    return error(
-      "LLM_UNAVAILABLE",
-      "enrich_parser_nodes requires a configured LLM provider. Set DREAMGRAPH_LLM_PROVIDER and related env vars before running.",
-    );
-  }
-
-  const llm = getLlmProvider();
-  const cfg = getDreamerLlmConfig();
+  const route = await selectLlmRoute({
+    task: "graph_enrichment",
+    daemon_component: "dreamer",
+    daemon_temperature: 0.2,
+    max_tokens: 4096,
+  });
 
   // Always load both files: features supply anchor context even when only
   // data_model is being enriched.
@@ -547,7 +639,15 @@ async function executeEnrichParserNodes(
     notes: [...deprecationNotes],
   };
 
-  // Pre-build the set of valid feature ids — used to filter anchors so we
+  if (route.layer === "deterministic_fallback") {
+    result.notes.push(
+      `ADR-203 route=deterministic_fallback reason=${route.provenance.fallback_reason ?? "unknown"}; using structural parser-node enrichment fallback.`,
+    );
+  } else {
+    result.notes.push(`ADR-203 route=${route.layer} provider=${route.provenance.provider ?? "unknown"} model=${route.model ?? "unknown"}.`);
+  }
+
+  // Pre-build the set of valid feature ids — used to validate anchors so we
   // never write a link to a target that doesn't exist.
   const validFeatureIds = new Set<string>(
     allFeatures.filter((f) => typeof f.id === "string").map((f) => f.id),
@@ -603,6 +703,12 @@ async function executeEnrichParserNodes(
       for (const batch of chunk(bucketNodes, opts.batchSize)) {
         result.batches_run++;
 
+        const validAnchorIds = new Set<string>(featureContext.map((f) => f.id));
+        // Allow anchors to any feature in the same repo even if not in the
+        // context list — keeps the LLM from being penalised for picking a
+        // legitimate cross-domain feature it has seen during scanning.
+        for (const fid of validFeatureIds) validAnchorIds.add(fid);
+
         const userPrompt = [
           `Repo: ${repo}`,
           `Domain: ${domain}`,
@@ -621,43 +727,65 @@ async function executeEnrichParserNodes(
         let parsed: PerNodeEnrichment[] = [];
         let modelUsed: string | undefined;
 
-        try {
-          const resp = await llm.complete(
-            [
-              { role: "system", content: SYSTEM_PROMPT },
-              { role: "user", content: userPrompt },
-            ],
-            {
-              model: cfg.model,
-              temperature: 0.2,
-              maxTokens: Math.min(cfg.maxTokens, 4096),
-              jsonSchema: {
-                name: "parser_node_enrichment",
-                schema: ENRICHMENT_JSON_SCHEMA,
-              },
-            },
-          );
-          result.llm_calls++;
-          result.tokens_used += resp.tokensUsed ?? 0;
-          modelUsed = resp.model;
-          parsed = parseLlmEnrichment(resp.text);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          result.errors.push(`Batch (${bkey}, ${batch.length} nodes): ${msg}`);
-          result.total_skipped += batch.length;
-          nodesProcessed += batch.length;
-          continue;
+        if (route.layer === "deterministic_fallback") {
+          parsed = batch.map(structuralEnrichmentFor);
+          modelUsed = "deterministic_fallback";
+        } else {
+          const provider = route.provider;
+          if (!provider) {
+            parsed = batch.map(structuralEnrichmentFor);
+            modelUsed = "deterministic_fallback";
+            result.errors.push(`Batch (${bkey}, ${batch.length} nodes): provider_missing; deterministic fallback used.`);
+          } else {
+            try {
+              let responseText = "";
+              try {
+                const resp = await provider.complete(
+                  [
+                    { role: "system", content: SYSTEM_PROMPT },
+                    { role: "user", content: userPrompt },
+                  ],
+                  {
+                    ...route.options,
+                    maxTokens: Math.min(route.options.maxTokens ?? 4096, 4096),
+                    jsonSchema: {
+                      name: "parser_node_enrichment",
+                      schema: ENRICHMENT_JSON_SCHEMA,
+                    },
+                  },
+                );
+                result.llm_calls++;
+                result.tokens_used += resp.tokensUsed ?? 0;
+                modelUsed = resp.model ?? route.model ?? route.layer;
+                responseText = resp.text;
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                throw new Error(`${llmRouteFailureReason("provider")}: ${msg}`);
+              }
+
+              try {
+                parsed = parseLlmEnrichment(responseText);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                throw new Error(`${llmRouteFailureReason("invalid_output")}: ${msg}`);
+              }
+
+              const validationErrors = validateBatchEnrichments(parsed, batch, validAnchorIds);
+              if (validationErrors.length > 0) {
+                throw new Error(`${llmRouteFailureReason("validation")}: ${validationErrors.join("; ")}`);
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              result.errors.push(`Batch (${bkey}, ${batch.length} nodes): ${msg}; deterministic fallback used.`);
+              parsed = batch.map(structuralEnrichmentFor);
+              modelUsed = "deterministic_fallback";
+            }
+          }
         }
 
-        // Match LLM results back to input nodes by id.
+        // Match validated or deterministic-fallback results back to input nodes by id.
         const resultsById = new Map<string, PerNodeEnrichment>();
         for (const r of parsed) resultsById.set(r.id, r);
-
-        const validAnchorIds = new Set<string>(featureContext.map((f) => f.id));
-        // Allow anchors to any feature in the same repo even if not in the
-        // context list — keeps the LLM from being penalised for picking a
-        // legitimate cross-domain feature it has seen during scanning.
-        for (const fid of validFeatureIds) validAnchorIds.add(fid);
 
         const nowIso = new Date().toISOString();
         let batchEnriched = 0;
@@ -668,7 +796,7 @@ async function executeEnrichParserNodes(
           nodesProcessed++;
           if (!enrichment) {
             result.total_skipped++;
-            result.errors.push(`Node ${node.id}: missing in LLM response`);
+            result.errors.push(`Node ${node.id}: missing in enrichment response`);
             continue;
           }
           const { node: merged, anchorsAdded } = mergeEnrichment(
@@ -727,6 +855,35 @@ async function executeEnrichParserNodes(
   }
 
   result.duration_ms = Date.now() - started;
+  result.adaptive_future_audit = buildAdaptiveFutureAuditTrail({
+    task_class: "graph_tool_change",
+    selected_candidate_id: `enrich_parser_nodes:${resolvedTarget}:semantic_enrichment`,
+    route: route.layer === "deterministic_fallback" ? "deterministic" : "llm",
+    fallback: route.layer === "deterministic_fallback" || result.errors.length > 0 ? "deterministic_fallback" : "none",
+    candidates: [
+      {
+        id: `enrich_parser_nodes:${resolvedTarget}:semantic_enrichment`,
+        task_class: "graph_tool_change",
+        selected: true,
+        score_factors: {
+          adr_alignment: 0.85,
+          workflow_fit: result.total_eligible === 0 ? 0.5 : 0.8,
+          verification_path: 0.75,
+          graph_sync_impact: !result.dry_run && result.total_enriched > 0 ? 0.9 : 0.4,
+          blast_radius: result.total_eligible > 50 ? 0.7 : 0.4,
+          evidence_strength: result.total_eligible === 0 ? 0.4 : result.total_enriched / Math.max(result.total_eligible, 1),
+        },
+        anchors: result.files_processed.map((file) => ({
+          kind: file === "features" ? "feature" as const : "data_model" as const,
+          id: `enrich_parser_nodes:${file}`,
+          source_file: `${file}.json`,
+        })),
+        objections: result.errors,
+        validation_failures: result.errors,
+      },
+    ],
+    notes: result.notes,
+  });
 
   logger.info(
     `enrich_parser_nodes: enriched=${result.total_enriched} eligible=${result.total_eligible} ` +
