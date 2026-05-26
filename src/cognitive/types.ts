@@ -1907,10 +1907,13 @@ export interface FutureSignal {
   evidence_anchor_ids: string[];
   confidence: number;
   observed_at: string;
+<<<<<<< HEAD
   status?: "active" | "stale" | "superseded";
   reviewed_at?: string;
   superseded_by?: string;
   superseded_reason?: string;
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 }
 
 export interface FutureObjection {
@@ -1979,14 +1982,18 @@ export interface RemediationEvidenceBundle {
   allowed_action_classes: RemediationInterventionType[];
   deterministic_short_circuit: "phantom_entity" | "graph_enrichment" | "none";
   verification_obligations: VerificationStep[];
+<<<<<<< HEAD
   learning_hooks?: LearningHook[];
   prior_future_signals?: FutureSignal[];
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 }
 
 export interface GeneratedRemediationPlanSet {
   evidence_bundle_id: string;
   candidates: CandidateFuture[];
   model_layer: "connected" | "daemon" | "deterministic_fallback";
+<<<<<<< HEAD
   model_provenance?: {
     task: string;
     layer: "connected" | "daemon" | "deterministic_fallback";
@@ -1996,6 +2003,8 @@ export interface GeneratedRemediationPlanSet {
     fallback_reason?: string;
     temperature?: number;
   };
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   fallback_reason?: string;
   validation_failures: string[];
 }
@@ -2610,6 +2619,64 @@ export interface CognitivePreamble {
   token_count: number;
   /** Advisory-only future ranking and fallback provenance for this surface. */
   adaptive_future?: AdaptiveFutureSurfaceAdvice;
+}
+
+/** Evidence classes the Task Preamble Compiler may include. */
+export type TaskPreambleEvidenceKind =
+  | "graph_entity"
+  | "adr"
+  | "workflow"
+  | "api_surface"
+  | "tension"
+  | "prior_outcome"
+  | "verification_obligation"
+  | "context_signal";
+
+/** One bounded, engine-assembled evidence item for task preamble compilation. */
+export interface TaskPreambleEvidenceItem {
+  /** Stable semantic anchor such as feature id, ADR id, workflow id, API member, or tension id. */
+  anchor: string;
+  kind: TaskPreambleEvidenceKind;
+  /** Compact evidence text already owned by the engine; never raw prompt or provider payload text. */
+  summary: string;
+  confidence: number;
+  /** Larger numbers are preferred when trimming to budget. */
+  priority: number;
+}
+
+/** Input for the provider-neutral Task Preamble Compiler. */
+export interface TaskPreambleCompileRequest {
+  /** User task text used only for bounded relevance scoring, not persisted by the compiler. */
+  task: string;
+  /** Optional deterministic evidence supplied by caller; otherwise graph evidence is assembled locally. */
+  evidence?: TaskPreambleEvidenceItem[];
+  /** Maximum generated preamble tokens. Default: 300. */
+  max_tokens?: number;
+  /** Minimum matched relevance score required before adding context. Default: 0.12. */
+  min_relevance?: number;
+  /** Minimum estimated avoided-token cost required before adding context. Default: 64. */
+  min_expected_savings_tokens?: number;
+}
+
+export type TaskPreambleBudgetDecision =
+  | "include"
+  | "omit_no_evidence"
+  | "omit_not_economical"
+  | "omit_over_budget"
+  | "omit_validation_failed";
+
+/** Provider-neutral compiled task preamble, including compact ADR-203 provenance. */
+export interface CompiledTaskPreamble {
+  preamble_text: string;
+  evidence_anchors: string[];
+  token_count: number;
+  budget_decision: TaskPreambleBudgetDecision;
+  omitted_context_reasons: string[];
+  validation_failures: string[];
+  selected_model_layer: "connected" | "daemon" | "deterministic_fallback";
+  selected_model_provider: string | null;
+  selected_model: string | null;
+  fallback_reason?: string;
 }
 
 /** Evidence classes the Task Preamble Compiler may include. */

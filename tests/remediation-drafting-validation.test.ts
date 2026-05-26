@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
   buildAdaptiveFutureReview,
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   harvestRemediationFutureSignals,
   scoreCandidateFuture,
   validateCandidateFuture,
@@ -170,6 +173,7 @@ describe("validateCandidateFuture", () => {
     ).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("rejects low-confidence LLM candidates", () => {
     expect(validateCandidateFuture(validCandidate({ future_fit_score: 0.2 }), bundle)).toBeUndefined();
   });
@@ -183,6 +187,8 @@ describe("validateCandidateFuture", () => {
     ).toBeUndefined();
   });
 
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   it("drops malformed objections instead of surfacing partial objection records", () => {
     const candidate = validateCandidateFuture(
       validCandidate({
@@ -203,6 +209,7 @@ describe("validateCandidateFuture", () => {
 
 describe("future-fit scoring", () => {
   it("harvests scoped future signals only from known evidence anchors", () => {
+<<<<<<< HEAD
     const bundleWithLearningHooks: RemediationEvidenceBundle = {
       ...bundle,
       learning_hooks: [
@@ -233,6 +240,14 @@ describe("future-fit scoring", () => {
     );
     expect(signals.every((signal) => signal.evidence_anchor_ids.length > 0)).toBe(true);
     expect(signals.some((signal) => signal.evidence_anchor_ids.includes("missing-anchor"))).toBe(false);
+=======
+    const signals = harvestRemediationFutureSignals(bundle, "source_change");
+
+    expect(signals.map((signal) => signal.source)).toEqual(
+      expect.arrayContaining(["explicit_preference", "accepted", "recurring_pattern"]),
+    );
+    expect(signals.every((signal) => signal.evidence_anchor_ids.length > 0)).toBe(true);
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     expect(
       signals.every((signal) =>
         signal.evidence_anchor_ids.every((anchorId) =>
@@ -288,6 +303,7 @@ describe("future-fit scoring", () => {
     expect(invalid).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("weakens candidate support when user rejection evidence matches candidate anchors", () => {
     const candidate = validateCandidateFuture(
       validCandidate({
@@ -346,6 +362,8 @@ describe("future-fit scoring", () => {
     );
   });
 
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   it("keeps rejected-but-valid candidates explainable with future objections", () => {
     const candidate = validateCandidateFuture(
       validCandidate({
@@ -373,6 +391,7 @@ describe("future-fit scoring", () => {
       ]),
     );
   });
+<<<<<<< HEAD
 
   it("marks aged prior future signals as stale and surfaces review metadata", () => {
     const bundleWithPriorSignals: RemediationEvidenceBundle = {
@@ -499,6 +518,8 @@ describe("future-fit scoring", () => {
       ]),
     );
   });
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 });
 
 describe("validateRemediationDraft", () => {
@@ -517,6 +538,7 @@ describe("validateRemediationDraft", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["valid-one"]);
   });
 
+<<<<<<< HEAD
   it("keeps at most three schema-valid LLM candidates", () => {
     const candidates = validateRemediationDraft(
       {
@@ -533,12 +555,15 @@ describe("validateRemediationDraft", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["valid-one", "valid-two", "valid-three"]);
   });
 
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   it("rejects malformed draft envelopes", () => {
     expect(validateRemediationDraft({ candidates: "not-an-array" }, bundle)).toEqual([]);
     expect(validateRemediationDraft(undefined, bundle)).toEqual([]);
   });
 });
 
+<<<<<<< HEAD
 describe("Slice 3 remediation LLM drafting behind validation", () => {
   it("routes remediation drafting through strict JSON-schema output", async () => {
     const { readFile } = await import("node:fs/promises");
@@ -576,6 +601,8 @@ describe("Slice 2 remediation evidence bundle extraction", () => {
   });
 });
 
+=======
+>>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 describe('Slice 5 adaptive future persistence', () => {
   it('keeps the remediation log sidecar bounded and metric-backed', async () => {
     const { readFile } = await import('node:fs/promises');
