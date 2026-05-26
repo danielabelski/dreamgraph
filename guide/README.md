@@ -33,6 +33,10 @@ You do **not** need to read the guide top-to-bottom. Jump to whichever page matc
 | 8 | [Dreams and cycles](08-dreams-and-cycles.md) | What dreaming means, when to do it, what to expect. |
 | 9 | [Curating the graph](09-curating-the-graph.md) | Reviewing tensions, promoting/rejecting candidates, recording ADRs. |
 | 10 | [A typical daily workflow](10-daily-workflow.md) | A sustainable loop. What to do in the morning, what to leave running. |
+| 11 | [Multi-repo and monorepo setups](11-multi-repo.md) | Attaching more than one repository, including large monorepos. |
+| 12 | [Troubleshooting & FAQ](12-troubleshooting-faq.md) | Diagnosing daemon, graph, model, extension, and workflow issues. |
+| 13 | [Glossary](13-glossary.md) | Plain-language definitions for DreamGraph terms. |
+| 14 | [Adaptive Future Engine](14-adaptive-future-engine.md) | What AFE is, where it runs, how it is deployed, and how to read its audit trails. |
 
 ## Topical reference (read as needed)
 
