@@ -1,4 +1,4 @@
-# DreamGraph v11.0.0 — Adaptive Future Engine
+# DreamGraph v11.0.1 — Adaptive Future Engine
 ### The Autonomous Cognitive Layer for Sovereign Development.
 
 DreamGraph is a model-agnostic, graph-grounded development agent. It replaces brute-force context dumping with architectural discipline, ensuring your project's logic remains persistent regardless of which LLM you choose to plug in.
@@ -9,7 +9,7 @@ DreamGraph is a model-agnostic, graph-grounded development agent. It replaces br
 * **Autonomous Normalization:** Background 'Dream Cycles' continuously map and resolve architectural tensions.
 * **100% Local Privacy:** Your database, your daemon, your keys. Sovereign by design.
 
-## 🛠 Status: v11.0.0 "Adaptive Future Engine"
+## 🛠 Status: v11.0.1 "Adaptive Future Engine"
 * **Engine:** Active
 * **Explorer:** Production-ready graph browsing and curated mutations
 * **Governance:** ADR-enforced

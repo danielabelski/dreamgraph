@@ -39,7 +39,7 @@ The VS Code extension does not host a separate AFE runtime. The extension talks 
 
 ## How It Is Deployed In Practice
 
-For users, deploying AFE usually means upgrading DreamGraph to v11.0.0 or later and running the daemon for an instance as usual.
+For users, deploying AFE usually means upgrading DreamGraph to v11.0.1 or later and running the daemon for an instance as usual.
 
 A typical practical setup looks like this:
 
