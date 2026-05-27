@@ -256,8 +256,15 @@ const COGNITIVE_RUN_KEYWORDS = [
   'symmetry completion', 'tension_directed', 'tension directed',
   'causal_replay', 'causal replay', 'reflective', 'pgo_wave', 'pgo wave',
   'orphan_bridging', 'orphan bridging', 'schema_grounding', 'schema grounding',
-  // Scheduling vocabulary.
-  'schedule', 'unschedule', 'scheduled dream', 'cron',
+];
+
+const SCHEDULER_KEYWORDS = [
+  'schedule', 'schedules', 'scheduled', 'scheduling', 'unschedule',
+  'cron', 'cron-like', 'cron_like', 'midnight', 'interval',
+  'recurring', 'recurrence', 'timer',
+  'dream', 'dreaming', 'dream run', 'dream cycle', 'dream cycles','dream runs', 'dream schedule', 'scheduled dream',
+  'nightmare schedule', 'nightmare run', 'nightmare runs',
+  'federation export', 'export at midnight',
 ];
 
 const DOCS_KEYWORDS = [
@@ -388,8 +395,12 @@ export function selectToolGroups(args: {
     reasons.push('keyword[adr_read] → adr');
   }
   if (_hasAny(prompt, COGNITIVE_RUN_KEYWORDS)) {
-    groups.push('cognitive_read', 'cognitive_run', 'scheduler');
-    reasons.push('keyword[cognitive] → cognitive_read+cognitive_run+scheduler');
+    groups.push('cognitive_read', 'cognitive_run');
+    reasons.push('keyword[cognitive] → cognitive_read+cognitive_run');
+  }
+  if (_hasAny(prompt, SCHEDULER_KEYWORDS)) {
+    groups.push('scheduler');
+    reasons.push('keyword[scheduler] → scheduler');
   }
   if (_hasAny(prompt, HEALTH_KEYWORDS)) {
     groups.push('cognitive_read');
