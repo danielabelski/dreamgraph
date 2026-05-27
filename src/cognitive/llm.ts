@@ -870,12 +870,8 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
   if (request.connected) {
     const available = await request.connected.provider.isAvailable().catch(() => false);
     if (available) {
-<<<<<<< HEAD
       const connectedModel = request.connected.model?.trim();
       const model = connectedModel || request.connected.provider.name;
-=======
-      const model = request.connected.model ?? request.connected.provider.name;
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
       return {
         layer: "connected",
         provider: request.connected.provider,
@@ -915,12 +911,8 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
   } else if (cfg.provider !== "none") {
     const component = request.daemon_component ?? "dreamer";
     const componentCfg = componentConfig(component);
-<<<<<<< HEAD
     const daemonModel = componentCfg.model.trim();
     if (!daemonModel) {
-=======
-    if (!componentCfg.model.trim()) {
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
       return fallbackSelection(request, "no_daemon_model");
     }
 
@@ -930,15 +922,9 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
       return {
         layer: "daemon",
         provider,
-<<<<<<< HEAD
         model: daemonModel,
         options: {
           model: daemonModel,
-=======
-        model: componentCfg.model,
-        options: {
-          model: componentCfg.model,
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
           temperature,
           maxTokens: maxTokens ?? componentCfg.maxTokens,
         },
@@ -946,11 +932,7 @@ export async function selectLlmRoute(request: LlmRouteRequest): Promise<LlmRoute
           task: request.task,
           layer: "daemon",
           provider: provider.name,
-<<<<<<< HEAD
           model: daemonModel,
-=======
-          model: componentCfg.model,
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
           source: "daemon",
           temperature,
         },

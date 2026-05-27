@@ -1,25 +1,25 @@
-/**
- * DreamGraph v5.2 — Graph RAG Bridge (Knowledge Backbone)
+﻿/**
+ * DreamGraph v5.2 â€” Graph RAG Bridge (Knowledge Backbone)
  *
  * Exposes the DreamGraph knowledge graph as a retrieval-augmented generation
  * (RAG) layer for any LLM interaction. The graph becomes a universal context
- * source — queries resolve to entities, expand via BFS, rank by relevance,
+ * source â€” queries resolve to entities, expand via BFS, rank by relevance,
  * and serialize within a token budget.
  *
- * This module is **read-only** — it never modifies any data files.
+ * This module is **read-only** â€” it never modifies any data files.
  *
  * Key concepts:
  *   - TF-IDF entity similarity (lightweight, no external embedding service)
  *   - BFS subgraph extraction from resolved entities
- *   - Relevance ranking (confidence × recency × query overlap)
+ *   - Relevance ranking (confidence Ã— recency Ã— query overlap)
  *   - Token-budgeted serialization with priority trimming
  *   - Cognitive Preamble: compact system summary for automatic LLM injection
  *
  * Retrieval modes:
- *   entity_focused    — "Tell me about the payment system"
- *   tension_focused   — "What problems exist?"
- *   narrative_focused — "What has changed recently?"
- *   comprehensive     — Balanced overview for pre-prompt injection
+ *   entity_focused    â€” "Tell me about the payment system"
+ *   tension_focused   â€” "What problems exist?"
+ *   narrative_focused â€” "What has changed recently?"
+ *   comprehensive     â€” Balanced overview for pre-prompt injection
  */
 
 import { readFile } from "node:fs/promises";
@@ -48,7 +48,7 @@ import type {
 import { selectLlmRoute } from "./llm.js";
 
 // ---------------------------------------------------------------------------
-// Token estimation (chars / 4 heuristic — conservative)
+// Token estimation (chars / 4 heuristic â€” conservative)
 // ---------------------------------------------------------------------------
 
 function estimateTokens(text: string): number {
@@ -295,7 +295,7 @@ function extractSubgraph(
         nextFrontier.add(edge.from);
         includedEdges.push(edge);
       } else if (frontier.has(edge.from) && frontier.has(edge.to)) {
-        // Both endpoints in frontier — include the edge
+        // Both endpoints in frontier â€” include the edge
         if (!includedEdges.some((e) => e.id === edge.id)) {
           includedEdges.push(edge);
         }
@@ -386,7 +386,7 @@ function serialize(input: SerializationInput): {
   // Edges section
   if (edges.length > 0) {
     const edgeLines = edges.map(
-      (e) => `- ${e.from} → ${e.to}: ${e.relation} (confidence: ${e.confidence})`
+      (e) => `- ${e.from} â†’ ${e.to}: ${e.relation} (confidence: ${e.confidence})`
     );
     sections.push({
       label: "Relationships",
@@ -902,178 +902,6 @@ export async function compileTaskPreamble(request: TaskPreambleCompileRequest): 
 }
 
 // ---------------------------------------------------------------------------
-// Public API: Task Preamble Compiler
-// ---------------------------------------------------------------------------
-
-function evidenceAnchorIsValid(anchor: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_.:/#-]{1,160}$/.test(anchor);
-}
-
-function taskRelevance(task: string, evidence: TaskPreambleEvidenceItem): number {
-  const taskTerms = new Set(tokenize(task));
-  if (taskTerms.size === 0) return 0;
-
-  const evidenceTerms = tokenize(`${evidence.anchor} ${evidence.summary}`);
-  const matches = evidenceTerms.filter((term) => taskTerms.has(term)).length;
-  return Math.min(1, matches / Math.max(4, taskTerms.size));
-}
-
-function formatTaskPreambleEvidence(evidence: TaskPreambleEvidenceItem[]): string {
-  return [
-    "DreamGraph task preamble:",
-    ...evidence.map((item) => `- [${item.kind}] ${item.anchor}: ${item.summary}`),
-  ].join("\n");
-}
-
-async function assembleTaskPreambleEvidence(task: string): Promise<TaskPreambleEvidenceItem[]> {
-  const kg = await loadKnowledgeGraph();
-  const taskTerms = new Set(tokenize(task));
-
-  const entityEvidence: TaskPreambleEvidenceItem[] = allEntities(kg)
-    .map((entity) => ({
-      anchor: entity.id,
-      kind: entity.id.startsWith("workflow_") ? "workflow" : "graph_entity",
-      summary: entity.description,
-      confidence: 0.8,
-      priority: taskRelevance(task, {
-        anchor: entity.id,
-        kind: "graph_entity",
-        summary: entity.description,
-        confidence: 0.8,
-        priority: 0,
-      }),
-    } satisfies TaskPreambleEvidenceItem))
-    .filter((item) => item.priority > 0 || tokenize(item.anchor).some((term) => taskTerms.has(term)))
-    .sort((a, b) => b.priority - a.priority)
-    .slice(0, 5);
-
-  const tensionEvidence: TaskPreambleEvidenceItem[] = kg.tensions
-    .filter((tension) => tension.entities.some((entityId) => entityEvidence.some((item) => item.anchor === entityId)))
-    .sort((a, b) => b.urgency - a.urgency)
-    .slice(0, 3)
-    .map((tension) => ({
-      anchor: tension.id,
-      kind: "tension",
-      summary: tension.description,
-      confidence: tension.urgency,
-      priority: tension.urgency,
-    }));
-
-  return [...entityEvidence, ...tensionEvidence];
-}
-
-/**
- * Compile bounded graph-grounded task context before provider/adapter execution.
- * The compiler never requires an LLM; no-provider and uneconomical cases return no added preamble.
- */
-export async function compileTaskPreamble(request: TaskPreambleCompileRequest): Promise<CompiledTaskPreamble> {
-  const route = await selectLlmRoute({
-    task: "task_preamble_compilation",
-    daemon_component: "normalizer",
-    daemon_temperature: 0.2,
-    max_tokens: request.max_tokens ?? 300,
-  });
-
-  const maxTokens = request.max_tokens ?? 300;
-  const minRelevance = request.min_relevance ?? 0.12;
-  const minExpectedSavings = request.min_expected_savings_tokens ?? 64;
-  const evidence = request.evidence ?? await assembleTaskPreambleEvidence(request.task);
-  const validationFailures = evidence.flatMap((item) => {
-    const failures: string[] = [];
-    if (!evidenceAnchorIsValid(item.anchor)) failures.push(`invalid_anchor:${item.anchor}`);
-    if (!item.summary.trim()) failures.push(`empty_summary:${item.anchor}`);
-    if (item.confidence < 0 || item.confidence > 1) failures.push(`invalid_confidence:${item.anchor}`);
-    return failures;
-  });
-
-  if (validationFailures.length > 0) {
-    return {
-      preamble_text: "",
-      evidence_anchors: [],
-      token_count: 0,
-      budget_decision: "omit_validation_failed",
-      omitted_context_reasons: ["evidence failed schema or anchor validation"],
-      validation_failures: validationFailures,
-      selected_model_layer: route.layer,
-      selected_model_provider: route.provenance.provider,
-      selected_model: route.provenance.model,
-      fallback_reason: route.provenance.fallback_reason,
-    };
-  }
-
-  const ranked = evidence
-    .map((item) => ({ item, relevance: taskRelevance(request.task, item) }))
-    .filter(({ item, relevance }) => item.confidence >= 0.5 && relevance >= minRelevance)
-    .sort((a, b) => (b.item.priority + b.relevance) - (a.item.priority + a.relevance));
-
-  if (ranked.length === 0) {
-    return {
-      preamble_text: "",
-      evidence_anchors: [],
-      token_count: 0,
-      budget_decision: evidence.length === 0 ? "omit_no_evidence" : "omit_not_economical",
-      omitted_context_reasons: evidence.length === 0 ? ["no bounded evidence assembled"] : ["assembled evidence was not relevant enough to justify prompt cost"],
-      validation_failures: [],
-      selected_model_layer: route.layer,
-      selected_model_provider: route.provenance.provider,
-      selected_model: route.provenance.model,
-      fallback_reason: route.provenance.fallback_reason,
-    };
-  }
-
-  const selected: TaskPreambleEvidenceItem[] = [];
-  for (const { item } of ranked) {
-    const candidate = formatTaskPreambleEvidence([...selected, item]);
-    if (estimateTokens(candidate) <= maxTokens) selected.push(item);
-  }
-
-  if (selected.length === 0) {
-    return {
-      preamble_text: "",
-      evidence_anchors: [],
-      token_count: 0,
-      budget_decision: "omit_over_budget",
-      omitted_context_reasons: ["bounded evidence exceeded prompt budget"],
-      validation_failures: [],
-      selected_model_layer: route.layer,
-      selected_model_provider: route.provenance.provider,
-      selected_model: route.provenance.model,
-      fallback_reason: route.provenance.fallback_reason,
-    };
-  }
-
-  const preambleText = formatTaskPreambleEvidence(selected);
-  const tokenCount = estimateTokens(preambleText);
-  if (minExpectedSavings > 0 && tokenCount > minExpectedSavings) {
-    return {
-      preamble_text: "",
-      evidence_anchors: [],
-      token_count: 0,
-      budget_decision: "omit_not_economical",
-      omitted_context_reasons: ["compiled context cost exceeded expected avoided scanning or cognition cost"],
-      validation_failures: [],
-      selected_model_layer: route.layer,
-      selected_model_provider: route.provenance.provider,
-      selected_model: route.provenance.model,
-      fallback_reason: route.provenance.fallback_reason,
-    };
-  }
-
-  return {
-    preamble_text: preambleText,
-    evidence_anchors: selected.map((item) => item.anchor),
-    token_count: tokenCount,
-    budget_decision: "include",
-    omitted_context_reasons: [],
-    validation_failures: [],
-    selected_model_layer: route.layer,
-    selected_model_provider: route.provenance.provider,
-    selected_model: route.provenance.model,
-    fallback_reason: route.provenance.fallback_reason,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Public API: get_cognitive_preamble
 // ---------------------------------------------------------------------------
 
@@ -1104,15 +932,15 @@ export async function getCognitivePreamble(maxTokens: number = 500): Promise<Cog
     /* use default */
   }
 
-  // Top architecture — highest confidence validated edges
+  // Top architecture â€” highest confidence validated edges
   const topEdges = [...kg.validatedEdges]
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 5);
   const keyArchitecture = topEdges.map(
-    (e) => `${e.from} → ${e.to}: ${e.relation} (confidence: ${e.confidence})`
+    (e) => `${e.from} â†’ ${e.to}: ${e.relation} (confidence: ${e.confidence})`
   );
 
-  // Open questions — top tensions by urgency
+  // Open questions â€” top tensions by urgency
   const topTensions = [...kg.tensions]
     .sort((a, b) => b.urgency - a.urgency)
     .slice(0, 3);
@@ -1120,7 +948,7 @@ export async function getCognitivePreamble(maxTokens: number = 500): Promise<Cog
     (t) => `[${t.domain}] ${t.description} (urgency: ${t.urgency})`
   );
 
-  // Recent insights — latest story chapters
+  // Recent insights â€” latest story chapters
   const recentChapters = kg.storyChapters.slice(-3);
   const recentInsights = recentChapters.map(
     (c) => `${c.title}: ${c.key_discoveries.slice(0, 2).join("; ")}`

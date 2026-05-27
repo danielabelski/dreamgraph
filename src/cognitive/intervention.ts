@@ -264,17 +264,11 @@ async function persistRemediationPlans(
   candidateRuns: Array<{
     evidence_bundle_id: string;
     selected_candidate_id?: string;
-<<<<<<< HEAD
     selected_source?: "llm" | "heuristic" | "fallback";
     rejected_candidate_ids: string[];
     model_layer: GeneratedRemediationPlanSet["model_layer"];
     fallback_reason?: string;
     fallback_used?: boolean;
-=======
-    rejected_candidate_ids: string[];
-    model_layer: GeneratedRemediationPlanSet["model_layer"];
-    fallback_reason?: string;
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     validation_failures: string[];
     future_fit_score?: number;
     objection_count: number;
@@ -313,7 +307,6 @@ async function persistRemediationPlans(
       },
     };
 
-<<<<<<< HEAD
     const signalIndexes = new Map(adaptiveFuture.signals.map((signal, index) => [signal.id, index] as const));
     for (const signal of futureSignals) {
       const existingIndex = signalIndexes.get(signal.id);
@@ -326,14 +319,6 @@ async function persistRemediationPlans(
         ...adaptiveFuture.signals[existingIndex],
         ...signal,
       };
-=======
-    const signalIds = new Set(adaptiveFuture.signals.map((signal) => signal.id));
-    for (const signal of futureSignals) {
-      if (!signalIds.has(signal.id)) {
-        adaptiveFuture.signals.push(signal);
-        signalIds.add(signal.id);
-      }
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     }
     adaptiveFuture.outcomes.push(...outcomes);
     adaptiveFuture.candidate_runs.push(...candidateRuns);
@@ -478,7 +463,6 @@ function buildRemediationEvidenceBundle(
   };
 }
 
-<<<<<<< HEAD
 function attachAdaptiveFutureMemory(
   bundle: RemediationEvidenceBundle,
   remediationLog: RemediationLogFile
@@ -497,8 +481,6 @@ function attachAdaptiveFutureMemory(
     : { ...bundle, prior_future_signals: priorFutureSignals };
 }
 
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 /**
  * Build a remediation strategy for a tension. The planner makes three
  * decisions in order:
@@ -1096,18 +1078,11 @@ function remediationDraftMessages(bundle: RemediationEvidenceBundle): LlmMessage
     {
       role: "system",
       content:
-<<<<<<< HEAD
         "Draft one to three remediation candidate futures as strict JSON. " +
         "Return {\"candidates\":[...]} only. Each candidate must include id, title, action_class, " +
         "evidence_anchor_ids, verification_steps, graph_sync_impact, future_fit_score, and objections. " +
         "Use only evidence_anchor ids and action classes present in the provided bundle. " +
         "Every candidate must cite ADR guard-rail anchors when guard rails are present and must score at least 0.35.",
-=======
-        "Draft one or more remediation candidate futures as strict JSON. " +
-        "Return {\"candidates\":[...]} only. Each candidate must include id, title, action_class, " +
-        "evidence_anchor_ids, verification_steps, graph_sync_impact, future_fit_score, and objections. " +
-        "Use only evidence_anchor ids and action classes present in the provided bundle.",
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     },
     {
       role: "user",
@@ -1120,18 +1095,7 @@ function parseRemediationDraftJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-<<<<<<< HEAD
     return undefined;
-=======
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start < 0 || end <= start) return undefined;
-    try {
-      return JSON.parse(text.slice(start, end + 1));
-    } catch {
-      return undefined;
-    }
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   }
 }
 
@@ -1161,7 +1125,6 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
     return undefined;
   }
 
-<<<<<<< HEAD
   const requiredAdrAnchorIds = new Set(
     bundle.adr_guard_rails
       .map((guardRail) => guardRail.adr_id)
@@ -1185,8 +1148,6 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
     return undefined;
   }
 
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   const verificationStepsRaw = Array.isArray(raw.verification_steps) ? raw.verification_steps : [];
   const verificationSteps = verificationStepsRaw.flatMap((step): CandidateFuture["verification_steps"] => {
     if (!isRecord(step)) return [];
@@ -1194,18 +1155,11 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
     const description = typeof step.description === "string" ? step.description.trim() : "";
     const stepAnchors = stringArray(step.evidence_anchor_ids);
     if (!stepId || !description || !stepAnchors || stepAnchors.some((anchor) => !anchorIds.has(anchor))) return [];
-<<<<<<< HEAD
     const command = typeof step.command === "string" ? step.command.trim() : "";
     return [{
       id: stepId,
       description,
       command: command || undefined,
-=======
-    return [{
-      id: stepId,
-      description,
-      command: typeof step.command === "string" ? step.command : undefined,
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
       evidence_anchor_ids: stepAnchors,
     }];
   });
@@ -1214,10 +1168,7 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
   const graphSync = isRecord(raw.graph_sync_impact) ? raw.graph_sync_impact : undefined;
   const graphSyncTargets = stringArray(graphSync?.targets);
   if (!graphSync || typeof graphSync.required !== "boolean" || !graphSyncTargets) return undefined;
-<<<<<<< HEAD
   if (graphSync.required && graphSyncTargets.length === 0) return undefined;
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   if (graphSyncTargets.some((target) => !REMEDIATION_DRAFT_ALLOWED_GRAPH_TARGETS.has(target))) return undefined;
 
   const objectionsRaw = Array.isArray(raw.objections) ? raw.objections : [];
@@ -1240,10 +1191,7 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
   const score = typeof raw.future_fit_score === "number" && Number.isFinite(raw.future_fit_score)
     ? Math.max(0, Math.min(1, raw.future_fit_score))
     : undefined;
-<<<<<<< HEAD
   if (score == null || score < 0.35) return undefined;
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 
   return {
     id,
@@ -1264,10 +1212,7 @@ export function validateCandidateFuture(raw: unknown, bundle: RemediationEvidenc
 export function validateRemediationDraft(raw: unknown, bundle: RemediationEvidenceBundle): CandidateFuture[] {
   if (!isRecord(raw) || !Array.isArray(raw.candidates)) return [];
   return raw.candidates
-<<<<<<< HEAD
     .slice(0, 3)
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     .map((candidate) => validateCandidateFuture(candidate, bundle))
     .filter((candidate): candidate is CandidateFuture => !!candidate);
 }
@@ -1277,7 +1222,6 @@ export function harvestRemediationFutureSignals(
   preferredActionClass: RemediationInterventionType
 ): FutureSignal[] {
   const now = new Date().toISOString();
-<<<<<<< HEAD
   const knownAnchorIds = new Set(bundle.evidence_anchors.map((anchor) => anchor.id));
   const tensionAnchorId = `tension:${bundle.tension_id}`;
   const hasTensionAnchor = knownAnchorIds.has(tensionAnchorId);
@@ -1369,69 +1313,41 @@ export function harvestRemediationFutureSignals(
   }
 
   createSignal({
-=======
-  const tensionAnchorId = `tension:${bundle.tension_id}`;
-  const hasTensionAnchor = bundle.evidence_anchors.some((anchor) => anchor.id === tensionAnchorId);
-  const signals: FutureSignal[] = [];
-
-  signals.push({
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     id: `future_signal:${bundle.id}:preferred_action`,
     description: `Deterministic remediation strategy prefers ${preferredActionClass}.`,
     source: "explicit_preference",
     evidence_anchor_ids: hasTensionAnchor ? [tensionAnchorId] : bundle.evidence_anchors.slice(0, 1).map((anchor) => anchor.id),
     confidence: 0.72,
-<<<<<<< HEAD
     status: "active",
     reviewed_at: now,
   });
 
   for (const adr of bundle.adr_guard_rails) {
     createSignal({
-=======
-    observed_at: now,
-  });
-
-  for (const adr of bundle.adr_guard_rails) {
-    signals.push({
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
       id: `future_signal:${bundle.id}:adr:${adr.adr_id}`,
       description: `Accepted ADR guard rails favor candidates that preserve ${adr.title}.`,
       source: "accepted",
       evidence_anchor_ids: [adr.adr_id],
       confidence: 0.95,
-<<<<<<< HEAD
       status: "active",
       reviewed_at: now,
-=======
-      observed_at: now,
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     });
   }
 
   for (const entity of bundle.entity_summaries) {
     if (entity.exists && entity.source_files.length > 0) {
-<<<<<<< HEAD
       createSignal({
-=======
-      signals.push({
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
         id: `future_signal:${bundle.id}:entity:${entity.id}`,
         description: `Existing source binding for ${entity.id} favors concrete, locally verifiable remediation.`,
         source: "recurring_pattern",
         evidence_anchor_ids: [entity.id, ...entity.source_files],
         confidence: 0.68,
-<<<<<<< HEAD
         status: "active",
         reviewed_at: now,
-=======
-        observed_at: now,
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
       });
     }
   }
 
-<<<<<<< HEAD
   for (const [index, hook] of (bundle.learning_hooks ?? []).entries()) {
     if (!Number.isFinite(hook.confidence)) continue;
     const missingAnchors = hook.evidence_anchor_ids.filter((anchorId) => !knownAnchorIds.has(anchorId));
@@ -1463,12 +1379,6 @@ export function harvestRemediationFutureSignals(
   }
 
   return signals;
-=======
-  return signals.filter((signal) =>
-    signal.evidence_anchor_ids.length > 0 &&
-    signal.evidence_anchor_ids.every((anchorId) => bundle.evidence_anchors.some((anchor) => anchor.id === anchorId))
-  );
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 }
 
 export function scoreCandidateFuture(
@@ -1478,7 +1388,6 @@ export function scoreCandidateFuture(
   preferredActionClass: RemediationInterventionType
 ): CandidateFuture {
   const candidateAnchors = new Set(candidate.evidence_anchor_ids);
-<<<<<<< HEAD
   const matchingSignals = signals.filter((signal) =>
     signal.evidence_anchor_ids.some((anchorId) => candidateAnchors.has(anchorId))
   );
@@ -1500,19 +1409,10 @@ export function scoreCandidateFuture(
   const averageConfidence = (items: FutureSignal[]): number => items.length === 0
     ? 0
     : items.reduce((sum, signal) => sum + signal.confidence, 0) / items.length;
-=======
-  const supportingSignals = signals.filter((signal) =>
-    signal.evidence_anchor_ids.some((anchorId) => candidateAnchors.has(anchorId))
-  );
-  const support = supportingSignals.length === 0
-    ? 0
-    : supportingSignals.reduce((sum, signal) => sum + signal.confidence, 0) / supportingSignals.length;
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   const objections = [...candidate.objections];
   let score = candidate.future_fit_score ?? 0.5;
 
   score += support * 0.25;
-<<<<<<< HEAD
   if (staleSignals.length > 0) {
     const objectionAnchors = Array.from(new Set(
       staleSignals.flatMap((signal) => signal.evidence_anchor_ids).filter((anchorId) => candidateAnchors.has(anchorId))
@@ -1550,8 +1450,6 @@ export function scoreCandidateFuture(
     score -= caution * 0.3;
   }
 
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   if (candidate.action_class === preferredActionClass) {
     score += 0.2;
   } else {
@@ -1586,7 +1484,6 @@ export function scoreCandidateFuture(
   };
 }
 
-<<<<<<< HEAD
 export function buildAdaptiveFutureReview(
   candidate: CandidateFuture | undefined,
   signals: FutureSignal[]
@@ -1629,8 +1526,6 @@ export function buildAdaptiveFutureReview(
   };
 }
 
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 function rankCandidateFutures(
   candidates: CandidateFuture[],
   bundle: RemediationEvidenceBundle,
@@ -1650,7 +1545,6 @@ async function draftRemediationCandidateFutures(
     daemon_component: "dreamer",
     max_tokens: 1800,
   });
-<<<<<<< HEAD
   const completionOptions = {
     ...route.options,
     jsonSchema: {
@@ -1744,8 +1638,6 @@ async function draftRemediationCandidateFutures(
       },
     },
   };
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 
   const drafts = new Map<string, GeneratedRemediationPlanSet>();
   for (const bundle of evidenceBundles) {
@@ -1754,10 +1646,7 @@ async function draftRemediationCandidateFutures(
         evidence_bundle_id: bundle.id,
         candidates: [],
         model_layer: "deterministic_fallback",
-<<<<<<< HEAD
         model_provenance: route.provenance,
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
         fallback_reason: route.provenance.fallback_reason,
         validation_failures: [],
       });
@@ -1765,20 +1654,13 @@ async function draftRemediationCandidateFutures(
     }
 
     try {
-<<<<<<< HEAD
       const response = await route.provider.complete(remediationDraftMessages(bundle), completionOptions);
-=======
-      const response = await route.provider.complete(remediationDraftMessages(bundle), route.options);
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
       const candidates = validateRemediationDraft(parseRemediationDraftJson(response.text), bundle);
       drafts.set(bundle.id, {
         evidence_bundle_id: bundle.id,
         candidates,
         model_layer: route.layer,
-<<<<<<< HEAD
         model_provenance: route.provenance,
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
         fallback_reason: candidates.length === 0 ? llmRouteFailureReason("validation") : undefined,
         validation_failures: candidates.length === 0 ? ["No schema-valid remediation candidates returned."] : [],
       });
@@ -1788,10 +1670,7 @@ async function draftRemediationCandidateFutures(
         evidence_bundle_id: bundle.id,
         candidates: [],
         model_layer: "deterministic_fallback",
-<<<<<<< HEAD
         model_provenance: route.provenance,
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
         fallback_reason: llmRouteFailureReason("provider"),
         validation_failures: [(err as Error).message],
       });
@@ -1805,27 +1684,16 @@ export async function buildRemediationEvidenceBundles(
   maxPlans: number = 5,
   minUrgency: number = 0.3
 ): Promise<RemediationEvidenceBundle[]> {
-<<<<<<< HEAD
   const [tensionFile, adrs, dataModel, dreamGraph, remediationLog] = await Promise.all([
-=======
-  const [tensionFile, adrs, dataModel, dreamGraph] = await Promise.all([
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
     engine.loadTensions(),
     loadAdrLog(),
     loadDataModelMap(),
     engine.loadDreamGraph(),
-<<<<<<< HEAD
     loadRemediationLog(),
   ]);
   const ctx: PlanContext = { dataModel, recentDreams: dreamGraph.edges };
   const { candidates } = selectRemediationCandidates(tensionFile.signals, maxPlans, minUrgency, Date.now());
   return candidates.map((tension) => attachAdaptiveFutureMemory(buildRemediationEvidenceBundle(tension, adrs, ctx), remediationLog));
-=======
-  ]);
-  const ctx: PlanContext = { dataModel, recentDreams: dreamGraph.edges };
-  const { candidates } = selectRemediationCandidates(tensionFile.signals, maxPlans, minUrgency, Date.now());
-  return candidates.map((tension) => buildRemediationEvidenceBundle(tension, adrs, ctx));
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 }
 
 /**
@@ -1887,7 +1755,6 @@ export async function generateRemediationPlans(
     future_signal_ids: string[];
     recorded_at: string;
   }> = [];
-<<<<<<< HEAD
   const evidenceBundles = candidates.map((tension) => attachAdaptiveFutureMemory(buildRemediationEvidenceBundle(tension, adrs, ctx), remediationLog));
   const llmEligibleEvidenceBundles = evidenceBundles.filter(
     (bundle) => bundle.deterministic_short_circuit === "none"
@@ -1897,11 +1764,6 @@ export async function generateRemediationPlans(
     `Remediation planner assembled ${evidenceBundles.length} evidence bundle(s) ` +
     `(${evidenceBundles.length - llmEligibleEvidenceBundles.length} deterministic short-circuit bypass(es)).`
   );
-=======
-  const evidenceBundles = candidates.map((tension) => buildRemediationEvidenceBundle(tension, adrs, ctx));
-  const llmDrafts = await draftRemediationCandidateFutures(evidenceBundles);
-  logger.info(`Remediation planner assembled ${evidenceBundles.length} evidence bundle(s).`);
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 
   for (let index = 0; index < candidates.length; index += 1) {
     const tension = candidates[index];

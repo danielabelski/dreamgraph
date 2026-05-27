@@ -1,14 +1,14 @@
-/**
- * DreamGraph Cognitive Dreaming System — Type definitions.
+﻿/**
+ * DreamGraph Cognitive Dreaming System â€” Type definitions.
  *
  * These types define the data structures for the three cognitive states
  * (AWAKE, REM, NORMALIZING) and the two knowledge spaces
  * (FACT GRAPH and DREAM GRAPH).
  *
  * Speculative Memory Model (5-state lifecycle):
- *   candidate → latent → validated → (promoted to fact graph)
- *                     → rejected
- *   latent    → expired (via decay without reinforcement)
+ *   candidate â†’ latent â†’ validated â†’ (promoted to fact graph)
+ *                     â†’ rejected
+ *   latent    â†’ expired (via decay without reinforcement)
  *
  * Enhanced with:
  * - Dream decay (TTL + confidence decay per cycle)
@@ -16,7 +16,7 @@
  * - Unresolved tension tracking (goal-directed dreaming)
  * - Dream history (session audit trail)
  * - Three-outcome normalization (validated / latent / rejected)
- * - Split scoring: plausibility × evidence − contradiction
+ * - Split scoring: plausibility Ã— evidence âˆ’ contradiction
  * - Activation scoring for goal-directed REM revisitation
  * - Two-threshold promotion: promotionThreshold + retentionThreshold
  *
@@ -48,7 +48,7 @@ export type DreamStrategy =
 
 /**
  * Canonical list of every concrete dream strategy (excluding the omnibus
- * "all" alias). Single source of truth — when adding a new strategy, append
+ * "all" alias). Single source of truth â€” when adding a new strategy, append
  * here so metacognition, scheduler, and adaptive selection see it.
  */
 export const ALL_DREAM_STRATEGIES_NON_ALL: ReadonlyArray<Exclude<DreamStrategy, "all">> = [
@@ -103,7 +103,7 @@ export type NormalizationReasonCode =
   | "low_signal"
   | "semantic_boost";
 
-/** Entity types — includes hypothetical types for dream nodes */
+/** Entity types â€” includes hypothetical types for dream nodes */
 export type DreamEntityType =
   | "feature"
   | "workflow"
@@ -112,7 +112,7 @@ export type DreamEntityType =
   | "hypothetical_workflow"
   | "hypothetical_entity";
 
-/** Edge types — includes hypothetical */
+/** Edge types â€” includes hypothetical */
 export type DreamEdgeType =
   | "feature"
   | "workflow"
@@ -121,7 +121,7 @@ export type DreamEdgeType =
   | "hypothetical";
 
 // ---------------------------------------------------------------------------
-// Dream Decay — edges fade unless reinforced
+// Dream Decay â€” edges fade unless reinforced
 // ---------------------------------------------------------------------------
 
 /** Decay configuration for dream edges */
@@ -132,7 +132,7 @@ export interface DecayConfig {
   decay_rate: number;
 }
 
-/** Default decay settings — TTL must survive at least one full 6-strategy rotation */
+/** Default decay settings â€” TTL must survive at least one full 6-strategy rotation */
 export const DEFAULT_DECAY: DecayConfig = {
   ttl: Number(process.env.DG_DECAY_TTL) || 8,
   decay_rate: Number(process.env.DG_DECAY_RATE) || 0.05,
@@ -142,7 +142,7 @@ export const DEFAULT_DECAY: DecayConfig = {
 // Promotion & Retention Thresholds
 // ---------------------------------------------------------------------------
 
-/** Two-threshold configuration: promotion (→ validated) + retention (→ latent) */
+/** Two-threshold configuration: promotion (â†’ validated) + retention (â†’ latent) */
 export interface PromotionConfig {
   /** Minimum combined confidence for promotion to validated */
   promotion_confidence: number;
@@ -172,8 +172,8 @@ export const DEFAULT_PROMOTION: PromotionConfig = {
 // ---------------------------------------------------------------------------
 
 /**
- * Combined confidence = plausibility × 0.45 + evidence × 0.45
- *                       + reinforcement bonus − contradiction penalty
+ * Combined confidence = plausibility Ã— 0.45 + evidence Ã— 0.45
+ *                       + reinforcement bonus âˆ’ contradiction penalty
  */
 export function computeConfidence(
   plausibility: number,
@@ -192,7 +192,7 @@ export function computeConfidence(
 }
 
 /**
- * Activation score — how much dream attention an edge should receive.
+ * Activation score â€” how much dream attention an edge should receive.
  * High activation = revisit in next REM cycle.
  */
 export function computeActivationScore(
@@ -212,7 +212,7 @@ export function computeActivationScore(
 }
 
 // ---------------------------------------------------------------------------
-// Dream Graph Structures — generated during REM
+// Dream Graph Structures â€” generated during REM
 // ---------------------------------------------------------------------------
 
 /**
@@ -226,9 +226,9 @@ export interface DreamNode {
   description: string;
   /** Fact graph entity IDs that inspired this dream */
   inspiration: string[];
-  /** Dreamer's confidence in this node's value (0.0–1.0) */
+  /** Dreamer's confidence in this node's value (0.0â€“1.0) */
   confidence: number;
-  /** Always "rem" — marks provenance */
+  /** Always "rem" â€” marks provenance */
   origin: "rem";
   /** ISO 8601 creation timestamp */
   created_at: string;
@@ -252,7 +252,7 @@ export interface DreamNode {
   // --- Entity enrichment (populated by LLM for entity promotion) ---
 
   /**
-   * Speculative intent — the LLM's proposed purpose or role for this entity.
+   * Speculative intent â€” the LLM's proposed purpose or role for this entity.
    * Starts as a dream hypothesis. When normalization promotes the node,
    * intent becomes factual and is written into the fact graph description.
    */
@@ -282,7 +282,7 @@ export interface DreamEdge {
   relation: string;
   /** Human-readable reason this edge was dreamed */
   reason: string;
-  /** Dreamer's confidence (0.0–1.0) */
+  /** Dreamer's confidence (0.0â€“1.0) */
   confidence: number;
   /** Always "rem" */
   origin: "rem";
@@ -308,11 +308,11 @@ export interface DreamEdge {
   status: DreamEdgeStatus;
   /** How much dream attention this edge should receive next cycle */
   activation_score: number;
-  /** Structural/semantic plausibility (0–1), set by normalizer */
+  /** Structural/semantic plausibility (0â€“1), set by normalizer */
   plausibility: number;
-  /** Evidence grounding score (0–1), set by normalizer */
+  /** Evidence grounding score (0â€“1), set by normalizer */
   evidence_score: number;
-  /** Contradiction severity (0–1), set by normalizer. 0 = no contradictions */
+  /** Contradiction severity (0â€“1), set by normalizer. 0 = no contradictions */
   contradiction_score: number;
 }
 
@@ -321,16 +321,16 @@ export interface DreamEdge {
 // ---------------------------------------------------------------------------
 
 /**
- * Cold-start bootstrap state — ADR-096.
+ * Cold-start bootstrap state â€” ADR-096.
  *
  * On a fresh instance the graph contains no fact entities and no validated
  * edges, so the strict promotion gate (entity-existence required) is
  * unreachable. During cold-start we drop entity-existence as evidence and
- * relax the confidence floor to 0.50 so the dream → normalize → promote
+ * relax the confidence floor to 0.50 so the dream â†’ normalize â†’ promote
  * loop can produce its first actionable output.
  *
  * Exit is dual-condition (whichever fires first):
- *   (A) entity-count threshold reached: ≥ 50 entities AND ≥ 10 validated edges
+ *   (A) entity-count threshold reached: â‰¥ 50 entities AND â‰¥ 10 validated edges
  *   (B) bootstrap window elapsed: 20 dream cycles OR 24h of daemon uptime
  *
  * `bootstrap_exit_reason` MUST be populated on every cold-start exit (ADR-096
@@ -349,9 +349,9 @@ export interface DreamGraphMetadata {
   created_at: string;
   /** ADR-096: cold-start bootstrap mode. Defaults to "cold_start" on fresh instances. */
   bootstrap_state?: BootstrapState;
-  /** ISO 8601 — when the daemon first observed cold-start (i.e. when normalize() first ran on a fresh graph). */
+  /** ISO 8601 â€” when the daemon first observed cold-start (i.e. when normalize() first ran on a fresh graph). */
   bootstrap_started_at?: string | null;
-  /** ISO 8601 — when the bootstrap window exited (null while still in cold-start). */
+  /** ISO 8601 â€” when the bootstrap window exited (null while still in cold-start). */
   bootstrap_exited_at?: string | null;
   /** Why bootstrap exited. MUST be populated on every exit event (ADR-096). */
   bootstrap_exit_reason?: BootstrapExitReason | null;
@@ -364,7 +364,7 @@ export interface DreamGraphFile {
 }
 
 // ---------------------------------------------------------------------------
-// Normalization Structures — generated during NORMALIZING
+// Normalization Structures â€” generated during NORMALIZING
 // ---------------------------------------------------------------------------
 
 /** Evidence gathered during validation */
@@ -402,13 +402,13 @@ export interface ValidationResult {
   dream_type: "node" | "edge";
   /** Three-outcome classification: validated / latent / rejected */
   status: NormalizationOutcome;
-  /** Combined confidence (plausibility × 0.45 + evidence × 0.45 + reinforcement − contradiction) */
+  /** Combined confidence (plausibility Ã— 0.45 + evidence Ã— 0.45 + reinforcement âˆ’ contradiction) */
   confidence: number;
-  /** Structural/semantic plausibility (0–1) */
+  /** Structural/semantic plausibility (0â€“1) */
   plausibility: number;
-  /** Evidence grounding score (0–1) */
+  /** Evidence grounding score (0â€“1) */
   evidence_score: number;
-  /** Contradiction severity (0–1). 0 = no contradictions */
+  /** Contradiction severity (0â€“1). 0 = no contradictions */
   contradiction_score: number;
   /** Structured evidence */
   evidence: ValidationEvidence;
@@ -441,7 +441,7 @@ export interface CandidateEdgesFile {
 }
 
 // ---------------------------------------------------------------------------
-// Validated Edges — promoted dreams that passed normalization
+// Validated Edges â€” promoted dreams that passed normalization
 // ---------------------------------------------------------------------------
 
 /**
@@ -460,9 +460,9 @@ export interface ValidatedEdge {
   description: string;
   /** Combined confidence (post-validation) */
   confidence: number;
-  /** Structural/semantic plausibility (0–1) */
+  /** Structural/semantic plausibility (0â€“1) */
   plausibility: number;
-  /** Evidence grounding score (0–1) */
+  /** Evidence grounding score (0â€“1) */
   evidence_score: number;
   /** Provenance: always "rem" */
   origin: "rem";
@@ -499,10 +499,10 @@ export interface ValidatedEdgesFile {
 }
 
 // ---------------------------------------------------------------------------
-// Tension System — what the system struggles with
+// Tension System â€” what the system struggles with
 // ---------------------------------------------------------------------------
 
-/** Domain grouping for tensions — enables prioritization by area */
+/** Domain grouping for tensions â€” enables prioritization by area */
 export type TensionDomain =
   | "security"
   | "invoicing"
@@ -526,16 +526,16 @@ export type TensionResolutionType =
 export type TensionResolutionAuthority = "human" | "system";
 
 /**
- * Phase 4 #8 — proposed resolution awaiting validation.
+ * Phase 4 #8 â€” proposed resolution awaiting validation.
  * The resolver stamps a candidate on an open tension, then a later
- * cycle confirms (→ resolveTension) or escalates (urgency bump).
+ * cycle confirms (â†’ resolveTension) or escalates (urgency bump).
  */
 export type TensionResolutionStrategy =
-  | "merge"      // Two entities are actually one — merge their identity.
-  | "mediator"   // A third entity sits between them — surface the bridge.
-  | "split"      // The tension entity is doing too much — split it.
-  | "reframe"    // The query/expectation is wrong — restate the problem.
-  | "wont_fix";  // Acknowledged but intentional — close as accepted risk.
+  | "merge"      // Two entities are actually one â€” merge their identity.
+  | "mediator"   // A third entity sits between them â€” surface the bridge.
+  | "split"      // The tension entity is doing too much â€” split it.
+  | "reframe"    // The query/expectation is wrong â€” restate the problem.
+  | "wont_fix";  // Acknowledged but intentional â€” close as accepted risk.
 
 export interface TensionResolutionCandidate {
   /** Hypothesis kind (drives validation strategy) */
@@ -546,10 +546,10 @@ export interface TensionResolutionCandidate {
   proposed_at: string;
   /** Cycles remaining until validation deadline (0 = validate now) */
   validation_window: number;
-  /** Source of the proposal — heuristic fallback or LLM call */
+  /** Source of the proposal â€” heuristic fallback or LLM call */
   source: "heuristic" | "llm";
   /**
-   * v8.2.6 — concrete, executable follow-up. Either an `enrich_seed_data`
+   * v8.2.6 â€” concrete, executable follow-up. Either an `enrich_seed_data`
    * payload (for graph_enrichment plans) or a `resolve_tension` call (for
    * wont_fix / source-change plans). Populated by the intervention-engine
    * bridge so callers can either review or auto-apply the proposal.
@@ -583,7 +583,7 @@ export interface TensionSignal {
   /** Tension TTL -- decays each cycle; expires when <= 0 */
   ttl: number;
   /**
-   * Phase 4 #8 — proposed resolution awaiting validation.
+   * Phase 4 #8 â€” proposed resolution awaiting validation.
    * Set by `engine.proposeTensionResolution`; consumed by
    * `engine.validateResolutionCandidates`. Absent on freshly recorded
    * tensions and on tensions whose previous candidate was escalated.
@@ -645,7 +645,7 @@ export interface TensionFile {
 }
 
 // ---------------------------------------------------------------------------
-// Dream History — audit trail of every cycle
+// Dream History â€” audit trail of every cycle
 // ---------------------------------------------------------------------------
 
 export interface DreamHistoryEntry {
@@ -714,7 +714,7 @@ export interface DreamHistoryFile {
 }
 
 // ---------------------------------------------------------------------------
-// Cognitive State — introspection (enhanced)
+// Cognitive State â€” introspection (enhanced)
 // ---------------------------------------------------------------------------
 
 export interface DreamGraphStats {
@@ -745,7 +745,7 @@ export interface TensionStats {
   unresolved: number;
   top_urgency: TensionSignal | null;
   /**
-   * Phase 4 #8 — resolution-lifecycle pipeline depth. Optional so older
+   * Phase 4 #8 â€” resolution-lifecycle pipeline depth. Optional so older
    * snapshots remain valid; absent when the resolver has never run.
    */
   resolution_pipeline?: {
@@ -768,13 +768,13 @@ export interface CognitiveState {
   last_normalization: string | null;
   promotion_config: PromotionConfig;
   decay_config: DecayConfig;
-  /** LLM provider status — dreams require an LLM for creative generation */
+  /** LLM provider status â€” dreams require an LLM for creative generation */
   llm?: {
     provider: string;
     model: string;
     available: boolean;
   };
-  /** ADR-096: cold-start bootstrap status (only present when meaningful — i.e. at least one normalization cycle has run). */
+  /** ADR-096: cold-start bootstrap status (only present when meaningful â€” i.e. at least one normalization cycle has run). */
   bootstrap?: BootstrapStatus;
   /**
    * ADR-098 (Slice 2A): live LLM-readiness probe status.
@@ -797,7 +797,7 @@ export interface CognitiveState {
 }
 
 /**
- * Bootstrap status surfaced via cognitive_status — ADR-096.
+ * Bootstrap status surfaced via cognitive_status â€” ADR-096.
  * Present once the engine has run at least one normalization cycle.
  */
 export interface BootstrapStatus {
@@ -820,7 +820,7 @@ export interface BootstrapStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Dream Insights — what the introspection tool returns
+// Dream Insights â€” what the introspection tool returns
 // ---------------------------------------------------------------------------
 
 export interface DreamCluster {
@@ -837,7 +837,7 @@ export interface DreamCluster {
 export interface DreamInsights {
   /** New edges from most recent cycle */
   recent_edges: DreamEdge[];
-  /** Strongest hypotheses (highest confidence × reinforcement) */
+  /** Strongest hypotheses (highest confidence Ã— reinforcement) */
   strongest_hypotheses: Array<{
     edge: DreamEdge;
     score: number;
@@ -848,14 +848,14 @@ export interface DreamInsights {
   /** Unresolved tensions directing next REM */
   active_tensions: TensionSignal[];
   /**
-   * Tensions bucketed by `type`. Counts only — full lists are in
+   * Tensions bucketed by `type`. Counts only â€” full lists are in
    * `active_tensions`. Helps the agent pick the right remediation
    * strategy without scanning the full list.
    */
   tensions_by_type?: Record<string, number>;
   /**
    * Tensions where the same dream has been rejected repeatedly
-   * (occurrences ≥ 3). These are signals the user should either
+   * (occurrences â‰¥ 3). These are signals the user should either
    * confirm (enrich the link) or refute (record an ADR).
    */
   recurrent_rejections?: TensionSignal[];
@@ -1124,7 +1124,7 @@ export interface SemanticElement {
   visibility_conditions?: string[];
 
   // ---------------------------------------------------------------------
-  // Slice 1 — first-class graph citizenship.
+  // Slice 1 â€” first-class graph citizenship.
   //
   // Source provenance (additive, optional, semver-safe). The resource
   // index (`index.json`) admits only entries where `source_repo` is set,
@@ -1143,7 +1143,7 @@ export interface SemanticElement {
   evidence_refs?: string[];
 
   // ---------------------------------------------------------------------
-  // Enrichment — written by `enrich_parser_nodes` (target: "ui" / "all").
+  // Enrichment â€” written by `enrich_parser_nodes` (target: "ui" / "all").
   //
   // UIElement reuses its own `purpose` field as the role tag, so the
   // `purpose` from EnrichableFields is intentionally NOT duplicated here.
@@ -1156,7 +1156,7 @@ export interface SemanticElement {
   intent?: string;
   /** Preserved original `purpose`/`description` text from before enrichment overwrote it. */
   description_raw?: string;
-  /** Enrichment provenance — present only after a successful enrichment pass. */
+  /** Enrichment provenance â€” present only after a successful enrichment pass. */
   enrichment?: {
     enriched: boolean;
     enriched_at: string;
@@ -1166,7 +1166,7 @@ export interface SemanticElement {
   };
 
   // ---------------------------------------------------------------------
-  // Graph linkage — feature anchors and cross-entity links.
+  // Graph linkage â€” feature anchors and cross-entity links.
   // Shape mirrors `GraphLink` in src/types/index.ts.
   // ---------------------------------------------------------------------
 
@@ -1190,7 +1190,7 @@ export interface UIRegistryFile {
     last_updated: string | null;
   };
   elements: SemanticElement[];
-  /** Schema documentation — ignored by runtime, useful for humans. */
+  /** Schema documentation â€” ignored by runtime, useful for humans. */
   _schema_notes?: Record<string, string>;
 }
 
@@ -1354,7 +1354,7 @@ export interface RegisterUIElementInput {
   default_action?: string;
   visibility_conditions?: string[];
 
-  // Slice 1 — first-class graph citizenship (additive optional inputs).
+  // Slice 1 â€” first-class graph citizenship (additive optional inputs).
   source_repo?: string;
   source_file?: string;
   source_kind?: "scanner" | "manual" | "sdk" | "user_guidance" | "generated";
@@ -1537,7 +1537,7 @@ export interface CausalLink {
   effect_entity: string;
   /** How many dream cycles typically elapse between cause and effect */
   lag_cycles: number;
-  /** Correlation strength (0–1) */
+  /** Correlation strength (0â€“1) */
   correlation_strength: number;
   /** How many times this pattern has been observed */
   observed_count: number;
@@ -1546,7 +1546,7 @@ export interface CausalLink {
   description: string;
 }
 
-/** A multi-hop causal chain: A → B → C */
+/** A multi-hop causal chain: A â†’ B â†’ C */
 export interface CausalChain {
   id: string;
   links: CausalLink[];
@@ -1707,7 +1707,7 @@ export interface TemporalInsights {
 /** Threat severity levels */
 export type ThreatSeverity = "critical" | "high" | "medium" | "low" | "info";
 
-/** A threat edge — extends DreamEdge with security metadata */
+/** A threat edge â€” extends DreamEdge with security metadata */
 export interface ThreatEdge {
   id: string;
   from: string;
@@ -1907,13 +1907,10 @@ export interface FutureSignal {
   evidence_anchor_ids: string[];
   confidence: number;
   observed_at: string;
-<<<<<<< HEAD
   status?: "active" | "stale" | "superseded";
   reviewed_at?: string;
   superseded_by?: string;
   superseded_reason?: string;
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 }
 
 export interface FutureObjection {
@@ -1945,13 +1942,13 @@ export interface FutureOutcome {
 /**
  * Classifier for the *kind* of intervention a plan represents.
  *
- * - `source_change`     — Edit one or more real source files.
- * - `graph_enrichment`  — Update entries in `data_model.json` /
+ * - `source_change`     â€” Edit one or more real source files.
+ * - `graph_enrichment`  â€” Update entries in `data_model.json` /
  *                        `features.json` / etc. (no source code touched).
- * - `wont_fix`          — Tension cannot be acted on (phantom target,
+ * - `wont_fix`          â€” Tension cannot be acted on (phantom target,
  *                        intentional separation, out-of-scope).
- * - `merge`             — Two entities should be collapsed.
- * - `rescan`            — The fact graph is stale; re-run scan_project.
+ * - `merge`             â€” Two entities should be collapsed.
+ * - `rescan`            â€” The fact graph is stale; re-run scan_project.
  */
 export type RemediationInterventionType =
   | "source_change"
@@ -1982,18 +1979,14 @@ export interface RemediationEvidenceBundle {
   allowed_action_classes: RemediationInterventionType[];
   deterministic_short_circuit: "phantom_entity" | "graph_enrichment" | "none";
   verification_obligations: VerificationStep[];
-<<<<<<< HEAD
   learning_hooks?: LearningHook[];
   prior_future_signals?: FutureSignal[];
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 }
 
 export interface GeneratedRemediationPlanSet {
   evidence_bundle_id: string;
   candidates: CandidateFuture[];
   model_layer: "connected" | "daemon" | "deterministic_fallback";
-<<<<<<< HEAD
   model_provenance?: {
     task: string;
     layer: "connected" | "daemon" | "deterministic_fallback";
@@ -2003,8 +1996,6 @@ export interface GeneratedRemediationPlanSet {
     fallback_reason?: string;
     temperature?: number;
   };
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
   fallback_reason?: string;
   validation_failures: string[];
 }
@@ -2132,7 +2123,7 @@ export interface RemediationLogFile {
 }
 
 // ===========================================================================
-// v5.1 — METACOGNITIVE SELF-TUNING
+// v5.1 â€” METACOGNITIVE SELF-TUNING
 // ===========================================================================
 
 /** Per-strategy performance metrics over a rolling window */
@@ -2142,7 +2133,7 @@ export interface StrategyMetrics {
   total_generated: number;
   /** Edges that eventually reached "validated" status */
   total_validated: number;
-  /** Precision: validated / generated (0–1) */
+  /** Precision: validated / generated (0â€“1) */
   precision: number;
   /** Tensions resolved by edges originating from this strategy */
   tensions_resolved: number;
@@ -2221,7 +2212,7 @@ export interface MetaLogFile {
 }
 
 // ===========================================================================
-// v5.1 — EVENT-DRIVEN DREAMING
+// v5.1 â€” EVENT-DRIVEN DREAMING
 // ===========================================================================
 
 /** Sources of cognitive events */
@@ -2304,7 +2295,7 @@ export const DEFAULT_EVENT_ROUTER_CONFIG: EventRouterConfig = {
 };
 
 // ===========================================================================
-// v5.1 — CONTINUOUS NARRATIVE INTELLIGENCE
+// v5.1 â€” CONTINUOUS NARRATIVE INTELLIGENCE
 // ===========================================================================
 
 /** Story metadata for the persistent autobiography */
@@ -2318,7 +2309,7 @@ export interface StoryMetadata {
   total_cycles_covered: number;
 }
 
-/** A diff chapter — what changed since the last chapter */
+/** A diff chapter â€” what changed since the last chapter */
 export interface StoryChapter extends NarrativeChapter {
   /** Sequential chapter number */
   chapter_number: number;
@@ -2375,7 +2366,7 @@ export const DEFAULT_NARRATIVE_CONFIG: NarrativeConfig = {
 };
 
 // ===========================================================================
-// v5.2 — DREAM SCHEDULING
+// v5.2 â€” DREAM SCHEDULING
 // ===========================================================================
 
 /** Cognitive actions that can be scheduled */
@@ -2395,7 +2386,7 @@ export type ScheduleTriggerType = "interval" | "cron_like" | "after_cycles" | "o
 export type ScheduleStatus = "active" | "paused" | "exhausted" | "error";
 
 /**
- * A persistent dream schedule — policy-driven temporal orchestration
+ * A persistent dream schedule â€” policy-driven temporal orchestration
  * for cognitive actions.
  */
 export interface DreamSchedule {
@@ -2462,7 +2453,7 @@ export interface ScheduleFile {
 export interface SchedulerConfig {
   /** Whether the scheduler tick loop is enabled (default true) */
   enabled: boolean;
-  /** Tick interval in ms — how often due schedules are checked (default 30_000) */
+  /** Tick interval in ms â€” how often due schedules are checked (default 30_000) */
   tick_interval_ms: number;
   /** Maximum scheduled runs per hour across all schedules (default 30) */
   max_runs_per_hour: number;
@@ -2497,13 +2488,13 @@ export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
 };
 
 // ===========================================================================
-// v5.2 — GRAPH RAG BRIDGE (Knowledge Backbone)
+// v5.2 â€” GRAPH RAG BRIDGE (Knowledge Backbone)
 // ===========================================================================
 
 /** Entity similarity result from TF-IDF matching */
 export interface EntitySimilarity {
   entity_id: string;
-  /** Cosine similarity score (0–1) */
+  /** Cosine similarity score (0â€“1) */
   score: number;
   /** Query terms that matched */
   matched_terms: string[];
@@ -2605,7 +2596,7 @@ export interface GraphRAGContext {
   adaptive_future?: AdaptiveFutureSurfaceAdvice;
 }
 
-/** Cognitive preamble — compact system context for LLM injection */
+/** Cognitive preamble â€” compact system context for LLM injection */
 export interface CognitivePreamble {
   /** One-paragraph system description from knowledge graph */
   system_summary: string;
@@ -2679,69 +2670,6 @@ export interface CompiledTaskPreamble {
   fallback_reason?: string;
 }
 
-/** Evidence classes the Task Preamble Compiler may include. */
-export type TaskPreambleEvidenceKind =
-  | "graph_entity"
-  | "adr"
-  | "workflow"
-  | "api_surface"
-  | "tension"
-  | "prior_outcome"
-  | "verification_obligation"
-  | "context_signal";
-
-/** One bounded, engine-assembled evidence item for task preamble compilation. */
-export interface TaskPreambleEvidenceItem {
-  /** Stable semantic anchor such as feature id, ADR id, workflow id, API member, or tension id. */
-  anchor: string;
-  kind: TaskPreambleEvidenceKind;
-  /** Compact evidence text already owned by the engine; never raw prompt or provider payload text. */
-  summary: string;
-  confidence: number;
-  /** Larger numbers are preferred when trimming to budget. */
-  priority: number;
-}
-
-/** Input for the provider-neutral Task Preamble Compiler. */
-export interface TaskPreambleCompileRequest {
-  /** User task text used only for bounded relevance scoring, not persisted by the compiler. */
-  task: string;
-  /** Optional deterministic evidence supplied by caller; otherwise graph evidence is assembled locally. */
-  evidence?: TaskPreambleEvidenceItem[];
-  /** Maximum generated preamble tokens. Default: 300. */
-  max_tokens?: number;
-  /** Minimum matched relevance score required before adding context. Default: 0.12. */
-  min_relevance?: number;
-  /** Minimum estimated avoided-token cost required before adding context. Default: 64. */
-  min_expected_savings_tokens?: number;
-}
-
-export type TaskPreambleBudgetDecision =
-  | "include"
-  | "omit_no_evidence"
-  | "omit_not_economical"
-  | "omit_over_budget"
-  | "omit_validation_failed";
-
-/** Provider-neutral compiled task preamble, including compact ADR-203 provenance. */
-export interface CompiledTaskPreamble {
-  preamble_text: string;
-  evidence_anchors: string[];
-  token_count: number;
-  budget_decision: TaskPreambleBudgetDecision;
-  omitted_context_reasons: string[];
-  validation_failures: string[];
-  selected_model_layer: "connected" | "daemon" | "deterministic_fallback";
-  selected_model_provider: string | null;
-  selected_model: string | null;
-  fallback_reason?: string;
-}
-
-// ===========================================================================
-// v5.2 — LUCID DREAMING (Interactive Exploration)
-// ===========================================================================
-
-/** A parsed hypothesis from human input */
 export interface LucidHypothesis {
   id: string;
   /** Original human input text */
