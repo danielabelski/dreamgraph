@@ -1,6 +1,6 @@
 # LLM Setup Guide
 
-This guide provides the correct DreamGraph LLM setup for both the daemon-side cognitive engine and the VS Code Architect.
+This guide provides the correct DreamGraph LLM setup for both the daemon-side cognitive engine and the VS Code architect.
 
 ## 1. Daemon-side engine configuration
 
@@ -109,7 +109,7 @@ and then running:
 dg init my-project --template openai
 ```
 
-## 2. VS Code Architect configuration
+## 2. VS Code architect configuration
 
 The VS Code extension uses separate settings from the daemon.
 
@@ -123,12 +123,12 @@ Configure via:
 Important:
 
 - daemon-side `engine.env` controls DreamGraph's internal cognitive engine
-- VS Code Architect settings control the editor chat agent
+- VS Code architect settings control the editor chat agent
 - they are related but separate configuration surfaces
 
 ## 3. OpenAI GPT-5.5 / Responses API notes
 
-The VS Code Architect supports OpenAI `gpt-5.5` models through the OpenAI Responses API, following OpenAI's [migration guide from Chat Completions to Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses).
+The VS Code architect supports OpenAI `gpt-5.5` models through the OpenAI Responses API, following OpenAI's [migration guide from Chat Completions to Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses).
 
 For GPT-5.5 Architect calls, DreamGraph uses:
 
@@ -194,5 +194,5 @@ Some Architect UI changes may persist to VS Code user settings rather than works
 - variables use the `DREAMGRAPH_LLM_*` prefix
 - provider, URL, and API key are present for cloud providers
 - Dreamer and Normalizer overrides are set only when needed
-- VS Code Architect provider/model are configured separately
+- VS Code architect provider/model are configured separately
 - after changes, restart the daemon if needed

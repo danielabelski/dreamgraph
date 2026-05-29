@@ -1,6 +1,6 @@
-# Installing DreamGraph v10.0.1 "Renata"
+# Installing DreamGraph v12.0.0 "Hippodamus"
 
-One-command install from source. Builds the MCP server, deploys the `dg` CLI globally, and installs the VS Code extension with DreamGraph Explorer.
+One-command install from source. Builds the MCP server, deploys the `dg` CLI globally, serves the architect beta through the daemon, and installs the VS Code extension with DreamGraph Explorer.
 
 > Prefer a guided walkthrough with screenshots? See the install page on the website: **[dreamgraph.nofs.ai/guide/installation](https://dreamgraph.nofs.ai/guide/installation)**.
 
@@ -38,7 +38,7 @@ bash scripts/install.sh
 That's it. After install, open a **new terminal** and run:
 
 ```bash
-dg --version          # DreamGraph CLI v10.0.1 (Renata)
+dg --version          # DreamGraph CLI v12.0.0 (Hippodamus)
 dg --help             # Show all commands
 ```
 

@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v11.0.0 — Adaptive Future Engine
+# DreamGraph v12.0.0 — Hippodamus
 
-![Version](https://img.shields.io/badge/version-11.0.0-blue)
+![Version](https://img.shields.io/badge/version-12.0.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -12,7 +12,9 @@
 
 **Website:** [dreamgraph.nofs.ai](https://dreamgraph.nofs.ai/) — overview, guide, downloads, and screenshots in a friendlier format than this README.
 
-DreamGraph is a graph-first cognitive daemon for MCP-enabled development environments. It combines an instance-scoped daemon, CLI, VS Code extension, dashboard, and a persistent knowledge graph so the graph—not any single file or one-off code read—becomes the system’s source of truth.
+DreamGraph is a graph-first cognitive daemon for MCP-enabled development environments. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so the graph—not any single file or one-off code read—becomes the system’s source of truth.
+
+**v12.0.0 Hippodamus introduces the standalone architect beta.** From this release onward, **architect** means the daemon-served standalone browser Architect surface. The editor-integrated chat surface is the **VS Code architect**. Architect beta brings project-bound chat, selected-plan scope, runtime provenance, model/adapter route visibility, governed DreamGraph MCP tool use, and auditable tool traces into the browser while keeping the daemon, graph, ADRs, and source mutations authoritative.
 
 It is built for repository understanding, architecture-aware reasoning, disciplined code change, and continuous graph enrichment through scans, workflows, ADR capture, tensions, and dream cycles.
 
@@ -61,6 +63,8 @@ The guide walks you through installation, your first instance, LLM setup, bootst
 11. [Multi-repo setups](guide/11-multi-repo.md)
 12. [Troubleshooting & FAQ](guide/12-troubleshooting-faq.md)
 13. [Glossary](guide/13-glossary.md)
+14. [Adaptive Future Engine](guide/14-adaptive-future-engine.md)
+15. [Architect beta](guide/15-architect-beta.md)
 
 The auto-generated technical reference (every tool, every parameter, every schema) lives in [`docs/`](docs/README.md) and is best read *after* the guide.
 
@@ -78,7 +82,7 @@ Sponsorship directly funds:
 
 - **A dev machine that doesn't catch fire** when running 20 DreamGraph instances next to a Postgres container and a WSL kernel
 - **CI infrastructure** for the multi-engine datastore tests on the v8.3.0 → v8.9.0 roadmap (SQLite, MySQL, MSSQL, MongoDB, Redis, blob storage, event bus)
-- **More frequent releases** — fewer hours spent on contract work means more hours on the daemon, the cognitive engine, the VS Code Architect, and the documentation
+- **More frequent releases** — fewer hours spent on contract work means more hours on the daemon, the cognitive engine, the VS Code architect, and the documentation
 
 Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10/mo (release-notes thanks) · $25/mo (logo in this README) · $100/mo (priority issue triage) · $500/mo (logo + monthly office hour) · $1,000/mo (embedded support in your team chat). One-time tiers cover release-notes mentions, pair programming, consulting, sponsored bugfixes, and contract work.
 
@@ -89,7 +93,8 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 - **Daemon** — the long-running DreamGraph runtime with stdio or HTTP transport
 - **MCP tool surface** — tools for graph queries, enrichment, source inspection, cognition, ADRs, workflows, and remediation
 - **CLI (`dg`)** — instance creation, attach/detach, start/stop, status, scan, enrich, schedule, export, fork, and migration
-- **VS Code extension** — chat, dashboard, Explorer (interactive 2D/3D graph + curated mutations), changed-files view, daemon connection, and local support tools
+- **Architect beta** — standalone browser Architect for project-bound chat, selected-plan scope, runtime provenance, model/adapter route visibility, governed MCP tool use, and auditable tool traces
+- **VS Code extension** — VS Code architect chat, dashboard, Explorer (interactive 2D/3D graph + curated mutations), changed-files view, daemon connection, and local support tools
 - **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, and dream-cycle reasoning
 - **Adaptive Future Engine** — advisory candidate-future ranking, future-fit scoring, compact objections, and bounded audit metadata for graph-tool and cognitive-workflow decisions
 - **Datastore-as-Hub** — first-class `datastore` entities, live schema introspection (`scan_database`), and the `schema_grounding` dream strategy for multi-repo SaaS projects sharing a backend (set `DATABASE_URL`; inert otherwise)
@@ -101,11 +106,11 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 
 ## GPT-5.5 and OpenAI Responses API
 
-DreamGraph's VS Code Architect supports OpenAI `gpt-5.5` models through the OpenAI Responses API, following OpenAI's [migration guide from Chat Completions to Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses). GPT-5.5 Architect calls use Responses-style input, function-tool definitions, tool-call output replay, reasoning effort, and text verbosity controls. DreamGraph currently uses the Responses API statelessly: DreamGraph's knowledge graph remains the source of memory and context, while prior conversation/tool context is replayed explicitly when needed.
+DreamGraph's VS Code architect supports OpenAI `gpt-5.5` models through the OpenAI Responses API, following OpenAI's [migration guide from Chat Completions to Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses). GPT-5.5 Architect calls use Responses-style input, function-tool definitions, tool-call output replay, reasoning effort, and text verbosity controls. DreamGraph currently uses the Responses API statelessly: DreamGraph's knowledge graph remains the source of memory and context, while prior conversation/tool context is replayed explicitly when needed.
 
 ## Local LLMs (Ollama and LM Studio)
 
-DreamGraph runs against local model servers as first-class peers of the hosted APIs. Both the cognitive engine and the VS Code Architect support **Ollama** (default `http://localhost:11434`) and **LM Studio** (default `http://localhost:1234/v1`, OpenAI-compatible). Pick the one you already use — there is no preferred option. See [docs/setup-llm.md](docs/setup-llm.md) and [guide/04-llm-setup.md](guide/04-llm-setup.md) for the env-var blocks and Architect settings.
+DreamGraph runs against local model servers as first-class peers of the hosted APIs. Both the cognitive engine and the VS Code architect support **Ollama** (default `http://localhost:11434`) and **LM Studio** (default `http://localhost:1234/v1`, OpenAI-compatible). Pick the one you already use — there is no preferred option. See [docs/setup-llm.md](docs/setup-llm.md) and [guide/04-llm-setup.md](guide/04-llm-setup.md) for the env-var blocks and Architect settings.
 
 ## Why DreamGraph
 
@@ -308,7 +313,8 @@ DreamGraph has six major surfaces:
 - **Adaptive Future Engine** — ranks compliant candidate futures with graph evidence, ADR/workflow/API constraints, score factors, objections, and compact audit trails
 - **Daemon runtime** — the MCP-capable service layer exposed through stdio or HTTP
 - **CLI** — operational control over instances and daemon lifecycle
-- **VS Code extension** — the primary interactive editor experience for chat, dashboard, changed-files context, daemon connection, and local-tool execution
+- **Architect beta** — the standalone browser Architect experience for daemon-authoritative project work, selected-plan chat, tool traces, and runtime provenance
+- **VS Code extension** — the primary interactive editor experience for VS Code architect chat, dashboard, changed-files context, daemon connection, and local-tool execution
 - **DreamGraph Explorer** — the interactive graph surface for browsing entities, tensions, candidates, and curated graph mutations, available in a web browser or through the VS Code extension; supports both a 2D Sigma.js canvas and a 3D Three.js canvas (toggle in the Explorer toolbar)
 
 For deeper architectural detail, see:
@@ -391,6 +397,7 @@ These can differ after upgrades, and that is expected.
 
 Reference docs (auto-generated from the codebase):
 
+- [Architect beta user guide](guide/15-architect-beta.md)
 - [INSTALL.md](INSTALL.md)
 - [Living Docs](docs/index.md)
 - [docs/architecture.md](docs/architecture.md)

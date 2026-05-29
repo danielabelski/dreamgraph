@@ -1258,7 +1258,7 @@ async function archiveArchitectPlanForCommand(planId: string): Promise<Record<st
     actor: "standalone-architect-browser",
     slice_id: "slice-4-plan-management-slash-commands",
     evidence: detail.path,
-    content: "Standalone Architect archived this plan through a daemon-governed slash command.",
+    content: "architect archived this plan through a daemon-governed slash command.",
   });
   if (!audit) throw new Error(`No Architect plan with id: ${planId}`);
   const timestamp = new Date().toISOString();
@@ -2407,7 +2407,7 @@ async function handlePlanArchiveRequest(req: IncomingMessage, res: ServerRespons
     actor: textField(body, "actor") ?? "standalone-architect-browser",
     slice_id: textField(body, "slice_id") ?? "standalone-architect-plan-panel",
     evidence: detail.path,
-    content: "Standalone Architect archived this plan through a daemon-governed plan-panel action.",
+    content: "architect archived this plan through a daemon-governed plan-panel action.",
   });
   if (!audit) {
     jsonError(res, 404, "not_found", `No Architect plan with id: ${planId}`);
@@ -3353,7 +3353,7 @@ async function buildArchitectFutureReviewProjection(plan: ArchitectPlanProjectio
   const adrAnchors = Array.from(new Set([...plan.registry.adr_bindings.slice(0, 3), "ADR-214"]));
   const baseAnchors = [
     { kind: "plan" as const, id: plan.id, label: plan.title, source_file: plan.path },
-    { kind: "source" as const, id: "src/architect/routes.ts", label: "Standalone Architect route layer" },
+    { kind: "source" as const, id: "src/architect/routes.ts", label: "architect route layer" },
     ...adrAnchors.map((id) => ({ kind: "adr" as const, id, label: id })),
   ];
   const currentSliceAnchor = currentSlice
@@ -3697,7 +3697,7 @@ async function handleArchitectScheduleActionRequest(
         actor,
         slice_id: sliceId,
         evidence: `schedule:${scheduleId}`,
-        content: "Standalone Architect scheduler action executed through daemon-governed Phase 6 endpoint.",
+        content: "architect scheduler action executed through daemon-governed Phase 6 endpoint.",
       })
     : null;
 

@@ -110,7 +110,7 @@ export function writeEngineEnv(
       {
         key: "DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID",
         defaultValue: "",
-        description: "Standalone Architect selected plan id restored when the daemon/browser restarts.",
+        description: "architect selected plan id restored when the daemon/browser restarts.",
         section: "Architect",
       },
       {
@@ -434,7 +434,7 @@ export function updateEngineEnvValues(envPath: string, updates: Record<string, s
 
     if (pending.size > 0) {
       if (lines.length > 0 && lines[lines.length - 1].trim() !== "") lines.push("");
-      lines.push("# Standalone Architect selections");
+      lines.push("# architect selections");
       for (const key of pending) {
         lines.push(formatEngineEnvAssignment(key, updates[key] ?? ""));
       }

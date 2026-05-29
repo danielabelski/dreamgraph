@@ -1,6 +1,6 @@
 # Anthropic Architect Configuration and Claude Opus 4.7 Migration
 
-This document describes how DreamGraph's VS Code Architect integrates with Anthropic models, with special guidance for **Claude Opus 4.7**.
+This document describes how DreamGraph's VS Code architect integrates with Anthropic models, with special guidance for **Claude Opus 4.7**.
 
 ## Current DreamGraph defaults
 

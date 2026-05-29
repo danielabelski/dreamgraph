@@ -1,6 +1,6 @@
 # 14. Adaptive Future Engine
 
-Adaptive Future Engine, usually shortened to AFE, is DreamGraph's v11 layer for choosing the best next step from several futures that are already allowed by your project graph.
+Adaptive Future Engine, usually shortened to AFE, is DreamGraph's layer for choosing the best next step from several futures that are already allowed by your project graph.
 
 In plain terms: when DreamGraph can take more than one valid path, AFE helps it choose the path that best fits your repository's evidence, ADRs, workflows, data model, API surface, and previous outcomes.
 
@@ -29,7 +29,7 @@ You do not start a separate AFE service. It is deployed as part of DreamGraph it
 
 In a normal installation, AFE runs inside the DreamGraph daemon and is reached through the same surfaces you already use:
 
-- the VS Code Architect chat;
+- architect and the VS Code architect chat;
 - MCP tools exposed by the daemon;
 - graph enrichment tools such as `enrich_parser_nodes`;
 - cognitive tools such as `solidify_cognitive_insight`;
@@ -39,7 +39,7 @@ The VS Code extension does not host a separate AFE runtime. The extension talks 
 
 ## How It Is Deployed In Practice
 
-For users, deploying AFE usually means upgrading DreamGraph to v11.0.1 or later and running the daemon for an instance as usual.
+For users, deploying AFE usually means upgrading DreamGraph to v12.0.0 or later and running the daemon for an instance as usual.
 
 A typical practical setup looks like this:
 

@@ -2,7 +2,7 @@
 
 Thank you to everyone who sponsors DreamGraph. Your support directly funds CI
 infrastructure, hardware, and development time for the daemon, cognitive
-engine, VS Code Architect, and documentation.
+engine, VS Code architect, and documentation.
 
 [**:sparkling_heart: Sponsor on GitHub →**](https://github.com/sponsors/mmethodz)
 

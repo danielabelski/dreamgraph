@@ -541,7 +541,7 @@ function copilotMcpConfigJson(input: {
 
 function serializeCliPrompt(messages: LlmMessage[], userMessage: string, adapter: ArchitectCliAdapter): string {
   return [
-    `You are running inside DreamGraph Standalone Architect through the real ${adapter} bridge.`,
+    `You are running inside DreamGraph architect through the real ${adapter} bridge.`,
     "Use the dreamgraph MCP server as the authoritative source for repository facts and mutations.",
     "Do not use provider-native shell/read/write routes; use dreamgraph:run_command, read_source_code, patch_file, and related DreamGraph MCP tools.",
     "",

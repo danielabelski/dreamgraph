@@ -1,11 +1,11 @@
 # 4. LLM setup
 
-> **TL;DR** — Edit `~/.dreamgraph/<instance-uuid>/config/engine.env`, set `DREAMGRAPH_LLM_PROVIDER`, `DREAMGRAPH_LLM_URL`, `DREAMGRAPH_LLM_API_KEY`, and a model. Restart the daemon. The VS Code Architect is configured separately in VS Code settings.
+> **TL;DR** — Edit `~/.dreamgraph/<instance-uuid>/config/engine.env`, set `DREAMGRAPH_LLM_PROVIDER`, `DREAMGRAPH_LLM_URL`, `DREAMGRAPH_LLM_API_KEY`, and a model. Restart the daemon. The VS Code architect is configured separately in VS Code settings.
 
 DreamGraph has **two** distinct LLM configurations. Don't mix them up:
 
 1. **Daemon-side engine** — used by the cognitive engine (dreaming, normalizing, etc.). Lives in `engine.env`.
-2. **VS Code Architect** — used by the chat panel in VS Code. Lives in VS Code settings.
+2. **VS Code architect** — used by the chat panel in VS Code. Lives in VS Code settings.
 
 You can run with only one of them configured. Many users only ever set the Architect.
 
@@ -89,7 +89,7 @@ dg init --name another-project --template openai
 
 ---
 
-## Part 2 — VS Code Architect
+## Part 2 — VS Code architect
 
 The Architect is the chat panel in VS Code. It is configured through VS Code settings, not `engine.env`.
 
@@ -175,7 +175,7 @@ dg restart my-project
 dg status my-project
 ```
 
-Then trigger a small dream cycle from the VS Code Architect or via MCP:
+Then trigger a small dream cycle from the VS Code architect or via MCP:
 
 > Ask the Architect: *"run a dream cycle with strategy `gap_detection` and max_dreams 5"*
 

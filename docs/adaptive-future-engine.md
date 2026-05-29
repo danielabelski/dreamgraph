@@ -1,6 +1,6 @@
 # Adaptive Future Engine
 
-The Adaptive Future Engine is the v11 preference layer for DreamGraph. It ranks compliant candidate futures using graph evidence, accepted ADRs, workflow context, API/data-model contracts, and learned project preference signals.
+The Adaptive Future Engine is the preference layer for DreamGraph. It ranks compliant candidate futures using graph evidence, accepted ADRs, workflow context, API/data-model contracts, and learned project preference signals.
 
 It is advisory by design. ADRs, workflow contracts, API surface, and explicit user instructions remain the hard constraints. The engine helps choose among valid futures; it does not create a new enforcement path or a new cognitive lifecycle state.
 

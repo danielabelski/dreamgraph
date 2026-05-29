@@ -1,5 +1,12 @@
 # DreamGraph Release Notes
 
+## v12.0.0 - Hippodamus
+
+DreamGraph v12.0.0 ships the Hippodamus release line and marks the standalone browser-based **architect** as beta. The release focuses on architect beta as the daemon-served project work surface with selected-plan scope, runtime provenance, model/adapter route visibility, governed DreamGraph MCP tool use, and auditable tool traces. The editor-integrated chat surface is now documented as the **VS Code architect**.
+
+See [`../RELEASE_NOTES_v12.0.0.md`](../RELEASE_NOTES_v12.0.0.md) for the full distribution notes.
+
+
 ## v11.0.0 - Adaptive Future Engine
 
 DreamGraph v11.0.0 ships the Adaptive Future Engine release line: advisory candidate-future ranking, future-fit scoring, compact objections, route/fallback provenance, and bounded audit metadata for graph-tool and cognitive-workflow consumers.

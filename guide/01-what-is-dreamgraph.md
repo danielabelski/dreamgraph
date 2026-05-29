@@ -95,7 +95,7 @@ ADRs are graph-aware: they can attach to specific features, workflows, or data e
 
 ## How AI agents see DreamGraph
 
-DreamGraph exposes itself as an **MCP server**. Any MCP-aware AI tool — Claude Desktop, the DreamGraph VS Code Architect, Copilot through extensions — can call its tools:
+DreamGraph exposes itself as an **MCP server**. Any MCP-aware AI tool — Claude Desktop, the DreamGraph VS Code architect, Copilot through extensions — can call its tools:
 
 - `query_resource` to read the graph
 - `enrich_seed_data` to add facts

@@ -338,7 +338,7 @@ export async function openExplorerCommand(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Command: Open Standalone Architect                                */
+/*  Command: Open architect                                */
 /* ------------------------------------------------------------------ */
 
 export async function openStandaloneArchitectCommand(

@@ -37,6 +37,7 @@ You do **not** need to read the guide top-to-bottom. Jump to whichever page matc
 | 12 | [Troubleshooting & FAQ](12-troubleshooting-faq.md) | Diagnosing daemon, graph, model, extension, and workflow issues. |
 | 13 | [Glossary](13-glossary.md) | Plain-language definitions for DreamGraph terms. |
 | 14 | [Adaptive Future Engine](14-adaptive-future-engine.md) | What AFE is, where it runs, how it is deployed, and how to read its audit trails. |
+| 15 | [Architect beta](15-architect-beta.md) | The standalone browser-based architect beta introduced in v12.0.0 Hippodamus. |
 
 ## Topical reference (read as needed)
 
@@ -45,19 +46,21 @@ You do **not** need to read the guide top-to-bottom. Jump to whichever page matc
 | [Multi-repo and monorepo setups](11-multi-repo.md) | You have more than one repository, or one big monorepo. |
 | [Troubleshooting & FAQ](12-troubleshooting-faq.md) | Something is wrong and you want a quick checklist. |
 | [Glossary](13-glossary.md) | "Wait, what's a *latent candidate* again?" |
-| [Adaptive Future Engine](14-adaptive-future-engine.md) | You want to understand v11 candidate-future ranking and audit trails. |
+| [Adaptive Future Engine](14-adaptive-future-engine.md) | You want to understand candidate-future ranking and audit trails. |
+| [Architect beta](15-architect-beta.md) | You want the standalone browser architect surface rather than the VS Code architect. |
 
 ---
 
 ## How DreamGraph fits into your day
 
-You install DreamGraph once. Then it runs as a background daemon you barely think about. You interact with it through three surfaces:
+You install DreamGraph once. Then it runs as a background daemon you barely think about. You interact with it through four surfaces:
 
 1. **The `dg` CLI** — for setup, daemon control, and one-off maintenance.
-2. **The VS Code extension** — for chat (Architect), the dashboard, and the Explorer.
-3. **MCP tools** — automatically available to any MCP-aware AI agent (Claude Desktop, Copilot, etc.) once the daemon is running.
+2. **Architect** — the standalone browser-based Architect beta introduced in v12.0.0 Hippodamus.
+3. **The VS Code extension** — for the VS Code architect, dashboard, Explorer, and changed-files context.
+4. **MCP tools** — automatically available to any MCP-aware AI agent once the daemon is running.
 
-Most days you will never type `dg` after starting the daemon. You'll talk to your AI agent and browse the Explorer.
+Most days you will never type `dg` after starting the daemon. You'll talk to architect or the VS Code architect and browse the Explorer.
 
 ---
 

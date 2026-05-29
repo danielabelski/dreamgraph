@@ -1,8 +1,8 @@
 # 6. The VS Code extension
 
-> **TL;DR** — Click the **DreamGraph** icon in the activity bar. You get a chat panel (Architect), a dashboard, an Explorer view, and a changed-files panel. The status-bar item is your bring-it-back button if a panel disappears.
+> **TL;DR** — Click the **DreamGraph** icon in the activity bar. You get the VS Code architect chat panel, a dashboard, an Explorer view, and a changed-files panel. The status-bar item is your bring-it-back button if a panel disappears.
 
-The extension is the easiest way to live with DreamGraph. This page is a guided tour.
+The extension is the editor-integrated DreamGraph surface. In v12.0.0 Hippodamus, **architect** means the standalone browser beta; this page describes the **VS Code architect** and the rest of the extension.
 
 ---
 
@@ -18,16 +18,16 @@ The extension auto-discovers the correct daemon by matching your **workspace fol
 
 ## The four panels
 
-### 1. Architect (chat)
+### 1. VS Code architect (chat)
 
-The Architect is a conversational AI that has every DreamGraph MCP tool wired up. It can:
+The VS Code architect is a conversational AI that has every DreamGraph MCP tool wired up. It can:
 
 - Read your code with repo awareness (`read_source_code`)
 - Query the graph (`query_resource system://features`, etc.)
 - Run dream cycles, record ADRs, resolve tensions
 - Edit files when you ask it to
 
-It uses whichever model you configured in [4. LLM setup](04-llm-setup.md) under `dreamgraph.architect.*` settings.
+It uses whichever model you configured in [4. LLM setup](04-llm-setup.md) under `dreamgraph.architect.*` settings. For the standalone browser beta, see [Architect beta](15-architect-beta.md).
 
 Useful behavior:
 
@@ -59,7 +59,7 @@ The interactive graph view, with a toolbar toggle between a 2D canvas (Sigma.js)
 
 ### 4. Changed files
 
-Lists files modified since the last commit (or since you opened the workspace). Each row is a quick way to ask the Architect "what does this change touch in the graph?" without you having to type the path.
+Lists files modified since the last commit (or since you opened the workspace). Each row is a quick way to ask the VS Code architect "what does this change touch in the graph?" without you having to type the path.
 
 ---
 
@@ -98,9 +98,9 @@ dg start my-project --http
 
 ## Local tools
 
-The extension exposes a small set of **local tools** to the Architect that act on your VS Code workspace directly (open file, show diff, run task, etc.). These are separate from MCP tools — they need direct access to VS Code's API.
+The extension exposes a small set of **local tools** to the VS Code architect that act on your VS Code workspace directly (open file, show diff, run task, etc.). These are separate from MCP tools — they need direct access to VS Code's API.
 
-You don't have to do anything to enable them. The Architect picks them as needed.
+You don't have to do anything to enable them. The VS Code architect picks them as needed.
 
 ---
 
