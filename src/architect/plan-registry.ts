@@ -610,7 +610,7 @@ function extractSlices(
 function extractCheckpoints(logMarkdown: string | null): ArchitectPlanCheckpoint[] {
   if (!logMarkdown) return [];
   const checkpoints: ArchitectPlanCheckpoint[] = [];
-  const pattern = /^###\s+(.+?)\s+—\s+slice:\s+(.+?)\s+—\s+status:\s+(.+)$/gm;
+  const pattern = /^###\s+(.+?)\s+[—-]\s+slice:\s+(.+?)\s+[—-]\s+status:\s+(.+)$/gm;
   const matches = Array.from(logMarkdown.matchAll(pattern));
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index];
@@ -628,7 +628,7 @@ function extractCheckpoints(logMarkdown: string | null): ArchitectPlanCheckpoint
       resume_note: parseFirstMatch(block, /^- Resume note:\s*(.+)$/m),
     });
   }
-  return checkpoints;
+  return checkpoints.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
 }
 
 function normalizeCheckpointStatus(status: string | null | undefined): string {
@@ -642,7 +642,7 @@ function isImplementationCheckpoint(checkpoint: ArchitectPlanCheckpoint): boolea
 
 function isCompletedCheckpoint(checkpoint: ArchitectPlanCheckpoint): boolean {
   const status = normalizeCheckpointStatus(checkpoint.status);
-  return status === "completed" || status === "verified";
+  return status === "completed" || status === "implemented" || status === "verified";
 }
 
 function sliceRef(slice: ArchitectPlanSlice | null | undefined, fallback?: ArchitectPlanCheckpoint | null): ArchitectPlanSliceRef | null {
@@ -736,7 +736,8 @@ function buildOperationalState(
   const resumeHint = latestImplementationCheckpoint?.resume_note ?? latestCompletedCheckpoint?.resume_note ?? lastResumeNote;
   const nextSlice = findNextSliceFromResume(slices, resumeHint, latestCompletedSlice?.id ?? latestCompletedCheckpoint?.slice_id ?? null);
   const latestImplementationSlice = findSliceById(slices, latestImplementationCheckpoint?.slice_id);
-  const activeSlice = normalizeCheckpointStatus(latestImplementationCheckpoint?.status) === "completed" || normalizeCheckpointStatus(latestImplementationCheckpoint?.status) === "verified"
+  const latestImplementationComplete = latestImplementationCheckpoint ? isCompletedCheckpoint(latestImplementationCheckpoint) : false;
+  const activeSlice = latestImplementationComplete
     ? nextSlice ?? latestImplementationSlice ?? activePhaseSlice
     : latestImplementationSlice ?? nextSlice ?? activePhaseSlice;
   const completedSliceIds = new Set(

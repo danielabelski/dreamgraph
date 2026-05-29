@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
@@ -26,6 +27,10 @@ import {
   type LlmProviderType,
 } from "../cognitive/llm.js";
 import { getScheduleHistory, getSchedules, runScheduleNow, updateSchedule } from "../cognitive/scheduler.js";
+import { cmdPlugin } from "../cli/commands/plugin.js";
+import { cmdRestart } from "../cli/commands/restart.js";
+import { cmdStatus } from "../cli/commands/status.js";
+import type { ParsedArgs } from "../cli/dg.js";
 import { getActiveScope, isInstanceMode, resolveInstanceAtStartup } from "../instance/lifecycle.js";
 import { updateEngineEnvValues } from "../utils/engine-env.js";
 import { loadJsonData } from "../utils/cache.js";
@@ -55,6 +60,7 @@ interface ArchitectPlanSummary {
     active_slice?: { id?: string | null; title?: string | null; status?: string | null } | null;
     last_completed_slice?: { id?: string | null; title?: string | null; status?: string | null } | null;
     next_slice?: { id?: string | null; title?: string | null; status?: string | null } | null;
+    resume_hint?: string | null;
     task_memory_binding?: { binding_status?: string | null };
   };
 }
@@ -148,8 +154,9 @@ const ARCHITECT_SELECTED_PLAN_ENV_KEY = "DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID";
 type ArchitectAdapterType = typeof ARCHITECT_ADAPTER_OPTIONS[number];
 type ArchitectAutonomyMode = typeof ARCHITECT_AUTONOMY_MODE_OPTIONS[number];
 type ArchitectExecutionRoute = ArchitectAdapterType;
-type ArchitectPassStatus = "idle" | "running" | "partial" | "timed_out" | "complete" | "failed";
+type ArchitectPassStatus = "idle" | "running" | "paused" | "partial" | "timed_out" | "cancelled" | "complete" | "failed";
 type ArchitectChatScope = "plan" | "project";
+type ArchitectExecutionControlAction = "stop" | "pause" | "resume" | "steer";
 
 interface ArchitectSessionPassState {
   completed: number;
@@ -172,6 +179,38 @@ interface ActiveArchitectSessionRuntime {
   session_id: string;
   session_source: "architect";
   provenance_authority: "dreamgraph_mcp";
+  execution_controls: ArchitectExecutionControlCapabilities;
+}
+
+interface ArchitectExecutionControlCapabilities {
+  stop: boolean;
+  pause: boolean;
+  resume: boolean;
+  steering: boolean;
+}
+
+interface ActiveArchitectExecutionControl {
+  id: string;
+  adapter: ArchitectAdapterType;
+  controller: AbortController;
+  state: Extract<ArchitectPassStatus, "running" | "paused" | "cancelled">;
+  started_at: string;
+  last_action_at: string;
+  steering_prompts: Array<{ prompt: string; received_at: string }>;
+}
+
+interface ArchitectTerminalSession {
+  id: string;
+  title: string;
+  process: ChildProcessWithoutNullStreams;
+  cwd: string;
+  shell: string;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  exit_code: number | null;
+  output: string[];
+  subscribers: Set<(eventName: string, payload: unknown) => void>;
 }
 
 type ArchitectRuntimeRouteContext = ActiveArchitectSessionRuntime;
@@ -199,6 +238,9 @@ let activeArchitectPassState: ArchitectSessionPassState = {
   status: "idle",
   updated_at: new Date().toISOString(),
 };
+let activeArchitectExecutionControl: ActiveArchitectExecutionControl | null = null;
+let architectTerminalSequence = 0;
+const architectTerminalSessions = new Map<string, ArchitectTerminalSession>();
 
 async function ensureArchitectInstanceBinding(): Promise<void> {
   if (getActiveScope() || !process.env.DREAMGRAPH_INSTANCE_UUID) return;
@@ -243,6 +285,16 @@ function getArchitectSelectedPlanConfig(): { planId: string | null; source: "arc
   return planId ? { planId, source: "architect" } : { planId: null, source: "default" };
 }
 
+function persistArchitectSelectedPlanId(planId: string | null): { persisted: boolean; engineEnvPath: string | null } {
+  const scope = getActiveScope();
+  const value = planId ?? "";
+  if (scope?.engineEnvPath) {
+    updateEngineEnvValues(scope.engineEnvPath, { [ARCHITECT_SELECTED_PLAN_ENV_KEY]: value });
+  }
+  process.env[ARCHITECT_SELECTED_PLAN_ENV_KEY] = value;
+  return { persisted: Boolean(scope?.engineEnvPath), engineEnvPath: scope?.engineEnvPath ?? null };
+}
+
 function architectChatScopeFromText(value: string | null): ArchitectChatScope | null {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "plan") return "plan";
@@ -269,6 +321,36 @@ function updateActiveArchitectPassState(partial: Partial<Omit<ArchitectSessionPa
   return activeArchitectPassState;
 }
 
+function buildArchitectExecutionControlCapabilities(adapter: ArchitectAdapterType): ArchitectExecutionControlCapabilities {
+  const isCli = adapter === "codex-cli" || adapter === "copilot-cli";
+  return {
+    stop: isCli,
+    pause: false,
+    resume: false,
+    steering: false,
+  };
+}
+
+function buildArchitectExecutionControlSnapshot(runtime: ActiveArchitectSessionRuntime): Record<string, unknown> {
+  return {
+    state: activeArchitectExecutionControl?.state ?? runtime.pass_state.status,
+    active_execution_id: activeArchitectExecutionControl?.id ?? null,
+    started_at: activeArchitectExecutionControl?.started_at ?? null,
+    last_action_at: activeArchitectExecutionControl?.last_action_at ?? null,
+    capabilities: runtime.execution_controls,
+    steering_queue_length: activeArchitectExecutionControl?.steering_prompts.length ?? 0,
+    adapter: runtime.adapter,
+    session_id: runtime.session_id,
+  };
+}
+
+function buildArchitectExecutionControlPayload(runtime: ActiveArchitectSessionRuntime): Record<string, unknown> {
+  return {
+    runtime,
+    execution_control: buildArchitectExecutionControlSnapshot(runtime),
+  };
+}
+
 function buildActiveArchitectSessionRuntime(overrides: Partial<Pick<ActiveArchitectSessionRuntime, "adapter" | "provider" | "model" | "autonomy_mode" | "pass_state">> = {}): ActiveArchitectSessionRuntime {
   const architect = getArchitectLlmConfig();
   const adapter = getArchitectAdapterConfig();
@@ -292,6 +374,7 @@ function buildActiveArchitectSessionRuntime(overrides: Partial<Pick<ActiveArchit
     session_id: ACTIVE_ARCHITECT_SESSION_ID,
     session_source: "architect",
     provenance_authority: "dreamgraph_mcp",
+    execution_controls: buildArchitectExecutionControlCapabilities(runtimeAdapter),
   };
 }
 
@@ -333,6 +416,34 @@ function buildProjectScopePayload(): Record<string, unknown> {
   };
 }
 
+function buildArchitectAttachmentCapabilities(runtime: ActiveArchitectSessionRuntime): { textAttachments: boolean; imageAttachments: boolean } {
+  const adapter = String(runtime.adapter || "native_api_tool_loop").toLowerCase();
+  const provider = String(runtime.provider || "none").toLowerCase();
+  const model = String(runtime.model || "").toLowerCase();
+  if (adapter === "codex-cli" || adapter === "copilot-cli" || adapter === "deterministic_fallback") {
+    return { textAttachments: false, imageAttachments: false };
+  }
+  switch (provider) {
+    case "anthropic":
+      return { textAttachments: true, imageAttachments: model.startsWith("claude") };
+    case "openai":
+      return {
+        textAttachments: true,
+        imageAttachments:
+          model.startsWith("gpt-5") ||
+          model.startsWith("gpt-4.1") ||
+          model.startsWith("gpt-4o") ||
+          model.startsWith("o4") ||
+          model.startsWith("o3"),
+      };
+    case "ollama":
+    case "lmstudio":
+      return { textAttachments: true, imageAttachments: false };
+    default:
+      return { textAttachments: false, imageAttachments: false };
+  }
+}
+
 function buildArchitectLlmPayload(runtime: ActiveArchitectSessionRuntime = buildActiveArchitectSessionRuntime()): Record<string, unknown> {
   return {
     adapter: runtime.adapter,
@@ -349,6 +460,10 @@ function buildArchitectLlmPayload(runtime: ActiveArchitectSessionRuntime = build
     execution_route: runtime.execution_route,
     session_id: runtime.session_id,
     provenance_authority: runtime.provenance_authority,
+    capabilities: {
+      ...buildArchitectAttachmentCapabilities(runtime),
+      executionControls: runtime.execution_controls,
+    },
   };
 }
 
@@ -394,7 +509,10 @@ function buildArchitectStatusPayload(): Record<string, unknown> {
       adr_edit_proposal: "POST /api/architect/v1/adrs/{adrId}/edits",
       events: "/api/architect/v1/events",
       event_transport: "text/event-stream",
+      commands: "POST /api/architect/v1/commands",
+      execution_controls: "POST /api/architect/v1/commands stop|pause|resume",
     },
+    execution_control: buildArchitectExecutionControlSnapshot(runtime),
     adaptive_future_projection: {
       advisory: true,
       persistence: "plan_bound_review_record",
@@ -750,6 +868,7 @@ function buildMeta(): Record<string, unknown> {
     runtime,
     architect_runtime: runtime,
     architect_llm: buildArchitectLlmPayload(runtime),
+    execution_control: buildArchitectExecutionControlSnapshot(runtime),
     selected_plan_id: selection.planId,
     architect_selection: {
       selected_plan_id: selection.planId,
@@ -760,6 +879,563 @@ function buildMeta(): Record<string, unknown> {
     audit_mode: "governed_plan_log",
     mutation_endpoints_enabled: true,
   };
+}
+
+class ArchitectCliExit extends Error {
+  code: number;
+  constructor(code: number) {
+    super(`Architect CLI exited with code ${code}`);
+    this.code = code;
+  }
+}
+
+async function captureArchitectCliOutput(run: () => Promise<void>): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalExit = process.exit;
+  console.log = (...args: unknown[]) => {
+    stdout.push(args.map((value) => String(value)).join(" "));
+  };
+  console.error = (...args: unknown[]) => {
+    stderr.push(args.map((value) => String(value)).join(" "));
+  };
+  process.exit = (((code?: number) => {
+    throw new ArchitectCliExit(typeof code === "number" ? code : 0);
+  }) as unknown) as typeof process.exit;
+  try {
+    await run();
+    return { stdout: stdout.join("\n").trim(), stderr: stderr.join("\n").trim(), exitCode: 0 };
+  } catch (error) {
+    if (error instanceof ArchitectCliExit) {
+      return { stdout: stdout.join("\n").trim(), stderr: stderr.join("\n").trim(), exitCode: error.code };
+    }
+    throw error;
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    process.exit = originalExit;
+  }
+}
+
+async function runArchitectGitCommand(args: string[]): Promise<string> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: getArchitectProjectRoot(),
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true,
+    });
+    return stdout.toString().trim();
+  } catch (error) {
+    const output = error as { message?: string; stderr?: Buffer | string; stdout?: Buffer | string };
+    const detail = output.stderr?.toString() || output.stdout?.toString() || output.message || "git command failed";
+    throw new Error(detail.trim());
+  }
+}
+
+function architectStatusString(value: unknown, fallback = "unknown"): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function architectStatusNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function formatArchitectStatusPayload(payload: unknown, fallbackInstanceId: string): string {
+  const status = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const identity = status.identity && typeof status.identity === "object" ? status.identity as Record<string, unknown> : {};
+  const project = status.project && typeof status.project === "object" ? status.project as Record<string, unknown> : {};
+  const daemon = status.daemon && typeof status.daemon === "object" ? status.daemon as Record<string, unknown> : {};
+  const cognitive = status.cognitive && typeof status.cognitive === "object" ? status.cognitive as Record<string, unknown> : {};
+  const uuid = architectStatusString(identity.uuid, fallbackInstanceId);
+  const name = architectStatusString(identity.name, "unnamed");
+  const running = typeof daemon.running === "boolean" ? daemon.running : null;
+  const crashed = daemon.crashed === true;
+  const daemonState = crashed ? "crashed" : running === true ? "running" : running === false ? "stopped" : "unknown";
+  const pid = architectStatusNumber(daemon.pid);
+  const port = architectStatusNumber(daemon.port);
+  const uptimeMs = architectStatusNumber(daemon.uptime_ms);
+  const uptime = uptimeMs == null ? "unknown" : `${Math.floor(uptimeMs / 1000)}s`;
+  const lines = [
+    "DreamGraph status",
+    `Instance: ${name} (${uuid})`,
+    `Instance status: ${architectStatusString(identity.status)}`,
+    `Mode: ${architectStatusString(identity.mode)} | Policy: ${architectStatusString(identity.policy)}`,
+    `Project: ${architectStatusString(project.root, "not attached")}`,
+    `Daemon: ${daemonState}${pid == null ? "" : `, pid ${pid}`}${port == null ? "" : `, port ${port}`}, uptime ${uptime}`,
+    `Cognitive: ${architectStatusNumber(cognitive.graph_nodes) ?? 0} nodes, ${architectStatusNumber(cognitive.graph_edges) ?? 0} edges, ${architectStatusNumber(cognitive.validated_edges) ?? 0} validated edges`,
+    `Activity: ${architectStatusNumber(cognitive.dream_cycles) ?? 0} dream cycles, ${architectStatusNumber(cognitive.tool_calls) ?? 0} tool calls`,
+  ];
+  return lines.join("\n");
+}
+
+function architectStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function pluginSummary(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+export function formatArchitectPluginListPayload(payload: unknown): string {
+  const plugins = Array.isArray(payload) ? payload.map(pluginSummary) : [];
+  if (plugins.length === 0) return "No plugins discovered.";
+  const lines = [`Discovered ${plugins.length} plugin${plugins.length === 1 ? "" : "s"}`];
+  for (const plugin of plugins) {
+    const id = architectStatusString(plugin.id, "unknown-plugin");
+    const version = architectStatusString(plugin.version, "unknown-version");
+    const enabled = plugin.enabled === false ? "disabled" : "enabled";
+    const trusted = plugin.trusted === true ? "trusted" : "untrusted";
+    const capabilities = architectStringList(plugin.capabilities);
+    lines.push(`- ${id}@${version} (${enabled}, ${trusted})`);
+    lines.push(`  Capabilities: ${capabilities.length ? capabilities.join(", ") : "none"}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatArchitectPluginInspectPayload(payload: unknown, fallbackPluginId: string): string {
+  const plugin = pluginSummary(payload);
+  const manifest = plugin.manifest && typeof plugin.manifest === "object" ? plugin.manifest as Record<string, unknown> : {};
+  const id = architectStatusString(plugin.id ?? manifest.id, fallbackPluginId);
+  const version = architectStatusString(plugin.version ?? manifest.version, "unknown-version");
+  const enabled = plugin.enabled === false ? "disabled" : "enabled";
+  const trusted = plugin.trusted === true ? "trusted" : "untrusted";
+  const capabilities = architectStringList(manifest.capabilities ?? plugin.capabilities);
+  const lines = [
+    `Plugin ${id}@${version}`,
+    `State: ${enabled}, ${trusted}`,
+    `Capabilities: ${capabilities.length ? capabilities.join(", ") : "none"}`,
+  ];
+  const source = architectStatusString(plugin.manifest_source, "");
+  if (source) lines.push(`Manifest: ${source}`);
+  const description = architectStatusString(manifest.description ?? manifest.intent, "");
+  if (description) lines.push(`Description: ${description}`);
+  return lines.join("\n");
+}
+
+function formatArchitectPluginActionPayload(subcommand: string, pluginId: string, parsed: unknown): string {
+  const result = pluginSummary(parsed);
+  if (result.success === false || result.ok === false) {
+    const detail = architectStatusString(result.error ?? result.message, "Plugin command failed.");
+    return `Plugin ${subcommand} failed for ${pluginId}: ${detail}`;
+  }
+  const verbs: Record<string, string> = {
+    enable: "enabled",
+    disable: "disabled",
+    trust: "trusted",
+    untrust: "untrusted",
+    reload: "reloaded",
+    unload: "unloaded",
+  };
+  const suffix = subcommand === "enable" || subcommand === "disable" || subcommand === "trust" || subcommand === "untrust"
+    ? " Restart the daemon for this configuration change to take effect."
+    : "";
+  return `Plugin ${pluginId} ${verbs[subcommand] ?? "updated"}.${suffix}`;
+}
+
+function currentPlanSelectionLabel(planId: string | null): string {
+  return planId ? `selected: ${planId}` : "Project Scope; no plan selected";
+}
+
+function planLifecycle(plan: ArchitectPlanSummary | ArchitectPlanDetail): string {
+  return architectStatusString(plan.operational_state?.plan_lifecycle ?? plan.status, "unknown");
+}
+
+function planActiveSlice(plan: ArchitectPlanSummary | ArchitectPlanDetail): string {
+  return architectStatusString(
+    plan.operational_state?.active_slice?.title ?? plan.operational_state?.current_slice_title ?? plan.operational_state?.current_slice_id,
+    "none",
+  );
+}
+
+function formatPlanSummaryLine(plan: ArchitectPlanSummary | ArchitectPlanDetail, selectedPlanId: string | null): string {
+  const marker = plan.id === selectedPlanId ? "*" : "-";
+  const next = architectStatusString(plan.operational_state?.next_slice?.title ?? plan.operational_state?.next_slice?.id, "none");
+  return `${marker} ${plan.id} - ${plan.title} (${planLifecycle(plan)}; active ${planActiveSlice(plan)}; next ${next})`;
+}
+
+export function formatArchitectPlanListPayload(plans: ArchitectPlanSummary[], selectedPlanId: string | null): string {
+  if (plans.length === 0) return `No Architect plans found. ${currentPlanSelectionLabel(selectedPlanId)}.`;
+  return [
+    `Architect plans (${plans.length}); ${currentPlanSelectionLabel(selectedPlanId)}`,
+    ...plans.map((plan) => formatPlanSummaryLine(plan, selectedPlanId)),
+  ].join("\n");
+}
+
+export function formatArchitectPlanStatusPayload(plan: ArchitectPlanDetail | null, selectedPlanId: string | null): string {
+  if (!plan) return "No Architect plan is selected. Use /plan list or /plan new <name>, or stay in Project Scope with /plan clear.";
+  const operational = plan.operational_state ?? {};
+  const lines = [
+    `Plan ${plan.title} (${plan.id})`,
+    `Lifecycle: ${planLifecycle(plan)} | execution: ${architectStatusString(operational.execution_state, "idle")}`,
+    `Phase: ${architectStatusString(operational.active_phase ?? operational.phase ?? plan.active_phase, "unknown")}`,
+    `Active slice: ${planActiveSlice(plan)}`,
+    `Last completed: ${architectStatusString(operational.last_completed_slice?.title ?? operational.last_completed_slice?.id, "none")}`,
+    `Next slice: ${architectStatusString(operational.next_slice?.title ?? operational.next_slice?.id, "none")}`,
+    `Checkpoints: ${plan.checkpoint_count ?? 0}; ADR bindings: ${(plan.adr_bindings ?? []).join(", ") || "none"}`,
+    `Resume: ${plan.resume_state?.last_resume_note ?? operational.resume_hint ?? "none"}`,
+  ];
+  return lines.join("\n");
+}
+
+export function formatArchitectPlanNextPayload(plan: ArchitectPlanDetail | null): string {
+  if (!plan) return "No Architect plan is selected. Select a plan before using /plan next.";
+  const next = plan.operational_state?.next_slice;
+  if (!next) return `Plan ${plan.id} has no projected next slice.`;
+  return `Next slice for ${plan.id}: ${architectStatusString(next.title ?? next.id, "unknown")} (${architectStatusString(next.status, "pending")})`;
+}
+
+function planSearchScore(plan: ArchitectPlanSummary, query: string): number {
+  const haystack = [plan.id, plan.title, plan.status, plan.active_phase, plan.operational_state?.current_slice_title, plan.operational_state?.next_slice?.title]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const normalized = query.toLowerCase();
+  if (plan.id.toLowerCase() === normalized) return 100;
+  if (plan.id.toLowerCase().includes(normalized)) return 80;
+  if (plan.title.toLowerCase().includes(normalized)) return 70;
+  return haystack.includes(normalized) ? 40 : 0;
+}
+
+function parseArchitectJsonOutput(raw: string, failureMessage: string): unknown {
+  try {
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    throw new Error(failureMessage);
+  }
+}
+
+async function listArchitectPlanSummaries(): Promise<ArchitectPlanSummary[]> {
+  return await Promise.all((await listArchitectPlanFiles()).map((fileName) => buildArchitectPlanSummary(fileName)));
+}
+
+async function selectArchitectPlanForCommand(planId: string | null): Promise<Record<string, unknown>> {
+  if (planId) {
+    const plan = await loadArchitectPlanDetail(planId);
+    if (!plan) throw new Error(`No Architect plan with id: ${planId}`);
+    const selection = persistArchitectSelectedPlanId(planId);
+    return { selected_plan_id: planId, selected_plan_title: plan.title, persisted: selection.persisted, engine_env_path: selection.engineEnvPath };
+  }
+  const selection = persistArchitectSelectedPlanId(null);
+  return { selected_plan_id: null, selected_plan_title: null, persisted: selection.persisted, engine_env_path: selection.engineEnvPath };
+}
+
+async function createArchitectPlanForCommand(name: string): Promise<{ plan: ArchitectPlanSummary; result: Record<string, unknown> }> {
+  const title = normalizePlanTitle(name);
+  const baseId = slugifyPlanId(title);
+  const planId = await pickAvailablePlanId(baseId);
+  const timestamp = new Date().toISOString();
+  const plansRoot = getArchitectPlansRoot();
+  await mkdir(plansRoot, { recursive: true });
+  await writeFile(resolve(plansRoot, `${planId}.md`), buildCreatedPlanMarkdown(planId, title, timestamp), { encoding: "utf-8", flag: "wx" });
+  await writeFile(resolve(plansRoot, `${planId}.implementation-log.md`), buildCreatedPlanLog(planId, title, timestamp), { encoding: "utf-8", flag: "wx" });
+  const plan = await buildArchitectPlanSummary(`${planId}.md`);
+  const selection = await selectArchitectPlanForCommand(planId);
+  const result = {
+    plan_id: planId,
+    title,
+    status: "created",
+    changed: true,
+    plan_path: `plans/${planId}.md`,
+    log_path: `plans/${planId}.implementation-log.md`,
+    audit_scope: "daemon_governed_plan_create",
+    ...selection,
+  };
+  publishEvent("architect.plan_action", result);
+  return { plan, result };
+}
+
+function handleArchitectExecutionControlCommand(action: ArchitectExecutionControlAction, prompt: string | null = null): { content: string; structured: Record<string, unknown> } {
+  const runtime = buildActiveArchitectSessionRuntime();
+  const capabilities = runtime.execution_controls;
+  const current = activeArchitectExecutionControl;
+  if (action === "stop") {
+    if (!capabilities.stop) throw new Error("/stop is not supported by the current Architect runtime.");
+    if (!current || current.state !== "running") {
+      return {
+        content: "No Architect task is currently running.",
+        structured: buildArchitectExecutionControlPayload(runtime),
+      };
+    }
+    current.state = "cancelled";
+    current.last_action_at = new Date().toISOString();
+    current.controller.abort();
+    const passState = updateActiveArchitectPassState({ status: "cancelled" });
+    const nextRuntime = buildActiveArchitectSessionRuntime({ pass_state: passState });
+    const structured = buildArchitectExecutionControlPayload(nextRuntime);
+    publishEvent("architect.execution_control", { action, ...structured });
+    return { content: "Stop requested for the running Architect task. The daemon will return to idle after the active bridge exits.", structured };
+  }
+  if (action === "pause") {
+    if (!capabilities.pause) throw new Error("/pause is not supported by the current Architect runtime.");
+    if (!current || current.state !== "running") throw new Error("No running Architect task is available to pause.");
+    current.state = "paused";
+    current.last_action_at = new Date().toISOString();
+    const passState = updateActiveArchitectPassState({ status: "paused" });
+    const nextRuntime = buildActiveArchitectSessionRuntime({ pass_state: passState });
+    const structured = buildArchitectExecutionControlPayload(nextRuntime);
+    publishEvent("architect.execution_control", { action, ...structured });
+    return { content: "Architect task paused.", structured };
+  }
+  if (action === "resume") {
+    if (!capabilities.resume) throw new Error("/resume is not supported by the current Architect runtime.");
+    if (!current || current.state !== "paused") throw new Error("No paused Architect task is available to resume.");
+    current.state = "running";
+    current.last_action_at = new Date().toISOString();
+    const passState = updateActiveArchitectPassState({ status: "running" });
+    const nextRuntime = buildActiveArchitectSessionRuntime({ pass_state: passState });
+    const structured = buildArchitectExecutionControlPayload(nextRuntime);
+    publishEvent("architect.execution_control", { action, ...structured });
+    return { content: "Architect task resumed.", structured };
+  }
+  if (!capabilities.steering) throw new Error("Steering prompts are not supported by the current Architect runtime.");
+  if (!current || current.state !== "running") throw new Error("No running Architect task is available for steering.");
+  current.steering_prompts.push({ prompt: prompt ?? "", received_at: new Date().toISOString() });
+  current.last_action_at = new Date().toISOString();
+  const structured = buildArchitectExecutionControlPayload(runtime);
+  publishEvent("architect.execution_control", { action, prompt_length: prompt?.length ?? 0, ...structured });
+  return { content: "Steering prompt accepted for the running Architect task.", structured };
+}
+
+async function archiveArchitectPlanForCommand(planId: string): Promise<Record<string, unknown>> {
+  const detail = await loadArchitectPlanDetail(planId);
+  if (!detail) throw new Error(`No Architect plan with id: ${planId}`);
+  const audit = await recordPlanActionAudit(planId, {
+    kind: "plan_action",
+    action: "archive_plan",
+    audit_reason: `Operator archived Architect plan ${planId} from /plan archive.`,
+    actor: "standalone-architect-browser",
+    slice_id: "slice-4-plan-management-slash-commands",
+    evidence: detail.path,
+    content: "Standalone Architect archived this plan through a daemon-governed slash command.",
+  });
+  if (!audit) throw new Error(`No Architect plan with id: ${planId}`);
+  const timestamp = new Date().toISOString();
+  const archiveStamp = timestamp.replace(/[:.]/g, "-");
+  const plansRoot = getArchitectPlansRoot();
+  const archiveRoot = resolve(plansRoot, "archive");
+  await mkdir(archiveRoot, { recursive: true });
+  const archivedPlanFileName = `${planId}.${archiveStamp}.md`;
+  await rename(resolve(plansRoot, `${planId}.md`), resolve(archiveRoot, archivedPlanFileName));
+  const logFileName = `${planId}.implementation-log.md`;
+  const logPath = resolve(plansRoot, logFileName);
+  let archivedLogPath: string | null = null;
+  if (existsSync(logPath)) {
+    const archivedLogFileName = `${planId}.${archiveStamp}.implementation-log.md`;
+    await rename(logPath, resolve(archiveRoot, archivedLogFileName));
+    archivedLogPath = `plans/archive/${archivedLogFileName}`;
+  }
+  const selection = await selectArchitectPlanForCommand(null);
+  const result = {
+    plan_id: planId,
+    title: detail.title,
+    status: "archived",
+    changed: true,
+    audit_id: audit.audit_id,
+    archived_path: `plans/archive/${archivedPlanFileName}`,
+    archived_log_path: archivedLogPath,
+    audit_scope: "daemon_governed_plan_archive",
+    ...selection,
+  };
+  publishEvent("architect.plan_action", result);
+  return result;
+}
+
+async function handleArchitectCommandRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (message === "body_too_large") {
+      jsonError(res, 413, "body_too_large", "Architect command payload is too large");
+      return;
+    }
+    jsonError(res, 400, "bad_json", "Expected a JSON object request body");
+    return;
+  }
+
+  const command = textField(body, "command")?.trim().toLowerCase();
+  const args = Array.isArray(body.args) ? body.args.map((value) => String(value)).filter(Boolean) : [];
+  const instanceId = getInstanceId();
+  if (!command) {
+    jsonError(res, 400, "bad_request", "Missing command");
+    return;
+  }
+
+  try {
+    let title = command;
+    let invoked = "";
+    let content = "";
+    let structured: unknown = null;
+
+    if (command === "status") {
+      if (!instanceId) throw new Error("/status requires a bound DreamGraph instance.");
+      const captured = await captureArchitectCliOutput(async () => {
+        await cmdStatus([instanceId], { json: true });
+      });
+      if (captured.exitCode !== 0) throw new Error(captured.stderr || captured.stdout || "Unable to read instance status.");
+      invoked = `dg status ${instanceId} --json`;
+      title = `Status ${instanceId}`;
+      try {
+        structured = captured.stdout ? JSON.parse(captured.stdout) : {};
+      } catch {
+        throw new Error("Status response was not valid JSON.");
+      }
+      content = formatArchitectStatusPayload(structured, instanceId);
+    } else if (command === "restart") {
+      if (!instanceId) throw new Error("/restart requires a bound DreamGraph instance.");
+      const captured = await captureArchitectCliOutput(async () => {
+        await cmdRestart([instanceId], {});
+      });
+      if (captured.exitCode !== 0) throw new Error(captured.stderr || captured.stdout || "dg restart failed");
+      invoked = `dg restart ${instanceId}`;
+      title = `Restart ${instanceId}`;
+      content = captured.stdout || "Restart requested.";
+    } else if (command === "plugin") {
+      const subcommand = String(args[0] || "").trim().toLowerCase();
+      const pluginId = String(args[1] || "").trim();
+      const allowed = new Set(["list", "inspect", "enable", "disable", "trust", "untrust", "reload", "unload"]);
+      if (!allowed.has(subcommand)) throw new Error("Usage: /plugin <list|inspect|enable|disable|trust|untrust|reload|unload> [plugin-id]");
+      if (subcommand !== "list" && !pluginId) throw new Error(`Usage: /plugin ${subcommand} <plugin-id>`);
+      if (!instanceId) throw new Error("/plugin requires a bound DreamGraph instance.");
+      const positional = [subcommand, instanceId];
+      if (pluginId) positional.push(pluginId);
+      const flags: ParsedArgs["flags"] =
+        subcommand === "list" || subcommand === "inspect" ? { json: true } : {};
+      const captured = await captureArchitectCliOutput(async () => {
+        await cmdPlugin(positional, flags);
+      });
+      if (captured.exitCode !== 0) throw new Error(captured.stderr || captured.stdout || `Plugin ${subcommand} failed.`);
+      invoked = `dg plugin ${subcommand} ${instanceId}${pluginId ? ` ${pluginId}` : ""}`;
+      title = `Plugin ${subcommand}`;
+      const raw = captured.stdout || captured.stderr || "";
+      if (subcommand === "list") {
+        structured = parseArchitectJsonOutput(raw, "Plugin list response was not valid JSON.");
+        content = formatArchitectPluginListPayload(structured);
+      } else if (subcommand === "inspect") {
+        structured = parseArchitectJsonOutput(raw, "Plugin inspect response was not valid JSON.");
+        content = formatArchitectPluginInspectPayload(structured, pluginId);
+      } else {
+        structured = raw.trim().startsWith("{") || raw.trim().startsWith("[") ? parseArchitectJsonOutput(raw, "Plugin action response was not valid JSON.") : null;
+        content = formatArchitectPluginActionPayload(subcommand, pluginId, structured);
+      }
+    } else if (command === "stop" || command === "pause" || command === "resume") {
+      invoked = `/${command}`;
+      title = `Execution ${command}`;
+      const control = handleArchitectExecutionControlCommand(command);
+      structured = control.structured;
+      content = control.content;
+    } else if (command === "steer") {
+      invoked = "/steer";
+      title = "Execution steering";
+      const control = handleArchitectExecutionControlCommand("steer", args.join(" ").trim());
+      structured = control.structured;
+      content = control.content;
+    } else if (command === "plan") {
+      const subcommand = String(args[0] || "").trim().toLowerCase();
+      const selectedPlanId = getArchitectSelectedPlanConfig().planId;
+      const allowed = new Set(["new", "archive", "list", "search", "status", "next", "clear"]);
+      if (!allowed.has(subcommand)) throw new Error("Usage: /plan <new|archive|list|search|status|next|clear>");
+      invoked = `/plan ${subcommand}`;
+      title = `Plan ${subcommand}`;
+      if (subcommand === "new") {
+        const name = args.slice(1).join(" ").trim();
+        if (!name) throw new Error("Usage: /plan new <name>");
+        const created = await createArchitectPlanForCommand(name);
+        structured = created.result;
+        content = `Created and selected plan ${created.plan.title} (${created.plan.id}).`;
+      } else if (subcommand === "archive") {
+        if (!selectedPlanId) throw new Error("No Architect plan is selected. Select a plan before using /plan archive.");
+        structured = await archiveArchitectPlanForCommand(selectedPlanId);
+        content = `Archived plan ${selectedPlanId}. Architect is now in Project Scope with no plan selected.`;
+      } else if (subcommand === "list") {
+        const plans = await listArchitectPlanSummaries();
+        structured = { plans, selected_plan_id: selectedPlanId };
+        content = formatArchitectPlanListPayload(plans, selectedPlanId);
+      } else if (subcommand === "search") {
+        const query = args.slice(1).join(" ").trim();
+        if (!query) throw new Error("Usage: /plan search <query>");
+        const plans = (await listArchitectPlanSummaries())
+          .map((plan) => ({ plan, score: planSearchScore(plan, query) }))
+          .filter((entry) => entry.score > 0)
+          .sort((left, right) => right.score - left.score || left.plan.title.localeCompare(right.plan.title))
+          .map((entry) => entry.plan);
+        structured = { query, plans, selected_plan_id: selectedPlanId };
+        content = plans.length ? formatArchitectPlanListPayload(plans, selectedPlanId) : `No Architect plans matched "${query}".`;
+      } else if (subcommand === "status") {
+        const plan = selectedPlanId ? await loadArchitectPlanDetail(selectedPlanId) : null;
+        structured = { plan, selected_plan_id: selectedPlanId };
+        content = formatArchitectPlanStatusPayload(plan, selectedPlanId);
+      } else if (subcommand === "next") {
+        const plan = selectedPlanId ? await loadArchitectPlanDetail(selectedPlanId) : null;
+        structured = { next_slice: plan?.operational_state?.next_slice ?? null, selected_plan_id: selectedPlanId };
+        content = formatArchitectPlanNextPayload(plan);
+      } else if (subcommand === "clear") {
+        structured = await selectArchitectPlanForCommand(null);
+        content = "Cleared plan selection. Architect is now in Project Scope.";
+      }
+    } else if (command === "git") {
+      const subcommand = String(args[0] || "").trim().toLowerCase();
+      const remainder = args.slice(1);
+      if (subcommand === "status") {
+        invoked = "git status --short --branch";
+        title = "Git status";
+        content = await runArchitectGitCommand(["status", "--short", "--branch"]);
+      } else if (subcommand === "diff") {
+        invoked = "git diff --stat --patch --";
+        title = "Git diff";
+        content = (await runArchitectGitCommand(["diff", "--stat", "--patch", "--"])) || "No diff.";
+      } else if (subcommand === "branch") {
+        invoked = "git branch --show-current";
+        title = "Git branch";
+        content = await runArchitectGitCommand(["branch", "--show-current"]);
+      } else if (subcommand === "log") {
+        invoked = "git log --oneline -10";
+        title = "Git log";
+        content = await runArchitectGitCommand(["log", "--oneline", "-10"]);
+      } else if (subcommand === "commit") {
+        const message = remainder.join(" ").trim();
+        if (!message) throw new Error("Usage: /git commit <message>");
+        invoked = `git commit -m ${JSON.stringify(message)}`;
+        title = "Git commit";
+        content = await runArchitectGitCommand(["commit", "-m", message]);
+      } else {
+        throw new Error("Usage: /git <status|diff|branch|log|commit>");
+      }
+    } else {
+      jsonError(res, 400, "bad_request", `Unsupported command: ${command}`);
+      return;
+    }
+
+    json(res, 200, {
+      ok: true,
+      contract: "architect",
+      version: "v1",
+      ...buildMeta(),
+      result: {
+        success: true,
+        command,
+        args,
+        title,
+        content,
+        formatted_payload: content,
+        structured,
+        diagnostics: {
+          active_instance_id: instanceId ?? null,
+          invoked,
+          raw_detail_available: Boolean(invoked || structured),
+        },
+        raw_detail: null,
+      },
+    }, { "Cache-Control": "no-store" });
+  } catch (error) {
+    jsonError(res, 400, "command_failed", String(error instanceof Error ? error.message : error));
+  }
 }
 
 function parseArchitectPlanSubroute(pathname: string): { planId: string; suffix: string | null } | null {
@@ -782,6 +1458,18 @@ function parseArchitectAdrSubroute(pathname: string): ArchitectAdrSubroute | nul
   const [encodedAdrId, ...rest] = remainder.split("/");
   return {
     adrId: decodeURIComponent(encodedAdrId),
+    suffix: rest.length > 0 ? rest.join("/") : null,
+  };
+}
+
+function parseArchitectTerminalSubroute(pathname: string): { terminalId: string; suffix: string | null } | null {
+  const base = "/api/architect/v1/terminals/";
+  if (!pathname.startsWith(base)) return null;
+  const remainder = pathname.slice(base.length);
+  if (!remainder) return { terminalId: "", suffix: null };
+  const [encodedTerminalId, ...rest] = remainder.split("/");
+  return {
+    terminalId: decodeURIComponent(encodedTerminalId),
     suffix: rest.length > 0 ? rest.join("/") : null,
   };
 }
@@ -816,6 +1504,23 @@ function textField(body: Record<string, unknown>, field: string): string | null 
 function optionalTextField(body: Record<string, unknown>, field: string): string | null {
   const value = body[field];
   return typeof value === "string" ? value.trim() : null;
+}
+
+function optionalRawTextField(body: Record<string, unknown>, field: string): string | null {
+  const value = body[field];
+  return typeof value === "string" ? value : null;
+}
+
+function boundedTextField(body: Record<string, unknown>, field: string, maxLength: number): string | null {
+  const value = optionalTextField(body, field);
+  if (!value) return null;
+  return value.slice(0, maxLength);
+}
+
+function boundedRawTextField(body: Record<string, unknown>, field: string, maxLength: number): string | null {
+  const value = optionalRawTextField(body, field);
+  if (value == null || value.length === 0) return null;
+  return value.slice(0, maxLength);
 }
 
 function architectProviderField(body: Record<string, unknown>, field: string): LlmProviderType | null {
@@ -878,6 +1583,193 @@ function buildPlanActionInput(
     evidence: textField(body, "evidence"),
     content: textField(body, "content"),
   };
+}
+
+function buildArchitectTerminalSnapshot(session: ArchitectTerminalSession): Record<string, unknown> {
+  return {
+    id: session.id,
+    title: session.title,
+    cwd: session.cwd,
+    shell: session.shell,
+    created_at: session.created_at,
+    updated_at: session.updated_at,
+    closed_at: session.closed_at,
+    exit_code: session.exit_code,
+    state: session.closed_at ? "closed" : "running",
+    authority: {
+      surface: "local_terminal_convenience",
+      payload_authority: false,
+      repository_authority: "dreamgraph_mcp",
+      adr_binding: "ADR-222",
+    },
+  };
+}
+
+function emitArchitectTerminalEvent(session: ArchitectTerminalSession, eventName: string, payload: unknown): void {
+  for (const subscriber of session.subscribers) subscriber(eventName, payload);
+}
+
+function resolveArchitectTerminalShellCommand(): { command: string; args: string[]; shell: string } {
+  if (process.platform === "win32") {
+    return { command: "powershell.exe", args: ["-NoLogo"], shell: "PowerShell" };
+  }
+  return { command: process.env.SHELL || "bash", args: ["-i"], shell: "bash" };
+}
+
+function createArchitectTerminalSession(title: string | null): ArchitectTerminalSession {
+  architectTerminalSequence += 1;
+  const id = `terminal-${architectTerminalSequence}`;
+  const cwd = getArchitectProjectRoot();
+  const shellPlan = resolveArchitectTerminalShellCommand();
+  const child = spawn(shellPlan.command, shellPlan.args, {
+    cwd,
+    env: { ...process.env, TERM: process.env.TERM || "xterm-256color" },
+    windowsHide: true,
+  });
+  const now = new Date().toISOString();
+  const session: ArchitectTerminalSession = {
+    id,
+    title: title || `Terminal ${architectTerminalSequence}`,
+    process: child,
+    cwd,
+    shell: shellPlan.shell,
+    created_at: now,
+    updated_at: now,
+    closed_at: null,
+    exit_code: null,
+    output: [],
+    subscribers: new Set(),
+  };
+  const appendOutput = (stream: "stdout" | "stderr", chunk: Buffer): void => {
+    const text = chunk.toString("utf-8");
+    session.output.push(text);
+    if (session.output.length > 500) session.output.splice(0, session.output.length - 500);
+    session.updated_at = new Date().toISOString();
+    emitArchitectTerminalEvent(session, "terminal_output", { id, stream, text, updated_at: session.updated_at });
+  };
+  child.stdout.on("data", (chunk: Buffer) => appendOutput("stdout", chunk));
+  child.stderr.on("data", (chunk: Buffer) => appendOutput("stderr", chunk));
+  child.on("error", (error) => {
+    const text = `Terminal failed to start: ${(error as Error).message}\n`;
+    session.output.push(text);
+    session.closed_at = new Date().toISOString();
+    session.updated_at = session.closed_at;
+    emitArchitectTerminalEvent(session, "terminal_output", { id, stream: "stderr", text, updated_at: session.updated_at });
+    emitArchitectTerminalEvent(session, "terminal_exit", buildArchitectTerminalSnapshot(session));
+  });
+  child.on("exit", (code) => {
+    session.closed_at = new Date().toISOString();
+    session.updated_at = session.closed_at;
+    session.exit_code = code;
+    emitArchitectTerminalEvent(session, "terminal_exit", buildArchitectTerminalSnapshot(session));
+  });
+  architectTerminalSessions.set(id, session);
+  return session;
+}
+
+function closeArchitectTerminalSession(session: ArchitectTerminalSession): void {
+  if (!session.closed_at) {
+    session.process.kill();
+    session.closed_at = new Date().toISOString();
+    session.updated_at = session.closed_at;
+  }
+  emitArchitectTerminalEvent(session, "terminal_exit", buildArchitectTerminalSnapshot(session));
+  architectTerminalSessions.delete(session.id);
+}
+
+async function handleArchitectTerminalCreateRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    jsonError(res, 400, "bad_request", (error as Error).message);
+    return;
+  }
+  const session = createArchitectTerminalSession(boundedTextField(body, "title", 80));
+  json(res, 200, { ok: true, contract: "architect", version: "v1", terminal: buildArchitectTerminalSnapshot(session) }, { "Cache-Control": "no-store" });
+}
+
+async function handleArchitectTerminalInputRequest(req: IncomingMessage, res: ServerResponse, terminalId: string): Promise<void> {
+  const session = architectTerminalSessions.get(terminalId);
+  if (!session) {
+    jsonError(res, 404, "not_found", "Terminal session not found");
+    return;
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    jsonError(res, 400, "bad_request", (error as Error).message);
+    return;
+  }
+  const input = boundedRawTextField(body, "input", 4096);
+  if (input == null) {
+    jsonError(res, 400, "bad_request", "Terminal input is required");
+    return;
+  }
+  if (session.closed_at || !session.process.stdin.writable) {
+    jsonError(res, 409, "terminal_closed", "Terminal session is closed");
+    return;
+  }
+  session.process.stdin.write(input);
+  session.updated_at = new Date().toISOString();
+  json(res, 200, { ok: true, terminal: buildArchitectTerminalSnapshot(session) }, { "Cache-Control": "no-store" });
+}
+
+async function handleArchitectTerminalRenameRequest(req: IncomingMessage, res: ServerResponse, terminalId: string): Promise<void> {
+  const session = architectTerminalSessions.get(terminalId);
+  if (!session) {
+    jsonError(res, 404, "not_found", "Terminal session not found");
+    return;
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    jsonError(res, 400, "bad_request", (error as Error).message);
+    return;
+  }
+  const title = boundedTextField(body, "title", 80);
+  if (!title) {
+    jsonError(res, 400, "bad_request", "Terminal title is required");
+    return;
+  }
+  session.title = title;
+  session.updated_at = new Date().toISOString();
+  emitArchitectTerminalEvent(session, "terminal_rename", buildArchitectTerminalSnapshot(session));
+  json(res, 200, { ok: true, terminal: buildArchitectTerminalSnapshot(session) }, { "Cache-Control": "no-store" });
+}
+
+function handleArchitectTerminalEvents(req: IncomingMessage, res: ServerResponse, terminalId: string): void {
+  const session = architectTerminalSessions.get(terminalId);
+  if (!session) {
+    jsonError(res, 404, "not_found", "Terminal session not found");
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  const writeTerminalEvent = (eventName: string, payload: unknown): void => {
+    res.write(`event: ${eventName}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+  writeTerminalEvent("terminal_snapshot", { terminal: buildArchitectTerminalSnapshot(session), output: session.output.join("") });
+  const subscriber = (eventName: string, payload: unknown): void => writeTerminalEvent(eventName, payload);
+  session.subscribers.add(subscriber);
+  req.on("close", () => session.subscribers.delete(subscriber));
+}
+
+function handleArchitectTerminalCloseRequest(res: ServerResponse, terminalId: string): void {
+  const session = architectTerminalSessions.get(terminalId);
+  if (!session) {
+    jsonError(res, 404, "not_found", "Terminal session not found");
+    return;
+  }
+  const snapshot = buildArchitectTerminalSnapshot(session);
+  closeArchitectTerminalSession(session);
+  json(res, 200, { ok: true, terminal: snapshot }, { "Cache-Control": "no-store" });
 }
 
 async function handlePlanActionRequest(
@@ -1740,6 +2632,20 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     autonomy_mode: mode,
     pass_state: updateActiveArchitectPassState({ status: "running", tools: 0 }),
   });
+  const executionController = new AbortController();
+  activeArchitectExecutionControl = {
+    id: `${runtime.session_id}:${Date.now()}`,
+    adapter,
+    controller: executionController,
+    state: "running",
+    started_at: new Date().toISOString(),
+    last_action_at: new Date().toISOString(),
+    steering_prompts: [],
+  };
+  publishEvent("architect.execution_control", {
+    action: "started",
+    ...buildArchitectExecutionControlPayload(runtime),
+  });
 
   if (adapter === "deterministic_fallback") {
     fallbackReason = "operator_selected_deterministic_fallback";
@@ -1756,6 +2662,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
         userMessage: message,
         model: architectConfig.model,
         timeoutMs: architectConfig.timeoutMs,
+        signal: executionController.signal,
         onToolTrace: (entry) => {
           toolTrace = mergeArchitectToolTraceEntries(toolTrace, entry);
           runtime = buildActiveArchitectSessionRuntime({
@@ -1794,7 +2701,9 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
         fallbackReason = fallbackReason ?? "empty_cli_bridge_response";
       }
     } catch (error) {
-      fallbackReason = `architect_provider_failed: ${(error as Error).message.slice(0, 240)}`;
+      fallbackReason = executionController.signal.aborted
+        ? "architect_execution_cancelled"
+        : `architect_provider_failed: ${(error as Error).message.slice(0, 240)}`;
     }
   } else if (architectConfig.provider === "none" || architectConfig.model.length === 0) {
     fallbackReason = "architect_llm_not_configured";
@@ -1851,19 +2760,25 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
           fallbackReason = fallbackReason ?? "empty_llm_response";
         }
       } catch (error) {
-        fallbackReason = `architect_provider_failed: ${(error as Error).message.slice(0, 240)}`;
+        fallbackReason = executionController.signal.aborted
+          ? "architect_execution_cancelled"
+          : `architect_provider_failed: ${(error as Error).message.slice(0, 240)}`;
       }
     }
   }
 
-  if (!assistantText && chatScope === "plan" && shouldApplyPlanChatUpdate(message, plan)) {
+  if (executionController.signal.aborted && !fallbackReason) {
+    fallbackReason = "architect_execution_cancelled";
+  }
+
+  if (!assistantText && chatScope === "plan" && !executionController.signal.aborted && shouldApplyPlanChatUpdate(message, plan)) {
     planUpdate = await applyPlanChatUpdate(plan!, message, runtime);
   }
 
   const finalPassState = updateActiveArchitectPassState({
     completed: activeArchitectPassState.completed + 1,
     tools: toolTrace.length,
-    status: architectPassStatusFromFallback(fallbackReason),
+    status: executionController.signal.aborted ? "cancelled" : architectPassStatusFromFallback(fallbackReason),
   });
   runtime = buildActiveArchitectSessionRuntime({
     adapter,
@@ -1933,6 +2848,10 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     plan_update: planUpdate,
     provenance: runtimeProvenance,
   });
+
+  if (activeArchitectExecutionControl?.controller === executionController) {
+    activeArchitectExecutionControl = null;
+  }
 
   const meta = buildMeta();
   const payload = {
@@ -3018,16 +3937,26 @@ function renderArchitectShell(): string {
       gap: 8px;
       overflow: hidden;
     }
-    .architect-center-tabs {
+    .architect-center-tab-strip {
       display: flex;
-      flex-wrap: wrap;
       gap: 6px;
       align-items: center;
       border-bottom: 1px solid var(--line);
       padding-bottom: 6px;
+      min-width: 0;
+      position: relative;
+    }
+    .architect-center-tabs {
+      display: flex;
+      flex: 1 1 auto;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
     }
     .architect-tab-button {
       min-height: 28px;
+      max-width: 180px;
       border: 1px solid var(--line);
       border-radius: 6px;
       background: rgba(255, 255, 255, 0.045);
@@ -3035,14 +3964,76 @@ function renderArchitectShell(): string {
       cursor: pointer;
       padding: 4px 9px;
       font: 700 0.72rem/1.2 var(--sans);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .architect-tab-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .architect-tab-close {
+      width: 16px;
+      height: 16px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      padding: 0;
+      font: 700 0.72rem/1 var(--sans);
+    }
+    .architect-tab-close:hover {
+      background: rgba(255, 255, 255, 0.10);
     }
     .architect-tab-button[aria-selected="true"] {
       border-color: rgba(104, 216, 182, 0.54);
       background: var(--accent-soft);
       color: var(--accent);
     }
+    .architect-tab-add {
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--muted);
+      cursor: pointer;
+      font: 800 0.9rem/1 var(--sans);
+    }
+    .architect-tab-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 20;
+      min-width: 160px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #111815;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+      padding: 4px;
+    }
+    .architect-tab-menu button {
+      width: 100%;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+      padding: 7px 8px;
+      text-align: left;
+      font: 700 0.72rem/1.2 var(--sans);
+    }
+    .architect-tab-menu button:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
     .architect-tab-panels {
       min-height: 0;
+      height: 100%;
       overflow: hidden;
     }
     .architect-tab-panel {
@@ -3063,10 +4054,75 @@ function renderArchitectShell(): string {
       overflow: auto;
       padding-right: 4px;
     }
+    .architect-tab-panel.terminal-workspace {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      gap: 0;
+      overflow: hidden;
+    }
+    .architect-tab-panel.terminal-workspace > h2 {
+      display: none;
+    }
     .architect-tab-panel h2 {
       margin: 0 0 8px;
       font-size: 1rem;
       line-height: 1.2;
+    }
+    .terminal-surface {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 8px;
+      min-height: 0;
+      height: 100%;
+    }
+    .terminal-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+    .terminal-console {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      min-height: 0;
+      height: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #07100d;
+      color: var(--ink);
+      overflow: hidden;
+      font: 0.78rem/1.45 var(--mono);
+    }
+    .terminal-output {
+      min-height: 0;
+      margin: 0;
+      padding: 10px 10px 0;
+      white-space: pre-wrap;
+      overflow: auto;
+    }
+    .terminal-form {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 6px;
+      align-items: center;
+      padding: 4px 10px 10px;
+    }
+    .terminal-prompt {
+      color: var(--accent);
+      user-select: none;
+    }
+    .terminal-input {
+      min-width: 0;
+      min-height: 24px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      padding: 0;
+      font: inherit;
     }
     .runtime-controls {
       display: grid;
@@ -3287,53 +4343,84 @@ function renderArchitectShell(): string {
     }
     .chat-form {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      grid-template-areas:
-        "input actions"
-        "status status";
+      grid-template-columns: minmax(0, 1fr);
       gap: 8px;
-      align-items: end;
     }
     .prompt-surface {
-      grid-area: input;
-      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
       min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.055);
+      padding: 8px;
     }
     .chat-input {
       width: 100%;
-      min-height: 48px;
-      max-height: 26vh;
+      min-height: 34px;
+      max-height: 112px;
       resize: none;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.055);
+      border: 0;
+      background: transparent;
       color: var(--ink);
-      padding: 30px 10px 10px;
+      padding: 4px 2px;
       font: 0.82rem/1.34 var(--sans);
-      overflow: auto;
+      overflow: hidden;
     }
     .chat-input:focus {
+      outline: none;
+    }
+    .prompt-surface:focus-within {
       outline: 2px solid rgba(104, 216, 182, 0.32);
       border-color: rgba(104, 216, 182, 0.52);
     }
-    .chat-submit-row {
-      grid-area: actions;
+    .chat-attachment-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 32px;
+    }
+    .chat-attachment-cluster {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .chat-send-cluster {
       display: flex;
       align-items: center;
       justify-content: flex-end;
       gap: 8px;
+      flex: 0 0 auto;
     }
-    .chat-submit-row .action-button {
-      width: auto;
-      min-width: 86px;
+    .chat-attachment-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      min-width: 0;
+    }
+    .chat-attachment-list li {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      min-height: 32px;
+      padding: 3px 8px;
+      border: 1px solid rgba(104, 216, 182, 0.24);
+      border-radius: 999px;
+      background: rgba(104, 216, 182, 0.08);
+      color: var(--muted);
+      font-size: 0.68rem;
     }
     .scope-pill {
-      position: absolute;
-      top: 7px;
-      left: 8px;
-      z-index: 1;
-      max-width: min(280px, calc(100% - 16px));
-      height: 18px;
+      align-self: flex-start;
+      max-width: min(280px, 100%);
+      height: 22px;
       border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.055);
@@ -3360,6 +4447,48 @@ function renderArchitectShell(): string {
       cursor: not-allowed;
       opacity: 0.62;
     }
+    .scope-pill:focus-visible,
+    .mini-icon-button:focus-visible,
+    .chat-send-button:focus-visible {
+      outline: 2px solid rgba(104, 216, 182, 0.55);
+      outline-offset: 2px;
+    }
+    .mini-icon-button,
+    .chat-send-button {
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      border-radius: 999px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .mini-icon-button {
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.065);
+      color: var(--ink);
+      font-size: 1rem;
+    }
+    .mini-icon-button:hover {
+      border-color: rgba(104, 216, 182, 0.36);
+      background: rgba(104, 216, 182, 0.12);
+    }
+    .chat-send-button {
+      border: 1px solid rgba(104, 216, 182, 0.66);
+      background: var(--accent);
+      color: #07130f;
+      padding: 0;
+    }
+    .chat-send-button:hover {
+      border-color: rgba(255, 255, 255, 0.38);
+      filter: brightness(1.08);
+    }
+    .chat-send-button svg {
+      width: 17px;
+      height: 17px;
+      stroke-width: 2.35;
+    }
     .processing-light {
       width: 14px;
       height: 14px;
@@ -3376,10 +4505,13 @@ function renderArchitectShell(): string {
       animation: architectProcessingRing 820ms linear infinite;
     }
     .chat-form .status {
-      grid-area: status;
       margin-top: 0;
+      font-size: 0.68rem;
+      line-height: 1.35;
     }
     .action-button:disabled,
+    .mini-icon-button:disabled,
+    .chat-send-button:disabled,
     .chat-input:disabled {
       cursor: not-allowed;
       opacity: 0.62;
@@ -3477,8 +4609,49 @@ function renderArchitectShell(): string {
       border-color: rgba(104, 216, 182, 0.5);
       background: rgba(104, 216, 182, 0.18);
     }
+    .adr-icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(104, 216, 182, 0.1);
+      color: var(--ink);
+      cursor: pointer;
+      padding: 0;
+      flex: 0 0 auto;
+    }
+    .adr-icon-button:hover {
+      border-color: rgba(104, 216, 182, 0.5);
+      background: rgba(104, 216, 182, 0.18);
+    }
+    .adr-icon-button svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     .inline-actions > * {
       flex: 1 1 132px;
+    }
+    .adr-binding-item {
+      display: grid;
+      gap: 6px;
+    }
+    .adr-binding-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .adr-binding-header strong {
+      margin-bottom: 0;
+      min-width: 0;
     }
     a {
       color: var(--accent);
@@ -3687,22 +4860,36 @@ function renderArchitectShell(): string {
           <span id="architect-pass-view" class="pass-view">0 passes | 0 tools</span>
         </label>
       </div>
-      <div class="architect-center-tabs" role="tablist" aria-label="Center workspace">
-        <button id="architect-tab-chat" class="architect-tab-button" type="button" role="tab" aria-selected="true" aria-controls="architect-panel-chat" data-architect-tab="chat">Chat</button>
-        <button id="architect-tab-plan" class="architect-tab-button" type="button" role="tab" aria-selected="false" aria-controls="architect-panel-plan" data-architect-tab="plan">Plan</button>
-        <button id="architect-tab-adr" class="architect-tab-button" type="button" role="tab" aria-selected="false" aria-controls="architect-panel-adr" data-architect-tab="adr">ADR Editor</button>
+      <div class="architect-center-tab-strip">
+        <div id="architect-center-tabs" class="architect-center-tabs" role="tablist" aria-label="Center workspace"></div>
+        <button id="architect-tab-add" class="architect-tab-add" type="button" aria-label="Create center tab" title="Create center tab">+</button>
+        <div id="architect-tab-menu" class="architect-tab-menu" hidden></div>
       </div>
-      <div class="architect-tab-panels">
+      <div id="architect-tab-panels" class="architect-tab-panels">
         <div id="architect-panel-chat" class="architect-tab-panel chat-workspace" role="tabpanel" aria-labelledby="architect-tab-chat" data-architect-tab-panel="chat">
           <div id="chat-log" class="chat-log" aria-live="polite"></div>
           <form id="chat-form" class="chat-form">
             <div class="prompt-surface">
               <button id="chat-scope-pill" class="scope-pill" type="button" data-scope="project" aria-pressed="false" aria-label="Toggle chat scope">🌍 Project</button>
-              <textarea id="chat-input" class="chat-input" name="message" placeholder="Ask Architect about this project or the selected plan..."></textarea>
-            </div>
-            <div class="chat-submit-row">
-              <span id="chat-processing-light" class="processing-light" aria-hidden="true"></span>
-              <button id="chat-submit" class="action-button" type="submit">Send</button>
+              <textarea id="chat-input" class="chat-input" name="message" rows="1" placeholder="Ask Architect about this project or the selected plan..."></textarea>
+              <div class="chat-attachment-row">
+                <div class="chat-attachment-cluster">
+                  <button id="chat-attachment-button" class="mini-icon-button" type="button" aria-label="Add attachment" title="Add attachment">+</button>
+                  <ul id="chat-attachment-list" class="chat-attachment-list" hidden></ul>
+                </div>
+                <div class="chat-send-cluster">
+                  <span id="chat-processing-light" class="processing-light" aria-hidden="true"></span>
+                  <button id="chat-pause" class="mini-icon-button" type="button" aria-label="Pause task" title="Pause task" hidden>II</button>
+                  <button id="chat-stop" class="mini-icon-button" type="button" aria-label="Stop task" title="Stop task" hidden>X</button>
+                  <button id="chat-submit" class="chat-send-button" type="submit" aria-label="Send prompt" title="Send prompt">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z" />
+                      <path d="M6 12h16" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <input id="chat-attachment-input" type="file" multiple hidden />
             </div>
             <p id="chat-status" class="status">Architect chat is bound to the active project and daemon configuration.</p>
           </form>
@@ -3811,8 +4998,13 @@ function renderArchitectShell(): string {
     const chatInputEl = document.getElementById('chat-input');
     const chatScopePillEl = document.getElementById('chat-scope-pill');
     const chatSubmitEl = document.getElementById('chat-submit');
+    const chatPauseEl = document.getElementById('chat-pause');
+    const chatStopEl = document.getElementById('chat-stop');
     const chatProcessingLightEl = document.getElementById('chat-processing-light');
     const chatStatusEl = document.getElementById('chat-status');
+    const chatAttachmentButtonEl = document.getElementById('chat-attachment-button');
+    const chatAttachmentInputEl = document.getElementById('chat-attachment-input');
+    const chatAttachmentListEl = document.getElementById('chat-attachment-list');
     const architectAdapterSelectEl = document.getElementById('architect-adapter-select');
     const architectProviderSelectEl = document.getElementById('architect-provider-select');
     const architectModelInputEl = document.getElementById('architect-model-input');
@@ -3859,10 +5051,18 @@ function renderArchitectShell(): string {
     let activeArchitectRuntime = (initialRuntimePayload && (initialRuntimePayload.runtime || initialRuntimePayload.architect_runtime || initialRuntimePayload.architect_llm)) || {};
     let lastPersistedPlanId = initialRuntimePayload && (initialRuntimePayload.selected_plan_id || (initialRuntimePayload.architect_selection && initialRuntimePayload.architect_selection.selected_plan_id)) || null;
     let activeChatScope = lastPersistedPlanId ? 'plan' : 'project';
+    let activePlanSnapshot = null;
+    let activeAttachmentCapabilities = { textAttachments: false, imageAttachments: false };
+    let pendingChatAttachments = [];
     const architectControlStorageKey = 'architect.chat.controls.v1';
-    const architectCenterTabButtons = Array.from(document.querySelectorAll('[data-architect-tab]'));
-    const architectCenterTabPanels = Array.from(document.querySelectorAll('[data-architect-tab-panel]'));
+    const architectCenterTabContainer = document.getElementById('architect-center-tabs');
+    const architectCenterPanelContainer = document.getElementById('architect-tab-panels');
+    const architectTabAddButton = document.getElementById('architect-tab-add');
+    const architectTabMenu = document.getElementById('architect-tab-menu');
     const architectCenterTabStorageKey = 'architect.center.tab.v1';
+    let architectCenterTabs = [];
+    let architectTabSequence = 0;
+    const architectTabTypeRegistry = new Map();
     const architectModelOptionsByProvider = {
       anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
       openai: ['gpt-5.5', 'gpt-5', 'gpt-5.4', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini', 'o3', 'o4-mini'],
@@ -3874,27 +5074,333 @@ function renderArchitectShell(): string {
       'codex-cli': ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5-mini', 'auto'],
     };
 
+    function registerArchitectTabType(descriptor) {
+      if (!descriptor || !descriptor.type || typeof descriptor.create !== 'function') return;
+      architectTabTypeRegistry.set(descriptor.type, descriptor);
+    }
+
+    function createBuiltInArchitectTab(id, title, type, panelId) {
+      return {
+        id: id,
+        title: title,
+        type: type,
+        lifecycle: 'built-in',
+        dirty: false,
+        closeable: false,
+        panelId: panelId,
+      };
+    }
+
+    function createTerminalArchitectTab() {
+      architectTabSequence += 1;
+      const id = 'terminal-tab-' + architectTabSequence;
+      return {
+        id: id,
+        title: 'Terminal ' + architectTabSequence,
+        type: 'terminal',
+        lifecycle: 'dynamic',
+        dirty: true,
+        closeable: true,
+        panelId: 'architect-panel-' + id,
+        terminalSessionId: null,
+        terminalEventSource: null,
+      };
+    }
+
     function resolveArchitectCenterTab(tabId) {
       const requested = tabId || 'chat';
-      return architectCenterTabButtons.some(function(button) { return button.dataset.architectTab === requested; }) ? requested : 'chat';
+      return architectCenterTabs.some(function(tab) { return tab.id === requested; }) ? requested : 'chat';
+    }
+
+    function renderArchitectTabButton(tab, activeTabId) {
+      const button = document.createElement('button');
+      button.id = 'architect-tab-' + tab.id;
+      button.className = 'architect-tab-button';
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', tab.id === activeTabId ? 'true' : 'false');
+      button.setAttribute('aria-controls', tab.panelId);
+      button.dataset.architectTab = tab.id;
+      button.dataset.architectTabType = tab.type;
+      button.dataset.architectTabLifecycle = tab.lifecycle;
+      button.addEventListener('click', function() { setArchitectCenterTab(tab.id); });
+
+      const label = document.createElement('span');
+      label.className = 'architect-tab-label';
+      label.textContent = tab.title + (tab.dirty ? ' *' : '');
+      button.appendChild(label);
+
+      if (tab.closeable) {
+        const close = document.createElement('span');
+        close.className = 'architect-tab-close';
+        close.setAttribute('role', 'button');
+        close.setAttribute('tabindex', '0');
+        close.setAttribute('aria-label', 'Close ' + tab.title);
+        close.title = 'Close ' + tab.title;
+        close.textContent = 'x';
+        close.addEventListener('click', function(event) {
+          event.stopPropagation();
+          closeArchitectCenterTab(tab.id);
+        });
+        close.addEventListener('keydown', function(event) {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeArchitectCenterTab(tab.id);
+        });
+        button.appendChild(close);
+      }
+      return button;
+    }
+
+    function renderArchitectTabPanel(tab) {
+      let panel = document.getElementById(tab.panelId);
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = tab.panelId;
+        panel.className = 'architect-tab-panel ' + (tab.type === 'terminal' ? 'terminal-workspace' : '');
+        panel.setAttribute('role', 'tabpanel');
+        panel.dataset.architectTabPanel = tab.id;
+        panel.dataset.architectTabType = tab.type;
+        if (tab.type === 'terminal') renderTerminalArchitectTabPanel(tab, panel);
+        architectCenterPanelContainer.appendChild(panel);
+      }
+      panel.setAttribute('aria-labelledby', 'architect-tab-' + tab.id);
+      panel.hidden = true;
+      return panel;
+    }
+
+    function appendTerminalOutput(output, text) {
+      output.textContent += text;
+      output.scrollTop = output.scrollHeight;
+    }
+
+    async function postTerminalRequest(path, body) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok || payload.ok === false) throw new Error(payload.message || 'Terminal request failed.');
+      return payload;
+    }
+
+    function updateTerminalTabTitle(tab, title) {
+      tab.title = title;
+      tab.dirty = false;
+      const heading = document.querySelector('#' + tab.panelId + ' h2');
+      if (heading) heading.textContent = title;
+      renderArchitectCenterTabs(tab.id);
+    }
+
+    function bindTerminalEventSource(tab, output, status) {
+      if (!tab.terminalSessionId || tab.terminalEventSource) return;
+      const events = new EventSource('/api/architect/v1/terminals/' + encodeURIComponent(tab.terminalSessionId) + '/events');
+      tab.terminalEventSource = events;
+      events.addEventListener('terminal_snapshot', function(event) {
+        const payload = JSON.parse(event.data || '{}');
+        output.textContent = String(payload.output || '');
+        output.scrollTop = output.scrollHeight;
+        if (payload.terminal && payload.terminal.cwd) status.textContent = payload.terminal.shell + ' | ' + payload.terminal.cwd;
+      });
+      events.addEventListener('terminal_output', function(event) {
+        const payload = JSON.parse(event.data || '{}');
+        appendTerminalOutput(output, String(payload.text || ''));
+      });
+      events.addEventListener('terminal_exit', function(event) {
+        const payload = JSON.parse(event.data || '{}');
+        status.textContent = 'Terminal closed' + (payload.exit_code == null ? '' : ' | exit ' + payload.exit_code);
+        events.close();
+        tab.terminalEventSource = null;
+      });
+      events.addEventListener('terminal_rename', function(event) {
+        const payload = JSON.parse(event.data || '{}');
+        if (payload.title) updateTerminalTabTitle(tab, payload.title);
+      });
+      events.onerror = function() {
+        status.textContent = 'Terminal event stream disconnected.';
+      };
+    }
+
+    async function ensureTerminalSession(tab, output, status) {
+      if (tab.terminalSessionId) return;
+      status.textContent = 'Starting terminal in project root...';
+      const payload = await postTerminalRequest('/api/architect/v1/terminals', { title: tab.title });
+      tab.terminalSessionId = payload.terminal && payload.terminal.id;
+      if (payload.terminal && payload.terminal.title) updateTerminalTabTitle(tab, payload.terminal.title);
+      const shell = (payload.terminal && payload.terminal.shell) || 'terminal';
+      status.textContent = shell + ' | ' + ((payload.terminal && payload.terminal.cwd) || 'project root');
+      bindTerminalEventSource(tab, output, status);
+    }
+
+    function renderTerminalArchitectTabPanel(tab, panel) {
+      const heading = document.createElement('h2');
+      heading.textContent = tab.title;
+      const surface = document.createElement('div');
+      surface.className = 'terminal-surface';
+      const toolbar = document.createElement('div');
+      toolbar.className = 'terminal-toolbar';
+      const status = document.createElement('span');
+      status.textContent = 'Terminal pending daemon session.';
+      const rename = document.createElement('button');
+      rename.className = 'mini-button';
+      rename.type = 'button';
+      rename.textContent = 'Rename';
+      toolbar.appendChild(status);
+      toolbar.appendChild(rename);
+      const consoleSurface = document.createElement('div');
+      consoleSurface.className = 'terminal-console';
+      const output = document.createElement('pre');
+      output.className = 'terminal-output';
+      output.textContent = 'Starting local terminal session. Terminal output is local convenience output, not daemon payload authority.\\n';
+      const form = document.createElement('form');
+      form.className = 'terminal-form';
+      const prompt = document.createElement('span');
+      prompt.className = 'terminal-prompt';
+      prompt.textContent = '>';
+      const input = document.createElement('input');
+      input.className = 'terminal-input';
+      input.type = 'text';
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      input.setAttribute('aria-label', 'Terminal command line');
+      input.placeholder = '';
+      form.appendChild(prompt);
+      form.appendChild(input);
+      consoleSurface.appendChild(output);
+      consoleSurface.appendChild(form);
+      surface.appendChild(toolbar);
+      surface.appendChild(consoleSurface);
+      panel.appendChild(heading);
+      panel.appendChild(surface);
+      ensureTerminalSession(tab, output, status).catch(function(error) {
+        status.textContent = error.message || 'Terminal failed to start.';
+        appendTerminalOutput(output, '\\n' + status.textContent + '\\n');
+      });
+      const commandHistory = [];
+      let historyIndex = 0;
+      output.addEventListener('click', function() { input.focus(); });
+      consoleSurface.addEventListener('click', function() { input.focus(); });
+      surface.addEventListener('click', function(event) {
+        if (event.target === rename) return;
+        input.focus();
+      });
+      window.setTimeout(function() { input.focus(); }, 0);
+      input.addEventListener('keydown', function(event) {
+        if (event.key === 'ArrowUp') {
+          if (commandHistory.length === 0) return;
+          event.preventDefault();
+          historyIndex = Math.max(0, historyIndex - 1);
+          input.value = commandHistory[historyIndex] || '';
+          input.setSelectionRange(input.value.length, input.value.length);
+        } else if (event.key === 'ArrowDown') {
+          if (commandHistory.length === 0) return;
+          event.preventDefault();
+          historyIndex = Math.min(commandHistory.length, historyIndex + 1);
+          input.value = commandHistory[historyIndex] || '';
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
+      });
+      form.addEventListener('submit', function(event) {
+        event.preventDefault();
+        const value = input.value;
+        if (!tab.terminalSessionId) return;
+        input.value = '';
+        if (value) commandHistory.push(value);
+        historyIndex = commandHistory.length;
+        postTerminalRequest('/api/architect/v1/terminals/' + encodeURIComponent(tab.terminalSessionId) + '/input', { input: value + '\\n' }).catch(function(error) {
+          appendTerminalOutput(output, '\\n' + (error.message || 'Terminal input failed.') + '\\n');
+        });
+      });
+      rename.addEventListener('click', function() {
+        if (!tab.terminalSessionId) return;
+        const title = window.prompt('Terminal name', tab.title);
+        if (!title) return;
+        postTerminalRequest('/api/architect/v1/terminals/' + encodeURIComponent(tab.terminalSessionId) + '/rename', { title: title }).then(function(payload) {
+          if (payload.terminal && payload.terminal.title) updateTerminalTabTitle(tab, payload.terminal.title);
+        }).catch(function(error) { status.textContent = error.message || 'Rename failed.'; });
+      });
+    }
+
+    function renderArchitectCenterTabs(activeTabId) {
+      resetNode(architectCenterTabContainer);
+      const normalized = resolveArchitectCenterTab(activeTabId);
+      for (const tab of architectCenterTabs) {
+        architectCenterTabContainer.appendChild(renderArchitectTabButton(tab, normalized));
+        renderArchitectTabPanel(tab);
+      }
+      for (const panel of Array.from(architectCenterPanelContainer.querySelectorAll('[data-architect-tab-panel]'))) {
+        panel.hidden = panel.dataset.architectTabPanel !== normalized;
+      }
+      const activePanel = architectCenterPanelContainer.querySelector('[data-architect-tab-panel="' + normalized + '"]');
+      if (activePanel && activePanel.dataset.architectTabType === 'terminal') {
+        const input = activePanel.querySelector('.terminal-input');
+        if (input) window.setTimeout(function() { input.focus(); }, 0);
+      }
+      return normalized;
     }
 
     function setArchitectCenterTab(tabId) {
-      const normalized = resolveArchitectCenterTab(tabId);
-      for (const button of architectCenterTabButtons) {
-        const selected = button.dataset.architectTab === normalized;
-        button.setAttribute('aria-selected', selected ? 'true' : 'false');
-      }
-      for (const panel of architectCenterTabPanels) {
-        panel.hidden = panel.dataset.architectTabPanel !== normalized;
-      }
+      const normalized = renderArchitectCenterTabs(tabId);
       try { window.localStorage.setItem(architectCenterTabStorageKey, normalized); } catch (_) { /* storage may be unavailable */ }
     }
 
-    function hydrateArchitectCenterTabs() {
-      for (const button of architectCenterTabButtons) {
-        button.addEventListener('click', function() { setArchitectCenterTab(button.dataset.architectTab || 'chat'); });
+    function closeArchitectCenterTab(tabId) {
+      const tab = architectCenterTabs.find(function(candidate) { return candidate.id === tabId; });
+      if (!tab || !tab.closeable) return;
+      if (tab.terminalEventSource) {
+        tab.terminalEventSource.close();
+        tab.terminalEventSource = null;
       }
+      if (tab.terminalSessionId) {
+        postTerminalRequest('/api/architect/v1/terminals/' + encodeURIComponent(tab.terminalSessionId) + '/close', {}).catch(function() { /* best-effort cleanup */ });
+      }
+      const activePanel = architectCenterPanelContainer.querySelector('[data-architect-tab-panel]:not([hidden])');
+      const activeTabId = activePanel ? activePanel.dataset.architectTabPanel : 'chat';
+      const wasActive = activeTabId === tab.id;
+      architectCenterTabs = architectCenterTabs.filter(function(candidate) { return candidate.id !== tabId; });
+      const panel = document.getElementById(tab.panelId);
+      if (panel) panel.remove();
+      setArchitectCenterTab(wasActive ? 'chat' : activeTabId);
+    }
+
+    function createArchitectCenterTab(type) {
+      const descriptor = architectTabTypeRegistry.get(type);
+      if (!descriptor) return;
+      const tab = descriptor.create();
+      architectCenterTabs.push(tab);
+      setArchitectCenterTab(tab.id);
+      if (architectTabMenu) architectTabMenu.hidden = true;
+    }
+
+    function renderArchitectTabMenu() {
+      resetNode(architectTabMenu);
+      for (const descriptor of architectTabTypeRegistry.values()) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.textContent = descriptor.title;
+        item.addEventListener('click', function() { createArchitectCenterTab(descriptor.type); });
+        architectTabMenu.appendChild(item);
+      }
+    }
+
+    function hydrateArchitectCenterTabs() {
+      architectCenterTabs = [
+        createBuiltInArchitectTab('chat', 'Chat', 'chat', 'architect-panel-chat'),
+        createBuiltInArchitectTab('plan', 'Plan', 'plan', 'architect-panel-plan'),
+        createBuiltInArchitectTab('adr', 'ADR Editor', 'adr', 'architect-panel-adr'),
+      ];
+      registerArchitectTabType({ type: 'terminal', title: 'New Terminal', create: createTerminalArchitectTab });
+      renderArchitectTabMenu();
+      architectTabAddButton.addEventListener('click', function() {
+        architectTabMenu.hidden = !architectTabMenu.hidden;
+      });
+      document.addEventListener('click', function(event) {
+        if (architectTabMenu.hidden) return;
+        if (architectTabMenu.contains(event.target) || architectTabAddButton.contains(event.target)) return;
+        architectTabMenu.hidden = true;
+      });
       let saved = 'chat';
       try { saved = window.localStorage.getItem(architectCenterTabStorageKey) || 'chat'; } catch (_) { saved = 'chat'; }
       setArchitectCenterTab(saved);
@@ -3995,13 +5501,24 @@ function renderArchitectShell(): string {
       return envelope;
     }
 
+    function activeExecutionCapabilities() {
+      const llm = activeArchitectRuntime && activeArchitectRuntime.capabilities ? activeArchitectRuntime.capabilities : {};
+      return activeArchitectRuntime.execution_controls || llm.executionControls || { stop: false, pause: false, resume: false, steering: false };
+    }
+
     function setChatProcessing(processing) {
+      const controls = activeExecutionCapabilities();
       chatProcessing = processing;
       chatFormEl.classList.toggle('processing', processing);
       chatFormEl.setAttribute('aria-busy', processing ? 'true' : 'false');
-      chatSubmitEl.disabled = processing;
+      chatSubmitEl.disabled = false;
+      chatSubmitEl.hidden = processing;
+      chatPauseEl.hidden = !(processing && controls.pause);
+      chatPauseEl.disabled = !(processing && controls.pause);
+      chatStopEl.hidden = !(processing && controls.stop);
+      chatStopEl.disabled = !(processing && controls.stop);
       chatScopePillEl.disabled = processing;
-      chatInputEl.disabled = processing;
+      chatInputEl.disabled = false;
       chatProcessingLightEl.setAttribute('aria-hidden', processing ? 'false' : 'true');
     }
 
@@ -4120,22 +5637,22 @@ function renderArchitectShell(): string {
 
     function formatToolResultPreview(tool, preview) {
       if (!preview) return '';
-      const parsed = tryParseJsonPayload(preview);
-      if (parsed) {
-        return summarizeJsonObject(parsed.value) || 'structured result received';
+      const value = unwrapToolResultPreview(preview);
+      if (value && typeof value === 'object') {
+        return summarizeJsonObject(value) || 'structured result received';
       }
-      const text = collapseWhitespace(preview);
+      const text = collapseWhitespace(value == null ? preview : value);
       return text.length > 180 ? text.slice(0, 180) + '...' : text;
     }
 
     function compactToolPreview(preview) {
       if (!preview) return '';
-      const parsed = tryParseJsonPayload(preview);
-      if (parsed) {
-        const lines = describeStructuredToolResult(parsed.value);
+      const value = unwrapToolResultPreview(preview);
+      if (value && typeof value === 'object') {
+        const lines = describeStructuredToolResult(value);
         return lines.length > 0 ? lines.join(String.fromCharCode(10)) : 'Structured result received';
       }
-      const text = collapseWhitespace(preview);
+      const text = collapseWhitespace(value == null ? preview : value);
       return text.length > 900 ? text.slice(0, 900) + '...' : text;
     }
 
@@ -4189,9 +5706,15 @@ function renderArchitectShell(): string {
       const parsed = tryParseJsonPayload(preview);
       if (!parsed) return null;
       const value = parsed.value;
-      if (value && Array.isArray(value.content) && value.content[0] && typeof value.content[0].text === 'string') {
-        const nested = tryParseJsonPayload(value.content[0].text);
-        return nested ? nested.value : value.content[0].text;
+      if (value && Array.isArray(value.content)) {
+        const textParts = value.content
+          .filter(function(part) { return part && part.type === 'text' && typeof part.text === 'string'; })
+          .map(function(part) { return part.text; });
+        if (textParts.length > 0) {
+          const text = textParts.join(String.fromCharCode(10)).trim();
+          const nested = tryParseJsonPayload(text);
+          return nested ? nested.value : text;
+        }
       }
       return value;
     }
@@ -4444,6 +5967,7 @@ function renderArchitectShell(): string {
       architectProviderSelectEl.disabled = cliAdapter || deterministic;
       renderArchitectModelOptions(modelProviderKeyForControls(), preferredModel);
       architectModelInputEl.disabled = deterministic;
+      syncAttachmentCapabilities(computeAttachmentCapabilities(adapter, deterministicProviderForAdapter(adapter), architectModelInputEl.value.trim()));
     }
 
     function hydrateArchitectControls(payload) {
@@ -4464,7 +5988,10 @@ function renderArchitectShell(): string {
         syncArchitectControlState('');
         saveArchitectControls();
       });
-      architectModelInputEl.addEventListener('change', saveArchitectControls);
+      architectModelInputEl.addEventListener('change', function() {
+        syncAttachmentCapabilities(computeAttachmentCapabilities(architectAdapterSelectEl.value, deterministicProviderForAdapter(architectAdapterSelectEl.value), architectModelInputEl.value.trim()));
+        saveArchitectControls();
+      });
       architectAutonomyModeSelectEl.addEventListener('change', saveArchitectControls);
     }
 
@@ -4476,6 +6003,148 @@ function renderArchitectShell(): string {
         model: architectModelInputEl.value.trim(),
         mode: architectAutonomyModeSelectEl.value || 'autonomous',
       };
+    }
+
+    function computeAttachmentCapabilities(adapter, provider, model) {
+      const normalizedAdapter = String(adapter || 'native_api_tool_loop').toLowerCase();
+      const normalizedProvider = String(provider || 'none').toLowerCase();
+      const normalizedModel = String(model || '').toLowerCase();
+      if (normalizedAdapter === 'codex-cli' || normalizedAdapter === 'copilot-cli' || normalizedAdapter === 'deterministic_fallback') {
+        return { textAttachments: false, imageAttachments: false };
+      }
+      if (normalizedProvider === 'anthropic') {
+        return { textAttachments: true, imageAttachments: normalizedModel.indexOf('claude') === 0 };
+      }
+      if (normalizedProvider === 'openai') {
+        return {
+          textAttachments: true,
+          imageAttachments: normalizedModel.indexOf('gpt-5') === 0 || normalizedModel.indexOf('gpt-4.1') === 0 || normalizedModel.indexOf('gpt-4o') === 0 || normalizedModel.indexOf('o4') === 0 || normalizedModel.indexOf('o3') === 0,
+        };
+      }
+      if (normalizedProvider === 'ollama' || normalizedProvider === 'lmstudio') {
+        return { textAttachments: true, imageAttachments: false };
+      }
+      return { textAttachments: false, imageAttachments: false };
+    }
+
+    function formatAttachmentSize(size) {
+      if (typeof size !== 'number' || !isFinite(size) || size < 1024) return String(size || 0) + ' B';
+      if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KB';
+      return (size / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function renderPendingChatAttachments() {
+      resetNode(chatAttachmentListEl);
+      if (!pendingChatAttachments.length) {
+        chatAttachmentListEl.hidden = true;
+        return;
+      }
+      chatAttachmentListEl.hidden = false;
+      pendingChatAttachments.forEach(function(attachment, index) {
+        const item = document.createElement('li');
+        const label = document.createElement('span');
+        label.textContent = attachment.name + ' (' + attachment.kind + ', ' + formatAttachmentSize(attachment.size) + ')';
+        item.appendChild(label);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'mini-icon-button';
+        remove.setAttribute('aria-label', 'Remove attachment');
+        remove.title = 'Remove attachment';
+        remove.textContent = 'x';
+        remove.addEventListener('click', function() {
+          pendingChatAttachments.splice(index, 1);
+          renderPendingChatAttachments();
+        });
+        item.appendChild(remove);
+        chatAttachmentListEl.appendChild(item);
+      });
+    }
+
+    function syncAttachmentCapabilities(capabilities) {
+      activeAttachmentCapabilities = capabilities || { textAttachments: false, imageAttachments: false };
+      const enabled = Boolean(activeAttachmentCapabilities.textAttachments || activeAttachmentCapabilities.imageAttachments);
+      chatAttachmentButtonEl.disabled = !enabled;
+      chatAttachmentButtonEl.title = enabled
+        ? 'Add attachment'
+        : 'Current adapter/model does not support standalone attachments.';
+      if (!enabled && pendingChatAttachments.length) {
+        pendingChatAttachments = [];
+        renderPendingChatAttachments();
+      }
+      chatAttachmentInputEl.accept = [
+        activeAttachmentCapabilities.textAttachments ? '.md,.txt,.json,.yaml,.yml,.ts,.tsx,.js,.jsx,.css,.html,.py,.cs,.sql,.sh,.ps1' : '',
+        activeAttachmentCapabilities.imageAttachments ? 'image/*' : '',
+      ].filter(Boolean).join(',');
+    }
+
+    async function readTextAttachment(file) {
+      const text = await file.text();
+      return {
+        kind: 'text',
+        name: file.name,
+        mimeType: file.type || 'text/plain',
+        size: file.size || text.length,
+        content: text.slice(0, 24000),
+        truncated: text.length > 24000,
+      };
+    }
+
+    async function readImageAttachment(file) {
+      const dataUrl = await new Promise(function(resolve, reject) {
+        const reader = new FileReader();
+        reader.onload = function() { resolve(String(reader.result || '')); };
+        reader.onerror = function() { reject(reader.error || new Error('Attachment read failed.')); };
+        reader.readAsDataURL(file);
+      });
+      return {
+        kind: 'image',
+        name: file.name,
+        mimeType: file.type || 'image/png',
+        size: file.size || 0,
+        content: String(dataUrl || '').slice(0, 120000),
+        truncated: String(dataUrl || '').length > 120000,
+      };
+    }
+
+    async function stageAttachmentFiles(files) {
+      const next = [];
+      for (const file of Array.from(files || [])) {
+        const mimeType = String(file.type || '').toLowerCase();
+        if (mimeType.indexOf('image/') === 0) {
+          if (!activeAttachmentCapabilities.imageAttachments) {
+            chatStatusEl.textContent = 'Current model does not support image attachments.';
+            continue;
+          }
+          next.push(await readImageAttachment(file));
+          continue;
+        }
+        if (!activeAttachmentCapabilities.textAttachments) {
+          chatStatusEl.textContent = 'Current model does not support text attachments.';
+          continue;
+        }
+        next.push(await readTextAttachment(file));
+      }
+      if (next.length) {
+        pendingChatAttachments = pendingChatAttachments.concat(next);
+        renderPendingChatAttachments();
+        chatStatusEl.textContent = 'Staged ' + String(next.length) + ' attachment' + (next.length === 1 ? '' : 's') + '.';
+      }
+      chatAttachmentInputEl.value = '';
+    }
+
+    function buildAttachmentPromptBlock() {
+      if (!pendingChatAttachments.length) return '';
+      return pendingChatAttachments.map(function(attachment) {
+        const heading = '[Attachment: ' + attachment.name + ' | ' + attachment.mimeType + ' | ' + formatAttachmentSize(attachment.size) + ']';
+        const suffix = attachment.truncated ? '\\n[attachment content truncated for browser transport]' : '';
+        return heading + '\\n' + attachment.content + suffix;
+      }).join('\\n\\n');
+    }
+
+    function clearPendingChatAttachments() {
+      pendingChatAttachments = [];
+      renderPendingChatAttachments();
+      chatAttachmentInputEl.value = '';
     }
 
     function activePlanTitleForScope() {
@@ -4538,6 +6207,173 @@ function renderArchitectShell(): string {
       };
     }
 
+    function parseArchitectSlashCommand(message) {
+      const text = String(message || '').trim();
+      if (!text || text.charAt(0) !== '/') return null;
+      const tokens = text.slice(1).split(/\s+/).filter(Boolean);
+      if (!tokens.length) {
+        return { name: '', args: [], raw: text, malformed: true };
+      }
+      return {
+        name: String(tokens[0] || '').toLowerCase(),
+        args: tokens.slice(1),
+        raw: text,
+        malformed: false,
+      };
+    }
+
+    function slashHelpText() {
+      return [
+        '/status - Show the status of the current instance',
+        '/stop - Stop a running Architect task when supported',
+        '/pause - Pause a running Architect task when supported',
+        '/resume - Resume a paused Architect task when supported',
+        '/restart - Restart the bound daemon instance',
+        '/plugin list - List runtime plugins',
+        '/plugin inspect <plugin-id> - Show plugin details',
+        '/plugin enable|disable <plugin-id> - Change plugin availability',
+        '/plugin trust|untrust <plugin-id> - Change plugin trust',
+        '/plugin reload|unload <plugin-id> - Reload or unload a plugin',
+        '/plan new <name> - Create and select a plan',
+        '/plan archive - Archive the selected plan',
+        '/plan list|status|next|clear - Manage plan selection and lifecycle',
+        '/plan search <query> - Search Architect plans',
+        '/clear - Clear chat history',
+        '/adr - List bound ADRs for the active plan',
+        '/adr ADR-215 - Open ADR preview/editor',
+        '/adr edit ADR-215 - Jump into the ADR editor',
+        '/adr search <query> - Search ADR previews',
+        '/adr proposed - Show proposed and unaccepted ADRs',
+        '/git status|diff|branch|log - Show project git information',
+        '/git commit <message> - Commit current project changes',
+        '/help - Show slash commands',
+      ].join('\\n');
+    }
+
+    function renderArchitectCommandResult(result) {
+      if (!result || typeof result !== 'object') return '{}';
+      return result.formatted_payload || result.content || '{}';
+    }
+
+    function architectCommandStatusText(result, fallbackName) {
+      const title = result && result.title ? String(result.title) : String(fallbackName || 'command');
+      return title + ' completed through the daemon command surface.';
+    }
+
+    async function runArchitectHostCommand(command, args) {
+      const response = await fetch('/api/architect/v1/commands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: command, args: args || [] }),
+      });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok) {
+        throw new Error(payload.message || ('Architect command failed with HTTP ' + response.status));
+      }
+      return payload.result || {};
+    }
+
+    async function fetchAdrIndex() {
+      const response = await fetch('/api/architect/v1/adrs', { cache: 'no-store' });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok) {
+        throw new Error(payload.message || ('ADR index failed with HTTP ' + response.status));
+      }
+      return Array.isArray(payload.adrs) ? payload.adrs : [];
+    }
+
+    async function handleAdrSlashCommand(args) {
+      if (!args.length) {
+        const bound = (((activePlanSnapshot || {}).registry || {}).adr_bindings || []).slice();
+        appendChatMessage('assistant', bound.length ? bound.join('\\n') : 'No ADRs are bound to the active plan.');
+        return true;
+      }
+      if (String(args[0] || '').toLowerCase() === 'search') {
+        const query = args.slice(1).join(' ').trim().toLowerCase();
+        if (!query) throw new Error('Usage: /adr search <query>');
+        const matches = (await fetchAdrIndex()).filter(function(adr) {
+          return [adr.id, adr.title, adr.status, adr.decision_summary, adr.problem_summary].filter(Boolean).join(' ').toLowerCase().indexOf(query) >= 0;
+        });
+        appendChatMessage('assistant', matches.length ? JSON.stringify(matches, null, 2) : 'No ADR matched "' + query + '".');
+        return true;
+      }
+      if (String(args[0] || '').toLowerCase() === 'proposed') {
+        const matches = (await fetchAdrIndex()).filter(function(adr) {
+          const status = String((adr && adr.status) || '').toLowerCase();
+          return status === 'proposed' || status === 'unaccepted';
+        });
+        appendChatMessage('assistant', matches.length ? JSON.stringify(matches, null, 2) : 'No proposed or unaccepted ADRs found.');
+        return true;
+      }
+      if (String(args[0] || '').toLowerCase() === 'edit') {
+        const adrId = String(args[1] || '').toUpperCase();
+        if (!/^ADR-\d{3,}$/.test(adrId)) throw new Error('Usage: /adr edit ADR-215');
+        setArchitectCenterTab('adr');
+        await openAdrEditor(adrId);
+        appendChatMessage('assistant', 'Opened ' + adrId + ' in the ADR editor.');
+        return true;
+      }
+      const adrId = String(args[0] || '').toUpperCase();
+      if (!/^ADR-\d{3,}$/.test(adrId)) throw new Error('Usage: /adr ADR-215');
+      setArchitectCenterTab('adr');
+      await openAdrEditor(adrId);
+      appendChatMessage('assistant', 'Opened preview for ' + adrId + '.');
+      return true;
+    }
+
+    async function tryHandleSlashCommand(message) {
+      const slash = parseArchitectSlashCommand(message);
+      if (!slash) return false;
+      if (slash.malformed) {
+        appendChatMessage('assistant', 'That slash command is incomplete. Use /help to see available commands.');
+        chatStatusEl.textContent = 'Slash command validation failed.';
+        return true;
+      }
+      if (slash.name === 'help') {
+        appendChatMessage('assistant', slashHelpText());
+        return true;
+      }
+      if (slash.name === 'clear') {
+        resetNode(chatLogEl);
+        chatStatusEl.textContent = 'Chat history cleared.';
+        return true;
+      }
+      if (slash.name === 'adr') {
+        await handleAdrSlashCommand(slash.args);
+        return true;
+      }
+      if (slash.name === 'status' || slash.name === 'restart' || slash.name === 'stop' || slash.name === 'pause' || slash.name === 'resume') {
+        if (slash.name === 'restart') {
+          appendChatMessage('assistant', 'Restarting...');
+        }
+        const result = await runArchitectHostCommand(slash.name, slash.args);
+        appendChatMessage('assistant', renderArchitectCommandResult(result));
+        chatStatusEl.textContent = architectCommandStatusText(result, slash.name);
+        if (slash.name === 'stop') setChatProcessing(false);
+        return true;
+      }
+      if (slash.name === 'plugin' || slash.name === 'git' || slash.name === 'plan') {
+        const result = await runArchitectHostCommand(slash.name, slash.args);
+        appendChatMessage('assistant', renderArchitectCommandResult(result));
+        chatStatusEl.textContent = architectCommandStatusText(result, slash.name);
+        if (slash.name === 'plan') {
+          const structured = result.structured || {};
+          const selected = structured.selected_plan_id || structured.plan_id || null;
+          if (slash.args[0] === 'clear' || slash.args[0] === 'archive') {
+            await loadPlans(null, { activatePlanScope: false });
+          } else if (selected) {
+            await loadPlans(selected, { activatePlanScope: true });
+          } else if (slash.args[0] === 'new' || slash.args[0] === 'list' || slash.args[0] === 'search') {
+            await loadPlans(activePlanId, { activatePlanScope: activeChatScope === 'plan' });
+          }
+        }
+        return true;
+      }
+      appendChatMessage('assistant', 'I do not recognize /' + slash.name + '. Use /help to see available commands.');
+      chatStatusEl.textContent = 'Slash command validation failed.';
+      return true;
+    }
+
     function deterministicProviderForAdapter(adapter) {
       if (adapter === 'deterministic_fallback' || adapter === 'codex-cli' || adapter === 'copilot-cli') return 'none';
       return architectProviderSelectEl.value || 'none';
@@ -4558,6 +6394,8 @@ function renderArchitectShell(): string {
       if (typeof passState.completed === 'number') {
         autonomyPassCount = Math.max(autonomyPassCount, passState.completed);
       }
+      const llm = payload.architect_llm || {};
+      syncAttachmentCapabilities(llm.capabilities || computeAttachmentCapabilities(runtime.adapter, runtime.provider, runtime.model));
       architectModelConfigEl.textContent = 'Model: ' + architectRuntimeLabel(runtime);
       architectModelConfigEl.title = 'session: ' + (runtime.session_id || 'unknown') + ' | route: ' + (runtime.execution_route || runtime.adapter || 'unknown') + ' | autonomy: ' + (runtime.autonomy_mode || 'unknown') + ' | provenance: ' + (runtime.provenance_authority || 'unknown') + ' | adapter source: ' + (runtime.adapter_source || 'unknown') + ' | model source: ' + (runtime.model_source || 'unknown') + ' | provider source: ' + (runtime.provider_source || 'unknown');
     }
@@ -4607,16 +6445,12 @@ function renderArchitectShell(): string {
       appendParagraph(container, 'Read-only daemon preview | guard rails advisory: ' + String(advisory.guard_rails_advisory !== false));
       const actions = document.createElement('div');
       actions.className = 'inline-actions';
-      const editButton = document.createElement('button');
-      editButton.type = 'button';
-      editButton.className = 'mini-button';
-      editButton.textContent = 'Edit proposal';
-      editButton.addEventListener('click', function() {
+      actions.style.justifyContent = 'flex-end';
+      actions.appendChild(createAdrEditIconButton(function() {
         openAdrEditor(adr.id || adrId, payload).catch(function(error) {
           adrEditorStatusEl.textContent = String(error instanceof Error ? error.message : error);
         });
-      });
-      actions.appendChild(editButton);
+      }));
       container.appendChild(actions);
     }
 
@@ -4686,28 +6520,35 @@ function renderArchitectShell(): string {
       parent.appendChild(paragraph);
     }
 
+    function createAdrEditIconButton(onClick) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'adr-icon-button';
+      button.setAttribute('aria-label', 'Edit ADR proposal');
+      button.title = 'Edit proposal';
+      button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>';
+      button.addEventListener('click', onClick);
+      return button;
+    }
+
     function appendAdrListItem(node, adrId) {
       const item = document.createElement('li');
+      item.className = 'adr-binding-item';
+      const header = document.createElement('div');
+      header.className = 'adr-binding-header';
       const title = document.createElement('strong');
       appendTextWithAdrPreviews(title, adrId);
-      item.appendChild(title);
+      header.appendChild(title);
+      header.appendChild(createAdrEditIconButton(function() {
+        openAdrEditor(adrId).catch(function(error) {
+          adrEditorStatusEl.textContent = String(error instanceof Error ? error.message : error);
+        });
+      }));
+      item.appendChild(header);
       const meta = document.createElement('div');
       meta.className = 'meta';
       meta.textContent = 'daemon-governed ADR preview on hover or focus';
       item.appendChild(meta);
-      const actions = document.createElement('div');
-      actions.className = 'inline-actions';
-      const editButton = document.createElement('button');
-      editButton.type = 'button';
-      editButton.className = 'mini-button';
-      editButton.textContent = 'Edit proposal';
-      editButton.addEventListener('click', function() {
-        openAdrEditor(adrId).catch(function(error) {
-          adrEditorStatusEl.textContent = String(error instanceof Error ? error.message : error);
-        });
-      });
-      actions.appendChild(editButton);
-      item.appendChild(actions);
       node.appendChild(item);
     }
 
@@ -5169,6 +7010,7 @@ function renderArchitectShell(): string {
     }
 
     function renderPlan(plan) {
+      activePlanSnapshot = plan || null;
       const registry = plan.registry || {
         summary: {},
         adr_bindings: [],
@@ -5292,6 +7134,7 @@ function renderArchitectShell(): string {
       activePlanLoadToken += 1;
       activePlanId = null;
       activePlanButton = null;
+      activePlanSnapshot = null;
       archivePlanButtonEl.disabled = true;
       for (const node of document.querySelectorAll('button.plan-item')) {
         node.classList.remove('active');
@@ -5405,8 +7248,10 @@ function renderArchitectShell(): string {
       const slash = parseChatSlashOverride(message);
       const dispatchScope = setChatScope(slash.scope || activeChatScope);
       const dispatchMessage = String(slash.message || '').trim();
-      if (!dispatchMessage) {
-        chatStatusEl.textContent = 'Enter a message after the slash scope command.';
+      const attachmentBlock = buildAttachmentPromptBlock();
+      const outboundMessage = [dispatchMessage, attachmentBlock].filter(Boolean).join('\\n\\n');
+      if (!outboundMessage) {
+        chatStatusEl.textContent = 'Enter a message or add an attachment first.';
         return;
       }
       if (dispatchScope === 'plan' && !activePlanId) {
@@ -5419,7 +7264,7 @@ function renderArchitectShell(): string {
       activeToolTraceRows = new Map();
       const persistedPayload = await persistArchitectControls();
       const requestRuntime = updateActiveArchitectRuntime(persistedPayload);
-      appendChatMessage('user', dispatchMessage);
+      appendChatMessage('user', outboundMessage);
       autonomyPassCount += 1;
       updateAutonomyPassView('running', 0);
       setChatProcessing(true);
@@ -5429,7 +7274,7 @@ function renderArchitectShell(): string {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
           body: JSON.stringify({
-            message: dispatchMessage,
+            message: outboundMessage,
             scope: dispatchScope,
             chat_scope: dispatchScope,
             planId: dispatchScope === 'plan' ? activePlanId : null,
@@ -5448,6 +7293,7 @@ function renderArchitectShell(): string {
         if (!response.ok) {
           throw new Error(payload.message || ('Architect chat failed with HTTP ' + response.status));
         }
+        clearPendingChatAttachments();
         renderRuntime(payload);
         const runtime = updateActiveArchitectRuntime(payload);
         const result = payload.result || {};
@@ -5726,6 +7572,9 @@ function renderArchitectShell(): string {
         renderLiveEventStatus(envelope, 'idle');
       });
       stream.addEventListener('architect.tool_result', appendToolTraceEvent);
+      stream.addEventListener('architect.execution_control', function(event) {
+        appendTypedEventLine('execution-control', event);
+      });
       stream.addEventListener('architect.plan_action', function(event) {
         appendTypedEventLine('plan-action', event);
       });
@@ -5766,22 +7615,92 @@ function renderArchitectShell(): string {
         chatFormEl.dispatchEvent(new Event('submit', { cancelable: true }));
       }
     });
-    chatFormEl.addEventListener('submit', function(event) {
+    chatInputEl.addEventListener('paste', function(event) {
+      const files = event.clipboardData && event.clipboardData.files;
+      if (!files || !files.length) return;
       event.preventDefault();
-      if (chatProcessing) {
-        chatStatusEl.textContent = 'Architect is still processing.';
+      stageAttachmentFiles(files).catch(function(error) {
+        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+      });
+    });
+    chatAttachmentButtonEl.addEventListener('click', function() {
+      if (chatAttachmentButtonEl.disabled) {
+        chatStatusEl.textContent = 'Current adapter/model does not support standalone attachments.';
         return;
       }
+      chatAttachmentInputEl.click();
+    });
+    function resizeChatInput() {
+      chatInputEl.style.height = 'auto';
+      const computed = window.getComputedStyle(chatInputEl);
+      const lineHeight = Number.parseFloat(computed.lineHeight) || 18;
+      const verticalPadding = Number.parseFloat(computed.paddingTop) + Number.parseFloat(computed.paddingBottom);
+      const maxHeight = Math.ceil((lineHeight * 5) + verticalPadding);
+      const nextHeight = Math.min(chatInputEl.scrollHeight, maxHeight);
+      chatInputEl.style.height = String(nextHeight) + 'px';
+      chatInputEl.style.overflowY = chatInputEl.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    }
+    chatAttachmentInputEl.addEventListener('change', function() {
+      stageAttachmentFiles(chatAttachmentInputEl.files).catch(function(error) {
+        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+      });
+    });
+    async function requestExecutionControl(action, args) {
+      const result = await runArchitectHostCommand(action, args || []);
+      appendChatMessage('assistant', renderArchitectCommandResult(result));
+      chatStatusEl.textContent = architectCommandStatusText(result, action);
+      if (action === 'stop') setChatProcessing(false);
+      return result;
+    }
+    chatStopEl.addEventListener('click', function() {
+      requestExecutionControl('stop').catch(function(error) {
+        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+      });
+    });
+    chatPauseEl.addEventListener('click', function() {
+      requestExecutionControl('pause').catch(function(error) {
+        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+      });
+    });
+    chatInputEl.addEventListener('input', resizeChatInput);
+    resizeChatInput();
+    chatFormEl.addEventListener('submit', function(event) {
+      event.preventDefault();
       const message = chatInputEl.value.trim();
-      if (!message) {
-        chatStatusEl.textContent = 'Enter a message first.';
+      if (chatProcessing) {
+        const controls = activeExecutionCapabilities();
+        if (!message) {
+          chatStatusEl.textContent = 'Enter a steering prompt or stop the running task.';
+          return;
+        }
+        if (!controls.steering) {
+          chatStatusEl.textContent = 'Current runtime does not support steering while running.';
+          return;
+        }
+        chatInputEl.value = '';
+        resizeChatInput();
+        requestExecutionControl('steer', [message]).catch(function(error) {
+          chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+        });
+        return;
+      }
+      const hasAttachments = pendingChatAttachments.length > 0;
+      if (!message && !hasAttachments) {
+        chatStatusEl.textContent = 'Enter a message or add an attachment first.';
         return;
       }
       chatInputEl.value = '';
-      sendChatMessage(message).catch(function(error) {
-        updateAutonomyPassView('failed', 0);
-        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
-      });
+      resizeChatInput();
+      Promise.resolve()
+        .then(function() { return tryHandleSlashCommand(message); })
+        .then(function(handled) {
+          if (handled) return;
+          return sendChatMessage(message);
+        })
+        .catch(function(error) {
+          updateAutonomyPassView('failed', 0);
+          chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+        });
     });
 
     createPlanButtonEl.addEventListener('click', function() {
@@ -6171,6 +8090,13 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
       future_review: "/api/architect/v1/plans/{planId}/future-review",
       schedules: "/api/architect/v1/schedules",
       schedule_actions: "/api/architect/v1/schedules/{scheduleId}/actions",
+      commands: "POST /api/architect/v1/commands",
+      execution_controls: "POST /api/architect/v1/commands stop|pause|resume",
+      terminals: "POST /api/architect/v1/terminals",
+      terminal_input: "POST /api/architect/v1/terminals/{terminalId}/input",
+      terminal_rename: "POST /api/architect/v1/terminals/{terminalId}/rename",
+      terminal_close: "POST /api/architect/v1/terminals/{terminalId}/close",
+      terminal_events: "GET /api/architect/v1/terminals/{terminalId}/events",
       adrs: "/api/architect/v1/adrs",
       adr_preview: "/api/architect/v1/adrs/{adrId}",
       adr_edit_proposal: "POST /api/architect/v1/adrs/{adrId}/edits",
@@ -6256,6 +8182,42 @@ export async function handleArchitectRoute(
 
     if (req.method === "POST" && pathname === "/api/architect/v1/selection") {
       await handleArchitectSelectionRequest(req, res);
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/architect/v1/commands") {
+      await handleArchitectCommandRequest(req, res);
+      return true;
+    }
+
+    if (req.method === "POST" && (pathname === "/api/architect/v1/terminals" || pathname === "/api/architect/v1/terminals/")) {
+      await handleArchitectTerminalCreateRequest(req, res);
+      return true;
+    }
+
+    const terminalSubroute = parseArchitectTerminalSubroute(pathname);
+    if (terminalSubroute && !terminalSubroute.terminalId) {
+      jsonError(res, 400, "bad_request", "Missing terminal id");
+      return true;
+    }
+
+    if (req.method === "GET" && terminalSubroute?.suffix === "events") {
+      handleArchitectTerminalEvents(req, res, terminalSubroute.terminalId);
+      return true;
+    }
+
+    if (req.method === "POST" && terminalSubroute?.suffix === "input") {
+      await handleArchitectTerminalInputRequest(req, res, terminalSubroute.terminalId);
+      return true;
+    }
+
+    if (req.method === "POST" && terminalSubroute?.suffix === "rename") {
+      await handleArchitectTerminalRenameRequest(req, res, terminalSubroute.terminalId);
+      return true;
+    }
+
+    if (req.method === "POST" && terminalSubroute?.suffix === "close") {
+      handleArchitectTerminalCloseRequest(res, terminalSubroute.terminalId);
       return true;
     }
 

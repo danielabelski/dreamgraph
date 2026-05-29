@@ -61,6 +61,7 @@ export interface RunArchitectCliBridgeInput {
   userMessage: string;
   model: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   onToolTrace?: (entry: ArchitectToolTraceEntry) => void;
 }
 
@@ -160,6 +161,7 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
         env: invocation.env,
         stdin: invocation.stdin,
         timeoutMs,
+        signal: input.signal,
       });
     } finally {
       await auditTail.stop();
@@ -655,6 +657,7 @@ function runProcess(input: {
   env: Record<string, string>;
   stdin: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<ProcessResult> {
   return new Promise((resolvePromise, reject) => {
     const startedAt = Date.now();
@@ -671,12 +674,21 @@ function runProcess(input: {
     let stderr = "";
     let timedOut = false;
     let settled = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const terminateChild = () => {
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 2_000).unref?.();
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminateChild();
     }, input.timeoutMs);
     timer.unref?.();
+    const abortListener = () => terminateChild();
+    if (input.signal?.aborted) {
+      abortListener();
+    } else {
+      input.signal?.addEventListener("abort", abortListener, { once: true });
+    }
 
     child.stdout.on("data", (chunk) => {
       stdout = appendLimited(stdout, String(chunk));
@@ -686,12 +698,14 @@ function runProcess(input: {
     });
     child.on("error", (error) => {
       clearTimeout(timer);
+      input.signal?.removeEventListener("abort", abortListener);
       if (settled) return;
       settled = true;
       reject(error);
     });
     child.on("close", (exitCode, signal) => {
       clearTimeout(timer);
+      input.signal?.removeEventListener("abort", abortListener);
       if (settled) return;
       settled = true;
       resolvePromise({
@@ -829,9 +843,27 @@ function auditToToolTrace(record: AuditRecord, iteration: number, traceId: strin
     args_summary: compact(record.inputJson ?? "{}"),
     status,
     duration_ms: typeof record.durationMs === "number" ? Math.max(0, Math.trunc(record.durationMs)) : 0,
-    result_preview: compact(record.resultJson ?? ""),
+    result_preview: compact(previewAuditResult(record.resultJson ?? "")),
     trace_id: traceId,
   };
+}
+
+function previewAuditResult(resultJson: string): string {
+  if (!resultJson.trim()) return "";
+  try {
+    const parsed = JSON.parse(resultJson) as unknown;
+    if (isRecord(parsed) && Array.isArray(parsed.content)) {
+      const text = parsed.content
+        .filter((item): item is { type: string; text: string } => isRecord(item) && item.type === "text" && typeof item.text === "string")
+        .map((item) => item.text)
+        .join("\n")
+        .trim();
+      return text || resultJson;
+    }
+  } catch {
+    // Fall back to the raw bridge payload below.
+  }
+  return resultJson;
 }
 
 function appendLimited(current: string, next: string): string {
@@ -842,6 +874,10 @@ function appendLimited(current: string, next: string): string {
 
 function compact(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 4_000);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringEnv(source: Readonly<Record<string, string | undefined>>): Record<string, string> {

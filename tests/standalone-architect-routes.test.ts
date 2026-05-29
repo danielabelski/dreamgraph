@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Script } from "node:vm";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -11,7 +12,15 @@ import {
   resolveArchitectCliBridgeExecutablePath,
   resolveArchitectCliBridgeToolNames,
 } from "../src/architect/cli-bridge.js";
-import { handleArchitectRoute } from "../src/architect/routes.js";
+import {
+  formatArchitectPlanListPayload,
+  formatArchitectPlanNextPayload,
+  formatArchitectPlanStatusPayload,
+  formatArchitectPluginInspectPayload,
+  formatArchitectPluginListPayload,
+  formatArchitectStatusPayload,
+  handleArchitectRoute,
+} from "../src/architect/routes.js";
 import * as lifecycle from "../src/instance/lifecycle.js";
 
 async function withArchitectServer<T>(run: (baseUrl: string) => Promise<T>): Promise<T> {
@@ -118,7 +127,7 @@ describe("standalone Architect route hardening", () => {
       const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 
       expect(script).toBeTruthy();
-      expect(() => new Function(script)).not.toThrow();
+      expect(() => new Script(script!, { filename: "architect-shell.js" })).not.toThrow();
       expect(script).toContain("function collapseWhitespace");
       expect(script).toContain("String.fromCharCode(92) + 's+'");
       expect(script).toContain("function describeStructuredToolResult");
@@ -146,6 +155,9 @@ describe("standalone Architect route hardening", () => {
       expect(routes.future_review).toBe("/api/architect/v1/plans/{planId}/future-review");
       expect(routes.schedules).toBe("/api/architect/v1/schedules");
       expect(routes.schedule_actions).toBe("/api/architect/v1/schedules/{scheduleId}/actions");
+      expect(routes.commands).toBe("POST /api/architect/v1/commands");
+      expect(((payload.architect_llm as Record<string, unknown>).capabilities as Record<string, unknown>).textAttachments).toBeTypeOf("boolean");
+      expect(((payload.architect_llm as Record<string, unknown>).capabilities as Record<string, unknown>).imageAttachments).toBeTypeOf("boolean");
       expect(future.advisory).toBe(true);
       expect(future.fallback_visible).toBe(true);
       expect(interop.companion_surface).toBe(true);
@@ -628,6 +640,277 @@ describe("standalone Architect route hardening", () => {
     });
   });
 
+  it("treats implemented slice checkpoints as complete and advances to the next slice", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-slice-projection-"));
+    const dataDir = join(tempRoot, "data");
+    const plansDir = join(tempRoot, "plans");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-slice-projection-test",
+      projectRoot: tempRoot,
+      dataDir,
+    } as never);
+
+    try {
+      await mkdir(plansDir, { recursive: true });
+      await writeFile(join(plansDir, "slice-projection.md"), [
+        "# Slice Projection",
+        "",
+        "Status: Draft",
+        "",
+        "### Slice 1 - Foundation",
+        "",
+        "### Slice 2 - Status",
+        "",
+        "### Slice 3 - Plugins",
+        "",
+      ].join("\n"), "utf-8");
+      await writeFile(join(plansDir, "slice-projection.implementation-log.md"), [
+        "# Slice Projection Implementation Log",
+        "",
+        "### 2026-05-29T12:09:00.000Z - slice: Slice 2 - Status - status: completed",
+        "",
+        "- Verification: complete",
+        "",
+        "### 2026-05-29T12:08:00.000Z - slice: Slice 1 - Foundation - status: implemented",
+        "",
+        "- Verification: complete",
+        "",
+      ].join("\n"), "utf-8");
+
+      await withArchitectServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/architect/v1/plans/slice-projection`);
+        const payload = await expectJsonOk(response);
+        const plan = payload.plan as { operational_state?: Record<string, unknown> };
+        const operational = plan.operational_state ?? {};
+        const lastCompleted = operational.last_completed_slice as { title?: string } | null;
+        const nextSlice = operational.next_slice as { title?: string } | null;
+
+        expect(String(lastCompleted?.title ?? lastCompleted?.id ?? "")).toContain("Slice 2");
+        expect(String(nextSlice?.title ?? nextSlice?.id ?? "")).toContain("Slice 3");
+        expect(String(operational.current_slice_title ?? "")).toContain("Slice 3");
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("formats status command JSON into chat-safe status text", () => {
+    const rendered = formatArchitectStatusPayload({
+      identity: { uuid: "instance-1", name: "Architect", status: "active", mode: "standalone", policy: "local" },
+      project: { root: "C:/repo" },
+      daemon: { running: true, pid: 1234, port: 8765, uptime_ms: 65000, crashed: false },
+      cognitive: { graph_nodes: 10, graph_edges: 20, validated_edges: 5, dream_cycles: 2, tool_calls: 7 },
+    }, "fallback-instance");
+
+    expect(rendered).toContain("DreamGraph status");
+    expect(rendered).toContain("Instance: Architect (instance-1)");
+    expect(rendered).toContain("Daemon: running, pid 1234, port 8765, uptime 65s");
+    expect(rendered).toContain("Cognitive: 10 nodes, 20 edges, 5 validated edges");
+    expect(rendered).not.toContain("dg status");
+  });
+
+  it("formats plugin command JSON into chat-safe plugin summaries", () => {
+    const list = formatArchitectPluginListPayload([
+      { id: "examples.hello-events", version: "0.1.0", enabled: true, trusted: false, capabilities: ["tools", "resources"] },
+    ]);
+    expect(list).toContain("Discovered 1 plugin");
+    expect(list).toContain("examples.hello-events@0.1.0 (enabled, untrusted)");
+    expect(list).toContain("Capabilities: tools, resources");
+    expect(list).not.toContain("manifest_source");
+
+    const inspect = formatArchitectPluginInspectPayload({
+      id: "examples.hello-events",
+      version: "0.1.0",
+      enabled: false,
+      trusted: true,
+      manifest_source: "C:/instance/plugins/examples.hello-events/plugin.json",
+      manifest: { description: "Example plugin", capabilities: ["ui"] },
+    }, "fallback.plugin");
+    expect(inspect).toContain("Plugin examples.hello-events@0.1.0");
+    expect(inspect).toContain("State: disabled, trusted");
+    expect(inspect).toContain("Description: Example plugin");
+    expect(inspect).not.toContain("{\n");
+  });
+
+  it("validates plugin slash command arguments before invoking CLI output", async () => {
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-plugin-validation-test",
+      projectRoot: tmpdir(),
+      dataDir: join(tmpdir(), "data"),
+    } as never);
+
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/architect/v1/commands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: "plugin", args: ["inspect"] }),
+        });
+        const payload = await response.json() as Record<string, unknown>;
+        expect(response.status).toBe(400);
+        expect(String(payload.message)).toBe("Usage: /plugin inspect <plugin-id>");
+        expect(String(payload.message)).not.toContain("dg plugin");
+      });
+    } finally {
+      scopeSpy.mockRestore();
+    }
+  });
+
+  it("formats plan command payloads into chat-safe plan summaries", () => {
+    const plan = {
+      id: "architect-level-3",
+      title: "Architect Level 3",
+      path: "plans/architect-level-3.md",
+      log_path: "plans/architect-level-3.implementation-log.md",
+      status: "Draft",
+      active_phase: "Phase 1",
+      updated_at: "2026-05-29T00:00:00.000Z",
+      adr_bindings: ["ADR-209", "ADR-218"],
+      graph_binding_count: 0,
+      slice_count: 8,
+      checkpoint_count: 3,
+      operational_state: {
+        plan_lifecycle: "implementing",
+        execution_state: "idle",
+        active_phase: "Phase 1 / Level 3",
+        current_slice_title: "Slice 4 - Plan Management Slash Commands",
+        last_completed_slice: { id: "slice-3", title: "Slice 3 - Plugin Slash Commands", status: "completed" },
+        next_slice: { id: "slice-5", title: "Slice 5 - Task Execution Control Architecture", status: null },
+      },
+    } as never;
+
+    const list = formatArchitectPlanListPayload([plan], "architect-level-3");
+    expect(list).toContain("Architect plans (1); selected: architect-level-3");
+    expect(list).toContain("* architect-level-3 - Architect Level 3");
+    expect(list).not.toContain("dg ");
+
+    const detail = {
+      ...plan,
+      markdown: "# Architect Level 3",
+      headings: [],
+      resume_state: { last_log_heading: "Slice 3", last_resume_note: "continue", log_excerpt: "done" },
+      registry: {} as never,
+    } as never;
+    const status = formatArchitectPlanStatusPayload(detail, "architect-level-3");
+    expect(status).toContain("Plan Architect Level 3 (architect-level-3)");
+    expect(status).toContain("Active slice: Slice 4 - Plan Management Slash Commands");
+    expect(status).toContain("ADR bindings: ADR-209, ADR-218");
+    expect(formatArchitectPlanNextPayload(detail)).toContain("Slice 5 - Task Execution Control Architecture");
+  });
+
+  it("handles plan slash commands through daemon-owned plan and selection state", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-plan-command-"));
+    const dataDir = join(tempRoot, "data");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-plan-command-test",
+      projectRoot: tempRoot,
+      dataDir,
+    } as never);
+
+    try {
+      await mkdir(join(tempRoot, "plans"), { recursive: true });
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/commands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: "plan", args: ["new", "Slash Managed Plan"] }),
+        });
+        const created = await expectJsonOk(createdResponse);
+        const createdResult = created.result as Record<string, unknown>;
+        const createdStructured = createdResult.structured as Record<string, unknown>;
+        expect(String(createdResult.content)).toContain("Created and selected plan Slash Managed Plan");
+        expect(createdStructured.selected_plan_id).toBe("slash-managed-plan");
+        expect(created.selected_plan_id).toBe("slash-managed-plan");
+
+        const status = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/commands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: "plan", args: ["status"] }),
+        }));
+        expect(String((status.result as Record<string, unknown>).content)).toContain("Plan Slash Managed Plan (slash-managed-plan)");
+
+        const cleared = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/commands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: "plan", args: ["clear"] }),
+        }));
+        expect(cleared.selected_plan_id).toBeNull();
+        expect(String((cleared.result as Record<string, unknown>).content)).toContain("Project Scope");
+
+        const missingArchive = await fetch(`${baseUrl}/api/architect/v1/commands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: "plan", args: ["archive"] }),
+        });
+        const missingPayload = await missingArchive.json() as Record<string, unknown>;
+        expect(missingArchive.status).toBe(400);
+        expect(String(missingPayload.message)).toContain("No Architect plan is selected");
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      delete process.env.DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("handles execution control slash commands through normalized daemon state", async () => {
+    const previousAdapter = process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
+    process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER = "codex-cli";
+    try {
+      await withArchitectServer(async (baseUrl) => {
+      const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+      const routes = contract.routes as Record<string, string>;
+      const control = contract.execution_control as Record<string, unknown>;
+      const capabilities = control.capabilities as Record<string, unknown>;
+      expect(routes.execution_controls).toBe("POST /api/architect/v1/commands stop|pause|resume");
+      expect(capabilities.stop).toBeTypeOf("boolean");
+      expect(capabilities.pause).toBeTypeOf("boolean");
+      expect(capabilities.resume).toBeTypeOf("boolean");
+      expect(capabilities.steering).toBeTypeOf("boolean");
+
+      const stopped = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "stop", args: [] }),
+      }));
+      const result = stopped.result as Record<string, unknown>;
+      expect(String(result.content)).toContain("No Architect task is currently running");
+      expect(String(result.formatted_payload)).not.toContain("dg ");
+      expect((result.structured as Record<string, unknown>).execution_control).toBeTruthy();
+
+      const paused = await fetch(`${baseUrl}/api/architect/v1/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "pause", args: [] }),
+      });
+      expect(paused.status).toBe(400);
+      const pausePayload = await paused.json() as Record<string, unknown>;
+      expect(String(pausePayload.message)).toContain("/pause is not supported");
+      });
+    } finally {
+      if (previousAdapter === undefined) {
+        delete process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
+      } else {
+        process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER = previousAdapter;
+      }
+    }
+  });
+
+  it("serves daemon-owned terminal contract routes", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/architect`);
+      const payload = await expectJsonOk(response);
+      const routes = payload.routes as Record<string, string>;
+
+      expect(routes.terminals).toBe("POST /api/architect/v1/terminals");
+      expect(routes.terminal_input).toBe("POST /api/architect/v1/terminals/{terminalId}/input");
+      expect(routes.terminal_rename).toBe("POST /api/architect/v1/terminals/{terminalId}/rename");
+      expect(routes.terminal_close).toBe("POST /api/architect/v1/terminals/{terminalId}/close");
+      expect(routes.terminal_events).toBe("GET /api/architect/v1/terminals/{terminalId}/events");
+    });
+  });
+
   it("serves repaired standalone UI affordances directly in the shell", async () => {
     await withArchitectServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/architect`);
@@ -651,8 +934,12 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("function persistSelectedPlan");
       expect(html).toContain("function clearSelectedPlan");
       expect(html).toContain("function parseChatSlashOverride");
+      expect(html).toContain("function parseArchitectSlashCommand");
+      expect(html).toContain("function tryHandleSlashCommand");
       expect(html).toContain("class=\"prompt-surface\"");
       expect(html).toContain("id=\"chat-scope-pill\"");
+      expect(html).toContain("id=\"chat-attachment-button\"");
+      expect(html).toContain("id=\"chat-attachment-input\"");
       expect(html).toContain("🌍 Project");
       expect(html).toContain("Messages will use project-wide context");
       expect(html).toContain("📍 Plan: ");
@@ -669,15 +956,41 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("function renderChatContent");
       expect(html).toContain("function appendTextWithAdrPreviews");
       expect(html).toContain("function loadAdrPreview");
+      expect(html).toContain("createAdrEditIconButton");
       expect(html).toContain("/api/architect/v1/adrs/");
+      expect(html).toContain("/api/architect/v1/commands");
       expect(html).toContain("id=\"adr-editor\"");
       expect(html).toContain("ADR Editor");
       expect(html).toContain("class=\"architect-center-tabs\"");
-      expect(html).toContain("data-architect-tab=\"chat\"");
-      expect(html).toContain("data-architect-tab=\"plan\"");
-      expect(html).toContain("data-architect-tab=\"adr\"");
+      expect(html).toContain("id=\"architect-tab-add\"");
+      expect(html).toContain("id=\"architect-tab-menu\"");
+      expect(html).toContain("function registerArchitectTabType");
+      expect(html).toContain("function createBuiltInArchitectTab");
+      expect(html).toContain("function renderArchitectCenterTabs");
+      expect(html).toContain("function createTerminalArchitectTab");
+      expect(html).toContain("New Terminal");
+      expect(html).toContain("function renderTerminalArchitectTabPanel");
+      expect(html).toContain("/api/architect/v1/terminals");
+      expect(html).toContain("Terminal output is local convenience output, not daemon payload authority.");
+      expect(html).toContain("terminal-console");
+      expect(html).toContain("commandHistory");
+      expect(html).toContain("value + '\\n'");
+      expect(html).not.toContain("send.textContent = 'Send'");
+      expect(html).toContain("data-architect-tab-panel=\"chat\"");
+      expect(html).toContain("data-architect-tab-panel=\"plan\"");
+      expect(html).toContain("data-architect-tab-panel=\"adr\"");
       expect(html).toContain("function resolveArchitectCenterTab");
-      expect(html).toContain("return architectCenterTabButtons.some");
+      expect(html).toContain("return architectCenterTabs.some");
+      expect(html).toContain("/status - Show the status of the current instance");
+      expect(html).toContain("/stop - Stop a running Architect task when supported");
+      expect(html).toContain("id=\"chat-pause\"");
+      expect(html).toContain("id=\"chat-stop\"");
+      expect(html).toContain("function activeExecutionCapabilities");
+      expect(html).toContain("Current runtime does not support steering while running.");
+      expect(html).toContain("architect.execution_control");
+      expect(html).toContain("formatted_payload");
+      expect(html).toContain("Slash command validation failed.");
+      expect(html).toContain("title=\"Collapse context sidebar\">></button>");
       expect(html).toContain("function hydrateArchitectCenterTabs");
       expect(html).toContain("center-plan-body");
       expect(html).not.toContain("Dedicated editor is available in the center ADR Editor tab.");
