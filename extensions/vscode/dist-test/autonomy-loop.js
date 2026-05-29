@@ -44,6 +44,7 @@ const FILE_PATH_RE = /(?<![\w./\\-])((?:[\w.-]+[\\/])+[\w.-]+\.(?:ts|tsx|js|jsx|
 // at line 2944." A directory prefix is not required because the model is
 // already constraining via the verb on the same line.
 const QUOTED_FILE_PATH_RE = /[`'"]([\w./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|css|html|py|java|cs|rs|go|rb|sh|ps1|yaml|yml|toml|sql))[`'"]/gi;
+const GOAL_COMPLETION_RE = /ready for commit|done and verified|goal sufficiently reached|\b(?:original goal|goal|task|request|assessment|implementation|change|work)\b[^.\n]{0,80}\bcompleted successfully\b/i;
 /**
  * Extract concrete file paths the architect named on the same line as an
  * edit verb. Empty array means no prose anchor was detected. The result is
@@ -108,7 +109,7 @@ function inferPassOutcomeSignal(content) {
     // neutral signal rather than crashing on `undefined.toLowerCase()`.
     const raw = content ?? '';
     const lower = raw.toLowerCase();
-    const goalSufficientlyReached = /ready for commit|done and verified|goal sufficiently reached|completed successfully/.test(lower);
+    const goalSufficientlyReached = GOAL_COMPLETION_RE.test(lower);
     // Awaiting-user detection. Catches the most common "the assistant
     // handed control back to the user" patterns: explicit confirmation
     // requests, choice prompts, "let me know" / "should I" sign-offs,
@@ -217,6 +218,9 @@ function buildContinuationPrompt(selectedAction, options = {}) {
         }
         else {
             lines.push(`- Suggested entry tool: \`${toolName}\`. Use additional tools in the same turn as needed to finish the step.`);
+            if (toolName === 'read_source_code') {
+                lines.push('- Authorized: one focused read_source_code call for the known target entity or bounded range; continue without requiring manual magic wording.');
+            }
             if (argsJson) {
                 lines.push(`- Suggested args for the entry tool: \`${argsJson}\`. Adjust freely; they are a hint, not a contract.`);
             }
@@ -275,7 +279,7 @@ function analyzePass(state, input) {
         // Action presence is definitive evidence of a clear next step.
         hasClearNextStep: hasActions || proseSignal.hasClearNextStep,
         // Structured overrides when present.
-        goalSufficientlyReached: (env?.goalStatus === 'complete') || proseSignal.goalSufficientlyReached,
+        goalSufficientlyReached: env ? env.goalStatus === 'complete' : proseSignal.goalSufficientlyReached,
         progressStatus: env?.progressStatus ?? proseSignal.progressStatus,
         uncertainty: env?.uncertainty ?? proseSignal.uncertainty,
         // "blocked" from a structured envelope is a turn-local signal, not a

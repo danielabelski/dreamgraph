@@ -58,6 +58,21 @@ const autonomy_loop_js_1 = require("../autonomy-loop.js");
     const prompt = (0, autonomy_loop_js_1.buildContinuationPrompt)(undefined, { patchAnchorEstablished: false });
     strict_1.default.doesNotMatch(prompt, /Do NOT re-locate/i);
 });
+(0, node_test_1.default)('continuation prompt authorizes one bounded read_source_code action', () => {
+    const prompt = (0, autonomy_loop_js_1.buildContinuationPrompt)({
+        id: 'allow-focused-read',
+        label: 'Allow one target entity read',
+        rationale: 'The next pass only needs one bounded source read.',
+        priority: 1,
+        eligible: true,
+        withinScope: true,
+        blockers: [],
+        tool: 'read_source_code',
+        toolArgs: { repo: 'dreamgraph', filePath: 'extensions/vscode/src/tool-groups.ts', entity: 'TOOL_GROUPS' },
+    });
+    strict_1.default.match(prompt, /Authorized: one focused read_source_code call/);
+    strict_1.default.match(prompt, /Suggested args for the entry tool/);
+});
 (0, node_test_1.default)('post-anchor re-reading does NOT trigger a two-strike token-economy STOP', () => {
     // The architectural decision is "no failure: keep going until done".
     // Re-reading after an anchor was the canonical token-waste pattern, but

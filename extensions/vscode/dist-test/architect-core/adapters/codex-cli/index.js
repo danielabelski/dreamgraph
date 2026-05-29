@@ -3,7 +3,7 @@
 //
 // Codex CLI adapter - public barrel (Slice 1).
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.HOST_PROCESS = exports.HOST_FS = exports.HOST_CRYPTO = exports.HOST_CLOCK = exports.createCodexCliProviderPort = exports.serializeConversationForCodexCli = exports.CURRENT_TURN_OPEN_MARKER = exports.CURRENT_TURN_CLOSE_MARKER = exports.runCodexCli = exports.normalizeCodexTranscript = exports.classifyToolCall = exports.serializeCodexMcpConfig = exports.buildCodexMcpConfigOverrides = exports.buildCodexMcpConfig = exports.buildCodexMcpBridgePlan = exports.buildCodexArgv = exports.buildAuthoritativeAllowlist = exports.parseCodexHelpSurface = exports.isHelpSurfaceSupported = exports.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME = exports.CODEX_REQUIRED_AUTHORITATIVE_TOOLS = exports.CODEX_MINIMUM_AUTHORITATIVE_TOOLS = exports.CODEX_INLINE_TOOL_SERVER = exports.CODEX_CLI_PROVIDER_ID = exports.CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS = exports.CODEX_AUTHORITATIVE_TOOL_CATALOG = void 0;
+exports.HOST_PROCESS = exports.HOST_FS = exports.HOST_CRYPTO = exports.HOST_CLOCK = exports.createCodexCliProviderPort = exports.serializeConversationForCodexCli = exports.CURRENT_TURN_OPEN_MARKER = exports.CURRENT_TURN_CLOSE_MARKER = exports.runCodexCli = exports.summarizeCodexDiagnosticLine = exports.isCodexPluginSyncNoise = exports.extractCodexJsonEvents = exports.createCodexCliEventStream = exports.codexEventType = exports.codexAssistantDelta = exports.codexAssistantCompletedText = exports.normalizeCodexTranscript = exports.classifyToolCall = exports.serializeCodexMcpConfig = exports.buildCodexMcpConfigOverrides = exports.buildCodexMcpConfig = exports.buildCodexMcpBridgePlan = exports.buildCodexArgv = exports.buildAuthoritativeAllowlist = exports.parseCodexHelpSurface = exports.isHelpSurfaceSupported = exports.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME = exports.CODEX_REQUIRED_AUTHORITATIVE_TOOLS = exports.CODEX_MINIMUM_AUTHORITATIVE_TOOLS = exports.CODEX_INLINE_TOOL_SERVER = exports.CODEX_CLI_PROVIDER_ID = exports.CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS = exports.CODEX_AUTHORITATIVE_TOOL_CATALOG = void 0;
 var types_js_1 = require("./types.js");
 Object.defineProperty(exports, "CODEX_AUTHORITATIVE_TOOL_CATALOG", { enumerable: true, get: function () { return types_js_1.CODEX_AUTHORITATIVE_TOOL_CATALOG; } });
 Object.defineProperty(exports, "CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS", { enumerable: true, get: function () { return types_js_1.CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS; } });
@@ -28,6 +28,14 @@ var transcript_classifier_js_1 = require("./transcript-classifier.js");
 Object.defineProperty(exports, "classifyToolCall", { enumerable: true, get: function () { return transcript_classifier_js_1.classifyToolCall; } });
 var transcript_js_1 = require("./transcript.js");
 Object.defineProperty(exports, "normalizeCodexTranscript", { enumerable: true, get: function () { return transcript_js_1.normalizeCodexTranscript; } });
+var event_stream_js_1 = require("./event-stream.js");
+Object.defineProperty(exports, "codexAssistantCompletedText", { enumerable: true, get: function () { return event_stream_js_1.codexAssistantCompletedText; } });
+Object.defineProperty(exports, "codexAssistantDelta", { enumerable: true, get: function () { return event_stream_js_1.codexAssistantDelta; } });
+Object.defineProperty(exports, "codexEventType", { enumerable: true, get: function () { return event_stream_js_1.codexEventType; } });
+Object.defineProperty(exports, "createCodexCliEventStream", { enumerable: true, get: function () { return event_stream_js_1.createCodexCliEventStream; } });
+Object.defineProperty(exports, "extractCodexJsonEvents", { enumerable: true, get: function () { return event_stream_js_1.extractCodexJsonEvents; } });
+Object.defineProperty(exports, "isCodexPluginSyncNoise", { enumerable: true, get: function () { return event_stream_js_1.isCodexPluginSyncNoise; } });
+Object.defineProperty(exports, "summarizeCodexDiagnosticLine", { enumerable: true, get: function () { return event_stream_js_1.summarizeCodexDiagnosticLine; } });
 var orchestrator_js_1 = require("./orchestrator.js");
 Object.defineProperty(exports, "runCodexCli", { enumerable: true, get: function () { return orchestrator_js_1.runCodexCli; } });
 var prompt_serializer_js_1 = require("./prompt-serializer.js");

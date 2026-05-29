@@ -157,6 +157,29 @@ function getCardRendererScript() {
         }
         html += '</div>';
 
+        function actionBlocker(step, label) {
+          var explicit = Array.isArray(step.blockers) ? step.blockers : [];
+          if (explicit.length > 0) {
+            return explicit.map(function (b) { return b && b.label ? String(b.label) : ''; }).filter(Boolean).join('\\n');
+          }
+          if (step.eligible === false || step.withinScope === false) {
+            return 'This suggested action is not runnable from the current context.';
+          }
+          if (step.capabilityChecked === true) return '';
+          var text = String(label || '').toLowerCase();
+          var publishMarketplace = /\\bpublish\\b/.test(text) && (/\\bvsix\\b/.test(text) || /\\bmarketplace\\b/.test(text) || /\\bvs code marketplace\\b/.test(text));
+          if (publishMarketplace) {
+            return 'Requires VSCE_PAT in the host environment before this action can run.';
+          }
+          var graphRelease = (/\\brelease\\b|\\bvsix\\b|\\bv\\d+\\.\\d+\\.\\d+\\b/.test(text))
+            && (/\\bknowledge graph\\b|\\bdreamgraph graph\\b|\\bgraph\\b/.test(text))
+            && (/\\brecord\\b|\\bwrite\\b|\\badd\\b|\\bpatch\\b|\\bcurate\\b|\\benrich\\b|\\binvoke\\b/.test(text));
+          if (graphRelease || text.indexOf('enrich_seed_data') >= 0) {
+            return 'Requires MCP graph-write tool enrich_seed_data in the current tool surface.';
+          }
+          return '';
+        }
+
         var steps = Array.isArray(env.recommended_next_steps) ? env.recommended_next_steps : [];
         if (steps.length > 0) {
           // Per user rule: never render a button that hides what it does.
@@ -181,19 +204,25 @@ function getCardRendererScript() {
               label = 'Run ' + String(step.tool);
             }
             if (!label) continue; // skip dead button
-            rendered.push({ id: step.id || '', label: label, title: rationale, raw: step });
+            var blocker = actionBlocker(step, label);
+            rendered.push({ id: step.id || '', label: label, title: blocker || rationale, blocked: !!blocker, raw: step });
           }
           if (rendered.length > 0) {
             html += '<div class="dg-envelope-actions">';
             html += '<div class="dg-envelope-actions-label">Suggested Actions</div>';
+            var enabledCount = 0;
+            var blockedCount = 0;
             for (var j = 0; j < rendered.length; j++) {
               var r = rendered[j];
-              html += '<button class="action-chip dg-envelope-action" data-action-id="' + escAttr(r.id) + '"' +
+              if (!r.blocked) enabledCount++;
+              if (r.blocked) blockedCount++;
+              html += '<button class="action-chip dg-envelope-action' + (r.blocked ? ' action-chip-disabled' : '') + '" data-action-id="' + escAttr(r.id) + '"' +
                       ' data-action-label="' + escAttr(r.label) + '"' +
+                      (r.blocked ? ' disabled aria-disabled="true" data-blocked="true"' : '') +
                       (r.title ? ' title="' + escAttr(r.title) + '"' : '') + '>' +
                       escHtml(r.label) + '</button>';
             }
-            if (rendered.length > 1) {
+            if (env.doAllEligible !== false && enabledCount > 1 && blockedCount === 0) {
               html += '<button class="action-chip action-chip-all dg-envelope-do-all">Do all</button>';
             }
             html += '</div>';

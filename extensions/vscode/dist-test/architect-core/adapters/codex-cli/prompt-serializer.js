@@ -32,6 +32,17 @@ function renderMessageContent(content) {
 function renderToolsManifest(manifest) {
     const lines = [];
     const hasDreamgraphRunCommand = manifest.tools.includes("run_command");
+    const authorityExamples = [
+        "read_source_code",
+        "read_local_file",
+        "patch_file",
+        "modify_entity",
+        "write_file",
+        "run_command",
+    ].filter((tool) => manifest.tools.includes(tool));
+    const authorityExamplesText = authorityExamples.length > 0
+        ? `, including ${authorityExamples.join(", ")},`
+        : "";
     lines.push("### REQUIRED FIRST STEP - DreamGraph MCP context economy");
     lines.push("");
     lines.push(`This conversation runs inside the DreamGraph VS Code extension. A project-aware MCP server "${manifest.server}" is connected and exposes graph-first context (cognitive knowledge graph, ADRs, workflows, data model, UI registry, source code, API surface).`);
@@ -42,6 +53,13 @@ function renderToolsManifest(manifest) {
     for (const tool of manifest.tools) {
         lines.push(`  - ${tool}`);
     }
+    lines.push("");
+    lines.push("Core read authority:");
+    lines.push(`  - ${manifest.server}:read_source_code is a safe core_read tool and is preferred when the target file, entity, or bounded line range is already known.`);
+    lines.push(`  - ${manifest.server}:search_source_code is only a locator/fallback for finding anchors; switch back to read_source_code for focused inspection once the target is known.`);
+    lines.push(`  - read_source_file is not a Codex/DreamGraph tool name. Normalize that wording to read_source_code before classifying the failure as a missing tool.`);
+    lines.push(`  - Codex provider-native shell/read restrictions do not apply to listed ${manifest.server} MCP tools. If a listed MCP read fails, classify it as missing_tool, policy_blocked, schema_args_failure, continuation_authorization_needed, or runtime_mcp_failure based on the actual tool error.`);
+    lines.push(`  - ${manifest.server}:modify_api_surface property metadata updates require class_name. If a property update fails schema validation, retry with class_name rather than treating the tool as unavailable.`);
     lines.push("");
     lines.push("Exposed command execution routes:");
     if (hasDreamgraphRunCommand) {
@@ -64,13 +82,13 @@ function renderToolsManifest(manifest) {
     lines.push(`  - Workflows                          -> query_resource("system://workflows")`);
     lines.push(`  - Data model                         -> query_resource("system://data-model") or search_data_model(query)`);
     lines.push(`  - Semantic code/graph search         -> graph_rag_retrieve(query)`);
-    lines.push(`  - Source inspection                  -> read_source_code(repo, filePath, entity?/range?)`);
+    lines.push(`  - Source inspection                  -> read_source_code(repo, filePath, entity?/range?) for known targets; use search_source_code only to locate unknown anchors`);
     lines.push(`  - Directory layout                   -> list_directory(repo, dirPath?)`);
     lines.push(`  - File/entity mutations              -> prefer ${manifest.server}:edit_entity, ${manifest.server}:patch_file, ${manifest.server}:create_file, ${manifest.server}:edit_file, or markdown/ADR/project-state mutation tools`);
     lines.push(`  - ADRs / graph / project state       -> prefer ${manifest.server} mutation tools such as record_architecture_decision, enrich_seed_data, register_ui_element, and related listed tools before local fallbacks`);
     lines.push(`  - Verification / build / tests       -> ${hasDreamgraphRunCommand ? `${manifest.server}:run_command({ command, cwd?, timeoutMs? }) - there is no other shell route for this run` : "command execution is disabled for this run"}`);
     lines.push("");
-    lines.push(`Codex CLI adapter authority override: if earlier generic Architect instructions mention local support tools such as write_file, modify_entity, read_local_file, run_command, powershell, bash, or shell, treat them as unavailable or last-resort fallbacks for this Codex CLI run. Listed ${manifest.server} MCP tools take precedence because they are graph-aware, provenance/audit-preserving, and multi-repository aware.`);
+    lines.push(`Codex CLI adapter authority override: if earlier generic Architect instructions mention provider-native powershell, bash, cmd, shell, edit, write, or read tools, treat those provider-native routes as unavailable for this Codex CLI run. Listed ${manifest.server} MCP tools${authorityExamplesText} are separate DreamGraph-authorized routes and take precedence because they are graph-aware, provenance/audit-preserving, and multi-repository aware.`);
     lines.push("");
     lines.push(`Mutation routing policy: when modifying files, repositories, entities, ADRs, graph knowledge, or project state, prefer the listed ${manifest.server} MCP mutation tools first: source mutations through ${manifest.server}:edit_entity, ${manifest.server}:patch_file, ${manifest.server}:create_file, ${manifest.server}:edit_file, ${manifest.server}:rename_file, or ${manifest.server}:delete_file; knowledge mutations through ${manifest.server}:enrich_seed_data, ${manifest.server}:register_ui_element, ${manifest.server}:modify_api_surface, ${manifest.server}:record_architecture_decision, and related graph tools. Native Codex CLI write/edit/read/shell routes are denied by adapter policy. Skipping the grounding call or bypassing an available DreamGraph mutation/verification tool is a protocol violation.`);
     lines.push("");

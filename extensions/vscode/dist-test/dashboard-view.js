@@ -68,8 +68,16 @@ class DashboardViewProvider {
      * Called by connectToInstance when the real port is discovered.
      */
     updateDaemonUrl(host, port) {
+        if (!this._isValidPort(port)) {
+            this._daemonUrl = null;
+            this.refresh();
+            return;
+        }
         this._daemonUrl = `http://${host}:${port}/status`;
         this.refresh();
+    }
+    _isValidPort(port) {
+        return Number.isInteger(port) && port !== null && port !== undefined && port > 0 && port <= 65535;
     }
     get isVisible() {
         return this._view?.visible ?? false;
@@ -156,7 +164,8 @@ class DashboardViewProvider {
         // Fallback to settings (used before first connect)
         const config = vscode.workspace.getConfiguration("dreamgraph");
         const host = config.get("daemonHost") ?? "127.0.0.1";
-        const port = config.get("daemonPort") ?? 8100;
+        const configuredPort = config.get("daemonPort");
+        const port = this._isValidPort(configuredPort) ? configuredPort : 8100;
         return `http://${host}:${port}/status`;
     }
     _getHtml(daemonUrl) {
@@ -198,25 +207,24 @@ class DashboardViewProvider {
   <div class="offline" id="offline" style="display:none">
     <span style="font-size:32px">🧠</span>
     <div>DreamGraph daemon is not reachable.</div>
-    <div style="font-size:12px">Start the daemon or check <code>dreamgraph.daemonPort</code> setting.</div>
+    <div style="font-size:12px">Resolved daemon URL: <code>${daemonUrl}</code></div>
     <button onclick="location.reload()">Retry</button>
   </div>
   <script nonce="${nonce}">
     const iframe = document.getElementById("dash");
     const offline = document.getElementById("offline");
-    // Show offline fallback if iframe fails to load
-    iframe.addEventListener("error", () => {
+    let loaded = false;
+    const showOffline = () => {
+      if (loaded) return;
       iframe.style.display = "none";
       offline.style.display = "flex";
+    };
+    iframe.addEventListener("error", showOffline);
+    const timeout = setTimeout(showOffline, 10000);
+    iframe.addEventListener("load", () => {
+      loaded = true;
+      clearTimeout(timeout);
     });
-    // Timeout fallback — if iframe doesn't load within 5s, show offline
-    const timeout = setTimeout(() => {
-      try { if (!iframe.contentWindow || !iframe.contentWindow.document.body.innerHTML) throw 0; } catch {
-        iframe.style.display = "none";
-        offline.style.display = "flex";
-      }
-    }, 5000);
-    iframe.addEventListener("load", () => clearTimeout(timeout));
   </script>
 </body>
 </html>`;

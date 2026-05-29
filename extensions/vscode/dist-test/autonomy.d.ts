@@ -64,10 +64,22 @@ export interface RecommendedAction {
     withinScope: boolean;
     mutuallyExclusiveWith?: string[];
     batchGroup?: string;
+    requiresTools?: string[];
+    requiresSecrets?: string[];
+    blockers?: RecommendedActionBlocker[];
     /** Exact MCP/local tool name to run for this action, when applicable. */
     tool?: string;
     /** Pre-bound arguments for `tool`. */
     toolArgs?: Record<string, unknown>;
+}
+export interface RecommendedActionBlocker {
+    id: string;
+    label: string;
+    kind: 'missing_tool' | 'missing_secret' | 'external';
+}
+export interface RecommendedActionCapabilityContext {
+    availableToolNames?: readonly string[];
+    env?: Record<string, string | undefined>;
 }
 export interface RecommendedActionSet {
     actions: RecommendedAction[];
@@ -116,6 +128,8 @@ export declare function getModeProfile(mode: AutonomyMode): ModeProfile;
 export declare function applyModeProfileToState(mode: AutonomyMode, nowEpochMs?: number): AutonomyState;
 export declare function rankRecommendedActions(actions: RecommendedAction[]): RecommendedActionSet;
 export declare function computeDoAllEligibility(actions: RecommendedAction[]): boolean;
+export declare function isRecommendedActionRunnable(action: RecommendedAction): boolean;
+export declare function applyRecommendedActionCapabilityGuards(actions: readonly RecommendedAction[], context?: RecommendedActionCapabilityContext): RecommendedAction[];
 export declare function chooseActionForMode(mode: AutonomyMode, actionSet: RecommendedActionSet, signal: PassOutcomeSignal): string | undefined;
 export declare function shouldContinueAfterPass(state: AutonomyState, signal: PassOutcomeSignal, actionSet?: RecommendedActionSet): ContinuationDecision;
 export declare function getAutonomyInstructionBlock(state?: AutonomyInstructionState): string;

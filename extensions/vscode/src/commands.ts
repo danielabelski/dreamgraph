@@ -14,6 +14,7 @@
 
 import * as vscode from "vscode";
 import * as cp from "node:child_process";
+import * as path from "node:path";
 
 import type { DaemonClient } from "./daemon-client.js";
 import type { McpClient } from "./mcp-client.js";
@@ -257,6 +258,44 @@ export async function openDashboardCommand(
   await svc.dashboardView.open();
 }
 
+function resolveDaemonBrowserUrl(
+  svc: CommandServices,
+  pathname: string,
+  query?: Record<string, string>,
+): string {
+  const validPort = (port: number | null | undefined): number | null => {
+    return Number.isInteger(port) && port !== null && port !== undefined && port > 0 && port <= 65535
+      ? port
+      : null;
+  };
+
+  const config = vscode.workspace.getConfiguration("dreamgraph");
+  const host = config.get<string>("daemonHost") ?? "127.0.0.1";
+  const instance = svc.getInstance();
+  const port =
+    validPort(instance?.daemon.port) ??
+    validPort(svc.daemonClient.port) ??
+    validPort(config.get<number>("daemonPort")) ??
+    8100;
+  const url = new URL(`http://${host}:${port}${pathname}`);
+  for (const [key, value] of Object.entries(query ?? {})) {
+    url.searchParams.set(key, value);
+  }
+  return url.toString();
+}
+
+function activePlanIdFromEditor(): string | null {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== "file") return null;
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) return null;
+  const relativePath = path.relative(workspaceFolder.uri.fsPath, editor.document.uri.fsPath).replace(/\\/g, "/");
+  if (!relativePath.startsWith("plans/") || !relativePath.endsWith(".md") || relativePath.endsWith(".implementation-log.md")) {
+    return null;
+  }
+  return path.posix.basename(relativePath, ".md");
+}
+
 /* ------------------------------------------------------------------ */
 /*  Command: Open Explorer                                            */
 /* ------------------------------------------------------------------ */
@@ -274,15 +313,7 @@ export async function openExplorerCommand(
   // would give the default 8100 even when the actual daemon is on a
   // different port (auto-selected when 8100 is busy), which renders the
   // Explorer iframe as an empty black panel.
-  const config = vscode.workspace.getConfiguration("dreamgraph");
-  const host = config.get<string>("daemonHost") ?? "127.0.0.1";
-  const instance = svc.getInstance();
-  const port =
-    instance?.daemon.port ??
-    svc.daemonClient.port ??
-    config.get<number>("daemonPort") ??
-    8100;
-  const url = `http://${host}:${port}/explorer/`;
+  const url = resolveDaemonBrowserUrl(svc, "/explorer/");
 
   if (explorerPanel) {
     if (explorerPanelUrl !== url) {
@@ -304,6 +335,18 @@ export async function openExplorerCommand(
   });
   explorerPanel.webview.html = renderExplorerHtml(url);
   explorerPanelUrl = url;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Command: Open Standalone Architect                                */
+/* ------------------------------------------------------------------ */
+
+export async function openStandaloneArchitectCommand(
+  svc: CommandServices,
+): Promise<void> {
+  const planId = activePlanIdFromEditor();
+  const url = resolveDaemonBrowserUrl(svc, "/architect", planId ? { plan: planId } : undefined);
+  await vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
 function renderExplorerHtml(url: string): string {
@@ -560,6 +603,10 @@ export async function statusQuickPickCommand(
       description: "Open graph explorer (curated mutations)",
     },
     {
+      label: "$(compass) Open Architect",
+      description: "Open current plan in standalone Architect",
+    },
+    {
       label: "$(eye) Inspect Context",
       description: "Show context envelope",
     },
@@ -586,6 +633,8 @@ export async function statusQuickPickCommand(
       return openDashboardCommand(svc);
     case "$(graph) Open Explorer":
       return openExplorerCommand(svc);
+    case "$(compass) Open Architect":
+      return openStandaloneArchitectCommand(svc);
     case "$(eye) Inspect Context":
       return inspectContextCommand(svc), undefined;
   }

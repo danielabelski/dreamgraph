@@ -99,6 +99,7 @@ export interface ToolResultMessage {
 export type StreamCallback = (chunk: string) => void;
 
 export const ANTHROPIC_MODELS = [
+  "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-sonnet-4-6",
@@ -290,15 +291,15 @@ export class ArchitectLlm implements vscode.Disposable {
       return normalized;
     }
 
-    return model.startsWith("claude-opus-4-7") ? "xhigh" : "high";
+    return model.startsWith("claude-opus-4-8") || model.startsWith("claude-opus-4-7") ? "xhigh" : "high";
   }
 
   private _getAnthropicMaxTokens(model: string): number {
-    return model.startsWith("claude-opus-4-7") ? 65536 : 8192;
+    return model.startsWith("claude-opus-4-8") || model.startsWith("claude-opus-4-7") ? 65536 : 8192;
   }
 
   private _getAnthropicThinking(model: string): { type: "adaptive"; display?: "summarized" } | undefined {
-    if (!model.startsWith("claude-opus-4-7")) {
+    if (!model.startsWith("claude-opus-4-8") && !model.startsWith("claude-opus-4-7")) {
       return undefined;
     }
 
@@ -339,7 +340,7 @@ export class ArchitectLlm implements vscode.Disposable {
       body.tools = compactedTools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
     }
 
-    if (config.model.startsWith("claude-opus-4-7")) {
+    if (config.model.startsWith("claude-opus-4-8") || config.model.startsWith("claude-opus-4-7")) {
       body.output_config = { effort: this._getAnthropicEffort(config.model) };
       const thinking = this._getAnthropicThinking(config.model);
       if (thinking) {

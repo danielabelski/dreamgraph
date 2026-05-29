@@ -2,7 +2,7 @@ import { type CodexArgvPlan, type CodexCliErrorCode, type CodexCliProviderId, ty
 import type { CodexCliClockPort, CodexCliCryptoPort, CodexCliFsPort, CodexCliMcpAuditPort, CodexCliProcessPort, CodexCliRegistryPort, CodexCliSpawnResult, RecordedMcpToolCall } from "./orchestrator-ports.js";
 export interface CodexCliRunInput {
     readonly prompt: string;
-    readonly invocationCwd: string;
+    readonly invocationCwd?: string;
     readonly timeoutMs: number;
     readonly idleTimeoutMs?: number;
     readonly model?: string;
@@ -39,7 +39,7 @@ export interface CodexCliFailure {
     readonly code: CodexCliErrorCode;
     readonly message: string;
     readonly preSpawn: boolean;
-    readonly cause: "missing-binary" | "unsupported-help" | "not-logged-in" | "mcp-load-failed" | "registry-mismatch" | "user-cancelled" | "wall-timeout" | "idle-timeout" | "spawn-error" | "process-signal" | "nonzero-exit";
+    readonly cause: "missing-binary" | "unsupported-help" | "not-logged-in" | "usage-limit" | "model-unsupported" | "policy-denied" | "missing-tool" | "policy-blocked" | "schema-args-failure" | "provider-native-restriction" | "continuation-authorization-needed" | "runtime-mcp-failure" | "mcp-load-failed" | "registry-mismatch" | "user-cancelled" | "wall-timeout" | "idle-timeout" | "spawn-error" | "process-signal" | "nonzero-exit";
     readonly recoveryAction?: CodexCliRecoveryAction;
 }
 export interface CodexCliRunResult {
@@ -56,6 +56,7 @@ export interface CodexCliRunResult {
     readonly spawn?: CodexCliSpawnResult;
     readonly transcript?: CodexCliTranscript;
     readonly toolCalls: readonly ClassifiedToolCall[];
+    readonly toolCallWitnesses: CodexCliTranscript["toolCallWitnesses"];
 }
 export declare function runCodexCli(input: CodexCliRunInput, deps: CodexCliDeps): Promise<CodexCliRunResult>;
 //# sourceMappingURL=orchestrator.d.ts.map

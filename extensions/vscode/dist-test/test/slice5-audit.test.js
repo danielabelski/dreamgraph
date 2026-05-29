@@ -65,4 +65,19 @@ const node_path_1 = require("node:path");
     strict_1.default.match(chatPanel, /this\._reconcileCliAuditToolTrace\(result\.runId, result\.toolCalls\)/);
     strict_1.default.match(chatPanel, /this\._lastToolTrace\[liveIndex\] = authoritativeEntry/);
 });
+(0, node_test_1.default)('Slice 6 audit: codex-cli host timeout and forced-report evidence preserve partial progress', () => {
+    const chatPanel = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'chat-panel.ts'), 'utf8');
+    const helpers = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'chat-panel', 'helpers.ts'), 'utf8');
+    strict_1.default.match(chatPanel, /provider === 'copilot-cli' \|\| provider === 'codex-cli'/);
+    strict_1.default.match(chatPanel, /provider === 'copilot-cli' \? 'copilotCli\.timeoutMs' : 'codexCli\.timeoutMs'/);
+    strict_1.default.match(chatPanel, /Evidence from the just-finished pass:\\n\$\{evidenceDigest\}/);
+    strict_1.default.match(chatPanel, /internalPrompt: true/);
+    strict_1.default.match(chatPanel, /preserveExistingToolTrace: true/);
+    strict_1.default.match(chatPanel, /perTurn\.internalPrompt === true/);
+    strict_1.default.match(chatPanel, /options\.preserveExistingToolTrace !== true/);
+    strict_1.default.match(chatPanel, /audited tool calls prove progress\/evidence only/);
+    strict_1.default.match(chatPanel, /Do not call the original prompt fulfilled unless the requested final answer\/report was actually delivered/);
+    strict_1.default.match(helpers, /trace\.length > 0[\s\S]*Partial progress:/);
+    strict_1.default.doesNotMatch(helpers, /trace\.length > 0 && failedCount === 0\)\)/);
+});
 //# sourceMappingURL=slice5-audit.test.js.map

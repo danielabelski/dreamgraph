@@ -1120,6 +1120,18 @@ function getStyles() {
     .action-chip:hover {
       background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
     }
+    .action-chip:disabled,
+    .action-chip[aria-disabled="true"],
+    .action-chip-disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      border-style: dashed;
+    }
+    .action-chip:disabled:hover,
+    .action-chip[aria-disabled="true"]:hover,
+    .action-chip-disabled:hover {
+      background: var(--vscode-button-secondaryBackground, transparent);
+    }
     .action-chip-all {
       font-weight: 600;
       border-color: var(--vscode-button-border, var(--vscode-focusBorder));

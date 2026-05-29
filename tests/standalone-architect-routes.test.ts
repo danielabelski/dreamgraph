@@ -1,0 +1,715 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  createArchitectCliBridgeSpawnPlan,
+  createArchitectCodexConfigToml,
+  resolveArchitectCliBridgeExecutablePath,
+  resolveArchitectCliBridgeToolNames,
+} from "../src/architect/cli-bridge.js";
+import { handleArchitectRoute } from "../src/architect/routes.js";
+import * as lifecycle from "../src/instance/lifecycle.js";
+
+async function withArchitectServer<T>(run: (baseUrl: string) => Promise<T>): Promise<T> {
+  let server: Server | undefined;
+  server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const handled = await handleArchitectRoute(req, res, url.pathname);
+    if (!handled) {
+      res.statusCode = 404;
+      res.end("not found");
+    }
+  });
+
+  await new Promise<void>((resolve) => {
+    server!.listen(0, "127.0.0.1", resolve);
+  });
+
+  try {
+    const address = server.address() as AddressInfo;
+    return await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server!.close((error) => error ? reject(error) : resolve());
+    });
+  }
+}
+
+async function expectJsonOk(response: Response): Promise<Record<string, unknown>> {
+  expect(response.status).toBe(200);
+  return await response.json() as Record<string, unknown>;
+}
+
+describe("standalone Architect route hardening", () => {
+  it("advertises bridge-local run_command during CLI MCP preflight", () => {
+    expect(resolveArchitectCliBridgeToolNames(["query_resource", "read_source_code", "search_source_code"])).toEqual([
+      "query_resource",
+      "read_source_code",
+      "search_source_code",
+      "run_command",
+    ]);
+    expect(resolveArchitectCliBridgeToolNames(["query_resource", "run_command"])).toEqual([
+      "query_resource",
+      "run_command",
+    ]);
+  });
+
+  it("serializes Codex MCP config with TOML-safe dynamic keys", () => {
+    const content = createArchitectCodexConfigToml({
+      bridgeCommand: "node",
+      bridgeArgs: ["./cli-mcp-bridge.js"],
+      env: {
+        "=C:": "C:\\Users\\Mika",
+        "CommonProgramFiles(x86)": "C:\\Program Files (x86)\\Common Files",
+        DREAMGRAPH_RUN_ID: "run-1",
+      },
+      tools: ["run_command", "query.resource"],
+    });
+
+    expect(content).toContain('"=C:" = "C:\\\\Users\\\\Mika"');
+    expect(content).toContain('"CommonProgramFiles(x86)" = "C:\\\\Program Files (x86)\\\\Common Files"');
+    expect(content).toContain("[mcp_servers.dreamgraph.tools.run_command]");
+    expect(content).toContain('[mcp_servers.dreamgraph.tools."query.resource"]');
+  });
+
+  it("resolves Windows CLI shims and wraps them before spawning", async () => {
+    if (process.platform !== "win32") {
+      expect(createArchitectCliBridgeSpawnPlan("/usr/local/bin/codex", ["--version"])).toEqual({
+        command: "/usr/local/bin/codex",
+        args: ["--version"],
+      });
+      return;
+    }
+
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-cli-shim-"));
+    try {
+      await writeFile(join(tempRoot, "codex"), "");
+      await writeFile(join(tempRoot, "codex.cmd"), "@echo off\r\n");
+      const env = {
+        ...process.env,
+        PATH: tempRoot,
+        Path: tempRoot,
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      };
+
+      const resolved = await resolveArchitectCliBridgeExecutablePath("codex", env);
+      expect(resolved?.toLowerCase()).toBe(join(tempRoot, "codex.cmd").toLowerCase());
+
+      const spawnPlan = createArchitectCliBridgeSpawnPlan(resolved!, ["exec", "--json", "-"]);
+      expect(spawnPlan.command).toBe("cmd.exe");
+      expect(spawnPlan.windowsVerbatimArguments).toBe(true);
+      expect(spawnPlan.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(spawnPlan.args[3]).toContain("codex.cmd");
+      expect(spawnPlan.args[3]).toContain("--json");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("serves an executable browser bootstrap script for runtime binding", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/architect`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+
+      expect(script).toBeTruthy();
+      expect(() => new Function(script)).not.toThrow();
+      expect(script).toContain("function collapseWhitespace");
+      expect(script).toContain("String.fromCharCode(92) + 's+'");
+      expect(script).toContain("function describeStructuredToolResult");
+      expect(script).toContain("lines.join(String.fromCharCode(10))");
+      expect(script).not.toContain("replace(/s+/g");
+      expect(script).not.toContain("JSON.stringify(parsed.value, null, 2)");
+      expect(html).toContain("Project scope loading...");
+      expect(html).not.toContain("Instance binding loading...");
+      expect(html).not.toContain("<h1>Architect</h1>");
+      expect(html).not.toContain(">Architect Chat<");
+      expect(html).toContain("height: 100vh;");
+      expect(html).toContain("overflow: hidden;");
+    });
+  });
+
+  it("advertises Phase 6 and Phase 7 contracts from the daemon boundary", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const payload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+      const routes = payload.routes as Record<string, string>;
+      const future = payload.adaptive_future_projection as Record<string, unknown>;
+      const interop = payload.vscode_interop as Record<string, unknown>;
+
+      expect(routes.config).toBe("POST /api/architect/v1/config");
+      expect(routes.selection).toBe("POST /api/architect/v1/selection");
+      expect(routes.future_review).toBe("/api/architect/v1/plans/{planId}/future-review");
+      expect(routes.schedules).toBe("/api/architect/v1/schedules");
+      expect(routes.schedule_actions).toBe("/api/architect/v1/schedules/{scheduleId}/actions");
+      expect(future.advisory).toBe(true);
+      expect(future.fallback_visible).toBe(true);
+      expect(interop.companion_surface).toBe(true);
+      expect(interop.cutover_requires_superseding_adr).toBe(true);
+    });
+  });
+
+  it("projects VS Code escape hatch links with plan detail snapshots", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const payload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans/STANDALONE_ARCHITECT_MIGRATION_PLAN`));
+      const plan = payload.plan as Record<string, unknown>;
+      const links = plan.vscode_links as Record<string, string>;
+
+      expect(links.plan_markdown).toMatch(/^vscode:\/\/file\//);
+      expect(links.plan_markdown).toContain("STANDALONE_ARCHITECT_MIGRATION_PLAN.md");
+      expect(links.implementation_log).toMatch(/^vscode:\/\/file\//);
+      expect(links.implementation_log).toContain("STANDALONE_ARCHITECT_MIGRATION_PLAN.implementation-log.md");
+    });
+  });
+
+  it("serves daemon-governed ADR previews without browser filesystem authority", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-adr-preview-"));
+    const dataDir = join(tempRoot, "data");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-adr-preview-test",
+      projectRoot: tempRoot,
+      dataDir,
+    } as never);
+
+    try {
+      await mkdir(dataDir, { recursive: true });
+      await writeFile(join(dataDir, "adr_log.json"), JSON.stringify({
+        metadata: { description: "test ADRs", schema_version: "1.0.0", total_decisions: 1, last_updated: "2026-05-28T00:00:00.000Z" },
+        decisions: [{
+          id: "ADR-206",
+          title: "Standalone Architect migration is plan-centered and daemon-authoritative",
+          date: "2026-05-27T18:56:26.775Z",
+          decided_by: "collaborative",
+          status: "accepted",
+          context: { problem: "Standalone Architect needs a daemon-authoritative plan workflow.", constraints: [], affected_entities: ["standalone-architect"] },
+          decision: { chosen: "Keep standalone Architect plan-centered and daemon-governed.", alternatives: [] },
+          consequences: { expected: [], risks: [] },
+          guard_rails: ["Do not implement standalone browser filesystem writes."],
+          tags: ["standalone-architect"],
+        }],
+      }), "utf-8");
+
+      await withArchitectServer(async (baseUrl) => {
+        const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+      const routes = contract.routes as Record<string, string>;
+      expect(routes.adrs).toBe("/api/architect/v1/adrs");
+      expect(routes.adr_preview).toBe("/api/architect/v1/adrs/{adrId}");
+
+      const indexPayload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/adrs`));
+      const surface = indexPayload.adr_surface as Record<string, unknown>;
+      const adrs = indexPayload.adrs as Array<Record<string, unknown>>;
+      expect(surface.read_only).toBe(true);
+      expect(surface.direct_browser_filesystem_access).toBe(false);
+      expect(adrs.length).toBeGreaterThan(0);
+
+      const previewPayload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/adrs/ADR-206`));
+      const adr = previewPayload.adr as Record<string, unknown>;
+      const fullContent = previewPayload.full_content as Record<string, unknown>;
+      const advisory = adr.advisory_metadata as Record<string, unknown>;
+      expect(adr.id).toBe("ADR-206");
+      expect(adr.title).toContain("Standalone Architect");
+      expect(adr.status).toBe("accepted");
+      expect(typeof adr.decision_summary).toBe("string");
+      expect(Array.isArray(adr.guard_rails)).toBe(true);
+      expect(advisory.read_model).toBe("daemon_governed_preview");
+      expect(advisory.hard_enforcement).toBe(false);
+      expect(fullContent.id).toBe("ADR-206");
+
+        const missing = await fetch(`${baseUrl}/api/architect/v1/adrs/ADR-999999`);
+        expect(missing.status).toBe(404);
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("records ADR edit proposals through a selected plan audit without direct ADR file mutation", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-adr-edit-"));
+    const dataDir = join(tempRoot, "data");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-adr-edit-test",
+      projectRoot: tempRoot,
+      dataDir,
+    } as never);
+
+    try {
+      await mkdir(dataDir, { recursive: true });
+      const adrLog = {
+        metadata: { description: "test ADRs", schema_version: "1.0.0", total_decisions: 1, last_updated: "2026-05-28T00:00:00.000Z" },
+        decisions: [{
+          id: "ADR-206",
+          title: "Standalone Architect migration is plan-centered and daemon-authoritative",
+          date: "2026-05-27T18:56:26.775Z",
+          decided_by: "collaborative",
+          status: "accepted",
+          context: { problem: "Standalone Architect needs a daemon-authoritative plan workflow.", constraints: [], affected_entities: ["standalone-architect"] },
+          decision: { chosen: "Keep standalone Architect plan-centered and daemon-governed.", alternatives: [] },
+          consequences: { expected: [], risks: [] },
+          guard_rails: ["Do not implement standalone browser filesystem writes."],
+          tags: ["standalone-architect"],
+        }],
+      };
+      await writeFile(join(dataDir, "adr_log.json"), JSON.stringify(adrLog), "utf-8");
+
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/plans`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "ADR Edit Proposal Plan" }),
+        });
+        expect(createdResponse.status).toBe(201);
+        const created = await createdResponse.json() as Record<string, unknown>;
+        const planId = String((created.result as Record<string, unknown>).plan_id);
+
+        const proposalResponse = await fetch(`${baseUrl}/api/architect/v1/adrs/ADR-206/edits`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            plan_id: planId,
+            title: "Standalone Architect remains daemon-authoritative",
+            decision_summary: "Keep standalone Architect plan-centered, daemon-governed, and review-audited.",
+            problem_summary: "Standalone Architect needs a daemon-authoritative plan workflow.",
+            guard_rails: ["Do not implement standalone browser filesystem writes."],
+            tags: ["standalone-architect", "browser-ui"],
+          }),
+        });
+        expect(proposalResponse.status).toBe(202);
+        const proposal = await proposalResponse.json() as Record<string, unknown>;
+        const result = proposal.result as Record<string, unknown>;
+        expect(result.status).toBe("proposal_recorded");
+        expect(result.changed).toBe(false);
+        expect(result.audit_scope).toBe("daemon_governed_adr_edit_proposal");
+        expect(result.changed_fields).toEqual(expect.arrayContaining(["title", "decision_summary", "tags"]));
+        expect(String((result.editor_contract as Record<string, unknown>).mutation_authority)).toBe("daemon_governed_plan_log");
+
+        const persistedAdrLog = JSON.parse(await readFile(join(dataDir, "adr_log.json"), "utf-8")) as typeof adrLog;
+        expect(persistedAdrLog.decisions[0].title).toBe(adrLog.decisions[0].title);
+        const implementationLog = await readFile(join(tempRoot, "plans", `${planId}.implementation-log.md`), "utf-8");
+        expect(implementationLog).toContain("adr_edit_proposal");
+        expect(implementationLog).toContain("ADR ADR-206");
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("projects advisory future review without turning AFE into enforcement", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const payload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans/STANDALONE_ARCHITECT_MIGRATION_PLAN/future-review`));
+      const review = payload.future_review as Record<string, unknown>;
+      const model = review.model_provenance as Record<string, unknown>;
+      const candidates = review.candidates as Array<Record<string, unknown>>;
+      const selectedCandidate = candidates.find((candidate) => candidate.selected === true) ?? {};
+
+      expect(review.advisory).toBe(true);
+      expect(review.hard_enforcement).toBe(false);
+      expect(model.fallback).toBe("deterministic_fallback");
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(String(selectedCandidate.id)).toContain("standalone_architect_migration_plan");
+      expect(typeof selectedCandidate.label).toBe("string");
+      expect(review.review_decisions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "accept" }),
+        expect.objectContaining({ id: "reject" }),
+        expect.objectContaining({ id: "defer" }),
+        expect.objectContaining({ id: "supersede" }),
+      ]));
+
+      const otherPayload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans/ARCHITECT_REWRITE_FOUNDATION_PLAN/future-review`));
+      const otherReview = otherPayload.future_review as Record<string, unknown>;
+      const otherCandidates = otherReview.candidates as Array<Record<string, unknown>>;
+      const otherSelectedCandidate = otherCandidates.find((candidate) => candidate.selected === true) ?? {};
+
+      expect(otherReview.selected_candidate_id).not.toBe(review.selected_candidate_id);
+      expect(String(otherSelectedCandidate.id)).toContain("architect_rewrite_foundation_plan");
+      expect(otherSelectedCandidate.label).not.toBe(selectedCandidate.label);
+    });
+  });
+
+  it("exposes one active session runtime across config and chat payloads", async () => {
+    const previousAdapter = process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
+    const previousProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    const previousAutonomy = process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE;
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const configured = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.4",
+            mode: "manual",
+          }),
+        }));
+        const configuredRuntime = configured.runtime as Record<string, unknown>;
+
+        expect(configuredRuntime.adapter).toBe("native_api_tool_loop");
+        expect(configuredRuntime.provider).toBe("openai");
+        expect(configuredRuntime.model).toBe("gpt-5.4");
+        expect(configuredRuntime.autonomy_mode).toBe("manual");
+        expect(configuredRuntime.execution_route).toBe("native_api_tool_loop");
+        expect(typeof configuredRuntime.session_id).toBe("string");
+        expect(configuredRuntime.provenance_authority).toBe("dreamgraph_mcp");
+
+        const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+        const contractRuntime = contract.runtime as Record<string, unknown>;
+        expect(contractRuntime.model).toBe("gpt-5.4");
+        expect(contractRuntime.autonomy_mode).toBe("manual");
+        expect((contract.architect_llm as Record<string, unknown>).session_id).toBe(configuredRuntime.session_id);
+
+        const chat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "what model are you running?",
+            adapter: "deterministic_fallback",
+            provider: "none",
+            model: "gpt-5.4",
+            mode: "manual",
+          }),
+        }));
+        const result = chat.result as Record<string, unknown>;
+        const resultRuntime = result.runtime as Record<string, unknown>;
+        expect(resultRuntime.model).toBe("gpt-5.4");
+        expect(resultRuntime.autonomy_mode).toBe("manual");
+        expect(result.content).toContain("Current execution runtime:");
+        expect(result.content).toContain("Model: gpt-5.4");
+        expect((result.provenance as Record<string, unknown>).runtime).toEqual(resultRuntime);
+      });
+    } finally {
+      if (previousAdapter == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER; else process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER = previousAdapter;
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousProvider;
+      if (previousModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousModel;
+      if (previousAutonomy == null) delete process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE; else process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE = previousAutonomy;
+    }
+  });
+
+  it("persists selected standalone plan in engine.env and exposes it for restart restore", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-selected-plan-"));
+    const engineEnvPath = join(tempRoot, "config", "engine.env");
+    const previousSelectedPlan = process.env.DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID;
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-selected-plan-test",
+      projectRoot: tempRoot,
+      engineEnvPath,
+    } as never);
+
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/plans`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Browser Architect UI Level 2" }),
+        });
+        expect(createdResponse.status).toBe(201);
+        const created = await createdResponse.json() as Record<string, unknown>;
+        const createdResult = created.result as Record<string, unknown>;
+        const planId = String(createdResult.plan_id);
+
+        const selected = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/selection`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ selected_plan_id: planId }),
+        }));
+        const selectedResult = selected.result as Record<string, unknown>;
+        expect(selectedResult.persisted).toBe(true);
+        expect(selectedResult.selected_plan_id).toBe(planId);
+        expect(selectedResult.env_key).toBe("DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID");
+        expect(selected.selected_plan_id).toBe(planId);
+
+        const env = await readFile(engineEnvPath, "utf-8");
+        expect(env).toContain(`DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID=${planId}`);
+
+        const plans = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans`));
+        expect(plans.selected_plan_id).toBe(planId);
+        expect((plans.architect_selection as Record<string, unknown>).selected_plan_id).toBe(planId);
+
+        const cleared = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/selection`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ selected_plan_id: null }),
+        }));
+        const clearedResult = cleared.result as Record<string, unknown>;
+        expect(clearedResult.persisted).toBe(true);
+        expect(clearedResult.selected_plan_id).toBeNull();
+        const clearedEnv = await readFile(engineEnvPath, "utf-8");
+        expect(clearedEnv).toContain("# DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID=");
+
+        const clearedPlans = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans`));
+        expect(clearedPlans.selected_plan_id).toBeNull();
+        expect((clearedPlans.architect_selection as Record<string, unknown>).selected_plan_id).toBeNull();
+      });
+    } finally {
+      if (previousSelectedPlan == null) delete process.env.DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID; else process.env.DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID = previousSelectedPlan;
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("separates project-scope chat from selected plan logs and honors slash overrides", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-chat-scope-"));
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-chat-scope-test",
+      projectRoot: tempRoot,
+    } as never);
+
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/plans`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Chat Scope Separation Plan" }),
+        });
+        expect(createdResponse.status).toBe(201);
+        const created = await createdResponse.json() as Record<string, unknown>;
+        const planId = String((created.result as Record<string, unknown>).plan_id);
+
+        const globalChat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "/global this plan should add graph health notes",
+            scope: "plan",
+            planId,
+            adapter: "deterministic_fallback",
+            provider: "none",
+            model: "gpt-5.4",
+            mode: "manual",
+          }),
+        }));
+        const globalResult = globalChat.result as Record<string, unknown>;
+        expect(globalResult.chat_scope).toBe("project");
+        expect(globalResult.plan_id).toBeNull();
+        expect(globalResult.plan_update).toBeNull();
+
+        const logAfterGlobal = await readFile(join(tempRoot, "plans", `${planId}.implementation-log.md`), "utf-8");
+        expect(logAfterGlobal).not.toContain("chat_plan_update");
+        expect(logAfterGlobal).not.toContain("graph health notes");
+
+        const planChat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "/plan this plan should add Slice 2 continuation notes",
+            scope: "project",
+            planId,
+            adapter: "deterministic_fallback",
+            provider: "none",
+            model: "gpt-5.4",
+            mode: "manual",
+          }),
+        }));
+        const planResult = planChat.result as Record<string, unknown>;
+        const planUpdate = planResult.plan_update as Record<string, unknown>;
+        expect(planResult.chat_scope).toBe("plan");
+        expect(planResult.plan_id).toBe(planId);
+        expect(planUpdate.changed).toBe(true);
+
+        const logAfterPlan = await readFile(join(tempRoot, "plans", `${planId}.implementation-log.md`), "utf-8");
+        expect(logAfterPlan).toContain("chat_plan_update");
+        expect(logAfterPlan).toContain("Slice 2 continuation notes");
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("applies selected-plan chat additions through daemon fallback when CLI adapter is metadata-only", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-chat-plan-"));
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-chat-plan-test",
+      projectRoot: tempRoot,
+    } as never);
+
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/plans`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Browser Architect UI Level 2" }),
+        });
+        expect(createdResponse.status).toBe(201);
+        const created = await createdResponse.json() as Record<string, unknown>;
+        const createdResult = created.result as Record<string, unknown>;
+        const planId = String(createdResult.plan_id);
+
+        const update = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: [
+              "this plan should design the next level features of the browser based standalone architect:",
+              "",
+              "- Plan tree hierarchy",
+              "- ADR editor dedicated and inline",
+              "- Filters for the left side plan view",
+            ].join("\n"),
+            planId,
+            adapter: "codex-cli",
+            provider: "none",
+            model: "gpt-5.4",
+            mode: "autonomous",
+          }),
+        }));
+        const result = update.result as Record<string, unknown>;
+        const planUpdate = result.plan_update as Record<string, unknown>;
+
+        expect(result.content).toContain("Updated Browser Architect UI Level 2");
+        expect(planUpdate.changed).toBe(true);
+        expect(planUpdate.update_mode).toBe("replace_goal_placeholder");
+        expect(String((result.route as Record<string, unknown>).fallback_reason)).toContain("architect_provider_failed");
+        expect(String((result.route as Record<string, unknown>).fallback_reason)).not.toContain("metadata_only");
+
+        const markdown = await readFile(join(tempRoot, "plans", `${planId}.md`), "utf-8");
+        const log = await readFile(join(tempRoot, "plans", `${planId}.implementation-log.md`), "utf-8");
+        expect(markdown).toContain("Plan tree hierarchy");
+        expect(markdown).not.toContain("Describe the goal for this Architect plan.");
+        expect(log).toContain("chat_plan_update");
+        expect(log).toContain("selected plan markdown was updated by the daemon");
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects GET chat prompts and supports POST SSE chat responses", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const rejected = await fetch(`${baseUrl}/api/architect/v1/chat?message=must-not-travel-in-url`);
+      expect(rejected.status).toBe(405);
+      expect(rejected.headers.get("allow")).toBe("POST");
+
+      const response = await fetch(`${baseUrl}/api/architect/v1/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          message: "hello what is the project?",
+          planId: "STANDALONE_ARCHITECT_MIGRATION_PLAN",
+          continuationToken: "test-continuation",
+          mode: "autonomous",
+          responseTransport: "sse",
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      const text = await response.text();
+      expect(text).toContain("event: architect.chat.status");
+      expect(text).toContain("event: architect.chat.result");
+      expect(text).toContain("\"transport\":\"sse\"");
+    });
+  });
+
+  it("projects implementation-log lifecycle and next-slice status", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/architect/v1/plans/browser-architect-ui-level-2`);
+      const payload = await expectJsonOk(response);
+      const plan = payload.plan as { operational_state?: Record<string, unknown> };
+      const operational = plan.operational_state ?? {};
+      const lastCompleted = operational.last_completed_slice as { title?: string } | null;
+      const nextSlice = operational.next_slice as { title?: string } | null;
+
+      expect(operational.plan_lifecycle).toBe("implementing");
+      expect(operational.execution_state).toBe("idle");
+      expect(String(lastCompleted?.title ?? lastCompleted?.id ?? "")).toContain("Slice 6");
+      expect(String(nextSlice?.title ?? nextSlice?.id ?? "")).toBe("");
+      expect(String(operational.current_slice_id ?? "")).not.toContain("standalone-architect-chat-plan-update");
+    });
+  });
+
+  it("serves repaired standalone UI affordances directly in the shell", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/architect`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+
+      expect(html).toContain("data-architect-collapse=\"left\"");
+      expect(html).toContain("data-architect-collapse=\"right\"");
+      expect(html).toContain("data-architect-resize-handle=\"left\"");
+      expect(html).toContain("data-architect-resize-handle=\"right\"");
+      expect(html).toContain("class=\"architect-right-accordion\"");
+      expect(html).toContain("id=\"architect-adapter-select\"");
+      expect(html).toContain("value=\"codex-cli\"");
+      expect(html).toContain("value=\"copilot-cli\"");
+      expect(html).toContain("id=\"architect-provider-select\"");
+      expect(html).toContain(".control-field option");
+      expect(html).toContain("id=\"architect-model-input\"");
+      expect(html).toContain("architectModelOptionsByProvider");
+      expect(html).toContain("function renderArchitectModelOptions");
+      expect(html).toContain("function persistArchitectControls");
+      expect(html).toContain("function persistSelectedPlan");
+      expect(html).toContain("function clearSelectedPlan");
+      expect(html).toContain("function parseChatSlashOverride");
+      expect(html).toContain("class=\"prompt-surface\"");
+      expect(html).toContain("id=\"chat-scope-pill\"");
+      expect(html).toContain("🌍 Project");
+      expect(html).toContain("Messages will use project-wide context");
+      expect(html).toContain("📍 Plan: ");
+      expect(html).toContain("Messages are bound to selected plan");
+      expect(html).toContain("chat_scope: dispatchScope");
+      expect(html).toContain("Plan scope active");
+      expect(html).toContain("DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID");
+      expect(html).toContain("/api/architect/v1/selection");
+      expect(html).toContain("function updateActiveArchitectRuntime");
+      expect(html).toContain("architectRuntimeLabel(runtime)");
+      expect(html).toContain("/api/architect/v1/config");
+      expect(html).toContain("engine.env updated");
+      expect(html).toContain("id=\"architect-autonomy-mode-select\"");
+      expect(html).toContain("function renderChatContent");
+      expect(html).toContain("function appendTextWithAdrPreviews");
+      expect(html).toContain("function loadAdrPreview");
+      expect(html).toContain("/api/architect/v1/adrs/");
+      expect(html).toContain("id=\"adr-editor\"");
+      expect(html).toContain("ADR Editor");
+      expect(html).toContain("class=\"architect-center-tabs\"");
+      expect(html).toContain("data-architect-tab=\"chat\"");
+      expect(html).toContain("data-architect-tab=\"plan\"");
+      expect(html).toContain("data-architect-tab=\"adr\"");
+      expect(html).toContain("function resolveArchitectCenterTab");
+      expect(html).toContain("return architectCenterTabButtons.some");
+      expect(html).toContain("function hydrateArchitectCenterTabs");
+      expect(html).toContain("center-plan-body");
+      expect(html).not.toContain("Dedicated editor is available in the center ADR Editor tab.");
+      expect(html).toContain("function openAdrEditor");
+      expect(html).toContain("function submitAdrEditProposal");
+      expect(html).toContain("proposal_only");
+      expect(html).toContain("adr-preview-trigger");
+      expect(html).toContain("daemon-governed ADR preview on hover or focus");
+      expect(html).toContain("function appendToolTraceMessage");
+      expect(html).toContain("function renderToolTraceRow");
+      expect(html).toContain("architect.tool_result");
+      expect(html).toContain("semanticToolArgSummary");
+      expect(html).toContain("tool-trace-panel");
+      expect(html).not.toContain("appendEventLine('[tool-trace]");
+      expect(html).toContain("Lifecycle");
+      expect(html).toContain("Next slice");
+      expect(html).toContain("function renderEventLine");
+      expect(html).toContain("activePlanLoadToken");
+      expect(html).toContain("const label = String(candidate.label || candidate.id || 'candidate');");
+      expect(html).toContain("No plan selected. Project-scope chat remains available.");
+      expect(html).toContain("if (activePlanId === plan.id)");
+      expect(html).not.toContain("await loadPlan(firstPlanId, firstButton)");
+      expect(html).toContain("button.plan-item {\n      display: flex;");
+      expect(html).toContain("flex-direction: column;");
+      expect(html).toContain("align-items: stretch;");
+      expect(html).toContain("min-height: unset;");
+      expect(html).toContain("button.plan-item .plan-title");
+      expect(html).toContain("-webkit-line-clamp: 2;");
+      expect(html).toContain("button.plan-item .plan-meta");
+      expect(html).toContain("font-size: 0.62rem;");
+      expect(html).toContain("meta.className = 'plan-meta'");
+      expect(html).toContain("title.className = 'plan-title'");
+    });
+  });
+});

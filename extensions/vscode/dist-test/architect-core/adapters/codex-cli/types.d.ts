@@ -1,10 +1,10 @@
 export declare const CODEX_CLI_PROVIDER_ID: "codex-cli";
 export type CodexCliProviderId = typeof CODEX_CLI_PROVIDER_ID;
-export type CodexCliErrorCode = "CODEX_CLI_NOT_FOUND" | "CODEX_CLI_VERSION_UNSUPPORTED" | "CODEX_HELP_SURFACE_UNSUPPORTED" | "CODEX_NOT_LOGGED_IN" | "MCP_PROBE_FAILED" | "MCP_ISOLATION_UNSUPPORTED" | "DREAMGRAPH_TOOL_REGISTRY_MISMATCH" | "WORKSPACE_NOT_OPTED_IN" | "CWD_POLICY_VIOLATION" | "CONFIG_OVERRIDE_POLICY_UNSUPPORTED" | "TIMEOUT" | "OUTPUT_LIMIT_EXCEEDED" | "AUTHORITATIVE_TOOL_REJECTED" | "GLOBAL_MCP_VISIBLE_IN_AUTHORITATIVE_MODE" | "INLINE_WRITE_OR_SHELL_ATTEMPTED" | "PATCH_OUT_OF_WORKSPACE" | "DIRECT_WORKSPACE_WRITE_DETECTED" | "CANCELLED" | "CODEX_RUN_NONZERO_EXIT" | "CODEX_RUN_SIGNALED";
-export declare const CODEX_MINIMUM_AUTHORITATIVE_TOOLS: readonly ["query_resource", "query_api_surface", "read_source_code", "search_source_code", "list_directory", "list_markdown_chapters", "read_markdown_chapter", "graph_rag_retrieve", "shortest_path", "query_db_schema"];
+export type CodexCliErrorCode = "CODEX_CLI_NOT_FOUND" | "CODEX_CLI_VERSION_UNSUPPORTED" | "CODEX_HELP_SURFACE_UNSUPPORTED" | "CODEX_NOT_LOGGED_IN" | "CODEX_USAGE_LIMIT" | "CODEX_MODEL_UNSUPPORTED" | "CODEX_POLICY_DENIED" | "DREAMGRAPH_TOOL_MISSING" | "DREAMGRAPH_TOOL_POLICY_BLOCKED" | "DREAMGRAPH_TOOL_SCHEMA_ARGS" | "DREAMGRAPH_TOOL_AUTHORIZATION_NEEDED" | "DREAMGRAPH_MCP_RUNTIME_FAILURE" | "MCP_PROBE_FAILED" | "MCP_ISOLATION_UNSUPPORTED" | "DREAMGRAPH_TOOL_REGISTRY_MISMATCH" | "WORKSPACE_NOT_OPTED_IN" | "CWD_POLICY_VIOLATION" | "CONFIG_OVERRIDE_POLICY_UNSUPPORTED" | "TIMEOUT" | "OUTPUT_LIMIT_EXCEEDED" | "AUTHORITATIVE_TOOL_REJECTED" | "GLOBAL_MCP_VISIBLE_IN_AUTHORITATIVE_MODE" | "INLINE_WRITE_OR_SHELL_ATTEMPTED" | "PATCH_OUT_OF_WORKSPACE" | "DIRECT_WORKSPACE_WRITE_DETECTED" | "CANCELLED" | "CODEX_RUN_NONZERO_EXIT" | "CODEX_RUN_SIGNALED";
+export declare const CODEX_MINIMUM_AUTHORITATIVE_TOOLS: readonly ["query_resource", "graph_rag_retrieve", "shortest_path", "query_api_surface", "read_source_code", "list_directory", "search_source_code", "list_markdown_chapters", "read_markdown_chapter", "cognitive_status"];
 export declare const CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS: readonly ["run_command"];
-export declare const CODEX_AUTHORITATIVE_TOOL_CATALOG: readonly ["query_resource", "query_api_surface", "read_source_code", "search_source_code", "list_directory", "list_markdown_chapters", "read_markdown_chapter", "graph_rag_retrieve", "shortest_path", "query_db_schema", "create_file", "edit_file", "delete_file", "rename_file", "edit_entity", "patch_file", "append_to_file", "edit_markdown_section", "patch_markdown_chapter", "enrich_seed_data", "enrich_parser_nodes", "solidify_cognitive_insight", "register_ui_element", "modify_api_surface", "record_architecture_decision", "query_architecture_decisions", "deprecate_architecture_decision", "cognitive_status", "get_dream_insights", "query_dreams", "get_causal_insights", "get_temporal_insights", "get_system_narrative", "get_system_story", "get_cognitive_preamble", "get_remediation_plan", "query_self_metrics", "dream_cycle", "normalize_dreams", "nightmare_cycle", "lucid_dream", "lucid_action", "wake_from_lucid", "schedule_dream", "list_schedules", "update_schedule", "run_schedule_now", "delete_schedule", "get_schedule_history", "init_graph", "scan_project", "extract_api_surface", "generate_visual_flow", "export_living_docs", "generate_ui_migration_plan", "export_dream_archetypes", "git_log", "git_blame", "fetch_web_page", "run_command"];
-export declare const CODEX_REQUIRED_AUTHORITATIVE_TOOLS: readonly ["query_resource", "query_api_surface", "read_source_code", "search_source_code", "list_directory", "list_markdown_chapters", "read_markdown_chapter", "graph_rag_retrieve", "shortest_path", "query_db_schema"];
+export declare const CODEX_AUTHORITATIVE_TOOL_CATALOG: readonly ["query_resource", "graph_rag_retrieve", "shortest_path", "query_api_surface", "read_source_code", "list_directory", "search_source_code", "list_markdown_chapters", "read_markdown_chapter", "cognitive_status", "read_local_file", "run_command", "create_file", "edit_file", "delete_file", "rename_file", "write_file", "modify_entity", "edit_entity", "patch_file", "append_to_file", "edit_markdown_section", "patch_markdown_chapter", "enrich_seed_data", "enrich_parser_nodes", "solidify_cognitive_insight", "register_ui_element", "modify_api_surface", "record_architecture_decision", "query_architecture_decisions", "deprecate_architecture_decision", "get_dream_insights", "query_dreams", "get_causal_insights", "get_temporal_insights", "get_system_narrative", "get_system_story", "get_cognitive_preamble", "get_remediation_plan", "query_self_metrics", "dream_cycle", "normalize_dreams", "nightmare_cycle", "lucid_dream", "lucid_action", "wake_from_lucid", "schedule_dream", "list_schedules", "update_schedule", "run_schedule_now", "delete_schedule", "get_schedule_history", "init_graph", "scan_project", "extract_api_surface", "generate_visual_flow", "export_living_docs", "generate_ui_migration_plan", "export_dream_archetypes", "git_log", "git_blame", "fetch_web_page"];
+export declare const CODEX_REQUIRED_AUTHORITATIVE_TOOLS: readonly ["query_resource", "graph_rag_retrieve", "shortest_path", "query_api_surface", "read_source_code", "list_directory", "search_source_code", "list_markdown_chapters", "read_markdown_chapter", "cognitive_status"];
 export type CodexAuthoritativeToolName = (typeof CODEX_AUTHORITATIVE_TOOL_CATALOG)[number];
 export declare const DREAMGRAPH_AUTHORITATIVE_SERVER_NAME: "dreamgraph";
 export type DreamgraphAuthoritativeServerName = typeof DREAMGRAPH_AUTHORITATIVE_SERVER_NAME;
@@ -13,6 +13,7 @@ export interface CodexHelpSurface {
     readonly versionString: string | null;
     readonly root: {
         readonly execCommand: boolean;
+        readonly askForApproval: boolean;
     };
     readonly exec: {
         readonly json: boolean;
@@ -27,6 +28,7 @@ export interface CodexHelpSurface {
         readonly outputSchema: boolean;
         readonly skipGitRepoCheck: boolean;
         readonly ignoreUserConfig: boolean;
+        readonly ignoreRules: boolean;
         readonly ephemeral: boolean;
         readonly positionalStdinPrompt: boolean;
     };
@@ -92,6 +94,7 @@ export interface CodexArgvInput {
     readonly addDirs?: readonly string[];
     readonly skipGitRepoCheck?: boolean;
     readonly ignoreUserConfig?: boolean;
+    readonly ignoreRules?: boolean;
     readonly ephemeral?: boolean;
     readonly helpSurface: CodexHelpSurface;
 }
@@ -103,6 +106,7 @@ export interface CodexArgvPlan {
         readonly promptSource: "stdin-positional-dash";
         readonly jsonEventsEnabled: boolean;
         readonly userConfigIgnored: boolean;
+        readonly rulesIgnored: boolean;
         readonly ephemeral: boolean;
         readonly gitRepoCheckSkipped: boolean;
         readonly addedDirs: readonly string[];
@@ -114,17 +118,59 @@ export interface ToolCallObservation {
     readonly server: string;
     readonly tool: string;
 }
+export type CodexToolCallWitnessStatus = "completed" | "failed" | "cancelled" | "unknown";
+export interface CodexToolCallWitness {
+    readonly server: string;
+    readonly tool: string;
+    readonly status: CodexToolCallWitnessStatus;
+    readonly detail?: string;
+    readonly source: "structured-event" | "diagnostic";
+    readonly sequence: number;
+}
 export interface ToolCallClassificationContext {
     readonly authoritativeServer: DreamgraphAuthoritativeServerName;
     readonly allowlist: readonly string[];
 }
 export declare const CODEX_INLINE_TOOL_SERVER: "<inline>";
+export interface CodexTokenUsage {
+    readonly inputTokens?: number;
+    readonly cachedInputTokens?: number;
+    readonly outputTokens?: number;
+    readonly totalTokens?: number;
+    readonly raw: unknown;
+}
+export interface CodexStructuredError {
+    readonly type: string;
+    readonly code?: string;
+    readonly message: string;
+    readonly retryAt?: string;
+    readonly raw: unknown;
+}
+export interface CodexUsageLimitInfo {
+    readonly message: string;
+    readonly code?: string;
+    readonly retryAt?: string;
+}
+export interface CodexTranscriptTurnStats {
+    readonly started: number;
+    readonly completed: number;
+}
 export interface CodexCliTranscript {
     readonly assistantText: string;
+    readonly assistantDeltas: readonly string[];
     readonly diagnostics: readonly string[];
     readonly hasStderrErrors: boolean;
     readonly notLoggedIn: boolean;
     readonly toolCalls: readonly ToolCallObservation[];
+    readonly toolCallWitnesses: readonly CodexToolCallWitness[];
+    readonly usage: CodexTokenUsage | null;
+    readonly structuredErrors: readonly CodexStructuredError[];
+    readonly usageLimit: CodexUsageLimitInfo | null;
+    readonly modelUnsupported: boolean;
+    readonly policyDenied: boolean;
+    readonly pluginSyncWarnings: readonly string[];
+    readonly turns: CodexTranscriptTurnStats;
+    readonly completedItemCount: number;
 }
 export interface CodexCliRunResult {
     readonly provider: CodexCliProviderId;
@@ -137,5 +183,6 @@ export interface CodexCliRunResult {
     readonly argv: readonly string[];
     readonly transcript: CodexCliTranscript;
     readonly toolCalls: readonly ToolCallObservation[];
+    readonly toolCallWitnesses: readonly CodexToolCallWitness[];
 }
 //# sourceMappingURL=types.d.ts.map

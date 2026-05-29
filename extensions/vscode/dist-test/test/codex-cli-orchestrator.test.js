@@ -18,6 +18,12 @@ Commands:
   exec    Run Codex non-interactively
   login   Manage login
   mcp     Manage MCP servers
+
+Options:
+  -a, --ask-for-approval <APPROVAL_POLICY>
+                                             Possible values:
+                                             - on-request: ask when needed
+                                             - never: never ask
 `;
 const EXEC_HELP = `
 Usage: codex exec [OPTIONS] [PROMPT]
@@ -42,6 +48,7 @@ Options:
       --output-schema <PATH>
       --skip-git-repo-check
       --ignore-user-config
+      --ignore-rules
       --ephemeral
 `;
 const FAKE_HOME_DIR = "C:\\Users\\tester";
@@ -61,6 +68,12 @@ function makeFakeFs() {
         },
         async readFileUtf8(path) {
             log.reads.push(path);
+            if (path.endsWith("\\auth.json"))
+                return "{\"tokens\":true}\n";
+            if (path.endsWith("\\version.json"))
+                return "{\"version\":\"test\"}\n";
+            if (path.endsWith("\\installation_id"))
+                return "install-test\n";
             return null;
         },
         async rmRecursive(path) {
@@ -108,8 +121,11 @@ function makeFakeProcess(opts = {}) {
     const log = {
         resolveCalls: [],
         rootHelpCalls: 0,
+        rootHelpCwds: [],
         execHelpCalls: 0,
+        execHelpCwds: [],
         loginStatusCalls: 0,
+        loginStatusCwds: [],
         spawnCalls: [],
     };
     const process = {
@@ -119,16 +135,19 @@ function makeFakeProcess(opts = {}) {
                 return { executablePath: `C:\\bin\\${name}.cmd`, versionString: "codex-cli 0.130.0" };
             return opts.resolve;
         },
-        async runRootHelp() {
+        async runRootHelp(input) {
             log.rootHelpCalls += 1;
+            log.rootHelpCwds.push(input.cwd);
             return commandResult({ stdout: ROOT_HELP, ...opts.rootHelp });
         },
-        async runExecHelp() {
+        async runExecHelp(input) {
             log.execHelpCalls += 1;
+            log.execHelpCwds.push(input.cwd);
             return commandResult({ stdout: EXEC_HELP, ...opts.execHelp });
         },
-        async runLoginStatus() {
+        async runLoginStatus(input) {
             log.loginStatusCalls += 1;
+            log.loginStatusCwds.push(input.cwd);
             return commandResult({ stderr: "Logged in using ChatGPT\n", ...opts.loginStatus });
         },
         async spawn(input) {
@@ -166,7 +185,16 @@ function makeFakeRegistry(liveTools = index_js_1.CODEX_AUTHORITATIVE_TOOL_CATALO
             return liveTools;
         },
         async describeBridgeSpawn() {
-            return { command: "node", args: ["./codex-cli-bridge.js"], env: { DEBUG: "dreamgraph:codex" } };
+            return {
+                command: "node",
+                args: ["./codex-cli-bridge.js"],
+                env: {
+                    DEBUG: "dreamgraph:codex",
+                    DREAMGRAPH_BRIDGE_AUDIT_DIR: "C:\\audit",
+                    DREAMGRAPH_HOST_MCP_URL: "http://127.0.0.1:8010/mcp/",
+                    DREAMGRAPH_WORKSPACE_ROOT: "C:\\repo\\dreamgraph",
+                },
+            };
         },
     };
 }
@@ -186,6 +214,17 @@ function makeFakeAudit(recorded = []) {
         },
     };
     return { port, log };
+}
+function makeRecordedDreamGraphCalls(count) {
+    return Object.freeze(Array.from({ length: count }, (_value, index) => ({
+        server: "dreamgraph",
+        tool: index % 2 === 0 ? "query_resource" : "read_source_code",
+        inputJson: "{}",
+        resultJson: "{\"ok\":true}",
+        isError: false,
+        durationMs: 5,
+        startedAtEpochMs: 1_800_000_000_000 + index,
+    })));
 }
 function defaultInput(over = {}) {
     return {
@@ -230,15 +269,38 @@ function makeDeps(over = {}) {
     const scratch = fsLog.mkdtemp[0];
     const runHome = `${scratch}\\codex-home`;
     strict_1.default.ok(fsLog.mkdir.some((m) => m.path === runHome && m.mode === 0o700));
-    strict_1.default.deepEqual(fsLog.copyDir, [{ src: `${FAKE_HOME_DIR}\\.codex`, dst: runHome, excludeNames: ["config.toml"] }]);
+    strict_1.default.deepEqual(fsLog.copyDir, []);
+    strict_1.default.deepEqual(fsLog.reads, [
+        `${FAKE_HOME_DIR}\\.codex\\auth.json`,
+        `${FAKE_HOME_DIR}\\.codex\\version.json`,
+        `${FAKE_HOME_DIR}\\.codex\\installation_id`,
+    ]);
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\auth.json` && w.contents.includes("\"tokens\":true")));
     strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("DREAMGRAPH_MCP_TOKEN = \"tok-codex\"")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("[mcp_servers.dreamgraph.env]")));
+    strict_1.default.ok(fsLog.writes.every((w) => w.path !== `${runHome}\\config.toml` || !/^env = \{/m.test(w.contents)));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("DREAMGRAPH_BRIDGE_AUDIT_DIR = \"C:\\\\audit\"")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("DREAMGRAPH_RUN_ID = \"codex-run-001\"")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("default_tools_enabled = true")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("trust_level = \"trusted\"")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("default_tools_approval_mode = \"approve\"")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("[mcp_servers.dreamgraph.tools.run_command]")));
     strict_1.default.ok(fsLog.writes.some((w) => w.path === `${scratch}\\request.json` && w.contents.includes("outputLastMessagePath")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${scratch}\\request.json` && w.contents.includes("\"auth.json\"")));
     strict_1.default.equal(processLog.spawnCalls.length, 1);
     const spawned = processLog.spawnCalls[0];
     strict_1.default.equal(spawned.command, "C:\\bin\\codex.cmd");
     strict_1.default.equal(spawned.stdin, defaultInput().prompt);
     strict_1.default.equal(spawned.env.CODEX_HOME, runHome);
-    strict_1.default.deepEqual([...spawned.args].slice(0, 9), ["exec", "--json", "--cd", "C:\\repo\\dreamgraph", "--sandbox", "read-only", "--ask-for-approval", "never", "--model"]);
+    strict_1.default.deepEqual([...spawned.args].slice(0, 12), ["--ask-for-approval", "never", "exec", "--json", "--cd", fsLog.mkdtemp[0], "--sandbox", "read-only", "--model", "gpt-5.5", "--profile", "dreamgraph"]);
+    strict_1.default.equal(spawned.args[3], "--json");
+    strict_1.default.equal(spawned.args.includes("--output-format"), false);
+    strict_1.default.ok(spawned.args.includes("--skip-git-repo-check"));
+    strict_1.default.equal(spawned.args.includes("--ignore-user-config"), false);
+    strict_1.default.ok(spawned.args.includes("--ignore-rules"));
+    strict_1.default.ok(spawned.args.includes("--ephemeral"));
+    strict_1.default.deepEqual(spawned.args.filter((arg, index, args) => arg === "-c" && args[index + 1]?.startsWith("mcp_servers.dreamgraph.")), []);
+    strict_1.default.deepEqual(spawned.args.filter((arg, index, args) => arg === "-c" && args[index + 1] === "model_reasoning_effort=\"xhigh\""), ["-c"]);
     strict_1.default.equal(spawned.args[spawned.args.length - 1], "-");
     strict_1.default.equal(spawned.timeoutMs, 60_000);
     strict_1.default.equal(spawned.idleTimeoutMs, 3_000);
@@ -248,6 +310,22 @@ function makeDeps(over = {}) {
     strict_1.default.equal(result.toolCalls[1].classification, "dreamgraph_rejected");
     strict_1.default.equal(result.toolCalls[2].classification, "provider_inline_tool");
     strict_1.default.deepEqual(fsLog.rmRecursive, [scratch]);
+});
+(0, node_test_1.default)("codex orchestrator: empty invocation cwd uses neutral probe cwd and scratch exec cwd", async () => {
+    const { fs, log: fsLog } = makeFakeFs();
+    const { process, log: processLog } = makeFakeProcess();
+    const result = await (0, index_js_1.runCodexCli)(defaultInput({ invocationCwd: "" }), makeDeps({ fs, process }));
+    strict_1.default.equal(result.ok, true);
+    strict_1.default.deepEqual(processLog.rootHelpCwds, [FAKE_HOME_DIR]);
+    strict_1.default.deepEqual(processLog.execHelpCwds, [FAKE_HOME_DIR]);
+    strict_1.default.deepEqual(processLog.loginStatusCwds, [FAKE_HOME_DIR]);
+    const scratch = fsLog.mkdtemp[0];
+    const spawned = processLog.spawnCalls[0];
+    strict_1.default.equal(spawned.cwd, scratch);
+    strict_1.default.ok(spawned.args.includes("--cd"));
+    strict_1.default.equal(spawned.args[spawned.args.indexOf("--cd") + 1], scratch);
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${scratch}\\request.json` && w.contents.includes("\"invocationCwd\": null")));
+    strict_1.default.ok(fsLog.writes.some((w) => w.path === `${scratch}\\request.json` && w.contents.includes(`"probeCwd": "${FAKE_HOME_DIR.replace(/\\/g, "\\\\")}"`)));
 });
 (0, node_test_1.default)("codex orchestrator: missing binary fails before spawn", async () => {
     const { process, log } = makeFakeProcess({ resolve: null });
@@ -362,6 +440,135 @@ function makeDeps(over = {}) {
     strict_1.default.equal(result.toolCalls.length, 0);
     strict_1.default.match(result.failure.message, /without any audited DreamGraph MCP calls/);
 });
+(0, node_test_1.default)("codex orchestrator: transcript-only DreamGraph MCP events fail closed without audit results", async () => {
+    const { process, log } = makeFakeProcess({
+        spawnResult: {
+            stdout: [
+                JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+                JSON.stringify({ type: "turn.started" }),
+                JSON.stringify({
+                    type: "mcp_tool_call.completed",
+                    tool: "dreamgraph.cognitive_status",
+                }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: {
+                        id: "item_0",
+                        type: "agent_message",
+                        text: "Graph health could not be retrieved because the cognitive_status MCP call was cancelled before returning data.\n\nResult: user cancelled MCP tool call",
+                    },
+                }),
+                JSON.stringify({ type: "turn.completed" }),
+            ].join("\n"),
+        },
+    });
+    const { port: mcpAudit, log: auditLog } = makeFakeAudit([]);
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process, mcpAudit }));
+    strict_1.default.equal(log.spawnCalls.length, 1);
+    strict_1.default.deepEqual(auditLog.finishes, ["codex-run-001"]);
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "MCP_PROBE_FAILED");
+    strict_1.default.equal(result.failure?.cause, "mcp-load-failed");
+    strict_1.default.equal(result.toolCalls.length, 0);
+    strict_1.default.deepEqual([...(result.transcript?.toolCalls ?? [])], [
+        { server: "dreamgraph", tool: "cognitive_status" },
+    ]);
+    strict_1.default.deepEqual(result.toolCallWitnesses.map((w) => `${w.server}:${w.tool}:${w.status}`), [
+        "dreamgraph:cognitive_status:completed",
+    ]);
+    strict_1.default.match(result.failure.message, /transcript-only MCP events/);
+    strict_1.default.match(result.failure.message, /user cancelled MCP tool call/);
+});
+(0, node_test_1.default)("codex orchestrator: cancelled DreamGraph MCP result without audit result fails closed", async () => {
+    const { process, log } = makeFakeProcess({
+        spawnResult: {
+            stdout: [
+                JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+                JSON.stringify({ type: "turn.started" }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: {
+                        id: "item_0",
+                        type: "mcp_tool_call",
+                        server: "dreamgraph",
+                        tool: "cognitive_status",
+                        status: "failed",
+                        aggregated_output: "user cancelled MCP tool call",
+                    },
+                }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: {
+                        id: "item_1",
+                        type: "agent_message",
+                        text: "Speculative synthesis: no strong verification signals were detected.",
+                    },
+                }),
+                JSON.stringify({ type: "turn.completed" }),
+            ].join("\n"),
+        },
+    });
+    const { port: mcpAudit, log: auditLog } = makeFakeAudit([]);
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process, mcpAudit }));
+    strict_1.default.equal(log.spawnCalls.length, 1);
+    strict_1.default.deepEqual(auditLog.finishes, ["codex-run-001"]);
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "MCP_PROBE_FAILED");
+    strict_1.default.equal(result.failure?.cause, "mcp-load-failed");
+    strict_1.default.equal(result.toolCalls.length, 0);
+    strict_1.default.deepEqual([...(result.transcript?.toolCalls ?? [])], []);
+    strict_1.default.deepEqual(result.toolCallWitnesses.map((w) => `${w.server}:${w.tool}:${w.status}`), [
+        "dreamgraph:cognitive_status:cancelled",
+    ]);
+    strict_1.default.equal(result.transcript?.assistantText, "Speculative synthesis: no strong verification signals were detected.");
+    strict_1.default.match(result.failure.message, /user cancelled MCP tool call/);
+});
+(0, node_test_1.default)("codex orchestrator: audited read call clears MCP probe even with transcript witness noise", async () => {
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stdout: [
+                JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+                JSON.stringify({ type: "turn.started" }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: {
+                        id: "item_0",
+                        type: "mcp_tool_call",
+                        server: "dreamgraph",
+                        tool: "query_resource",
+                        status: "failed",
+                        aggregated_output: "user cancelled MCP tool call",
+                    },
+                }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: { id: "item_1", type: "agent_message", text: "Verified graph read completed." },
+                }),
+                JSON.stringify({ type: "turn.completed" }),
+            ].join("\n"),
+        },
+    });
+    const { port: mcpAudit } = makeFakeAudit([
+        {
+            server: "dreamgraph",
+            tool: "query_resource",
+            inputJson: "{\"uri\":\"system://overview\"}",
+            resultJson: "{\"ok\":true}",
+            isError: false,
+            durationMs: 5,
+            startedAtEpochMs: 1,
+        },
+    ]);
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process, mcpAudit }));
+    strict_1.default.equal(result.ok, true);
+    strict_1.default.equal(result.failure, undefined);
+    strict_1.default.equal(result.toolCalls.length, 1);
+    strict_1.default.equal(result.toolCalls[0].call.tool, "query_resource");
+    strict_1.default.equal(result.toolCalls[0].classification, "dreamgraph_authoritative");
+    strict_1.default.deepEqual(result.toolCallWitnesses.map((w) => `${w.server}:${w.tool}:${w.status}`), [
+        "dreamgraph:query_resource:cancelled",
+    ]);
+});
 (0, node_test_1.default)("codex orchestrator: rmcp transport EOF on shutdown is teardown noise, not a load failure", async () => {
     // Regression: Codex taskkills its MCP child servers at the end of every run,
     // which produces a benign "rmcp::transport::async_rw: Error reading from
@@ -432,6 +639,218 @@ function makeDeps(over = {}) {
     strict_1.default.equal(authResult.failure?.code, "CODEX_NOT_LOGGED_IN");
     strict_1.default.equal(authResult.failure?.recoveryAction?.command, "codex login");
 });
+(0, node_test_1.default)("codex orchestrator: usage limit after audited DreamGraph tools is not classified as login failure", async () => {
+    const recorded = makeRecordedDreamGraphCalls(27);
+    const usageMessage = "Turn error: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 2:45 PM.";
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stdout: [
+                JSON.stringify({ type: "turn.started" }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: { id: "item_0", type: "agent_message", text: "I checked the graph and started reconciling." },
+                }),
+                JSON.stringify({ type: "turn.failed", error: { code: "rate_limit", message: usageMessage } }),
+            ].join("\n"),
+            stderr: "<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body>Cloudflare /backend-api/plugins/featured</body></html>",
+            exitCode: 1,
+        },
+    });
+    const { port: mcpAudit } = makeFakeAudit(recorded);
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process, mcpAudit }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "CODEX_USAGE_LIMIT");
+    strict_1.default.equal(result.failure?.cause, "usage-limit");
+    strict_1.default.match(result.failure.message, /27 successful DreamGraph tool calls/);
+    strict_1.default.match(result.failure.message, /Wait until 2:45 PM/);
+    strict_1.default.match(result.failure.message, /No login action is needed/);
+    strict_1.default.doesNotMatch(result.failure.message, /CODEX_NOT_LOGGED_IN/);
+    strict_1.default.equal(result.toolCalls.length, 27);
+    strict_1.default.equal(result.transcript?.assistantText, "I checked the graph and started reconciling.");
+    strict_1.default.equal(result.transcript?.pluginSyncWarnings.length, 1);
+    strict_1.default.ok(result.transcript?.diagnostics.every((line) => !line.includes("<!DOCTYPE html>")));
+});
+(0, node_test_1.default)("codex orchestrator: source snippets mentioning usage limit do not override policy/tool failures", async () => {
+    const stderr = [
+        "extensions/vscode/src/chat-panel.ts:1697: console.warn('[DreamGraph][codex-cli] onToolCall handler failed:', liveErr);",
+        "extensions/vscode/src/test/codex-cli-orchestrator.test.ts:665:test(\"codex orchestrator: usage limit after audited DreamGraph tools is not classified as login failure\", async () => {",
+        "2026-05-24T17:47:12.586643Z ERROR codex_core::tools::router: error=\"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -Command 'node --test dist/test/codex-cli-adapter.test.js' rejected: blocked by policy",
+        "mcp_tool_call failed: dreamgraph.query_resource",
+        "mcp_tool_call failed: dreamgraph.search_source_code",
+    ].join("\n");
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stderr,
+            exitCode: 1,
+        },
+    });
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "CODEX_POLICY_DENIED");
+    strict_1.default.notEqual(result.failure?.code, "CODEX_USAGE_LIMIT");
+    strict_1.default.equal(result.transcript?.usageLimit, null);
+    strict_1.default.deepEqual(result.toolCallWitnesses.map((w) => `${w.server}:${w.tool}:${w.status}`), [
+        "dreamgraph:query_resource:failed",
+        "dreamgraph:search_source_code:failed",
+    ]);
+    strict_1.default.ok(result.transcript?.diagnostics.every((line) => !line.includes("usage limit after audited")));
+});
+(0, node_test_1.default)("codex orchestrator: telemetry unknown terminal type is not unsupported model and failure tail stays compact", async () => {
+    const recorded = makeRecordedDreamGraphCalls(45);
+    const stderr = [
+        '2026-05-22T16:00:18.506798Z INFO session_loop{thread_id=abc}:turn{model=gpt-5.4}:model_client.stream_responses_websocket{model=gpt-5.4 wire_api=responses transport="responses_websocket"}: terminal.type=unknown model=gpt-5.4 slug=gpt-5.4 user.account_id="acct" user.email="person@example.com"',
+        '2026-05-22T16:00:18.514472Z INFO codex_otel.log_only: event.name="codex.sse_event" event.kind=response.completed input_token_count=103247 output_token_count=1769 cached_token_count=101248 reasoning_token_count=361 tool_token_count=105016 terminal.type=unknown model=gpt-5.4 slug=gpt-5.4 user.account_id="acct" user.email="person@example.com"',
+        "mcp_tool_call failed: dreamgraph.search_source_code",
+        "mcp_tool_call failed: dreamgraph.discipline_record_tool_call",
+    ].join("\n");
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stdout: JSON.stringify({
+                type: "item.completed",
+                item: { id: "item_0", type: "agent_message", text: "Partial assessment." },
+            }),
+            stderr,
+            exitCode: 1,
+        },
+    });
+    const { port: mcpAudit } = makeFakeAudit(recorded);
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process, mcpAudit }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "CODEX_RUN_NONZERO_EXIT");
+    strict_1.default.notEqual(result.failure?.code, "CODEX_MODEL_UNSUPPORTED");
+    strict_1.default.match(result.failure.message, /45 successful DreamGraph tool calls/);
+    strict_1.default.match(result.failure.message, /mcp_tool_call failed: dreamgraph\.search_source_code/);
+    strict_1.default.doesNotMatch(result.failure.message, /model_client\.stream_responses_websocket/);
+    strict_1.default.doesNotMatch(result.failure.message, /user\.email/);
+    strict_1.default.equal(result.transcript?.usage?.inputTokens, 103247);
+    strict_1.default.equal(result.toolCalls.length, 45);
+});
+(0, node_test_1.default)("codex orchestrator: inspected source mentioning unsupported model does not poison failure classification", async () => {
+    const recorded = makeRecordedDreamGraphCalls(18);
+    const inspectedTestPayload = JSON.stringify([
+        {
+            type: "text",
+            text: "test(\"unsupported model remains model-unsupported / nonzero model failure\", () => {\n" +
+                "  assert.equal(result.failure?.code, \"CODEX_MODEL_UNSUPPORTED\");\n" +
+                "});",
+        },
+    ]);
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stdout: [
+                JSON.stringify({
+                    type: "item.completed",
+                    item: { id: "item_0", type: "agent_message", text: "Adapter evidence was collected." },
+                }),
+                inspectedTestPayload,
+            ].join("\n"),
+            stderr: "<!DOCTYPE html><html><body>Cloudflare /backend-api/plugins/featured 403 Forbidden</body></html>",
+            exitCode: 1,
+        },
+    });
+    const { port: mcpAudit } = makeFakeAudit(recorded);
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process, mcpAudit }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "CODEX_RUN_NONZERO_EXIT");
+    strict_1.default.notEqual(result.failure?.code, "CODEX_MODEL_UNSUPPORTED");
+    strict_1.default.equal(result.toolCalls.length, 18);
+    strict_1.default.equal(result.transcript?.modelUnsupported, false);
+    strict_1.default.deepEqual([...(result.transcript?.pluginSyncWarnings ?? [])], [
+        "codex plugin sync warning: remote plugin catalog request returned 403/Cloudflare HTML; suppressed verbose HTML diagnostic",
+    ]);
+});
+(0, node_test_1.default)("codex orchestrator: audited DreamGraph success suppresses false exec login classification", async () => {
+    const recorded = makeRecordedDreamGraphCalls(1);
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stdout: JSON.stringify({
+                type: "item.completed",
+                item: { id: "item_0", type: "agent_message", text: "Graph evidence was collected." },
+            }),
+            stderr: "Error: not logged in. Please run codex login.\n",
+            exitCode: 1,
+        },
+    });
+    const { port: mcpAudit } = makeFakeAudit(recorded);
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process, mcpAudit }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "CODEX_RUN_NONZERO_EXIT");
+    strict_1.default.notEqual(result.failure?.code, "CODEX_NOT_LOGGED_IN");
+    strict_1.default.equal(result.toolCalls.length, 1);
+});
+(0, node_test_1.default)("codex orchestrator: failed read_source_code schema args are not classified as missing tool", async () => {
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stdout: [
+                JSON.stringify({ type: "turn.started" }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: {
+                        id: "item_0",
+                        type: "mcp_tool_call",
+                        server: "dreamgraph",
+                        tool: "read_source_code",
+                        status: "failed",
+                        aggregated_output: "Invalid arguments: missing required property filePath",
+                    },
+                }),
+                JSON.stringify({
+                    type: "item.completed",
+                    item: { id: "item_1", type: "agent_message", text: "The focused read failed." },
+                }),
+            ].join("\n"),
+            exitCode: 1,
+        },
+    });
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "DREAMGRAPH_TOOL_SCHEMA_ARGS");
+    strict_1.default.equal(result.failure?.cause, "schema-args-failure");
+    strict_1.default.doesNotMatch(result.failure.message, /missing tool/i);
+    strict_1.default.match(result.failure.message, /retry with the required arguments/i);
+    strict_1.default.equal(result.toolCalls.length, 0);
+});
+(0, node_test_1.default)("codex orchestrator: unsupported model and native policy denial are not login failures", async () => {
+    const unsupported = makeFakeProcess({
+        spawnResult: {
+            stdout: JSON.stringify({ type: "error", code: "unsupported_model", message: "Unsupported model: gpt-404" }),
+            exitCode: 1,
+        },
+    });
+    const unsupportedResult = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process: unsupported.process }));
+    strict_1.default.equal(unsupportedResult.failure?.code, "CODEX_MODEL_UNSUPPORTED");
+    strict_1.default.notEqual(unsupportedResult.failure?.code, "CODEX_NOT_LOGGED_IN");
+    const policy = makeFakeProcess({
+        spawnResult: {
+            stderr: "2026-05-21T13:34:30.489369Z ERROR codex_core::tools::router: rejected: blocked by policy\n",
+            exitCode: 1,
+        },
+    });
+    const policyResult = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process: policy.process }));
+    strict_1.default.equal(policyResult.failure?.code, "CODEX_POLICY_DENIED");
+    strict_1.default.equal(policyResult.failure?.cause, "provider-native-restriction");
+    strict_1.default.match(policyResult.failure.message, /does not mean DreamGraph MCP tools are unavailable/);
+    strict_1.default.match(policyResult.failure.message, /dreamgraph:run_command/);
+    strict_1.default.notEqual(policyResult.failure?.code, "CODEX_NOT_LOGGED_IN");
+});
+(0, node_test_1.default)("codex orchestrator: read-only sandbox MCP block is policy denial, not audit mismatch", async () => {
+    const { process } = makeFakeProcess({
+        spawnResult: {
+            stderr: "2026-05-24T13:14:01.146304Z ERROR codex_core::tools::router: error=patch rejected: writing is blocked by read-only sandbox; rejected by user approval settings\n" +
+                "mcp_tool_call failed: dreamgraph.query_resource\n" +
+                "mcp_tool_call failed: dreamgraph.run_command\n",
+            exitCode: 0,
+        },
+    });
+    const result = await (0, index_js_1.runCodexCli)(defaultInput(), makeDeps({ process }));
+    strict_1.default.equal(result.ok, false);
+    strict_1.default.equal(result.failure?.code, "CODEX_POLICY_DENIED");
+    strict_1.default.equal(result.failure?.cause, "provider-native-restriction");
+    strict_1.default.notEqual(result.failure?.code, "MCP_PROBE_FAILED");
+    strict_1.default.match(result.failure.message, /DreamGraph MCP tools are unavailable/);
+    strict_1.default.match(result.failure.message, /dreamgraph:run_command/);
+    strict_1.default.equal(result.toolCalls.length, 0);
+});
 (0, node_test_1.default)("codex orchestrator: thrown spawn still drains audit and cleans scratch", async () => {
     const { fs, log: fsLog } = makeFakeFs();
     const { process } = makeFakeProcess({ spawnThrows: new Error("spawn exploded") });
@@ -445,7 +864,6 @@ function makeDeps(over = {}) {
 });
 (0, node_test_1.default)("codex orchestrator: validates required input", async () => {
     await strict_1.default.rejects(() => (0, index_js_1.runCodexCli)(defaultInput({ prompt: "" }), makeDeps()), /prompt is required/);
-    await strict_1.default.rejects(() => (0, index_js_1.runCodexCli)(defaultInput({ invocationCwd: "" }), makeDeps()), /invocationCwd is required/);
     await strict_1.default.rejects(() => (0, index_js_1.runCodexCli)(defaultInput({ timeoutMs: 0 }), makeDeps()), /timeoutMs must be > 0/);
 });
 //# sourceMappingURL=codex-cli-orchestrator.test.js.map

@@ -69,6 +69,7 @@ function parseCodexHelpSurface(input) {
         versionString: input.versionString ?? null,
         root: {
             execCommand: commandPresent(root, "exec") || /\bcodex\s+exec\b/.test(root),
+            askForApproval: flagPresent(root, "--ask-for-approval") || shortFlagPresent(root, "-a"),
         },
         exec: {
             json: flagPresent(exec, "--json") || flagPresent(exec, "--experimental-json"),
@@ -83,6 +84,7 @@ function parseCodexHelpSurface(input) {
             outputSchema: flagPresent(exec, "--output-schema"),
             skipGitRepoCheck: flagPresent(exec, "--skip-git-repo-check"),
             ignoreUserConfig: flagPresent(exec, "--ignore-user-config"),
+            ignoreRules: flagPresent(exec, "--ignore-rules"),
             ephemeral: flagPresent(exec, "--ephemeral"),
             positionalStdinPrompt: positionalStdinPromptPresent(root, exec),
         },
@@ -108,6 +110,7 @@ function isHelpSurfaceSupported(surface) {
         e.outputSchema &&
         e.skipGitRepoCheck &&
         e.ignoreUserConfig &&
+        e.ignoreRules &&
         e.ephemeral &&
         e.positionalStdinPrompt);
 }

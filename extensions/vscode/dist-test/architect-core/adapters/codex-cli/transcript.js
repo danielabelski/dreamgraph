@@ -1,18 +1,31 @@
 "use strict";
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Codex CLI adapter - pure transcript normalizer (Slice 1).
+// Codex CLI adapter - pure transcript normalizer.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.normalizeCodexTranscript = normalizeCodexTranscript;
+exports.projectCodexToolCallWitnesses = projectCodexToolCallWitnesses;
+exports.projectCodexToolCallWitnessesFromDiagnostics = projectCodexToolCallWitnessesFromDiagnostics;
+const event_stream_js_1 = require("./event-stream.js");
 const ANSI_CSI_RE = /\x1B\[[0-9;?]*[ -/]*[@-~]/g;
 const ANSI_OSC_RE = /\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g;
 const STRAY_ESC_RE = /\x1B/g;
 const ERROR_LINE_RE = /\b(?:error|errors|failed|failure|fatal|panic|exception)\b/i;
-const NOT_LOGGED_IN_RE = /\b(?:not logged in|not signed in|unauthenticated|authentication required|please\s+run\s+codex\s+login)\b/i;
-// Lines that are clearly Codex/MCP runtime noise rather than login-status answers.
-// We strip these before the not-logged-in heuristic so unrelated tool-router or rmcp
-// errors (or taskkill SUCCESS lines) cannot trigger a false CODEX_NOT_LOGGED_IN.
-const RUNTIME_NOISE_LINE_RE = /(?:^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+)|(?:\b(?:rmcp::|codex_core::|codex_mcp_server::|tools::router|tracing::|tower::|hyper::|reqwest::)\S*)|(?:^SUCCESS:\s+The process with PID\b)|(?:\brejected:\s+blocked by policy\b)/i;
+const NOT_LOGGED_IN_RE = /\b(?:not logged in|not signed in|login required|authentication required|auth required|please\s+run\s+codex\s+login)\b/i;
+const USAGE_LIMIT_RUNTIME_RE = /\b(?:you(?:'|’|â€™)ve hit your usage limit|purchase more credits|try again at\s+[^.\n]+|rate[_ -]?limit(?:ed)?|insufficient[_ -]?quota|http\s*429|status\s*429|too many requests)\b/i;
+const USAGE_LIMIT_ERROR_CONTEXT_RE = /\b(?:turn error|codex(?: cli)? error|error|fatal|quota|limit (?:was )?reached)\b/i;
+const USAGE_LIMIT_PHRASE_RE = /\busage limit\b/i;
+const MODEL_UNSUPPORTED_RE = /\b(?:unsupported[_ -]model|model_not_supported|unsupported_model|model_not_found|invalid[_ -]model)\b/i;
+const MODEL_UNSUPPORTED_PHRASE_RE = /\b(?:model\b[^.\n]{0,100}\b(?:not supported|not found|does not exist|is unavailable)|(?:unknown|unrecognized)\s+model\s*:)/i;
+const POLICY_DENIED_RE = /\b(?:blocked by policy|policy denial|policy denied|rejected:\s*blocked by policy|not allowed by policy|read-only sandbox|writing is blocked|rejected by user approval settings|user approval settings)\b/i;
+const MCP_FAILED_STATUSES = new Set(["failed", "failure", "error", "cancelled", "canceled"]);
+const MCP_TOOL_CALL_DIAGNOSTIC_RE = /\bmcp_tool_call\s+(completed|succeeded|failed|failure|error|cancelled|canceled)\s*:\s*([a-z0-9_-]+)\.([a-z0-9_.-]+)(?::\s*(.*))?$/i;
+const SOURCE_LOCATION_SNIPPET_RE = /^(?:stdout:\s*)?(?:(?:[A-Za-z]:\\|\.{0,2}\/|[A-Za-z0-9_.-]+\/)[^:\n]*\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt):\d+(?::\d+)?:|[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs):\d+(?::\d+)?:)\s*/i;
+// Lines that are clearly Codex/MCP runtime noise rather than login-status
+// answers. Strip these before the auth heuristic so unrelated tool-router,
+// policy, plugin-sync, or teardown diagnostics cannot trigger a false
+// CODEX_NOT_LOGGED_IN.
+const RUNTIME_NOISE_LINE_RE = /(?:^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+)|(?:\b(?:rmcp::|codex_core::|codex_mcp_server::|tools::router|tracing::|tower::|hyper::|reqwest::)\S*)|(?:^SUCCESS:\s+The process with PID\b)|(?:\brejected:\s+blocked by policy\b)|(?:\bread-only sandbox\b)|(?:\buser approval settings\b)/i;
 function stripAnsi(text) {
     return text.replace(ANSI_OSC_RE, "").replace(ANSI_CSI_RE, "").replace(STRAY_ESC_RE, "");
 }
@@ -22,220 +35,610 @@ function normalizeNewlines(text) {
 function normalizeCodexTranscript(input) {
     const cleanedStdout = stripAnsi(normalizeNewlines(input.stdout));
     const cleanedStderr = stripAnsi(normalizeNewlines(input.stderr));
-    const extracted = extractCodexJsonEvents(cleanedStdout);
-    const projectedAssistantText = projectCodexAssistantText(extracted.events);
+    const stdoutExtracted = (0, event_stream_js_1.extractCodexJsonEvents)(cleanedStdout);
+    const stderrExtracted = (0, event_stream_js_1.extractCodexJsonEvents)(cleanedStderr);
+    const events = Object.freeze([...stdoutExtracted.events, ...stderrExtracted.events]);
+    const assistantDeltas = projectCodexAssistantDeltas(events);
+    const projectedAssistantText = projectCodexAssistantText(events, assistantDeltas);
     const assistantText = projectedAssistantText ?? cleanedStdout.replace(/[ \t]+\n/g, "\n").trim();
-    const toolCalls = projectCodexToolCalls(extracted.events);
-    const diagnostics = [];
-    let hasStderrErrors = false;
-    if (extracted.events.length > 0) {
-        diagnostics.push(...extracted.stdoutDiagnostics);
-    }
-    for (const raw of cleanedStderr.split("\n")) {
-        const line = raw.trim();
-        if (line.length === 0)
-            continue;
-        diagnostics.push(line);
-        if (!hasStderrErrors && ERROR_LINE_RE.test(line) && !RUNTIME_NOISE_LINE_RE.test(line)) {
-            hasStderrErrors = true;
-        }
-    }
+    const toolCalls = projectCodexToolCalls(events);
+    const structuredToolCallWitnesses = projectCodexToolCallWitnesses(events);
+    const mcpFailureDiagnostics = projectMcpFailureDiagnostics(events);
+    const usage = projectCodexUsage(events) ?? projectTelemetryUsage(`${cleanedStdout}\n${cleanedStderr}`);
+    const structuredErrors = projectStructuredErrors(events);
+    const stderrDiagnostics = stderrExtracted.diagnostics;
+    const diagnosticLines = collectDiagnostics({
+        stdoutDiagnostics: stdoutExtracted.events.length > 0 ? stdoutExtracted.diagnostics : [],
+        stderrDiagnostics,
+        mcpFailureDiagnostics,
+    });
+    const toolCallWitnesses = mergeToolCallWitnesses(structuredToolCallWitnesses, projectCodexToolCallWitnessesFromDiagnostics(diagnosticLines, structuredToolCallWitnesses.length));
+    const pluginSyncWarnings = projectPluginSyncWarnings(diagnosticLines);
+    const usageLimit = projectUsageLimitInfo({
+        structuredErrors,
+        diagnostics: diagnosticLines,
+        assistantText,
+    });
+    const modelUnsupported = structuredErrors.some((err) => isModelUnsupportedText(`${err.code ?? ""} ${err.message}`)) ||
+        stderrDiagnostics.some(isModelUnsupportedDiagnostic);
+    const policyDenied = structuredErrors.some((err) => isPolicyDeniedText(`${err.code ?? ""} ${err.message}`)) ||
+        stderrDiagnostics.some(isPolicyDeniedDiagnostic);
+    const hasStderrErrors = diagnosticLines.some((line) => ERROR_LINE_RE.test(line) &&
+        !RUNTIME_NOISE_LINE_RE.test(line) &&
+        !(0, event_stream_js_1.isCodexPluginSyncNoise)(line));
     const notLoggedIn = detectNotLoggedIn({
         stdout: cleanedStdout,
         stderr: cleanedStderr,
         exitCode: input.exitCode,
+        usageLimit,
+        modelUnsupported,
+        policyDenied,
     });
     return {
         assistantText,
-        diagnostics: Object.freeze(diagnostics),
+        assistantDeltas,
+        diagnostics: Object.freeze(diagnosticLines),
         hasStderrErrors,
         notLoggedIn,
         toolCalls,
+        toolCallWitnesses,
+        usage,
+        structuredErrors,
+        usageLimit,
+        modelUnsupported,
+        policyDenied,
+        pluginSyncWarnings,
+        turns: Object.freeze({
+            started: countEvents(events, "turn.started"),
+            completed: countEvents(events, "turn.completed"),
+        }),
+        completedItemCount: countEvents(events, "item.completed") + countEvents(events, "response.output_item.done"),
     };
 }
 /**
- * Decide whether `codex login status` actually reported an unauthenticated session.
+ * Decide whether `codex login status` or `codex exec` actually reported an
+ * unauthenticated session.
  *
- * Rules:
- *   1. Exit code 0 is authoritative: the CLI confirmed an authenticated session.
- *      Any matching keywords in stdout/stderr at exit 0 are advisory noise (for
- *      example, MCP/router log lines that mention "rejected" or "required").
- *   2. When exit code is non-zero or unknown, scan only lines that are NOT
- *      clearly Codex/MCP runtime noise. Timestamped tracing lines, rmcp/router
- *      diagnostics, taskkill banners, and "blocked by policy" rejections are not
- *      login signals and must not trigger a CODEX_NOT_LOGGED_IN failure.
+ * Exit code 0 is authoritative. On non-zero exits, auth is only inferred from
+ * clean auth lines after usage/rate-limit, unsupported-model, policy, plugin
+ * sync, and runtime-noise lines have been excluded.
  */
 function detectNotLoggedIn(input) {
     if (input.exitCode === 0)
         return false;
-    const candidateLines = [];
+    if (input.usageLimit || input.modelUnsupported || input.policyDenied)
+        return false;
     for (const raw of `${input.stdout}\n${input.stderr}`.split("\n")) {
-        const line = raw.trim();
-        if (line.length === 0)
+        const summarized = (0, event_stream_js_1.summarizeCodexDiagnosticLine)(raw);
+        if (!summarized)
             continue;
-        if (RUNTIME_NOISE_LINE_RE.test(line))
+        if (RUNTIME_NOISE_LINE_RE.test(summarized))
             continue;
-        candidateLines.push(line);
-    }
-    for (const line of candidateLines) {
-        if (NOT_LOGGED_IN_RE.test(line))
+        if ((0, event_stream_js_1.isCodexPluginSyncNoise)(summarized))
+            continue;
+        if (isUsageLimitText(summarized))
+            continue;
+        if (isModelUnsupportedText(summarized))
+            continue;
+        if (isPolicyDeniedText(summarized))
+            continue;
+        if (NOT_LOGGED_IN_RE.test(summarized))
             return true;
     }
     return false;
 }
-function extractCodexJsonEvents(stdout) {
-    const events = [];
-    const stdoutDiagnostics = [];
-    let nonJson = "";
-    let objectStart = -1;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let i = 0; i < stdout.length; i += 1) {
-        const ch = stdout[i];
-        if (objectStart < 0) {
-            if (ch === "{") {
-                objectStart = i;
-                depth = 1;
-                inString = false;
-                escaped = false;
-            }
-            else {
-                nonJson += ch;
-            }
-            continue;
-        }
-        if (inString) {
-            if (escaped) {
-                escaped = false;
-            }
-            else if (ch === "\\") {
-                escaped = true;
-            }
-            else if (ch === "\"") {
-                inString = false;
-            }
-            continue;
-        }
-        if (ch === "\"") {
-            inString = true;
-        }
-        else if (ch === "{") {
-            depth += 1;
-        }
-        else if (ch === "}") {
-            depth -= 1;
-            if (depth === 0) {
-                const rawObject = stdout.slice(objectStart, i + 1);
-                try {
-                    events.push(JSON.parse(rawObject));
-                }
-                catch {
-                    appendStdoutDiagnostics(stdoutDiagnostics, rawObject);
-                }
-                objectStart = -1;
-            }
-        }
+function projectCodexAssistantDeltas(events) {
+    const deltas = [];
+    for (const event of events) {
+        const delta = (0, event_stream_js_1.codexAssistantDelta)(event);
+        if (delta)
+            deltas.push(delta);
     }
-    if (objectStart >= 0) {
-        appendStdoutDiagnostics(stdoutDiagnostics, stdout.slice(objectStart));
-    }
-    appendStdoutDiagnostics(stdoutDiagnostics, nonJson);
-    return Object.freeze({
-        events: Object.freeze(events),
-        stdoutDiagnostics: Object.freeze(stdoutDiagnostics),
-    });
+    return Object.freeze(deltas);
 }
-function projectCodexAssistantText(events) {
+function projectCodexAssistantText(events, assistantDeltas) {
     if (events.length === 0)
         return null;
-    const deltaBuffer = [];
     let authoritativeText = null;
     for (const event of events) {
-        const record = asRecord(event);
-        const type = recordString(record, "type");
-        if (type === "assistant.message") {
-            const content = recordString(record, "content");
-            if (content !== undefined)
-                authoritativeText = content;
-            continue;
-        }
-        if (type === "assistant.message_delta") {
-            const deltaContent = recordString(record, "deltaContent");
-            if (deltaContent)
-                deltaBuffer.push(deltaContent);
-            continue;
-        }
-        if (type === "item.completed") {
-            const item = asRecord(record?.item);
-            if (recordString(item, "type") === "agent_message") {
-                const text = recordString(item, "text");
-                if (text !== undefined)
-                    authoritativeText = text;
-            }
-        }
+        const text = (0, event_stream_js_1.codexAssistantCompletedText)(event);
+        if (text !== null)
+            authoritativeText = text;
     }
     if (authoritativeText !== null)
         return authoritativeText.trim();
-    const deltaText = deltaBuffer.join("").trim();
+    const deltaText = assistantDeltas.join("").trim();
     return deltaText.length > 0 ? deltaText : "";
 }
 /**
- * Project DreamGraph MCP tool invocations directly from Codex's JSON event stream.
+ * Project DreamGraph MCP tool invocations directly from Codex's JSON event
+ * stream as transcript witnesses only.
  *
- * The MCP audit bridge is the authoritative source of recorded tool calls, but
- * when the bridge audit is empty (e.g. transport hiccup, race with `turn.completed`),
- * Codex's own `item.completed { item.type: "mcp_tool_call" }` and
- * `mcp_tool_call.completed { tool: "<server>.<tool>" }` events still witness the
- * invocation. We surface them on the transcript so the orchestrator can avoid
- * falsely classifying a grounded run as MCP_PROBE_FAILED.
+ * The MCP audit bridge is the authoritative source of recorded tool results.
+ * Failed/cancelled transcript items are intentionally not projected: those
+ * represent missing tool results, so they must not masquerade as successful
+ * calls whose audit record was lost.
  */
 function projectCodexToolCalls(events) {
     if (events.length === 0)
         return Object.freeze([]);
     const calls = [];
     for (const event of events) {
-        const record = asRecord(event);
-        const type = recordString(record, "type");
-        if (type === "item.completed") {
-            const item = asRecord(record?.item);
-            if (recordString(item, "type") === "mcp_tool_call") {
-                const server = recordString(item, "server");
-                const tool = recordString(item, "tool");
-                if (server && tool)
-                    calls.push({ server, tool });
+        const record = (0, event_stream_js_1.asRecord)(event);
+        const type = (0, event_stream_js_1.codexEventType)(event);
+        const data = (0, event_stream_js_1.codexEventData)(event);
+        if (type === "item.completed" || type === "response.output_item.done") {
+            const item = (0, event_stream_js_1.asRecord)(record?.item) ?? (0, event_stream_js_1.asRecord)(data?.item);
+            if (isMcpToolItem(item) && isSuccessfulOrUnknownMcpToolItem(item)) {
+                const observed = projectMcpToolItem(item);
+                if (observed)
+                    calls.push(observed);
             }
             continue;
         }
-        if (type === "mcp_tool_call.completed" || type === "mcp_tool_call") {
-            const qualified = recordString(record, "tool");
-            if (qualified) {
-                const dot = qualified.indexOf(".");
-                if (dot > 0 && dot < qualified.length - 1) {
-                    calls.push({
-                        server: qualified.slice(0, dot),
-                        tool: qualified.slice(dot + 1),
-                    });
-                }
-            }
+        if (type === "mcp_tool_call.completed" ||
+            type === "mcp_tool_call" ||
+            type === "mcp_tool_call.end" ||
+            type === "mcp_tool_call_end") {
+            if (!isSuccessfulOrUnknownMcpToolItem(record))
+                continue;
+            const observed = projectQualifiedMcpTool(record);
+            if (observed)
+                calls.push(observed);
+            continue;
+        }
+        if (type === "tool.execution_complete") {
+            const server = (0, event_stream_js_1.recordString)(data, "mcpServerName") ?? (0, event_stream_js_1.recordString)(record, "mcpServerName");
+            const tool = (0, event_stream_js_1.recordString)(data, "mcpToolName") ??
+                (0, event_stream_js_1.recordString)(record, "mcpToolName") ??
+                (0, event_stream_js_1.recordString)(data, "toolName") ??
+                (0, event_stream_js_1.recordString)(record, "toolName");
+            const success = record?.success ?? data?.success;
+            if (server && tool && success !== false)
+                calls.push({ server, tool });
         }
     }
     return Object.freeze(calls);
 }
-function appendStdoutDiagnostics(target, text) {
-    for (const raw of text.split("\n")) {
-        const line = raw.trim();
-        if (line.length > 0)
-            target.push(`stdout: ${line}`);
+function projectCodexToolCallWitnesses(events, sequenceOffset = 0) {
+    if (events.length === 0)
+        return Object.freeze([]);
+    const witnesses = [];
+    let sequence = sequenceOffset;
+    for (const event of events) {
+        const record = (0, event_stream_js_1.asRecord)(event);
+        const type = (0, event_stream_js_1.codexEventType)(event);
+        const data = (0, event_stream_js_1.codexEventData)(event);
+        if (type === "item.completed" || type === "response.output_item.done") {
+            const item = (0, event_stream_js_1.asRecord)(record?.item) ?? (0, event_stream_js_1.asRecord)(data?.item);
+            if (!isMcpToolItem(item))
+                continue;
+            const witness = projectMcpToolItemWitness(item, sequence);
+            if (witness) {
+                witnesses.push(witness);
+                sequence += 1;
+            }
+            continue;
+        }
+        if (type === "mcp_tool_call.completed" ||
+            type === "mcp_tool_call" ||
+            type === "mcp_tool_call.end" ||
+            type === "mcp_tool_call_end" ||
+            type === "mcp_tool_call.failed" ||
+            type === "mcp_tool_call.error" ||
+            type === "mcp_tool_call.cancelled" ||
+            type === "mcp_tool_call.canceled") {
+            const witness = projectQualifiedMcpToolWitness(record, type, sequence);
+            if (witness) {
+                witnesses.push(witness);
+                sequence += 1;
+            }
+            continue;
+        }
+        if (type === "tool.execution_complete") {
+            const server = (0, event_stream_js_1.recordString)(data, "mcpServerName") ?? (0, event_stream_js_1.recordString)(record, "mcpServerName");
+            const tool = (0, event_stream_js_1.recordString)(data, "mcpToolName") ??
+                (0, event_stream_js_1.recordString)(record, "mcpToolName") ??
+                (0, event_stream_js_1.recordString)(data, "toolName") ??
+                (0, event_stream_js_1.recordString)(record, "toolName");
+            if (!server || !tool)
+                continue;
+            const success = record?.success ?? data?.success;
+            const isError = record?.is_error ?? record?.isError ?? data?.is_error ?? data?.isError;
+            witnesses.push(Object.freeze({
+                server,
+                tool,
+                status: normalizeMcpToolStatus(undefined, success, isError, type),
+                source: "structured-event",
+                sequence,
+            }));
+            sequence += 1;
+        }
     }
+    return Object.freeze(witnesses);
 }
-function asRecord(value) {
-    if (typeof value !== "object" || value === null || Array.isArray(value))
+function projectCodexToolCallWitnessesFromDiagnostics(diagnostics, sequenceOffset = 0) {
+    const witnesses = [];
+    let sequence = sequenceOffset;
+    for (const line of diagnostics) {
+        const match = line.match(MCP_TOOL_CALL_DIAGNOSTIC_RE);
+        if (!match)
+            continue;
+        const server = match[2] ?? "unknown";
+        const tool = match[3] ?? "unknown";
+        const detail = match[4]?.trim();
+        const status = normalizeToolStatusWithDetail(normalizeDiagnosticToolStatus(match[1]), detail);
+        witnesses.push(Object.freeze({
+            server,
+            tool,
+            status,
+            ...(detail ? { detail } : {}),
+            source: "diagnostic",
+            sequence,
+        }));
+        sequence += 1;
+    }
+    return Object.freeze(witnesses);
+}
+function mergeToolCallWitnesses(primary, secondary) {
+    const out = [];
+    const seen = new Set();
+    for (const witness of [...primary, ...secondary]) {
+        const key = toolCallWitnessKey(witness);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        out.push(witness);
+    }
+    return Object.freeze(out);
+}
+function toolCallWitnessKey(witness) {
+    return [
+        witness.server,
+        witness.tool,
+        witness.status,
+        witness.detail ?? "",
+    ].join("\0");
+}
+function projectMcpFailureDiagnostics(events) {
+    if (events.length === 0)
+        return Object.freeze([]);
+    const out = [];
+    for (const event of events) {
+        const record = (0, event_stream_js_1.asRecord)(event);
+        const type = (0, event_stream_js_1.codexEventType)(event);
+        const data = (0, event_stream_js_1.codexEventData)(event);
+        const item = type === "item.completed" || type === "response.output_item.done"
+            ? (0, event_stream_js_1.asRecord)(record?.item) ?? (0, event_stream_js_1.asRecord)(data?.item)
+            : record;
+        if (!isMcpToolItem(item))
+            continue;
+        if (isSuccessfulOrUnknownMcpToolItem(item))
+            continue;
+        const server = (0, event_stream_js_1.recordString)(item, "server") ?? "unknown";
+        const tool = (0, event_stream_js_1.recordString)(item, "tool") ?? (0, event_stream_js_1.recordString)(item, "tool_name") ?? "unknown";
+        const status = (0, event_stream_js_1.recordString)(item, "status") ?? "failed";
+        const output = (0, event_stream_js_1.recordString)(item, "aggregated_output") ?? (0, event_stream_js_1.recordString)(item, "error") ?? "";
+        out.push(`mcp_tool_call ${status}: ${server}.${tool}${output.length > 0 ? `: ${output}` : ""}`);
+    }
+    return Object.freeze(out);
+}
+function projectCodexUsage(events) {
+    let usage = null;
+    for (const event of events) {
+        const candidate = usageRecordFromEvent(event);
+        if (candidate)
+            usage = candidate;
+    }
+    return usage;
+}
+function usageRecordFromEvent(event) {
+    const record = (0, event_stream_js_1.asRecord)(event);
+    const data = (0, event_stream_js_1.codexEventData)(event);
+    const response = (0, event_stream_js_1.asRecord)(record?.response) ?? (0, event_stream_js_1.asRecord)(data?.response);
+    const usage = (0, event_stream_js_1.asRecord)(record?.usage) ??
+        (0, event_stream_js_1.asRecord)(data?.usage) ??
+        (0, event_stream_js_1.asRecord)(response?.usage) ??
+        (0, event_stream_js_1.asRecord)((0, event_stream_js_1.asRecord)(record?.result)?.usage) ??
+        (0, event_stream_js_1.asRecord)((0, event_stream_js_1.asRecord)(data?.result)?.usage);
+    if (!usage)
+        return null;
+    const inputTokens = firstNumber(usage, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]);
+    const cachedInputTokens = firstNumber(usage, ["cached_input_tokens", "cachedInputTokens"]);
+    const outputTokens = firstNumber(usage, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]);
+    const totalTokens = firstNumber(usage, ["total_tokens", "totalTokens"]);
+    return Object.freeze({
+        ...(inputTokens !== undefined ? { inputTokens } : {}),
+        ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+        ...(outputTokens !== undefined ? { outputTokens } : {}),
+        ...(totalTokens !== undefined ? { totalTokens } : {}),
+        raw: usage,
+    });
+}
+function projectStructuredErrors(events) {
+    const errors = [];
+    for (const event of events) {
+        const type = (0, event_stream_js_1.codexEventType)(event);
+        const record = (0, event_stream_js_1.asRecord)(event);
+        const data = (0, event_stream_js_1.codexEventData)(event);
+        const errorRecord = (0, event_stream_js_1.asRecord)(record?.error) ??
+            (0, event_stream_js_1.asRecord)(data?.error) ??
+            (0, event_stream_js_1.asRecord)((0, event_stream_js_1.asRecord)(record?.response)?.error) ??
+            (0, event_stream_js_1.asRecord)((0, event_stream_js_1.asRecord)(data?.response)?.error);
+        const directMessage = (0, event_stream_js_1.recordString)(record, "message") ??
+            (0, event_stream_js_1.recordString)(data, "message") ??
+            (0, event_stream_js_1.recordString)(record, "error") ??
+            (0, event_stream_js_1.recordString)(data, "error");
+        const errorMessage = (0, event_stream_js_1.recordString)(errorRecord, "message") ??
+            (0, event_stream_js_1.recordString)(errorRecord, "error") ??
+            directMessage;
+        const errorCode = (0, event_stream_js_1.recordString)(errorRecord, "code") ??
+            (0, event_stream_js_1.recordString)(errorRecord, "type") ??
+            (0, event_stream_js_1.recordString)(record, "code") ??
+            (0, event_stream_js_1.recordString)(data, "code") ??
+            (0, event_stream_js_1.recordString)(record, "error_code") ??
+            (0, event_stream_js_1.recordString)(data, "error_code");
+        const typeLooksLikeError = typeof type === "string" && /(?:error|failed|failure|rate_limit|quota|unsupported|denied)/i.test(type);
+        if (!errorMessage && !errorCode && !typeLooksLikeError)
+            continue;
+        const message = errorMessage ?? errorCode ?? type ?? "Codex structured error";
+        errors.push(Object.freeze({
+            type: type ?? "unknown",
+            ...(errorCode !== undefined ? { code: errorCode } : {}),
+            message,
+            ...(extractRetryAt(message) ? { retryAt: extractRetryAt(message) } : {}),
+            raw: event,
+        }));
+    }
+    return Object.freeze(errors);
+}
+function projectUsageLimitInfo(input) {
+    for (const err of input.structuredErrors) {
+        const text = `${err.code ?? ""} ${err.message}`;
+        if (isUsageLimitText(text)) {
+            return Object.freeze({
+                message: err.message,
+                ...(err.code !== undefined ? { code: err.code } : {}),
+                ...(err.retryAt !== undefined ? { retryAt: err.retryAt } : extractRetryAt(err.message) ? { retryAt: extractRetryAt(err.message) } : {}),
+            });
+        }
+    }
+    for (const line of input.diagnostics) {
+        if (isDiagnosticUsageLimitText(line)) {
+            return Object.freeze({
+                message: line,
+                ...(extractRetryAt(line) ? { retryAt: extractRetryAt(line) } : {}),
+            });
+        }
+    }
+    if (isAssistantUsageLimitText(input.assistantText)) {
+        return Object.freeze({
+            message: input.assistantText,
+            ...(extractRetryAt(input.assistantText) ? { retryAt: extractRetryAt(input.assistantText) } : {}),
+        });
+    }
+    return null;
+}
+function collectDiagnostics(input) {
+    const out = [];
+    for (const line of input.stdoutDiagnostics)
+        pushDiagnostic(out, `stdout: ${line}`);
+    for (const line of input.stderrDiagnostics)
+        pushDiagnostic(out, line);
+    for (const line of input.mcpFailureDiagnostics)
+        pushDiagnostic(out, line);
+    return Object.freeze(out);
+}
+function pushDiagnostic(out, line) {
+    if (isSourceSnippetDiagnostic(line))
+        return;
+    if (out.includes(line))
+        return;
+    out.push(line);
+}
+function isSourceSnippetDiagnostic(line) {
+    return SOURCE_LOCATION_SNIPPET_RE.test(line.trim());
+}
+function projectPluginSyncWarnings(diagnostics) {
+    const out = [];
+    for (const line of diagnostics) {
+        if (!(0, event_stream_js_1.isCodexPluginSyncNoise)(line))
+            continue;
+        const summary = (0, event_stream_js_1.summarizeCodexDiagnosticLine)(line);
+        if (summary && !out.includes(summary))
+            out.push(summary);
+    }
+    return Object.freeze(out);
+}
+function isMcpToolItem(record) {
+    const type = (0, event_stream_js_1.recordString)(record, "type") ?? (0, event_stream_js_1.recordString)(record, "item_type");
+    return type === "mcp_tool_call";
+}
+function isSuccessfulOrUnknownMcpToolItem(record) {
+    const status = (0, event_stream_js_1.recordString)(record, "status")?.toLowerCase();
+    const success = record?.success;
+    const isError = record?.is_error ?? record?.isError;
+    if (success === false || isError === true)
+        return false;
+    return status === undefined || !MCP_FAILED_STATUSES.has(status);
+}
+function projectMcpToolItem(record) {
+    const server = (0, event_stream_js_1.recordString)(record, "server") ?? (0, event_stream_js_1.recordString)(record, "mcpServerName");
+    const tool = (0, event_stream_js_1.recordString)(record, "tool") ??
+        (0, event_stream_js_1.recordString)(record, "tool_name") ??
+        (0, event_stream_js_1.recordString)(record, "mcpToolName");
+    if (server && tool)
+        return { server, tool };
+    return projectQualifiedMcpTool(record);
+}
+function projectMcpToolItemWitness(record, sequence) {
+    const server = (0, event_stream_js_1.recordString)(record, "server") ?? (0, event_stream_js_1.recordString)(record, "mcpServerName");
+    const tool = (0, event_stream_js_1.recordString)(record, "tool") ??
+        (0, event_stream_js_1.recordString)(record, "tool_name") ??
+        (0, event_stream_js_1.recordString)(record, "mcpToolName");
+    const qualified = server && tool ? null : projectQualifiedMcpTool(record);
+    const witnessServer = server ?? qualified?.server;
+    const witnessTool = tool ?? qualified?.tool;
+    if (!witnessServer || !witnessTool)
+        return null;
+    const detail = (0, event_stream_js_1.recordString)(record, "aggregated_output") ??
+        (0, event_stream_js_1.recordString)(record, "error") ??
+        (0, event_stream_js_1.recordString)(record, "message");
+    const status = normalizeMcpToolStatus((0, event_stream_js_1.recordString)(record, "status"), record?.success, record?.is_error ?? record?.isError);
+    return Object.freeze({
+        server: witnessServer,
+        tool: witnessTool,
+        status: normalizeToolStatusWithDetail(status, detail),
+        ...(detail ? { detail } : {}),
+        source: "structured-event",
+        sequence,
+    });
+}
+function projectQualifiedMcpTool(record) {
+    const directServer = (0, event_stream_js_1.recordString)(record, "server");
+    const directTool = (0, event_stream_js_1.recordString)(record, "tool") ?? (0, event_stream_js_1.recordString)(record, "tool_name");
+    if (directServer && directTool) {
+        return { server: directServer, tool: directTool };
+    }
+    const qualified = (0, event_stream_js_1.recordString)(record, "tool") ?? (0, event_stream_js_1.recordString)(record, "tool_name");
+    if (!qualified)
+        return null;
+    const dot = qualified.indexOf(".");
+    if (dot <= 0 || dot >= qualified.length - 1)
+        return null;
+    return {
+        server: qualified.slice(0, dot),
+        tool: qualified.slice(dot + 1),
+    };
+}
+function projectQualifiedMcpToolWitness(record, type, sequence) {
+    const observed = projectQualifiedMcpTool(record);
+    if (!observed)
+        return null;
+    const detail = (0, event_stream_js_1.recordString)(record, "aggregated_output") ??
+        (0, event_stream_js_1.recordString)(record, "error") ??
+        (0, event_stream_js_1.recordString)(record, "message");
+    const status = normalizeMcpToolStatus((0, event_stream_js_1.recordString)(record, "status"), record?.success, record?.is_error ?? record?.isError, type);
+    return Object.freeze({
+        server: observed.server,
+        tool: observed.tool,
+        status: normalizeToolStatusWithDetail(status, detail),
+        ...(detail ? { detail } : {}),
+        source: "structured-event",
+        sequence,
+    });
+}
+function normalizeDiagnosticToolStatus(status) {
+    const normalized = status?.trim().toLowerCase();
+    if (normalized === "completed" || normalized === "succeeded")
+        return "completed";
+    if (normalized === "cancelled" || normalized === "canceled")
+        return "cancelled";
+    if (normalized === "failed" || normalized === "failure" || normalized === "error")
+        return "failed";
+    return "unknown";
+}
+function normalizeMcpToolStatus(status, success, isError, type) {
+    const normalized = normalizeDiagnosticToolStatus(status);
+    if (normalized !== "unknown")
+        return normalized;
+    if (success === false || isError === true)
+        return "failed";
+    if (success === true || type === "mcp_tool_call.completed" || type === "tool.execution_complete") {
+        return "completed";
+    }
+    if (typeof type === "string" && /cancelled|canceled/i.test(type))
+        return "cancelled";
+    if (typeof type === "string" && /failed|error/i.test(type))
+        return "failed";
+    return "unknown";
+}
+function normalizeToolStatusWithDetail(status, detail) {
+    if (status === "failed" && detail && /\buser cancelled MCP tool call\b/i.test(detail)) {
+        return "cancelled";
+    }
+    return status;
+}
+function firstNumber(record, keys) {
+    for (const key of keys) {
+        const value = (0, event_stream_js_1.recordNumber)(record, key);
+        if (value !== undefined)
+            return value;
+    }
+    return undefined;
+}
+function countEvents(events, type) {
+    let count = 0;
+    for (const event of events) {
+        if ((0, event_stream_js_1.codexEventType)(event) === type)
+            count += 1;
+    }
+    return count;
+}
+function isUsageLimitText(text) {
+    return USAGE_LIMIT_RUNTIME_RE.test(text) ||
+        (USAGE_LIMIT_PHRASE_RE.test(text) && USAGE_LIMIT_ERROR_CONTEXT_RE.test(text));
+}
+function isDiagnosticUsageLimitText(text) {
+    if (isSourceSnippetDiagnostic(text))
+        return false;
+    return isUsageLimitText(text);
+}
+function isAssistantUsageLimitText(text) {
+    return USAGE_LIMIT_RUNTIME_RE.test(text) &&
+        /(?:^|\b)(?:turn error|you(?:'|’|â€™)ve hit your usage limit|purchase more credits|try again at|rate[_ -]?limit|insufficient[_ -]?quota|too many requests)\b/i.test(text);
+}
+function isModelUnsupportedText(text) {
+    return MODEL_UNSUPPORTED_RE.test(text) || MODEL_UNSUPPORTED_PHRASE_RE.test(text);
+}
+function isPolicyDeniedText(text) {
+    return POLICY_DENIED_RE.test(text);
+}
+function isModelUnsupportedDiagnostic(text) {
+    if (!isModelUnsupportedText(text))
+        return false;
+    return /(?:^|\b)(?:turn error|error|fatal|codex(?: cli)? error)\s*:/i.test(text)
+        || /\b(?:unsupported_model|model_not_supported|model_not_found|invalid_model)\b/i.test(text);
+}
+function isPolicyDeniedDiagnostic(text) {
+    if (!isPolicyDeniedText(text))
+        return false;
+    return /(?:^|\b)(?:turn error|error|fatal|rejected|codex(?: cli)? error)\s*:/i.test(text)
+        || /\b(?:blocked by policy|read-only sandbox|writing is blocked|user approval settings)\b/i.test(text);
+}
+function extractRetryAt(text) {
+    const match = text.match(/\btry again at\s+([^.!\n]+)/i);
+    return match?.[1]?.trim();
+}
+function projectTelemetryUsage(text) {
+    if (!/\bevent\.kind=response\.completed\b/.test(text))
+        return null;
+    const inputTokens = telemetryNumber(text, "input_token_count");
+    const outputTokens = telemetryNumber(text, "output_token_count");
+    const cachedInputTokens = telemetryNumber(text, "cached_token_count");
+    const totalTokens = inputTokens !== undefined && outputTokens !== undefined
+        ? inputTokens + outputTokens
+        : undefined;
+    if (inputTokens === undefined &&
+        outputTokens === undefined &&
+        cachedInputTokens === undefined &&
+        totalTokens === undefined) {
+        return null;
+    }
+    return Object.freeze({
+        ...(inputTokens !== undefined ? { inputTokens } : {}),
+        ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+        ...(outputTokens !== undefined ? { outputTokens } : {}),
+        ...(totalTokens !== undefined ? { totalTokens } : {}),
+        raw: { source: "codex_telemetry" },
+    });
+}
+function telemetryNumber(text, key) {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = text.match(new RegExp(`\\b${escaped}=(\\d+)\\b`));
+    if (!match?.[1])
         return undefined;
-    return value;
-}
-function recordString(record, key) {
-    const value = record?.[key];
-    return typeof value === "string" ? value : undefined;
+    const value = Number(match[1]);
+    return Number.isFinite(value) ? value : undefined;
 }
 //# sourceMappingURL=transcript.js.map

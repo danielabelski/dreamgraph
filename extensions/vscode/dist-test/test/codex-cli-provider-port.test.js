@@ -18,6 +18,12 @@ Commands:
   exec    Run Codex non-interactively
   login   Manage login
   mcp     Manage MCP servers
+
+Options:
+  -a, --ask-for-approval <APPROVAL_POLICY>
+                                             Possible values:
+                                             - on-request: ask when needed
+                                             - never: never ask
 `;
 const EXEC_HELP = `
 Usage: codex exec [OPTIONS] [PROMPT]
@@ -42,6 +48,7 @@ Options:
       --output-schema <PATH>
       --skip-git-repo-check
       --ignore-user-config
+      --ignore-rules
       --ephemeral
 `;
 function commandResult(over = {}) {
@@ -113,6 +120,12 @@ function makeFakeProcess(opts = {}) {
         },
         async spawn(input) {
             log.spawnCalls.push(input);
+            for (const chunk of opts.stdoutChunks ?? []) {
+                input.onStdoutChunk?.(chunk);
+            }
+            for (const chunk of opts.stderrChunks ?? []) {
+                input.onStderrChunk?.(chunk);
+            }
             return spawnResult(opts.spawnResult);
         },
     };
@@ -190,6 +203,20 @@ function makeCallInput(over = {}) {
     strict_1.default.deepEqual(port.getCapabilities(), { textAttachments: false, imageAttachments: false });
     strict_1.default.equal(port.llm, FAKE_LLM);
 });
+(0, node_test_1.default)("codex provider-port: invocation cwd is optional for multi-repo DreamGraph runs", async () => {
+    const proc = makeFakeProcess();
+    const port = (0, index_js_1.createCodexCliProviderPort)({
+        hostLlm: FAKE_LLM,
+        timeoutMs: 30_000,
+        baseEnv: { PATH: "C:\\bin" },
+        deps: makeDeps({ process: proc.process }),
+    });
+    await port.callProvider(makeCallInput());
+    strict_1.default.equal(proc.log.spawnCalls.length, 1);
+    strict_1.default.match(proc.log.spawnCalls[0].cwd, /^C:\\Temp\\dreamgraph-codex-cli-run-/);
+    strict_1.default.ok(proc.log.spawnCalls[0].args.includes("--cd"));
+    strict_1.default.match(proc.log.spawnCalls[0].args[proc.log.spawnCalls[0].args.indexOf("--cd") + 1] ?? "", /^C:\\Temp\\dreamgraph-codex-cli-run-/);
+});
 (0, node_test_1.default)("codex provider-port: serializes conversation to stdin and projects proposal", async () => {
     const proc = makeFakeProcess();
     const port = (0, index_js_1.createCodexCliProviderPort)({
@@ -205,7 +232,7 @@ function makeCallInput(over = {}) {
     const proposal = await port.callProvider(makeCallInput());
     strict_1.default.equal(proc.log.spawnCalls.length, 1);
     const spawn = proc.log.spawnCalls[0];
-    strict_1.default.equal(spawn.cwd, "C:\\work\\repo");
+    strict_1.default.match(spawn.cwd, /^C:\\Temp\\dreamgraph-codex-cli-run-/);
     strict_1.default.equal(spawn.env.FOO, "bar");
     strict_1.default.match(spawn.env.CODEX_HOME, /dreamgraph-codex-cli-run-.*\\codex-home$/);
     strict_1.default.match(spawn.stdin, /\[system\]\nyou are an architect/);
@@ -241,7 +268,7 @@ function makeCallInput(over = {}) {
     strict_1.default.match(prompt, /  - query_resource/);
     strict_1.default.match(prompt, /  - edit_entity/);
     strict_1.default.match(prompt, /  - run_command/);
-    strict_1.default.match(prompt, /dreamgraph:run_command .*ONLY supported shell execution route/);
+    strict_1.default.match(prompt, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
     strict_1.default.match(prompt, /File\/entity mutations\s+-> prefer dreamgraph:edit_entity/);
     strict_1.default.match(prompt, /Verification \/ build \/ tests\s+-> dreamgraph:run_command/);
     strict_1.default.match(prompt, /Codex CLI adapter authority override/);
@@ -251,6 +278,7 @@ function makeCallInput(over = {}) {
     strict_1.default.ok(!proc.log.spawnCalls[0].args.includes("--image"));
     strict_1.default.equal(diagnostics.length, 1);
     strict_1.default.equal(diagnostics[0].mcpServerAdvertised, "dreamgraph");
+    strict_1.default.ok(diagnostics[0].mcpToolsAdvertised > index_js_1.CODEX_MINIMUM_AUTHORITATIVE_TOOLS.length);
 });
 (0, node_test_1.default)("codex provider-port: keeps bridge-local run_command visible with read-only upstream tools", async () => {
     const proc = makeFakeProcess();
@@ -272,7 +300,8 @@ function makeCallInput(over = {}) {
     const prompt = proc.log.spawnCalls[0].stdin;
     strict_1.default.match(prompt, /  - query_resource/);
     strict_1.default.match(prompt, /  - run_command/);
-    strict_1.default.match(prompt, /dreamgraph:run_command .*ONLY supported shell execution route/);
+    strict_1.default.match(prompt, /dreamgraph:run_command .*available.*ONLY supported shell execution route/);
+    strict_1.default.match(prompt, /Verification \/ build \/ tests\s+-> dreamgraph:run_command/);
 });
 (0, node_test_1.default)("codex provider-port: forwards assistant text through onStreamChunk", async () => {
     const port = (0, index_js_1.createCodexCliProviderPort)({
@@ -285,6 +314,58 @@ function makeCallInput(over = {}) {
     const chunks = [];
     await port.callProvider(makeCallInput({ onStreamChunk: (chunk) => chunks.push(chunk) }));
     strict_1.default.deepEqual(chunks, ["Slice 4 complete."]);
+});
+(0, node_test_1.default)("codex provider-port: streams Codex assistant deltas live without duplicating final text", async () => {
+    const stdout = [
+        JSON.stringify({ type: "turn.started" }),
+        JSON.stringify({ type: "response.output_text.delta", delta: "Graph" }),
+        JSON.stringify({ type: "assistant.message_delta", deltaContent: " health" }),
+        JSON.stringify({
+            type: "item.completed",
+            item: { id: "item_0", type: "agent_message", text: "Graph health" },
+        }),
+        JSON.stringify({ type: "turn.completed" }),
+    ].join("\n");
+    const proc = makeFakeProcess({
+        stdoutChunks: [stdout.slice(0, 90), stdout.slice(90)],
+        spawnResult: { stdout },
+    });
+    const port = (0, index_js_1.createCodexCliProviderPort)({
+        hostLlm: FAKE_LLM,
+        invocationCwd: "C:\\work",
+        timeoutMs: 30_000,
+        baseEnv: {},
+        deps: makeDeps({ process: proc.process }),
+    });
+    const chunks = [];
+    const proposal = await port.callProvider(makeCallInput({ onStreamChunk: (chunk) => chunks.push(chunk) }));
+    strict_1.default.deepEqual(chunks, ["Graph", " health"]);
+    strict_1.default.equal(proposal.response.content, "Graph health");
+});
+(0, node_test_1.default)("codex provider-port: streams completed assistant message when no deltas are available", async () => {
+    const stdout = [
+        JSON.stringify({ type: "turn.started" }),
+        JSON.stringify({
+            type: "item.completed",
+            item: { id: "item_0", type: "agent_message", text: "Completed message." },
+        }),
+        JSON.stringify({ type: "turn.completed" }),
+    ].join("\n");
+    const proc = makeFakeProcess({
+        stdoutChunks: [stdout],
+        spawnResult: { stdout },
+    });
+    const port = (0, index_js_1.createCodexCliProviderPort)({
+        hostLlm: FAKE_LLM,
+        invocationCwd: "C:\\work",
+        timeoutMs: 30_000,
+        baseEnv: {},
+        deps: makeDeps({ process: proc.process }),
+    });
+    const chunks = [];
+    const proposal = await port.callProvider(makeCallInput({ onStreamChunk: (chunk) => chunks.push(chunk) }));
+    strict_1.default.deepEqual(chunks, ["Completed message."]);
+    strict_1.default.equal(proposal.response.content, "Completed message.");
 });
 (0, node_test_1.default)("codex provider-port: provider errors carry deterministic metadata", async () => {
     const port = (0, index_js_1.createCodexCliProviderPort)({
@@ -342,6 +423,31 @@ function makeCallInput(over = {}) {
         "result:codex-run-provider:true",
     ]);
 });
+(0, node_test_1.default)("codex provider-port: streams transcript MCP witnesses when audit records are absent", async () => {
+    const observed = [];
+    const stderr = "mcp_tool_call failed: dreamgraph.query_resource\n";
+    const proc = makeFakeProcess({
+        stderrChunks: [stderr],
+        spawnResult: {
+            stderr,
+            exitCode: 1,
+        },
+    });
+    const port = (0, index_js_1.createCodexCliProviderPort)({
+        hostLlm: FAKE_LLM,
+        invocationCwd: "C:\\work",
+        timeoutMs: 30_000,
+        baseEnv: {},
+        deps: makeDeps({ process: proc.process }),
+        onToolWitness: (runId, witness) => observed.push(`witness:${runId}:${witness.server}:${witness.tool}:${witness.status}`),
+        onRunResult: (result) => observed.push(`result:${result.runId}:${result.ok}:${result.toolCallWitnesses.length}`),
+    });
+    await strict_1.default.rejects(port.callProvider(makeCallInput()));
+    strict_1.default.deepEqual(observed, [
+        "witness:codex-run-provider:dreamgraph:query_resource:failed",
+        "result:codex-run-provider:false:1",
+    ]);
+});
 (0, node_test_1.default)("codex provider-port: onRunResult fires for ok and failed runs", async () => {
     const results = [];
     const okPort = (0, index_js_1.createCodexCliProviderPort)({
@@ -369,7 +475,8 @@ function makeCallInput(over = {}) {
     strict_1.default.throws(() => (0, index_js_1.createCodexCliProviderPort)());
     strict_1.default.throws(() => (0, index_js_1.createCodexCliProviderPort)({
         hostLlm: FAKE_LLM,
-        invocationCwd: "",
+        // @ts-expect-error testing invalid input
+        invocationCwd: 42,
         timeoutMs: 1,
         baseEnv: {},
         deps: makeDeps(),

@@ -520,28 +520,21 @@ class ChatPanel {
                 case 'envelopeAction': {
                     const envMsg = message;
                     if (envMsg.label)
-                        await this.handleUserMessage(envMsg.label);
+                        await this._executeRecommendedAction('', envMsg.label);
                     break;
                 }
                 case 'envelopeDoAll': {
                     const envAllMsg = message;
-                    const labels = Array.isArray(envAllMsg.labels) ? envAllMsg.labels : [];
-                    if (labels.length === 1) {
-                        await this.handleUserMessage(labels[0]);
-                    }
-                    else if (labels.length > 1) {
-                        const combined = `Execute these steps sequentially:\n${labels.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
-                        await this.handleUserMessage(combined);
-                    }
+                    await this._executeAllRecommendedActions(Array.isArray(envAllMsg.labels) ? envAllMsg.labels : []);
                     break;
                 }
                 case 'setAutonomyMode': {
                     const modeMsg = message;
-                    this._setAutonomyMode(modeMsg.mode);
+                    await this._setAutonomyMode(modeMsg.mode);
                     break;
                 }
                 case 'resetAutonomy': {
-                    this._resetAutonomy();
+                    await this._resetAutonomy();
                     break;
                 }
                 case 'refreshPendingReviews': {
@@ -1189,8 +1182,8 @@ class ChatPanel {
             // graph/markdown/edit tools plus bridge-local run_command so the
             // CLI can act through DreamGraph authority instead of inline shell.
             cliToolsManifest: {
-                server: index_js_2.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
-                tools: index_js_2.COPILOT_AUTHORITATIVE_TOOL_CATALOG,
+                server: index_js_3.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
+                tools: index_js_3.CODEX_AUTHORITATIVE_TOOL_CATALOG,
             },
             deps: {
                 fs: index_js_2.HOST_FS,
@@ -1356,9 +1349,19 @@ class ChatPanel {
                     console.warn('[DreamGraph][codex-cli] onToolCall handler failed:', liveErr);
                 }
             },
+            onToolWitness: (runId, witness) => {
+                try {
+                    this._appendCodexTranscriptWitnessToolTrace(runId, [witness]);
+                }
+                catch (liveErr) {
+                    console.warn('[DreamGraph][codex-cli] onToolWitness handler failed:', liveErr);
+                }
+            },
             onRunResult: (result) => {
                 try {
                     this._reconcileCliAuditToolTrace(result.runId, result.toolCalls);
+                    this._appendCodexTranscriptWitnessToolTrace(result.runId, result.toolCallWitnesses);
+                    void this.postMessage({ type: 'toolTrace', calls: this._lastToolTrace });
                     if (!result.ok) {
                         const code = result.failure?.code ?? 'CODEX_CLI_UNKNOWN_FAILURE';
                         const message = result.failure?.message ?? 'Codex CLI run failed';
@@ -1390,9 +1393,10 @@ class ChatPanel {
         // The seam composer rebuilds `conversation` from prior + new turn,
         // so it only needs the prior slice. We strip the outer system message
         // and the trailing user turn that handleUserMessage already added.
-        const priorMessages = conversation
-            .filter((m) => m.role !== 'system')
-            .slice(0, -1);
+        const visibleMessages = conversation.filter((m) => m.role !== 'system');
+        const priorMessages = perTurn.internalPrompt === true
+            ? visibleMessages
+            : visibleMessages.slice(0, -1);
         const llm = this.architectLlm;
         const cb = this.contextBuilder;
         const panel = this;
@@ -1424,6 +1428,9 @@ class ChatPanel {
             // this method will push it before persisting. Real work both ways.
             persistUserMessage: async (text, _contentBlocks) => {
                 void _contentBlocks;
+                if (perTurn.internalPrompt === true) {
+                    return;
+                }
                 const last = panel.messages[panel.messages.length - 1];
                 const alreadyPushed = !!last && last.role === 'user' && (last.fullContent ?? last.content) === text;
                 if (!alreadyPushed) {
@@ -1704,20 +1711,21 @@ class ChatPanel {
     }
     _getLlmTimeoutMs(options) {
         const provider = this.architectLlm?.provider ?? 'anthropic';
-        // The copilot-cli adapter has its own hard wall-clock cap (the
-        // orchestrator's spawn `timeoutMs`, sourced from the
-        // `dreamgraph.architect.copilotCli.timeoutMs` setting, default 180s).
+        // Native CLI adapters have their own hard wall-clock caps (the
+        // orchestrator's spawn `timeoutMs`, sourced from the matching
+        // `dreamgraph.architect.<provider>.timeoutMs` setting, default 30 min).
         // If the chat-panel wraps the call in a smaller AbortSignal, that
         // signal will fire FIRST and the orchestrator surfaces it as
         // `CANCELLED` — indistinguishable from the user clicking Stop.
         // To keep the orchestrator's budget authoritative, derive the
         // chat-panel wrapper from the same setting plus a 30s buffer so
         // the spawn-side timeout always wins. The base PROVIDER_BUDGETS
-        // table doesn't cover copilot-cli (only API providers), which is
+        // table doesn't cover native CLI providers (only API providers), which is
         // why this branch is needed.
-        if (provider === 'copilot-cli') {
+        if (provider === 'copilot-cli' || provider === 'codex-cli') {
             const cfg = vscode.workspace.getConfiguration('dreamgraph.architect');
-            const raw = cfg.get('copilotCli.timeoutMs');
+            const key = provider === 'copilot-cli' ? 'copilotCli.timeoutMs' : 'codexCli.timeoutMs';
+            const raw = cfg.get(key);
             const base = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1_800_000;
             let budget = base + 30_000;
             if (options.toolCount && options.toolCount > 12)
@@ -2464,21 +2472,23 @@ class ChatPanel {
         this._autonomyEnabled = true;
         this._broadcastAutonomyStatus();
     }
-    _setAutonomyMode(mode) {
+    async _setAutonomyMode(mode) {
         const valid = ['cautious', 'conscientious', 'eager', 'autonomous'];
         const m = valid.find((v) => v === mode);
         if (!m)
             return;
+        const selected = m;
         // Per ADR-152/153: explicit mode selection from the header is a fresh
         // session under that mode's profile (PassBudget + TimeBudget reset). The
         // legacy `dreamgraph.architect.autoPassBudget` setting is honoured only
         // for the user-typed `parseAutonomyRequest` path — dropdown clicks always
         // apply the canonical mode profile so the budgets visibly mean something.
-        this._autonomyState = (0, autonomy_js_2.applyModeProfileToState)(m);
+        this._autonomyState = (0, autonomy_js_2.applyModeProfileToState)(selected);
         this._autonomyEnabled = true;
         this._broadcastAutonomyStatus();
+        await vscode.workspace.getConfiguration('dreamgraph.architect').update('autonomyMode', selected, this._architectSettingsTarget());
     }
-    _resetAutonomy() {
+    async _resetAutonomy() {
         // Reset to cautious profile so pills still show 3/3 + 2:00/2:00
         // rather than placeholders (per ADR-153, budgets are always visible).
         this._autonomyState = (0, autonomy_js_2.applyModeProfileToState)('cautious');
@@ -2486,6 +2496,7 @@ class ChatPanel {
         this._autonomyContinuing = false;
         this._lastRecommendedActions = [];
         this._broadcastAutonomyStatus();
+        await vscode.workspace.getConfiguration('dreamgraph.architect').update('autonomyMode', 'cautious', this._architectSettingsTarget());
     }
     _broadcastAutonomyStatus() {
         const status = (0, autonomy_js_1.deriveAutonomyStatusView)(this._autonomyState);
@@ -2523,6 +2534,49 @@ class ChatPanel {
             return { ...a };
         });
     }
+    _guardRecommendedActions(actions) {
+        return (0, autonomy_js_1.applyRecommendedActionCapabilityGuards)(actions, {
+            availableToolNames: this._lastAvailableToolNames,
+            env: {
+                VSCE_PAT: process.env.VSCE_PAT,
+                AZURE_DEVOPS_EXT_PAT: process.env.AZURE_DEVOPS_EXT_PAT,
+            },
+        });
+    }
+    _toRecommendedActionMessage(action) {
+        return {
+            id: action.id,
+            label: action.label,
+            rationale: action.rationale,
+            eligible: action.eligible,
+            withinScope: action.withinScope,
+            requiresTools: action.requiresTools,
+            requiresSecrets: action.requiresSecrets,
+            blockers: action.blockers,
+            capabilityChecked: true,
+        };
+    }
+    async _postRecommendedActionBlockedMessage(label, blockers) {
+        const detail = blockers.length > 0
+            ? blockers.map((b) => `- ${b.label}`).join('\n')
+            : '- This suggested action is not runnable from the current chat context.';
+        const message = {
+            id: this._createMessageId(),
+            role: 'system',
+            content: `Suggested action blocked: ${label}\n\n${detail}`,
+            timestamp: new Date().toISOString(),
+            instanceId: this.currentInstanceId,
+        };
+        this.messages.push(message);
+        await this.persistMessages();
+        await this.postMessage({
+            type: 'addMessage',
+            message,
+            actions: [],
+            roleMeta: this._roleMetaFor(message),
+            contextFooter: undefined,
+        });
+    }
     async _handleAutonomyPassComplete(content, messageId, llmMessages, tools) {
         // Extract structured envelope and build recommended actions.
         const envelope = (0, autonomy_structured_js_1.extractStructuredPassEnvelope)(content);
@@ -2533,7 +2587,7 @@ class ChatPanel {
         // on the next pass. This is the soft hint; Lever 1 (catalog
         // narrowing on the second sticky-anchor locate-only pass) is the
         // hard fallback. Both layers are token-economy at task level.
-        const actions = ChatPanel._bindWriteToolToAnchorActions(envelope.nextSteps, tools);
+        const actions = this._guardRecommendedActions(ChatPanel._bindWriteToolToAnchorActions(envelope.nextSteps, tools));
         this._lastRecommendedActions = actions;
         // Tool / file-edit accounting drives the empty-pass detector. Without
         // these, a pass that only printed "Autonomy counters: ..." with no real
@@ -2650,11 +2704,14 @@ class ChatPanel {
             const alreadyForcedReport = this._reportForcedThisRun === true;
             if (!hasReport && didRealWork && !alreadyForcedReport && !this.abortController?.signal.aborted) {
                 this._reportForcedThisRun = true;
+                const evidenceDigest = this._formatToolTraceEvidenceForPrompt(this._lastToolTrace);
                 const reportPrompt = [
                     'STOP. You are about to end the session without a report.',
+                    evidenceDigest ? `Evidence from the just-finished pass:\n${evidenceDigest}` : '',
+                    'Important: audited tool calls prove progress/evidence only. They do not prove the original user prompt was fulfilled unless you actually delivered the requested answer.',
                     'Emit ONLY the SUMMARY/structured-envelope report now: a one-paragraph plain-text summary of what you actually did this run, what changed, what is incomplete, and any blockers — followed by the standard json envelope fenced block (`goal_status`, `progress_status`, `uncertainty`, optional `recommended_next_steps`).',
                     'Do NOT issue any tool calls in this turn. Reporting is mandatory before sign-off.',
-                ].join(' ');
+                ].filter(Boolean).join(' ');
                 const notice = {
                     id: this._createMessageId(),
                     role: 'system',
@@ -2665,7 +2722,10 @@ class ChatPanel {
                 this.messages.push(notice);
                 await this.persistMessages();
                 await this.postMessage({ type: 'addMessage', message: notice, actions: [], roleMeta: this._roleMetaFor(notice), contextFooter: undefined });
-                await this._runAutonomyContinuationPass(reportPrompt, llmMessages, tools);
+                await this._runAutonomyContinuationPass(reportPrompt, llmMessages, tools, [], {
+                    internalPrompt: true,
+                    preserveExistingToolTrace: true,
+                });
                 return;
             }
             // Stopped — persist task state so the next turn can resume from a known position.
@@ -2694,7 +2754,7 @@ class ChatPanel {
             }
         }
     }
-    async _runAutonomyContinuationPass(prompt, baseLlmMessages, tools, nextStepActions = []) {
+    async _runAutonomyContinuationPass(prompt, baseLlmMessages, tools, nextStepActions = [], options = {}) {
         if (this._autonomyContinuing) {
             console.warn('[DreamGraph] _runAutonomyContinuationPass: re-entrant call dropped — a continuation is already in progress.');
             // F-08: surface the dropped re-entrant call so the user knows their
@@ -2713,19 +2773,23 @@ class ChatPanel {
                 ? await this.contextBuilder.buildEnvelope(prompt, undefined, this._currentBudgetCoordinator ?? undefined)
                 : null;
             const liveAnchor = envelope?.activeFile?.selection?.anchor ?? envelope?.activeFile?.cursorAnchor;
-            const userMessage = {
-                id: this._createMessageId(),
-                role: 'user',
-                content: prompt,
-                timestamp: new Date().toISOString(),
-                instanceId: this.currentInstanceId,
-                anchor: liveAnchor,
-            };
-            this.messages.push(userMessage);
-            await this._persistMessagesWithCanonicalAnchorRefresh(envelope);
+            if (options.internalPrompt !== true) {
+                const userMessage = {
+                    id: this._createMessageId(),
+                    role: 'user',
+                    content: prompt,
+                    timestamp: new Date().toISOString(),
+                    instanceId: this.currentInstanceId,
+                    anchor: liveAnchor,
+                };
+                this.messages.push(userMessage);
+                await this._persistMessagesWithCanonicalAnchorRefresh(envelope);
+            }
             this.streaming = true;
             this.streamingContent = '';
-            this._lastToolTrace = [];
+            if (options.preserveExistingToolTrace !== true) {
+                this._lastToolTrace = [];
+            }
             this._liveToolCallsSeen.clear();
             this._lastVerdict = null;
             this.abortController = new AbortController();
@@ -2826,6 +2890,7 @@ class ChatPanel {
                     droppedAttachmentNames: [],
                     attachmentSummary: '',
                     stopContextBlock: undefined,
+                    internalPrompt: options.internalPrompt,
                 });
                 // Reset the re-entrancy guard BEFORE the seam runs so the
                 // recursive `_handleAutonomyPassComplete` invoked from inside
@@ -2917,9 +2982,15 @@ class ChatPanel {
                 }
             }
             else if (tools.length > 0) {
+                if (options.internalPrompt === true) {
+                    llmMessages.push({ role: 'user', content: prompt });
+                }
                 fullContent = await this.runAgenticLoop(llmMessages, tools);
             }
             else {
+                if (options.internalPrompt === true) {
+                    llmMessages.push({ role: 'user', content: prompt });
+                }
                 const req = this._createRequestSignal();
                 try {
                     await this.architectLlm.stream(llmMessages, (chunk) => {
@@ -3049,7 +3120,7 @@ class ChatPanel {
             return;
         // Persist so chip clicks resolve via `_executeRecommendedAction`.
         // This is the only side effect required for resume continuity.
-        this._lastRecommendedActions = actions;
+        this._lastRecommendedActions = this._guardRecommendedActions(actions);
     }
     _broadcastSummaryCard(content, messageId) {
         try {
@@ -3068,7 +3139,7 @@ class ChatPanel {
             // body-rendered card resolve via `_executeRecommendedAction`.
             if ((0, envelope_utils_js_1.extractPrimaryEnvelope)(content)) {
                 const env = (0, autonomy_structured_js_1.extractStructuredPassEnvelope)(content);
-                this._lastRecommendedActions = env.nextSteps;
+                this._lastRecommendedActions = this._guardRecommendedActions(env.nextSteps);
                 return;
             }
             const env = (0, autonomy_structured_js_1.extractStructuredPassEnvelope)(content);
@@ -3082,10 +3153,11 @@ class ChatPanel {
                 || (env.uncertainty && env.uncertainty !== 'low');
             if (!hasSignal)
                 return;
-            const steps = env.nextSteps;
+            const steps = this._guardRecommendedActions(env.nextSteps);
             // Persist for chip-click resolution — _executeRecommendedAction uses this.
             this._lastRecommendedActions = steps;
-            const eligibleCount = steps.filter((s) => s.eligible && s.withinScope).length;
+            const runnableSteps = steps.filter(autonomy_js_1.isRecommendedActionRunnable);
+            const allStepsRunnable = runnableSteps.length === steps.length;
             void this.postMessage({
                 type: 'summaryCard',
                 messageId,
@@ -3094,8 +3166,8 @@ class ChatPanel {
                     goal_status: env.goalStatus,
                     progress_status: env.progressStatus,
                     uncertainty: env.uncertainty,
-                    recommended_next_steps: steps.map((s) => ({ id: s.id, label: s.label, rationale: s.rationale })),
-                    doAllEligible: eligibleCount > 1,
+                    recommended_next_steps: steps.map((s) => this._toRecommendedActionMessage(s)),
+                    doAllEligible: allStepsRunnable && (0, autonomy_js_1.computeDoAllEligibility)(runnableSteps),
                 },
             });
         }
@@ -3114,11 +3186,54 @@ class ChatPanel {
     _formatStopContextBlock(ctx) {
         return helpers.formatStopContextBlock(ctx);
     }
+    _formatToolTraceEvidenceForPrompt(trace) {
+        if (!trace || trace.length === 0)
+            return '';
+        const completed = trace.filter((entry) => entry.status !== 'failed').length;
+        const failed = trace.filter((entry) => entry.status === 'failed').length;
+        const counts = new Map();
+        for (const entry of trace) {
+            counts.set(entry.tool, (counts.get(entry.tool) ?? 0) + 1);
+        }
+        const topTools = [...counts.entries()]
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .slice(0, 10)
+            .map(([tool, count]) => `${tool} x${count}`)
+            .join(', ');
+        const failedTools = trace
+            .filter((entry) => entry.status === 'failed')
+            .slice(0, 8)
+            .map((entry) => `${entry.tool}${entry.argsSummary ? ` (${entry.argsSummary})` : ''}`);
+        const lines = [
+            `- Tool trace: ${trace.length} executed call${trace.length === 1 ? '' : 's'} (${completed} completed, ${failed} failed).`,
+            topTools ? `- Tools observed: ${topTools}.` : '',
+            failedTools.length > 0 ? `- Failed calls to mention as blockers/limits, not as absence of work: ${failedTools.join('; ')}.` : '',
+            '- Treat these audited calls as already completed progress evidence; do not say no inspection occurred.',
+            '- Do not call the original prompt fulfilled unless the requested final answer/report was actually delivered.',
+        ];
+        return lines.filter(Boolean).join('\n');
+    }
     async _executeRecommendedAction(actionId, fallbackLabel) {
-        const action = this._lastRecommendedActions.find((a) => a.id === actionId);
-        const label = action?.label || (typeof fallbackLabel === 'string' ? fallbackLabel.trim() : '');
+        const fallback = typeof fallbackLabel === 'string' ? fallbackLabel.trim() : '';
+        const stored = this._lastRecommendedActions.find((a) => a.id === actionId);
+        const action = stored
+            ? this._guardRecommendedActions([stored])[0]
+            : (fallback
+                ? this._guardRecommendedActions([{
+                        id: actionId || `fallback-${Date.now()}`,
+                        label: fallback,
+                        priority: 1,
+                        eligible: true,
+                        withinScope: true,
+                    }])[0]
+                : undefined);
+        const label = action?.label || fallback;
         if (!label)
             return;
+        if (action && !(0, autonomy_js_1.isRecommendedActionRunnable)(action)) {
+            await this._postRecommendedActionBlockedMessage(label, action.blockers ?? []);
+            return;
+        }
         // If the action carries a structured tool binding, prime it so the
         // follow-up turn's selectToolGroups() definitely exposes it — the chip
         // label alone ("Run a dream cycle") often won't substring-match the
@@ -3129,18 +3244,32 @@ class ChatPanel {
         await this.handleUserMessage(label);
     }
     async _executeAllRecommendedActions(fallbackLabels) {
-        const eligible = this._lastRecommendedActions.filter((a) => a.eligible && a.withinScope);
-        const liveLabels = eligible
+        const sourceActions = this._lastRecommendedActions.length > 0
+            ? this._guardRecommendedActions(this._lastRecommendedActions)
+            : this._guardRecommendedActions((Array.isArray(fallbackLabels) ? fallbackLabels : [])
+                .map((label, index) => ({
+                id: `fallback-${index + 1}`,
+                label: String(label || '').trim(),
+                priority: index + 1,
+                eligible: true,
+                withinScope: true,
+            }))
+                .filter((action) => action.label.length > 0));
+        const blocked = sourceActions.filter((a) => (a.blockers?.length ?? 0) > 0);
+        if (blocked.length > 0) {
+            await this._postRecommendedActionBlockedMessage('Do all', blocked.flatMap((a) => a.blockers ?? []));
+            return;
+        }
+        const runnable = sourceActions.filter(autonomy_js_1.isRecommendedActionRunnable);
+        const liveLabels = runnable
             .map((a) => a.label)
             .filter((label) => typeof label === 'string' && label.trim().length > 0);
-        const labels = liveLabels.length > 0
-            ? liveLabels
-            : (Array.isArray(fallbackLabels) ? fallbackLabels.map((label) => String(label || '').trim()).filter(Boolean) : []);
+        const labels = liveLabels;
         if (labels.length === 0)
             return;
         // Prime every tool binding in the batch so the combined follow-up turn
         // has them all whitelisted.
-        for (const a of eligible) {
+        for (const a of runnable) {
             if (a.tool)
                 this._primedTools.add(a.tool);
         }
@@ -3780,6 +3909,7 @@ class ChatPanel {
             filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
             durationMs: Math.max(0, Math.floor(call.durationMs)),
             status: call.isError ? 'failed' : 'completed',
+            provenance: 'audit',
         };
     }
     _reconcileCliAuditToolTrace(runId, classifiedCalls) {
@@ -3796,6 +3926,38 @@ class ChatPanel {
                 this._lastToolTrace.push(authoritativeEntry);
             }
         }
+    }
+    _appendCodexTranscriptWitnessToolTrace(runId, witnesses) {
+        if (!witnesses || witnesses.length === 0)
+            return;
+        for (const witness of witnesses) {
+            const key = ChatPanel._toolWitnessDedupKey(runId, witness);
+            if (this._liveToolCallsSeen.has(key))
+                continue;
+            const entry = this._toolTraceEntryFromCodexWitness(witness);
+            this._liveToolCallsSeen.set(key, this._lastToolTrace.length);
+            this._lastToolTrace.push(entry);
+            void this.postMessage({
+                type: 'tool-progress',
+                tool: entry.tool,
+                message: `${entry.tool} ${entry.status === 'failed' ? 'failed' : 'observed'} (transcript witness)`,
+            });
+        }
+    }
+    _toolTraceEntryFromCodexWitness(witness) {
+        const displayTool = `${witness.server}:${witness.tool}`;
+        const status = witness.status === 'completed' || witness.status === 'unknown'
+            ? 'completed'
+            : 'failed';
+        const detail = witness.detail?.trim();
+        return {
+            tool: displayTool,
+            argsSummary: detail ? `transcript witness: ${detail}` : `transcript witness: ${witness.status}`,
+            filesAffected: [],
+            durationMs: 0,
+            status,
+            provenance: 'transcript-witness',
+        };
     }
     /**
      * Build a ToolTraceEntry from a raw audit record (no classification
@@ -3824,6 +3986,7 @@ class ChatPanel {
             filesAffected: this._extractFilesAffected(call.tool, parsedArgs, call.resultJson),
             durationMs: Math.max(0, Math.floor(call.durationMs)),
             status: call.isError ? 'failed' : 'completed',
+            provenance: 'audit',
         };
     }
     /**
@@ -3833,6 +3996,16 @@ class ChatPanel {
      */
     static _toolCallDedupKey(runId, server, tool, startedAtEpochMs) {
         return `${runId}:${server}:${tool}:${startedAtEpochMs}`;
+    }
+    static _toolWitnessDedupKey(runId, witness) {
+        return [
+            runId,
+            'transcript-witness',
+            witness.server,
+            witness.tool,
+            witness.status,
+            witness.detail ?? '',
+        ].join(':');
     }
     async _verifyEntities(names) {
         if (!this.mcpClient?.isConnected || !Array.isArray(names) || names.length === 0) {
@@ -4254,7 +4427,8 @@ class ChatPanel {
         head.innerHTML = '<span>' + escapeHtml(entry.tool || 'tool') + '</span><span>' + escapeHtml(entry.status || '') + '</span>';
         const meta = document.createElement('div');
         meta.className = 'tool-trace-meta';
-        meta.textContent = (entry.argsSummary || '') + (entry.filesAffected?.length ? ' • ' + entry.filesAffected.join(', ') : '') + (Number.isFinite(entry.durationMs) ? ' • ' + entry.durationMs + 'ms' : '');
+        const provenance = entry.provenance === 'transcript-witness' ? 'transcript witness' : '';
+        meta.textContent = [entry.argsSummary || '', provenance, ...(entry.filesAffected?.length ? [entry.filesAffected.join(', ')] : []), ...(Number.isFinite(entry.durationMs) ? [entry.durationMs + 'ms'] : [])].filter(Boolean).join(' • ');
         item.appendChild(head);
         item.appendChild(meta);
         list.appendChild(item);
@@ -4266,9 +4440,13 @@ class ChatPanel {
     function renderProvenance(message, trace) {
       const div = document.createElement('div');
       div.className = 'message-provenance';
-      div.textContent = trace && trace.length > 0
+      const audited = Array.isArray(trace) && trace.some((entry) => entry.provenance !== 'transcript-witness');
+      const witnessed = Array.isArray(trace) && trace.some((entry) => entry.provenance === 'transcript-witness');
+      div.textContent = audited
         ? 'Provenance: grounded in executed tools and rendered output.'
-        : 'Provenance: rendered output without executed tool trace.';
+        : witnessed
+          ? 'Provenance: Codex transcript reported tool attempts, but no audited DreamGraph execution was recorded.'
+          : 'Provenance: rendered output without executed tool trace.';
       return div;
     }
 
@@ -4433,7 +4611,9 @@ class ChatPanel {
             // index-based reassignment from steps[] would mis-align after
             // skipped entries. Only set Do-all label list, which is whole-list.
             const steps = Array.isArray(obj.recommended_next_steps) ? obj.recommended_next_steps : [];
-            const labels = steps.map((step) => (step && typeof step.label === 'string' ? step.label : '')).filter(Boolean);
+            const labels = Array.from(rendered.querySelectorAll('.dg-envelope-action:not(:disabled)'))
+              .map((btn) => btn.getAttribute('data-action-label') || '')
+              .filter(Boolean);
             const doAllButton = rendered.querySelector('.dg-envelope-do-all');
             if (doAllButton && labels.length > 0) {
               doAllButton.setAttribute('data-action-labels', JSON.stringify(labels));
@@ -4476,6 +4656,7 @@ class ChatPanel {
         node.querySelectorAll('.dg-envelope-action:not([data-wired])').forEach((btn) => {
           btn.setAttribute('data-wired', '1');
           btn.addEventListener('click', () => {
+            if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
             const actionId = btn.getAttribute('data-action-id') || '';
             const label = btn.getAttribute('data-action-label') || '';
             if (actionId || label) {
@@ -4486,6 +4667,7 @@ class ChatPanel {
         node.querySelectorAll('.dg-envelope-do-all:not([data-wired])').forEach((btn) => {
           btn.setAttribute('data-wired', '1');
           btn.addEventListener('click', () => {
+            if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
             let labels = [];
             const raw = btn.getAttribute('data-action-labels') || '[]';
             try {
@@ -5124,7 +5306,15 @@ class ChatPanel {
               const chip = document.createElement('button');
               chip.className = 'action-chip';
               chip.textContent = action.label;
-              if (action.rationale) chip.title = action.rationale;
+              const blockers = Array.isArray(action.blockers) ? action.blockers : [];
+              if (blockers.length > 0 || action.eligible === false || action.withinScope === false) {
+                chip.disabled = true;
+                chip.setAttribute('aria-disabled', 'true');
+                chip.classList.add('action-chip-disabled');
+                chip.title = blockers.length > 0 ? blockers.map((b) => b.label).join('\\n') : 'This suggested action is not runnable from the current context.';
+              } else if (action.rationale) {
+                chip.title = action.rationale;
+              }
               chip.addEventListener('click', () => vscode.postMessage({ type: 'selectRecommendedAction', actionId: action.id }));
               wrapper.appendChild(chip);
             }
@@ -5164,12 +5354,15 @@ class ChatPanel {
             progress_status: env.progress_status,
             uncertainty: env.uncertainty,
             recommended_next_steps: steps,
+            doAllEligible: env.doAllEligible,
           });
           // Renderer now emits data-action-id/label directly per surviving
           // chip and skips dead "Step N" entries, so an index walk over the
           // raw steps[] array would mis-align after any drops. Only the
           // Do-all whole-list label set is patched here.
-          const labels = steps.map((s) => (s && typeof s.label === 'string' ? s.label : '')).filter(Boolean);
+          const labels = Array.from(host.querySelectorAll('.dg-envelope-action:not(:disabled)'))
+            .map((btn) => btn.getAttribute('data-action-label') || '')
+            .filter(Boolean);
           const doAllBtn = host.querySelector('.dg-envelope-do-all');
           if (doAllBtn) {
             if (env.doAllEligible && labels.length > 1) {
@@ -5182,6 +5375,7 @@ class ChatPanel {
           host.querySelectorAll('.dg-envelope-action:not([data-wired])').forEach((btn) => {
             btn.setAttribute('data-wired', '1');
             btn.addEventListener('click', () => {
+              if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
               const actionId = btn.getAttribute('data-action-id') || '';
               const label = btn.getAttribute('data-action-label') || '';
               if (actionId || label) {
@@ -5192,6 +5386,7 @@ class ChatPanel {
           host.querySelectorAll('.dg-envelope-do-all:not([data-wired])').forEach((btn) => {
             btn.setAttribute('data-wired', '1');
             btn.addEventListener('click', () => {
+              if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
               let labelsOut = [];
               try {
                 const parsed = JSON.parse(btn.getAttribute('data-action-labels') || '[]');

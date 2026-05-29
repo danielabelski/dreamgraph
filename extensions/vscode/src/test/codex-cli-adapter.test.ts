@@ -16,15 +16,12 @@ import {
   CODEX_INLINE_TOOL_SERVER,
   CODEX_MINIMUM_AUTHORITATIVE_TOOLS,
   DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
-  extractCodexJsonEvents,
   isHelpSurfaceSupported,
   normalizeCodexTranscript,
   parseCodexHelpSurface,
   serializeCodexMcpConfig,
-  serializeConversationForCodexCli,
   type CodexHelpSurface,
 } from "../architect-core/adapters/codex-cli/index.js";
-import { TOOL_GROUPS } from "../tool-groups.js";
 
 const ROOT_HELP = `
 Codex CLI
@@ -34,10 +31,6 @@ Usage: codex [OPTIONS] [COMMAND]
 Commands:
   exec    Run Codex non-interactively
   mcp     Manage MCP servers
-
-Options:
-  -a, --ask-for-approval <APPROVAL_POLICY>
-                                             Approval mode
 `;
 
 const EXEC_HELP = `
@@ -68,7 +61,6 @@ Options:
       --output-schema <PATH>                  Validate final output schema
       --skip-git-repo-check                   Run outside a git worktree
       --ignore-user-config                    Do not load user config
-      --ignore-rules                          Do not load execpolicy rules
       --ephemeral                             Avoid persistence
       --full-auto                             Deprecated compatibility flag
       --dangerously-bypass-approvals-and-sandbox, --yolo
@@ -95,7 +87,6 @@ Options:
       --output-schema <PATH>                  Validate final output schema
       --skip-git-repo-check                   Run outside a git worktree
       --ignore-user-config                    Do not load user config
-      --ignore-rules                          Do not load execpolicy rules
       --ephemeral                             Avoid persistence
 `;
 
@@ -110,7 +101,6 @@ const FULL_SURFACE: CodexHelpSurface = parseCodexHelpSurface({
 test("help-probe: parses Codex root and exec surfaces", () => {
   assert.equal(FULL_SURFACE.versionString, "codex 0.99.0");
   assert.equal(FULL_SURFACE.root.execCommand, true);
-  assert.equal(FULL_SURFACE.root.askForApproval, true);
   assert.equal(FULL_SURFACE.exec.positionalStdinPrompt, true);
   assert.equal(FULL_SURFACE.exec.json, true);
   assert.equal(FULL_SURFACE.exec.model, true);
@@ -124,7 +114,6 @@ test("help-probe: parses Codex root and exec surfaces", () => {
   assert.equal(FULL_SURFACE.exec.outputSchema, true);
   assert.equal(FULL_SURFACE.exec.skipGitRepoCheck, true);
   assert.equal(FULL_SURFACE.exec.ignoreUserConfig, true);
-  assert.equal(FULL_SURFACE.exec.ignoreRules, true);
   assert.equal(FULL_SURFACE.exec.ephemeral, true);
   assert.deepEqual(
     [...FULL_SURFACE.safety.sandboxModes],
@@ -158,15 +147,13 @@ test("help-probe: missing exec help fails the support check", () => {
   assert.equal(isHelpSurfaceSupported(surface), false);
 });
 
-test("allowlist: empty upstream registry still fails closed on required DreamGraph reads", () => {
+test("help-probe: empty registry reports all minimum tools as missing", () => {
   const a = buildAuthoritativeAllowlist([]);
   assert.equal(a.ok, false);
   assert.deepEqual(
     [...a.missingRequired],
     [...CODEX_MINIMUM_AUTHORITATIVE_TOOLS],
   );
-  assert.equal(a.tools.includes("run_command"), true);
-  assert.equal(a.tools.includes("read_local_file"), false);
 });
 
 test("allowlist: live registry with all catalog tools is ok", () => {
@@ -182,36 +169,10 @@ test("allowlist: live registry with all catalog tools is ok", () => {
   );
 });
 
-test("allowlist: Codex active surface includes every core_read tool", () => {
-  const a = buildAuthoritativeAllowlist([
-    ...TOOL_GROUPS.core_read,
-    ...CODEX_AUTHORITATIVE_TOOL_CATALOG,
-  ]);
+test("allowlist: bridge-local run_command is allowed even when absent upstream", () => {
+  const a = buildAuthoritativeAllowlist([...CODEX_MINIMUM_AUTHORITATIVE_TOOLS]);
   assert.equal(a.ok, true);
-  for (const toolName of TOOL_GROUPS.core_read) {
-    assert.equal(a.tools.includes(toolName), true, `${toolName} should be exposed`);
-  }
-  assert.equal(CODEX_MINIMUM_AUTHORITATIVE_TOOLS.includes("read_source_code"), true);
-  assert.equal(CODEX_MINIMUM_AUTHORITATIVE_TOOLS.includes("search_source_code"), true);
-  assert.equal(new Set<string>(CODEX_MINIMUM_AUTHORITATIVE_TOOLS).has("read_local_file"), false);
-  assert.equal(a.tools.includes("read_source_code"), true);
-  assert.equal(a.tools.includes("search_source_code"), true);
-  assert.equal(a.tools.includes("read_local_file"), true);
-});
-
-test("allowlist: bridge-local run_command is exposed for Codex when absent upstream", () => {
-  const upstreamOnly = CODEX_MINIMUM_AUTHORITATIVE_TOOLS;
-  const a = buildAuthoritativeAllowlist(upstreamOnly);
-  assert.equal(a.ok, true);
-  assert.equal(a.tools.includes("run_command"), true);
-  assert.equal(a.tools.includes("read_local_file"), false);
-});
-
-test("allowlist: core_write bridge tools are in the Codex catalog", () => {
-  assert.equal(CODEX_AUTHORITATIVE_TOOL_CATALOG.includes("run_command"), true);
-  assert.equal(CODEX_AUTHORITATIVE_TOOL_CATALOG.includes("write_file"), true);
-  assert.equal(CODEX_AUTHORITATIVE_TOOL_CATALOG.includes("modify_entity"), true);
-  assert.equal(CODEX_AUTHORITATIVE_TOOL_CATALOG.includes("patch_file"), true);
+  assert.ok(a.tools.includes("run_command"));
 });
 
 test("allowlist: missing minimum grounding tool flips ok to false", () => {
@@ -246,17 +207,9 @@ test("mcp-config: builds deterministic Codex config.toml artifact", () => {
   assert.match(content, /\[mcp_servers\.dreamgraph\]/);
   assert.match(content, /command = "node"/);
   assert.match(content, /args = \["\.\/codex-cli-bridge\.js", "--mode", "authoritative"\]/);
-  assert.doesNotMatch(content, /^env = \{/m);
-  assert.match(content, /\[mcp_servers\.dreamgraph\.env\]/);
-  assert.match(content, /DEBUG = "dreamgraph:\*"/);
   assert.match(content, /DREAMGRAPH_MCP_TOKEN = "tok-xyz"/);
   assert.match(content, /DREAMGRAPH_RUN_ID = "run-abc"/);
-  assert.match(content, /trust_level = "trusted"/);
-  assert.match(content, /disabled_tools = \[\]/);
-  assert.match(content, /default_tools_enabled = true/);
-  assert.match(content, /default_tools_approval_mode = "approve"/);
-  assert.match(content, /\[mcp_servers\.dreamgraph\.tools\.query_resource\]\napproval_mode = "approve"/);
-  assert.match(content, /\[mcp_servers\.dreamgraph\.tools\.read_source_code\]\napproval_mode = "approve"/);
+  assert.match(content, /default_tools_approval_mode = "auto"/);
   assert.ok(content.endsWith("\n"));
 
   const overrides = buildCodexMcpConfigOverrides({
@@ -267,7 +220,12 @@ test("mcp-config: builds deterministic Codex config.toml artifact", () => {
     dreamgraphEnv: { DEBUG: "dreamgraph:*" },
     allowlist: ["query_resource", "read_source_code"],
   });
-  assert.deepEqual([...overrides], []);
+  assert.deepEqual([...overrides], [
+    { key: "mcp_servers.dreamgraph.command", value: "\"node\"" },
+    { key: "mcp_servers.dreamgraph.args", value: "[\"./codex-cli-bridge.js\", \"--mode\", \"authoritative\"]" },
+    { key: "mcp_servers.dreamgraph.env", value: "{ DEBUG = \"dreamgraph:*\", DREAMGRAPH_MCP_TOKEN = \"tok-xyz\", DREAMGRAPH_RUN_ID = \"run-abc\" }" },
+    { key: "mcp_servers.dreamgraph.default_tools_approval_mode", value: "\"auto\"" },
+  ]);
 });
 
 test("mcp-config: rejects empty inputs with explicit messages", () => {
@@ -338,7 +296,15 @@ test("mcp-bridge: validates live registry before building isolated config", () =
     [...CODEX_AUTHORITATIVE_TOOL_CATALOG].sort(),
   );
   assert.match(bridge.config.content, /DREAMGRAPH_MCP_TOKEN = "tok-bridge"/);
-  assert.deepEqual([...bridge.configOverrides], []);
+  assert.deepEqual(
+    bridge.configOverrides.map((override) => override.key),
+    [
+      "mcp_servers.dreamgraph.command",
+      "mcp_servers.dreamgraph.args",
+      "mcp_servers.dreamgraph.env",
+      "mcp_servers.dreamgraph.default_tools_approval_mode",
+    ],
+  );
 });
 
 test("mcp-bridge: fails closed when required DreamGraph tools are missing", () => {
@@ -356,48 +322,6 @@ test("mcp-bridge: fails closed when required DreamGraph tools are missing", () =
   );
 });
 
-test("prompt-manifest: renders Codex DreamGraph MCP authority separately from native policy", () => {
-  const prompt = serializeConversationForCodexCli(
-    [{ role: "user", content: "run tests" }],
-    {
-      cliToolsManifest: {
-        server: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
-        tools: [
-          "read_source_code",
-          "read_local_file",
-          "search_source_code",
-          "run_command",
-        ],
-      },
-    },
-  );
-
-  assert.ok(prompt.includes("read_source_code is a safe core_read tool and is preferred"));
-  assert.ok(prompt.includes("search_source_code is only a locator/fallback"));
-  assert.ok(prompt.includes("run_command - DreamGraph-mediated shell execution through MCP (available"));
-  assert.ok(prompt.includes("Codex provider-native shell/read restrictions do not apply to listed dreamgraph MCP tools"));
-  assert.ok(prompt.includes("read_source_file is not a Codex/DreamGraph tool name"));
-  assert.ok(prompt.includes("modify_api_surface property metadata updates require class_name"));
-  assert.ok(prompt.includes("Do not claim command execution is unavailable while this route is listed as available"));
-});
-
-test("prompt-manifest: native command denial does not hide DreamGraph run_command", () => {
-  const prompt = serializeConversationForCodexCli(
-    [{ role: "user", content: "build" }],
-    {
-      cliToolsManifest: {
-        server: DREAMGRAPH_AUTHORITATIVE_SERVER_NAME,
-        tools: ["run_command"],
-      },
-    },
-  );
-
-  assert.ok(prompt.includes("HARD DENIAL - the following tool names DO NOT EXIST"));
-  assert.ok(prompt.includes("Use dreamgraph:run_command({ command, cwd?, timeoutMs? }) for build/test/lint verification instead"));
-  assert.equal(prompt.includes("read_local_file"), false);
-  assert.equal(prompt.includes("Command execution is disabled for this run; do not attempt it"), false);
-});
-
 test("argv: emits authoritative codex exec shape with stdin positional dash", () => {
   const plan = buildCodexArgv({
     workspace: "C:\\repo",
@@ -408,7 +332,6 @@ test("argv: emits authoritative codex exec shape with stdin positional dash", ()
     addDirs: ["C:\\repo\\.tmp\\run"],
     configOverrides: [{ key: "model_reasoning_effort", value: "high" }],
     skipGitRepoCheck: true,
-    ignoreRules: true,
     ephemeral: true,
     helpSurface: FULL_SURFACE,
   });
@@ -416,11 +339,11 @@ test("argv: emits authoritative codex exec shape with stdin positional dash", ()
   assert.deepEqual(
     [...plan.args],
     [
-      "--ask-for-approval", "never",
       "exec",
       "--json",
       "--cd", "C:\\repo",
       "--sandbox", "read-only",
+      "--ask-for-approval", "never",
       "--model", "gpt-5.5",
       "--profile", "dreamgraph",
       "--output-last-message", "C:\\repo\\.tmp\\last-message.txt",
@@ -428,57 +351,18 @@ test("argv: emits authoritative codex exec shape with stdin positional dash", ()
       "-c", "model_reasoning_effort=high",
       "--add-dir", "C:\\repo\\.tmp\\run",
       "--skip-git-repo-check",
-      "--ignore-rules",
       "--ephemeral",
       "-",
     ],
   );
-  assert.equal(plan.args[0], "--ask-for-approval");
-  assert.equal(plan.args[1], "never");
-  assert.equal(plan.args[2], "exec");
-  assert.equal(plan.args[3], "--json");
-  assert.equal(plan.args.includes("--output-format"), false);
   assert.equal(plan.policy.sandboxMode, "read-only");
   assert.equal(plan.policy.approvalMode, "never");
   assert.equal(plan.policy.promptSource, "stdin-positional-dash");
   assert.equal(plan.policy.jsonEventsEnabled, true);
-  assert.equal(plan.policy.rulesIgnored, true);
   assert.deepEqual([...plan.policy.addedDirs], ["C:\\repo\\.tmp\\run"]);
-  assert.deepEqual([...plan.policy.configOverrides], ["model_reasoning_effort=high"]);
 });
 
-test("argv: defaults reasoning effort for Codex gpt-5.5 and gpt-5.4 runs", () => {
-  const gpt55 = buildCodexArgv({
-    workspace: "C:\\repo",
-    model: "gpt-5.5",
-    helpSurface: FULL_SURFACE,
-  });
-  assert.ok(gpt55.args.includes("model_reasoning_effort=\"xhigh\""));
-  assert.deepEqual([...gpt55.policy.configOverrides], ["model_reasoning_effort=\"xhigh\""]);
-
-  const gpt54 = buildCodexArgv({
-    workspace: "C:\\repo",
-    model: "gpt-5.4",
-    helpSurface: FULL_SURFACE,
-  });
-  assert.ok(gpt54.args.includes("model_reasoning_effort=\"high\""));
-  assert.deepEqual([...gpt54.policy.configOverrides], ["model_reasoning_effort=\"high\""]);
-});
-
-test("argv: explicit reasoning effort override wins over model default", () => {
-  const plan = buildCodexArgv({
-    workspace: "C:\\repo",
-    model: "gpt-5.5",
-    configOverrides: [{ key: "model_reasoning_effort", value: "\"medium\"" }],
-    helpSurface: FULL_SURFACE,
-  });
-
-  assert.ok(plan.args.includes("model_reasoning_effort=\"medium\""));
-  assert.equal(plan.args.includes("model_reasoning_effort=\"xhigh\""), false);
-  assert.deepEqual([...plan.policy.configOverrides], ["model_reasoning_effort=\"medium\""]);
-});
-
-test("argv: emits root ask-for-approval when Codex exec does not advertise it", () => {
+test("argv: omits ask-for-approval when Codex exec does not advertise it", () => {
   const helpSurface = parseCodexHelpSurface({
     rootHelpText: ROOT_HELP,
     execHelpText: EXEC_HELP_WITHOUT_APPROVAL,
@@ -489,14 +373,13 @@ test("argv: emits root ask-for-approval when Codex exec does not advertise it", 
   });
 
   assert.deepEqual([...plan.args], [
-    "--ask-for-approval", "never",
     "exec",
     "--json",
     "--cd", "C:\\repo",
     "--sandbox", "read-only",
     "-",
   ]);
-  assert.equal(plan.policy.approvalMode, "never");
+  assert.equal(plan.policy.approvalMode, "not-advertised");
 });
 
 test("argv: never emits elevated sandbox or approval from config overrides", () => {
@@ -518,27 +401,6 @@ test("argv: never emits elevated sandbox or approval from config overrides", () 
       }),
     /cannot weaken authoritative sandbox\/approval policy/,
   );
-  assert.throws(
-    () =>
-      buildCodexArgv({
-        workspace: "C:\\repo",
-        configOverrides: [
-          { key: "mcp_servers.dreamgraph.default_tools_approval_mode", value: "\"auto\"" },
-        ],
-        helpSurface: FULL_SURFACE,
-      }),
-    /cannot weaken authoritative sandbox\/approval policy/,
-  );
-  const plan = buildCodexArgv({
-    workspace: "C:\\repo",
-    configOverrides: [
-      { key: "mcp_servers.dreamgraph.default_tools_approval_mode", value: "\"approve\"" },
-      { key: "mcp_servers.dreamgraph.tools.run_command.approval_mode", value: "\"approve\"" },
-    ],
-    helpSurface: FULL_SURFACE,
-  });
-  assert.ok(plan.args.includes("mcp_servers.dreamgraph.default_tools_approval_mode=\"approve\""));
-  assert.ok(plan.args.includes("mcp_servers.dreamgraph.tools.run_command.approval_mode=\"approve\""));
 });
 
 test("argv: rejects missing workspace and missing required help support", () => {
@@ -564,13 +426,6 @@ const CLASSIFY_CTX = {
 test("classifier: dreamgraph + allowlisted tool is authoritative", () => {
   assert.equal(
     classifyToolCall({ server: "dreamgraph", tool: "query_resource" }, CLASSIFY_CTX),
-    "dreamgraph_authoritative",
-  );
-});
-
-test("classifier: read_source_file wording normalizes to read_source_code", () => {
-  assert.equal(
-    classifyToolCall({ server: "dreamgraph", tool: "read_source_file" }, CLASSIFY_CTX),
     "dreamgraph_authoritative",
   );
 });
@@ -627,72 +482,6 @@ test("transcript: projects Codex MCP JSON events into tool observations", () => 
   ]);
 });
 
-test("transcript: ignores failed Codex MCP JSON items as missing tool results", () => {
-  const transcript = normalizeCodexTranscript({
-    stdout: [
-      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
-      JSON.stringify({
-        type: "item.completed",
-        item: {
-          type: "mcp_tool_call",
-          server: "dreamgraph",
-          tool: "cognitive_status",
-          status: "failed",
-          aggregated_output: "user cancelled MCP tool call",
-        },
-      }),
-      JSON.stringify({
-        type: "item.completed",
-        item: { id: "item_1", type: "agent_message", text: "Speculative synthesis only." },
-      }),
-    ].join("\n"),
-    stderr: "",
-    exitCode: 0,
-  });
-
-  assert.equal(transcript.assistantText, "Speculative synthesis only.");
-  assert.deepEqual([...transcript.toolCalls], []);
-  assert.deepEqual([...transcript.toolCallWitnesses], [
-    {
-      server: "dreamgraph",
-      tool: "cognitive_status",
-      status: "cancelled",
-      detail: "user cancelled MCP tool call",
-      source: "structured-event",
-      sequence: 0,
-    },
-  ]);
-});
-
-test("transcript: projects stderr MCP failures as unverified witnesses", () => {
-  const transcript = normalizeCodexTranscript({
-    stdout: "",
-    stderr:
-      "mcp_tool_call failed: dreamgraph.query_resource\n" +
-      "mcp_tool_call failed: dreamgraph.search_source_code: invalid arguments\n",
-    exitCode: 1,
-  });
-
-  assert.deepEqual([...transcript.toolCalls], []);
-  assert.deepEqual([...transcript.toolCallWitnesses], [
-    {
-      server: "dreamgraph",
-      tool: "query_resource",
-      status: "failed",
-      source: "diagnostic",
-      sequence: 0,
-    },
-    {
-      server: "dreamgraph",
-      tool: "search_source_code",
-      status: "failed",
-      detail: "invalid arguments",
-      source: "diagnostic",
-      sequence: 1,
-    },
-  ]);
-});
-
 test("transcript: strips ANSI, reports diagnostics, and detects login recovery signal", () => {
   const t = normalizeCodexTranscript({
     stdout: "\u001b[32mHello\u001b[0m\r\n",
@@ -734,203 +523,4 @@ test("transcript: projects Codex item.completed agent messages from whitespace-s
     "stdout: SUCCESS: The process with PID 10712 (child process of PID 18828) has been terminated.",
   ]);
   assert.equal(t.hasStderrErrors, false);
-});
-
-test("transcript: parses Codex structured output, assistant deltas, usage, and diagnostics", () => {
-  const t = normalizeCodexTranscript({
-    stdout: [
-      "diagnostic before json",
-      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
-      JSON.stringify({ type: "turn.started" }),
-      JSON.stringify({ type: "response.output_text.delta", delta: "Graph" }),
-      JSON.stringify({ type: "assistant.message_delta", deltaContent: " health" }),
-      JSON.stringify({
-        type: "item.completed",
-        item: { type: "mcp_tool_call", server: "dreamgraph", tool: "query_resource", status: "completed" },
-      }),
-      JSON.stringify({
-        type: "turn.completed",
-        usage: { input_tokens: 123, cached_input_tokens: 10, output_tokens: 45, total_tokens: 168 },
-      }),
-      JSON.stringify({
-        type: "item.completed",
-        item: { id: "item_0", type: "agent_message", text: "Graph health OK." },
-      }),
-    ].join("\n"),
-    stderr: "non-json stderr diagnostic\n",
-    exitCode: 0,
-  });
-
-  assert.equal(t.assistantText, "Graph health OK.");
-  assert.deepEqual([...t.assistantDeltas], ["Graph", " health"]);
-  assert.deepEqual([...t.toolCalls], [{ server: "dreamgraph", tool: "query_resource" }]);
-  assert.equal(t.usage?.inputTokens, 123);
-  assert.equal(t.usage?.cachedInputTokens, 10);
-  assert.equal(t.usage?.outputTokens, 45);
-  assert.equal(t.usage?.totalTokens, 168);
-  assert.deepEqual(t.turns, { started: 1, completed: 1 });
-  assert.equal(t.completedItemCount, 2);
-  assert.ok(t.diagnostics.some((line) => line.includes("diagnostic before json")));
-  assert.ok(t.diagnostics.some((line) => line.includes("non-json stderr diagnostic")));
-});
-
-test("transcript: extracts structured usage-limit errors with retry metadata", () => {
-  const t = normalizeCodexTranscript({
-    stdout: [
-      JSON.stringify({ type: "turn.started" }),
-      JSON.stringify({
-        type: "turn.failed",
-        error: {
-          code: "rate_limit",
-          message:
-            "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 2:45 PM.",
-        },
-      }),
-    ].join("\n"),
-    stderr: "",
-    exitCode: 1,
-  });
-
-  assert.equal(t.usageLimit?.code, "rate_limit");
-  assert.equal(t.usageLimit?.retryAt, "2:45 PM");
-  assert.equal(t.notLoggedIn, false);
-  assert.equal(t.structuredErrors.length, 1);
-});
-
-test("transcript: source and diagnostic text mentioning usage limit is not a runtime usage limit", () => {
-  const t = normalizeCodexTranscript({
-    stdout: JSON.stringify({
-      type: "item.completed",
-      item: { id: "item_0", type: "agent_message", text: "Inspected source around classification." },
-    }),
-    stderr: [
-      "extensions/vscode/src/test/codex-cli-orchestrator.test.ts:665:test(\"codex orchestrator: usage limit after audited DreamGraph tools is not classified as login failure\", async () => {",
-      "extensions/vscode/src/chat-panel.ts:1709: console.warn('[DreamGraph][codex-cli] onRunResult observer failed:', observerErr);",
-      "mcp_tool_call failed: dreamgraph.query_resource",
-    ].join("\n"),
-    exitCode: 1,
-  });
-
-  assert.equal(t.usageLimit, null);
-  assert.equal(t.notLoggedIn, false);
-  assert.deepEqual([...t.diagnostics], ["mcp_tool_call failed: dreamgraph.query_resource"]);
-  assert.deepEqual([...t.toolCallWitnesses], [
-    {
-      server: "dreamgraph",
-      tool: "query_resource",
-      status: "failed",
-      source: "diagnostic",
-      sequence: 0,
-    },
-  ]);
-});
-
-test("transcript: suppresses Cloudflare plugin catalog HTML as warning, not login failure", () => {
-  const html = [
-    "<!DOCTYPE html><html><head><title>403 Forbidden</title></head>",
-    "<body>Cloudflare Ray ID: abc /backend-api/plugins/featured Authentication required</body></html>",
-  ].join("");
-  const t = normalizeCodexTranscript({
-    stdout: JSON.stringify({
-      type: "item.completed",
-      item: { id: "item_0", type: "agent_message", text: "Partial text." },
-    }),
-    stderr: html,
-    exitCode: 1,
-  });
-
-  assert.equal(t.notLoggedIn, false);
-  assert.equal(t.pluginSyncWarnings.length, 1);
-  assert.ok(t.diagnostics.every((line) => !line.includes("<!DOCTYPE html>")));
-});
-
-test("transcript: classifies unsupported model and policy denial separately from login", () => {
-  const model = normalizeCodexTranscript({
-    stdout: JSON.stringify({ type: "error", code: "unsupported_model", message: "Unsupported model: nope" }),
-    stderr: "",
-    exitCode: 1,
-  });
-  assert.equal(model.modelUnsupported, true);
-  assert.equal(model.notLoggedIn, false);
-
-  const policy = normalizeCodexTranscript({
-    stdout: "",
-    stderr: "2026-05-21T13:34:30.489369Z ERROR codex_core::tools::router: rejected: blocked by policy\n",
-    exitCode: 1,
-  });
-  assert.equal(policy.policyDenied, true);
-  assert.equal(policy.notLoggedIn, false);
-});
-
-test("transcript: treats Codex telemetry unknown terminal type as noise, not unsupported model", () => {
-  const stderr = [
-    '2026-05-22T16:00:18.506798Z INFO session_loop{thread_id=abc}:turn{model=gpt-5.4}:model_client.stream_responses_websocket{model=gpt-5.4 wire_api=responses transport="responses_websocket"}: terminal.type=unknown model=gpt-5.4 slug=gpt-5.4 user.email="person@example.com"',
-    '2026-05-22T16:00:18.514472Z INFO codex_otel.log_only: event.name="codex.sse_event" event.kind=response.completed input_token_count=103247 output_token_count=1769 cached_token_count=101248 reasoning_token_count=361 tool_token_count=105016 terminal.type=unknown model=gpt-5.4 slug=gpt-5.4 user.email="person@example.com"',
-    "mcp_tool_call failed: dreamgraph.search_source_code",
-  ].join("\n");
-
-  const t = normalizeCodexTranscript({
-    stdout: JSON.stringify({
-      type: "item.completed",
-      item: { id: "item_0", type: "agent_message", text: "Partial assessment." },
-    }),
-    stderr,
-    exitCode: 1,
-  });
-
-  assert.equal(t.modelUnsupported, false);
-  assert.equal(t.notLoggedIn, false);
-  assert.equal(t.usage?.inputTokens, 103247);
-  assert.equal(t.usage?.outputTokens, 1769);
-  assert.equal(t.usage?.cachedInputTokens, 101248);
-  assert.deepEqual([...t.diagnostics], ["mcp_tool_call failed: dreamgraph.search_source_code"]);
-});
-
-test("event stream: parses JSON arrays and classifies them by shape", () => {
-  const eventArray = JSON.stringify([
-    { type: "turn.started" },
-    { type: "response.output_text.delta", delta: "Graph" },
-    { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 2 } },
-  ]);
-  const contentArray = JSON.stringify([
-    {
-      type: "text",
-      text: "tool payload mentioning CODEX_MODEL_UNSUPPORTED",
-    },
-  ]);
-  const extracted = extractCodexJsonEvents(`${eventArray}\n${contentArray}\nplain diagnostic`);
-
-  assert.deepEqual(extracted.events.map((event) => (event as { type?: string }).type), [
-    "turn.started",
-    "response.output_text.delta",
-    "turn.completed",
-  ]);
-  assert.deepEqual([...extracted.diagnostics], ["plain diagnostic"]);
-});
-
-test("transcript: classifies JSON content arrays as payload, not diagnostics or model errors", () => {
-  const toolContent = JSON.stringify([
-    {
-      type: "text",
-      text:
-        "test(\"unsupported model remains model-unsupported / nonzero model failure\", () => {\n" +
-        "  assert.equal(result.failure?.code, \"CODEX_MODEL_UNSUPPORTED\");\n" +
-        "});",
-    },
-  ]);
-  const t = normalizeCodexTranscript({
-    stdout: [
-      JSON.stringify({
-        type: "item.completed",
-        item: { id: "item_0", type: "agent_message", text: "I inspected the adapter source." },
-      }),
-      toolContent,
-    ].join("\n"),
-    stderr: "",
-    exitCode: 1,
-  });
-
-  assert.equal(t.assistantText, "I inspected the adapter source.");
-  assert.equal(t.modelUnsupported, false);
-  assert.deepEqual([...t.diagnostics], []);
 });

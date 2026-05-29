@@ -33,6 +33,10 @@
     "docs:architecture-tree": "node scripts/generate-architecture-tree.mjs",
     "docs:primary-workflows": "node scripts/generate-primary-workflow-docs.mjs"
   },
+  "bundleDependencies": [
+    "@dreamgraph/host",
+    "@dreamgraph/sdk"
+  ],
   "dependencies": {
     "@dreamgraph/host": "11.0.1",
     "@dreamgraph/sdk": "11.0.1",

@@ -81,7 +81,7 @@ async function writeUiPlugin(
   );
   await writeFile(
     join(pluginDir, "index.js"),
-    `export default function activate(ctx) {
+    `export default async function activate(ctx) {
   ${registerScript}
   return {};
 }
@@ -255,12 +255,12 @@ describe("plugin UI seam (M6)", () => {
         expectedEffects: ["mutate_ui_registry"],
         capabilities: ["ui:register"],
       },
-      `ctx.ui.register({
+      `await ctx.ui.register({
         id: "examples.ui-prune.alpha",
         name: "Alpha", purpose: "a", category: "data_display",
         inputs: [], outputs: [], interactions: [],
       });
-      ctx.ui.register({
+      await ctx.ui.register({
         id: "examples.ui-prune.beta",
         name: "Beta", purpose: "b", category: "data_display",
         inputs: [], outputs: [], interactions: [],

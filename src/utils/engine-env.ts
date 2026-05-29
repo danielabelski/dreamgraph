@@ -96,6 +96,42 @@ export function writeEngineEnv(
         section: "Base LLM Defaults",
       },
       {
+        key: "DREAMGRAPH_LLM_ARCHITECT_PROVIDER",
+        defaultValue: "ollama",
+        description: "Architect chat provider override. Falls back to DREAMGRAPH_LLM_PROVIDER when unset.",
+        section: "Architect",
+      },
+      {
+        key: "DREAMGRAPH_LLM_ARCHITECT_ADAPTER",
+        defaultValue: "native_api_tool_loop",
+        description: "Architect adapter: native_api_tool_loop | codex-cli | copilot-cli | deterministic_fallback.",
+        section: "Architect",
+      },
+      {
+        key: "DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID",
+        defaultValue: "",
+        description: "Standalone Architect selected plan id restored when the daemon/browser restarts.",
+        section: "Architect",
+      },
+      {
+        key: "DREAMGRAPH_LLM_ARCHITECT_MODEL",
+        defaultValue: "qwen3:8b",
+        description: "Architect chat model override. Fallback order: Architect -> general -> Normalizer -> Dreamer.",
+        section: "Architect",
+      },
+      {
+        key: "DREAMGRAPH_LLM_ARCHITECT_TEMPERATURE",
+        defaultValue: "0.7",
+        description: "Architect chat temperature",
+        section: "Architect",
+      },
+      {
+        key: "DREAMGRAPH_LLM_ARCHITECT_MAX_TOKENS",
+        defaultValue: "4096",
+        description: "Architect chat max tokens",
+        section: "Architect",
+      },
+      {
         key: "DREAMGRAPH_LLM_DREAMER_MODEL",
         defaultValue: "qwen3:8b",
         description: "Dreamer — creative dream cycle generation",
@@ -361,6 +397,70 @@ export function writeEngineEnv(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`engine.env: failed to write ${envPath}: ${msg}`);
+  }
+}
+
+function formatEngineEnvAssignment(key: string, value: string): string {
+  if (value === "") return `# ${key}=`;
+  const needsQuotes = /[\s#"']/.test(value);
+  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `${key}=${needsQuotes ? `"${escaped}"` : value}`;
+}
+
+/**
+ * Update a small set of engine.env values without rewriting unrelated settings.
+ * Replaces active or commented KEY= lines in place and appends missing keys.
+ */
+export function updateEngineEnvValues(envPath: string, updates: Record<string, string>): void {
+  try {
+    mkdirSync(dirname(envPath), { recursive: true });
+    const existing = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
+    const lines = existing.length > 0 ? existing.split(/\r?\n/) : [
+      "# DreamGraph Engine Configuration",
+      "# Per-instance environment settings. Uncomment and edit as needed.",
+      "",
+    ];
+    const pending = new Set(Object.keys(updates));
+    const assignment = /^\s*#?\s*([A-Z_][A-Z0-9_]*)=/i;
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const match = lines[i].match(assignment);
+      const key = match?.[1];
+      if (key && pending.has(key)) {
+        lines[i] = formatEngineEnvAssignment(key, updates[key] ?? "");
+        pending.delete(key);
+      }
+    }
+
+    if (pending.size > 0) {
+      if (lines.length > 0 && lines[lines.length - 1].trim() !== "") lines.push("");
+      lines.push("# Standalone Architect selections");
+      for (const key of pending) {
+        lines.push(formatEngineEnvAssignment(key, updates[key] ?? ""));
+      }
+    }
+
+    const tmp = envPath + ".tmp";
+    let fd: number | undefined;
+    try {
+      fd = openSync(tmp, "w");
+      writeFileSync(fd, lines.join("\n"), "utf-8");
+      fdatasyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      renameSync(tmp, envPath);
+    } catch (writeErr) {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch { /* ignore */ }
+      }
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+      throw writeErr;
+    }
+    logger.info(`engine.env: updated ${Object.keys(updates).length} keys in ${envPath}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`engine.env: failed to update ${envPath}: ${msg}`);
+    throw err;
   }
 }
 

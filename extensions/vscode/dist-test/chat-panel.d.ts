@@ -257,6 +257,9 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      * live catalog so the loop never deadlocks.
      */
     private static _bindWriteToolToAnchorActions;
+    private _guardRecommendedActions;
+    private _toRecommendedActionMessage;
+    private _postRecommendedActionBlockedMessage;
     private _handleAutonomyPassComplete;
     private _runAutonomyContinuationPass;
     /**
@@ -298,6 +301,7 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      */
     private _stripStructuredEnvelope;
     private _formatStopContextBlock;
+    private _formatToolTraceEvidenceForPrompt;
     private _executeRecommendedAction;
     private _executeAllRecommendedActions;
     /** Re-exported from helpers.ts. */
@@ -369,6 +373,8 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      */
     private _toolTraceEntryFromCopilotCall;
     private _reconcileCliAuditToolTrace;
+    private _appendCodexTranscriptWitnessToolTrace;
+    private _toolTraceEntryFromCodexWitness;
     /**
      * Build a ToolTraceEntry from a raw audit record (no classification
      * available yet). Used by the live audit tail to surface tool
@@ -384,6 +390,7 @@ export declare class ChatPanel implements vscode.WebviewViewProvider, vscode.Dis
      * REPLACE provisional entries with authoritative ones.
      */
     private static _toolCallDedupKey;
+    private static _toolWitnessDedupKey;
     private _verifyEntities;
     private getHtml;
 }

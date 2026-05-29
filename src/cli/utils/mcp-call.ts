@@ -73,7 +73,7 @@ export async function mcpCallTool(
  */
 export async function mcpListTools(
   port: number,
-): Promise<Array<{ name: string; description?: string }>> {
+): Promise<Array<{ name: string; description?: string; inputSchema?: unknown }>> {
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${port}/mcp`),
   );
@@ -89,6 +89,7 @@ export async function mcpListTools(
     return result.tools.map((t) => ({
       name: t.name,
       description: t.description,
+      inputSchema: t.inputSchema,
     }));
   } finally {
     try {

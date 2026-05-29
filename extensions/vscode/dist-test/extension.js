@@ -76,7 +76,7 @@ function activate(context) {
     // VS Code may move views out of their declared container on reinstall,
     // hiding the activity bar icon. Reset once per version to fix this.
     const versionKey = "dreamgraph.lastActivatedVersion";
-    const currentVersion = "10.5.0";
+    const currentVersion = "11.0.1";
     const lastVersion = context.globalState.get(versionKey);
     if (lastVersion !== currentVersion) {
         void vscode.commands.executeCommand("workbench.action.resetViewLocations");
@@ -186,6 +186,7 @@ function activate(context) {
         ["dreamgraph.showStatus", () => (0, commands_js_1.showStatusCommand)(services)],
         ["dreamgraph.openDashboard", () => (0, commands_js_1.openDashboardCommand)(services)],
         ["dreamgraph.openExplorer", () => (0, commands_js_1.openExplorerCommand)(services)],
+        ["dreamgraph.openStandaloneArchitect", () => (0, commands_js_1.openStandaloneArchitectCommand)(services)],
         ["dreamgraph.toggleGpuMetrics", () => (0, commands_js_1.toggleGpuMetricsCommand)()],
         ["dreamgraph.restoreSidebar", () => (0, commands_js_1.restoreSidebarCommand)(services)],
         ["dreamgraph.startDaemon", () => (0, commands_js_1.startDaemonCommand)(services)],
@@ -214,7 +215,7 @@ function activate(context) {
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(chat_panel_js_1.ChatPanel.viewType, chatPanel, {
         webviewOptions: { retainContextWhenHidden: true },
     }), vscode.window.registerWebviewViewProvider(dashboard_view_js_1.DashboardViewProvider.viewType, dashboardView), changedFilesTreeView);
-    // ---- architect-v2 QUARANTINED (v10.5.0 "Renata") ----
+    // ---- architect-v2 QUARANTINED (v11.0.0 "Adaptive Future Engine") ----
     // Panel registration intentionally removed. v1 hybrid is now the canonical
     // surface. The architect-v2/ folder is retained for historical reference
     // but is not loaded.

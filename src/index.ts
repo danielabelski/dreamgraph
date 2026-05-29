@@ -252,6 +252,19 @@ async function startHTTP(port: number): Promise<void> {
       // Fall through to dashboard for HTML rendering
     }
 
+    // ---- /architect + /api/architect/* — Standalone Architect Phase 1 ----
+    if (
+      url.pathname === "/architect" ||
+      url.pathname === "/architect/" ||
+      url.pathname === "/api/architect" ||
+      url.pathname === "/api/architect/" ||
+      url.pathname.startsWith("/api/architect/")
+    ) {
+      const { handleArchitectRoute } = await import("./architect/routes.js");
+      const handled = await handleArchitectRoute(req, res, url.pathname);
+      if (handled) return;
+    }
+
     // ---- /api/* — REST API endpoints for extension / HTTP clients ----
     if (url.pathname.startsWith("/api/")) {
       const handled = await handleApiRoute(req, res, url.pathname);

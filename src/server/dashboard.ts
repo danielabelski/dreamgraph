@@ -31,7 +31,7 @@ import {
 } from "../cognitive/scheduler.js";
 import {
   getLlmConfig, initLlmProvider,
-  getDreamerLlmConfig, getNormalizerLlmConfig,
+  getDreamerLlmConfig, getNormalizerLlmConfig, getArchitectLlmConfig,
   updateDreamerLlmConfig, updateNormalizerLlmConfig,
 } from "../cognitive/llm.js";
 import type { LlmConfig } from "../cognitive/llm.js";
@@ -68,6 +68,7 @@ function persistLlmEngineEnv(): void {
   const base = getLlmConfig();
   const dreamer = getDreamerLlmConfig();
   const normalizer = getNormalizerLlmConfig();
+  const architect = getArchitectLlmConfig();
 
   // For API key: check both in-memory config and process.env (engine.env loader).
   // This prevents the key from being lost when the provider changes (e.g. ollama→openai).
@@ -78,6 +79,12 @@ function persistLlmEngineEnv(): void {
     DREAMGRAPH_LLM_PROVIDER: base.provider,
     DREAMGRAPH_LLM_URL: base.baseUrl,
     DREAMGRAPH_LLM_API_KEY: effectiveApiKey,
+    // Architect (standalone browser chat)
+    DREAMGRAPH_LLM_ARCHITECT_PROVIDER: architect.provider,
+    DREAMGRAPH_LLM_ARCHITECT_ADAPTER: process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER || "native_api_tool_loop",
+    DREAMGRAPH_LLM_ARCHITECT_MODEL: architect.model,
+    DREAMGRAPH_LLM_ARCHITECT_TEMPERATURE: String(architect.temperature),
+    DREAMGRAPH_LLM_ARCHITECT_MAX_TOKENS: String(architect.maxTokens),
     // Dreamer (creative dream cycle generation)
     DREAMGRAPH_LLM_DREAMER_MODEL: dreamer.model,
     DREAMGRAPH_LLM_DREAMER_TEMPERATURE: String(dreamer.temperature),
@@ -1823,11 +1830,16 @@ async function handleConfigPost(
           const llmBase = getLlmConfig();
           const dreamer = getDreamerLlmConfig();
           const normalizer = getNormalizerLlmConfig();
+          const architect = getArchitectLlmConfig();
           const effectiveApiKey = llmBase.apiKey || process.env.DREAMGRAPH_LLM_API_KEY || "";
           writeEngineEnv(scope.engineEnvPath, {
             DREAMGRAPH_LLM_PROVIDER: llmBase.provider,
             DREAMGRAPH_LLM_URL: llmBase.baseUrl,
             DREAMGRAPH_LLM_API_KEY: effectiveApiKey,
+            DREAMGRAPH_LLM_ARCHITECT_PROVIDER: architect.provider,
+            DREAMGRAPH_LLM_ARCHITECT_MODEL: architect.model,
+            DREAMGRAPH_LLM_ARCHITECT_TEMPERATURE: String(architect.temperature),
+            DREAMGRAPH_LLM_ARCHITECT_MAX_TOKENS: String(architect.maxTokens),
             DREAMGRAPH_LLM_DREAMER_MODEL: dreamer.model,
             DREAMGRAPH_LLM_DREAMER_TEMPERATURE: String(dreamer.temperature),
             DREAMGRAPH_LLM_DREAMER_MAX_TOKENS: String(dreamer.maxTokens),
@@ -1904,11 +1916,16 @@ async function handleClearDbPost(
     const llmBase = getLlmConfig();
     const dreamer = getDreamerLlmConfig();
     const normalizer = getNormalizerLlmConfig();
+    const architect = getArchitectLlmConfig();
     const effectiveApiKey = getLlmConfig().apiKey || process.env.DREAMGRAPH_LLM_API_KEY || "";
     writeEngineEnv(scope.engineEnvPath, {
       DREAMGRAPH_LLM_PROVIDER: llmBase.provider,
       DREAMGRAPH_LLM_URL: llmBase.baseUrl,
       DREAMGRAPH_LLM_API_KEY: effectiveApiKey,
+      DREAMGRAPH_LLM_ARCHITECT_PROVIDER: architect.provider,
+      DREAMGRAPH_LLM_ARCHITECT_MODEL: architect.model,
+      DREAMGRAPH_LLM_ARCHITECT_TEMPERATURE: String(architect.temperature),
+      DREAMGRAPH_LLM_ARCHITECT_MAX_TOKENS: String(architect.maxTokens),
       DREAMGRAPH_LLM_DREAMER_MODEL: dreamer.model,
       DREAMGRAPH_LLM_DREAMER_TEMPERATURE: String(dreamer.temperature),
       DREAMGRAPH_LLM_DREAMER_MAX_TOKENS: String(dreamer.maxTokens),

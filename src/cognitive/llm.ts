@@ -26,6 +26,12 @@
  *     DREAMGRAPH_LLM_NORMALIZER_MODEL       = model name (default: provider-specific)
  *     DREAMGRAPH_LLM_NORMALIZER_TEMPERATURE = temperature (default: 0.1)
  *     DREAMGRAPH_LLM_NORMALIZER_MAX_TOKENS  = max response tokens (default: 2048)
+ *
+ *   Architect (interactive browser chat):
+ *     DREAMGRAPH_LLM_ARCHITECT_PROVIDER    = provider override (default: shared provider)
+ *     DREAMGRAPH_LLM_ARCHITECT_MODEL       = model override (fallback: general -> normalizer -> dreamer)
+ *     DREAMGRAPH_LLM_ARCHITECT_TEMPERATURE = temperature (default: shared temperature)
+ *     DREAMGRAPH_LLM_ARCHITECT_MAX_TOKENS  = max response tokens (default: shared max tokens)
  */
 
 import { logger } from "../utils/logger.js";
@@ -45,6 +51,14 @@ export interface LlmConfig {
   maxTokens: number;
   /** Per-request abort timeout in milliseconds. Defaults to 120_000. */
   timeoutMs: number;
+}
+
+export type LlmConfigSource = "architect" | "general" | "normalizer" | "dreamer" | "provider_default";
+
+export interface ArchitectLlmConfig extends LlmConfig {
+  component: "architect";
+  providerSource: "architect" | "general";
+  modelSource: LlmConfigSource;
 }
 
 export interface LlmMessage {
@@ -682,8 +696,45 @@ function parseComponentConfig(
   return { model, temperature, maxTokens };
 }
 
+const LLM_PROVIDER_TYPES: readonly LlmProviderType[] = ["ollama", "lmstudio", "openai", "anthropic", "sampling", "none"];
+
+function envText(key: string): string | null {
+  const value = process.env[key]?.trim();
+  return value && value.length > 0 ? value : null;
+}
+
+function envNumber(key: string, fallback: number): number {
+  const raw = envText(key);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseProviderOverride(raw: string | null): LlmProviderType | null {
+  const normalized = raw?.toLowerCase() as LlmProviderType | undefined;
+  return normalized && LLM_PROVIDER_TYPES.includes(normalized) ? normalized : null;
+}
+
+function providerDefaults(provider: LlmProviderType, base: LlmConfig): Pick<LlmConfig, "model" | "baseUrl" | "apiKey"> {
+  switch (provider) {
+    case "ollama":
+      return { model: "qwen3:8b", baseUrl: "http://localhost:11434", apiKey: "" };
+    case "lmstudio":
+      return { model: envText("DREAMGRAPH_LLM_MODEL") ?? "", baseUrl: "http://localhost:1234/v1", apiKey: "lm-studio" };
+    case "openai":
+      return { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1", apiKey: process.env.DREAMGRAPH_LLM_API_KEY ?? "" };
+    case "anthropic":
+      return { model: "claude-sonnet-4-20250514", baseUrl: "https://api.anthropic.com/v1", apiKey: process.env.DREAMGRAPH_LLM_API_KEY ?? "" };
+    case "sampling":
+      return { model: "client", baseUrl: "", apiKey: "" };
+    default:
+      return { model: base.model, baseUrl: base.baseUrl, apiKey: base.apiKey };
+  }
+}
+
 let _dreamerConfig: { model: string; temperature: number; maxTokens: number } | null = null;
 let _normalizerConfig: { model: string; temperature: number; maxTokens: number } | null = null;
+let _architectConfig: ArchitectLlmConfig | null = null;
 
 /** Get dreamer-specific LLM settings (model, temperature, maxTokens) */
 export function getDreamerLlmConfig(): { model: string; temperature: number; maxTokens: number } {
@@ -718,6 +769,80 @@ export function getNormalizerLlmConfig(): { model: string; temperature: number; 
   return _normalizerConfig;
 }
 
+/**
+ * Get Architect chat LLM settings and expose the exact fallback source.
+ * Model order: ARCHITECT -> general -> normalizer -> dreamer.
+ */
+export function getArchitectLlmConfig(): ArchitectLlmConfig {
+  if (!_architectConfig) {
+    const base = getLlmConfig();
+    const requestedProvider = parseProviderOverride(envText("DREAMGRAPH_LLM_ARCHITECT_PROVIDER"));
+    const provider = requestedProvider ?? base.provider;
+    const providerSource: ArchitectLlmConfig["providerSource"] = requestedProvider ? "architect" : "general";
+    const defaults = providerDefaults(provider, base);
+    const modelCandidates: Array<{ value: string | null; source: LlmConfigSource }> = [
+      { value: envText("DREAMGRAPH_LLM_ARCHITECT_MODEL"), source: "architect" },
+      { value: envText("DREAMGRAPH_LLM_MODEL") ?? base.model ?? defaults.model, source: "general" },
+      { value: envText("DREAMGRAPH_LLM_NORMALIZER_MODEL"), source: "normalizer" },
+      { value: envText("DREAMGRAPH_LLM_DREAMER_MODEL"), source: "dreamer" },
+      { value: defaults.model, source: "provider_default" },
+    ];
+    const selected = modelCandidates.find((candidate) => candidate.value != null && candidate.value.length > 0) ?? {
+      value: "",
+      source: "provider_default" as const,
+    };
+
+    _architectConfig = {
+      component: "architect",
+      provider,
+      providerSource,
+      model: selected.value ?? "",
+      modelSource: selected.source,
+      baseUrl: envText("DREAMGRAPH_LLM_ARCHITECT_URL") ?? (provider === base.provider ? base.baseUrl : defaults.baseUrl),
+      apiKey: process.env.DREAMGRAPH_LLM_ARCHITECT_API_KEY ?? (provider === base.provider ? base.apiKey : defaults.apiKey),
+      temperature: envNumber("DREAMGRAPH_LLM_ARCHITECT_TEMPERATURE", base.temperature),
+      maxTokens: Math.trunc(envNumber("DREAMGRAPH_LLM_ARCHITECT_MAX_TOKENS", base.maxTokens)),
+      timeoutMs: base.timeoutMs,
+    };
+    logger.info(
+      `LLM architect config: provider=${_architectConfig.provider} (${_architectConfig.providerSource}), ` +
+        `model=${_architectConfig.model || "n/a"} (${_architectConfig.modelSource}), ` +
+        `temp=${_architectConfig.temperature}, maxTokens=${_architectConfig.maxTokens}`,
+    );
+  }
+  return _architectConfig;
+}
+
+/** Update Architect chat LLM settings at runtime. */
+export function updateArchitectLlmConfig(
+  partial: Partial<Pick<ArchitectLlmConfig, "provider" | "model" | "baseUrl" | "temperature" | "maxTokens">>,
+): ArchitectLlmConfig {
+  const current = getArchitectLlmConfig();
+  const base = getLlmConfig();
+  const provider = partial.provider ?? current.provider;
+  const providerChanged = provider !== current.provider;
+  const defaults = providerDefaults(provider, base);
+  const model = partial.model ?? current.model;
+
+  _architectConfig = {
+    ...current,
+    provider,
+    providerSource: partial.provider != null ? "architect" : current.providerSource,
+    model,
+    modelSource: partial.model != null ? "architect" : current.modelSource,
+    baseUrl: partial.baseUrl ?? (providerChanged ? defaults.baseUrl : current.baseUrl),
+    apiKey: providerChanged ? defaults.apiKey : current.apiKey,
+    temperature: partial.temperature ?? current.temperature,
+    maxTokens: Math.trunc(partial.maxTokens ?? current.maxTokens),
+  };
+  logger.info(
+    `LLM architect config updated: provider=${_architectConfig.provider}, ` +
+      `model=${_architectConfig.model || "n/a"}, temp=${_architectConfig.temperature}, ` +
+      `maxTokens=${_architectConfig.maxTokens}`,
+  );
+  return _architectConfig;
+}
+
 /** Update dreamer-specific LLM settings at runtime. */
 export function updateDreamerLlmConfig(
   partial: Partial<{ model: string; temperature: number; maxTokens: number }>,
@@ -748,6 +873,29 @@ let _provider: LlmProvider | null = null;
 let _samplingProvider: McpSamplingProvider | null = null;
 let _config: LlmConfig | null = null;
 
+export function createLlmProviderForConfig(c: LlmConfig): LlmProvider {
+  switch (c.provider) {
+    case "ollama":
+      return new OllamaProvider(c.baseUrl, c.model, c.temperature, c.maxTokens, c.timeoutMs);
+    case "openai":
+      if (!c.apiKey) {
+        logger.warn("LLM: OpenAI provider configured but no API key set (DREAMGRAPH_LLM_API_KEY)");
+      }
+      return new OpenAiCompatibleProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens, "openai", c.timeoutMs);
+    case "lmstudio":
+      return new OpenAiCompatibleProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens, "lmstudio", c.timeoutMs);
+    case "anthropic":
+      if (!c.apiKey) {
+        logger.warn("LLM: Anthropic provider configured but no API key set (DREAMGRAPH_LLM_API_KEY)");
+      }
+      return new AnthropicProvider(c.baseUrl, c.model, c.apiKey, c.temperature, c.maxTokens, c.timeoutMs);
+    case "sampling":
+      return new McpSamplingProvider();
+    default:
+      return new NullProvider();
+  }
+}
+
 /** Initialize the LLM provider based on config. Call once at startup. */
 export function initLlmProvider(cfg?: LlmConfig): LlmProvider {
   const c = cfg ?? parseLlmConfig();
@@ -758,6 +906,7 @@ export function initLlmProvider(cfg?: LlmConfig): LlmProvider {
   // via dashboard would leave stale model/temp values in memory.
   _dreamerConfig = null;
   _normalizerConfig = null;
+  _architectConfig = null;
 
   switch (c.provider) {
     case "ollama":

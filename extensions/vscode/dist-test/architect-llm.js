@@ -47,6 +47,7 @@ const request_compaction_1 = require("./request-compaction");
 const architect_pass_schema_js_1 = require("./architect-pass-schema.js");
 const architect_pass_projection_js_1 = require("./architect-pass-projection.js");
 exports.ANTHROPIC_MODELS = [
+    "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
@@ -205,13 +206,13 @@ class ArchitectLlm {
             }
             return normalized;
         }
-        return model.startsWith("claude-opus-4-7") ? "xhigh" : "high";
+        return model.startsWith("claude-opus-4-8") || model.startsWith("claude-opus-4-7") ? "xhigh" : "high";
     }
     _getAnthropicMaxTokens(model) {
-        return model.startsWith("claude-opus-4-7") ? 65536 : 8192;
+        return model.startsWith("claude-opus-4-8") || model.startsWith("claude-opus-4-7") ? 65536 : 8192;
     }
     _getAnthropicThinking(model) {
-        if (!model.startsWith("claude-opus-4-7")) {
+        if (!model.startsWith("claude-opus-4-8") && !model.startsWith("claude-opus-4-7")) {
             return undefined;
         }
         const cfg = vscode.workspace.getConfiguration("dreamgraph.architect");
@@ -239,7 +240,7 @@ class ArchitectLlm {
         if (compactedTools && compactedTools.length > 0) {
             body.tools = compactedTools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
         }
-        if (config.model.startsWith("claude-opus-4-7")) {
+        if (config.model.startsWith("claude-opus-4-8") || config.model.startsWith("claude-opus-4-7")) {
             body.output_config = { effort: this._getAnthropicEffort(config.model) };
             const thinking = this._getAnthropicThinking(config.model);
             if (thinking) {

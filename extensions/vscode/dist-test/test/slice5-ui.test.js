@@ -19,6 +19,12 @@ const node_path_1 = require("node:path");
     strict_1.default.match(source, /ACTION_ALLOWLIST/);
     strict_1.default.match(source, /\[Response truncated\]/);
 });
+(0, node_test_1.default)('chat panel persists header autonomy dropdown selections', () => {
+    const source = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'chat-panel.ts'), 'utf8');
+    strict_1.default.match(source, /case 'setAutonomyMode':[\s\S]*await this\._setAutonomyMode\(modeMsg\.mode\)/);
+    strict_1.default.match(source, /private async _setAutonomyMode\(mode: string\): Promise<void>[\s\S]*update\(\s*'autonomyMode',\s*selected,\s*this\._architectSettingsTarget\(\)/);
+    strict_1.default.match(source, /private async _resetAutonomy\(\): Promise<void>[\s\S]*update\(\s*'autonomyMode',\s*'cautious',\s*this\._architectSettingsTarget\(\)/);
+});
 (0, node_test_1.default)('styles include role header, hover actions, and action block styles', () => {
     const css = (0, node_fs_1.readFileSync)((0, node_path_1.join)(process.cwd(), 'src', 'webview', 'styles.ts'), 'utf8');
     strict_1.default.match(css, /message-header/);

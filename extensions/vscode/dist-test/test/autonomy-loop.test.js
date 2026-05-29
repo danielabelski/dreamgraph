@@ -10,6 +10,8 @@ const autonomy_loop_js_1 = require("../autonomy-loop.js");
 (0, node_test_1.default)('inferPassOutcomeSignal detects goal completion and stalled progress markers', () => {
     const done = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('Done and verified. Ready for commit.');
     strict_1.default.equal(done.goalSufficientlyReached, true);
+    const toolOnly = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('18 DreamGraph tool calls completed successfully, but the report is still missing.');
+    strict_1.default.equal(toolOnly.goalSufficientlyReached, false);
     const stalled = (0, autonomy_loop_js_1.inferPassOutcomeSignal)('Stalled progress. Cannot proceed.');
     strict_1.default.equal(stalled.progressStatus, 'stalled');
 });
@@ -57,6 +59,28 @@ const autonomy_loop_js_1 = require("../autonomy-loop.js");
     });
     strict_1.default.equal(result.decision.shouldContinue, false);
     strict_1.default.match(result.decision.reason, /goal sufficiently reached/i);
+});
+(0, node_test_1.default)('analyzePass lets partial structured envelope override broad completion prose', () => {
+    const state = (0, autonomy_js_1.createAutonomyState)('eager', 20);
+    const result = (0, autonomy_loop_js_1.analyzePass)(state, {
+        content: 'The pass gathered evidence through 18 DreamGraph calls completed successfully, but the final adapter assessment remains undelivered.',
+        actions: [
+            { id: 'synthesize', label: 'Synthesize adapter state report', priority: 1, eligible: true, withinScope: true },
+        ],
+        envelope: {
+            summary: 'Evidence gathered, final report undelivered.',
+            goalStatus: 'partial',
+            progressStatus: 'advancing',
+            uncertainty: 'medium',
+            nextSteps: [
+                { id: 'synthesize', label: 'Synthesize adapter state report', priority: 1, eligible: true, withinScope: true },
+            ],
+        },
+        toolCallCount: 18,
+        toolNames: ['dreamgraph:read_source_code'],
+    });
+    strict_1.default.equal(result.signal.goalSufficientlyReached, false);
+    strict_1.default.doesNotMatch(result.decision.reason, /goal sufficiently reached/i);
 });
 (0, node_test_1.default)('advanceAutonomyStateIfContinued decrements visible counters only when continuing', () => {
     const state = (0, autonomy_js_1.createAutonomyState)('autonomous', 4);

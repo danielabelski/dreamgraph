@@ -52,6 +52,7 @@ exports.switchInstanceCommand = switchInstanceCommand;
 exports.showStatusCommand = showStatusCommand;
 exports.openDashboardCommand = openDashboardCommand;
 exports.openExplorerCommand = openExplorerCommand;
+exports.openStandaloneArchitectCommand = openStandaloneArchitectCommand;
 exports.toggleGpuMetricsCommand = toggleGpuMetricsCommand;
 exports.restoreSidebarCommand = restoreSidebarCommand;
 exports.startDaemonCommand = startDaemonCommand;
@@ -67,6 +68,7 @@ exports.setAutonomyModeCommand = setAutonomyModeCommand;
 exports.resetAutonomyCommand = resetAutonomyCommand;
 const vscode = __importStar(require("vscode"));
 const cp = __importStar(require("node:child_process"));
+const path = __importStar(require("node:path"));
 const instance_resolver_js_1 = require("./instance-resolver.js");
 const index_js_1 = require("./prompts/index.js");
 /* ------------------------------------------------------------------ */
@@ -220,6 +222,38 @@ async function openDashboardCommand(svc) {
     svc.statusBar.setRestoreSidebarVisible(false);
     await svc.dashboardView.open();
 }
+function resolveDaemonBrowserUrl(svc, pathname, query) {
+    const validPort = (port) => {
+        return Number.isInteger(port) && port !== null && port !== undefined && port > 0 && port <= 65535
+            ? port
+            : null;
+    };
+    const config = vscode.workspace.getConfiguration("dreamgraph");
+    const host = config.get("daemonHost") ?? "127.0.0.1";
+    const instance = svc.getInstance();
+    const port = validPort(instance?.daemon.port) ??
+        validPort(svc.daemonClient.port) ??
+        validPort(config.get("daemonPort")) ??
+        8100;
+    const url = new URL(`http://${host}:${port}${pathname}`);
+    for (const [key, value] of Object.entries(query ?? {})) {
+        url.searchParams.set(key, value);
+    }
+    return url.toString();
+}
+function activePlanIdFromEditor() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.scheme !== "file")
+        return null;
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder)
+        return null;
+    const relativePath = path.relative(workspaceFolder.uri.fsPath, editor.document.uri.fsPath).replace(/\\/g, "/");
+    if (!relativePath.startsWith("plans/") || !relativePath.endsWith(".md") || relativePath.endsWith(".implementation-log.md")) {
+        return null;
+    }
+    return path.posix.basename(relativePath, ".md");
+}
 /* ------------------------------------------------------------------ */
 /*  Command: Open Explorer                                            */
 /* ------------------------------------------------------------------ */
@@ -233,14 +267,7 @@ async function openExplorerCommand(svc) {
     // would give the default 8100 even when the actual daemon is on a
     // different port (auto-selected when 8100 is busy), which renders the
     // Explorer iframe as an empty black panel.
-    const config = vscode.workspace.getConfiguration("dreamgraph");
-    const host = config.get("daemonHost") ?? "127.0.0.1";
-    const instance = svc.getInstance();
-    const port = instance?.daemon.port ??
-        svc.daemonClient.port ??
-        config.get("daemonPort") ??
-        8100;
-    const url = `http://${host}:${port}/explorer/`;
+    const url = resolveDaemonBrowserUrl(svc, "/explorer/");
     if (explorerPanel) {
         if (explorerPanelUrl !== url) {
             explorerPanel.webview.html = renderExplorerHtml(url);
@@ -256,6 +283,14 @@ async function openExplorerCommand(svc) {
     });
     explorerPanel.webview.html = renderExplorerHtml(url);
     explorerPanelUrl = url;
+}
+/* ------------------------------------------------------------------ */
+/*  Command: Open Standalone Architect                                */
+/* ------------------------------------------------------------------ */
+async function openStandaloneArchitectCommand(svc) {
+    const planId = activePlanIdFromEditor();
+    const url = resolveDaemonBrowserUrl(svc, "/architect", planId ? { plan: planId } : undefined);
+    await vscode.env.openExternal(vscode.Uri.parse(url));
 }
 function renderExplorerHtml(url) {
     return `<!doctype html>
@@ -451,6 +486,10 @@ async function statusQuickPickCommand(svc) {
             description: "Open graph explorer (curated mutations)",
         },
         {
+            label: "$(compass) Open Architect",
+            description: "Open current plan in standalone Architect",
+        },
+        {
             label: "$(eye) Inspect Context",
             description: "Show context envelope",
         },
@@ -475,6 +514,8 @@ async function statusQuickPickCommand(svc) {
             return openDashboardCommand(svc);
         case "$(graph) Open Explorer":
             return openExplorerCommand(svc);
+        case "$(compass) Open Architect":
+            return openStandaloneArchitectCommand(svc);
         case "$(eye) Inspect Context":
             return inspectContextCommand(svc), undefined;
     }

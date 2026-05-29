@@ -12,6 +12,13 @@ export interface StructuredActionEnvelope {
         within_scope?: boolean;
         mutually_exclusive_with?: string[];
         batch_group?: string;
+        requires_tools?: string[];
+        requires_secrets?: string[];
+        blockers?: Array<{
+            id?: string;
+            label: string;
+            kind?: string;
+        }>;
         /**
          * Exact MCP/local tool name that should run this step. When present,
          * the host primes this tool for the next turn so brief follow-ups

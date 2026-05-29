@@ -117,20 +117,42 @@ function deriveVerdict(content, trace) {
         if (status === 'failed')
             failedCount++;
     }
-    if (normalized.includes('verified:') || normalized.includes('confirmed:') || (trace.length > 0 && failedCount === 0)) {
-        return {
-            level: 'verified',
-            summary: failedCount === 0 && trace.length > 0
-                ? `Verified with ${trace.length} executed tool call${trace.length === 1 ? '' : 's'}.`
-                : 'Verified based on explicit evidence in the response.',
-        };
-    }
-    if (failedCount > 0 || normalized.includes('likely') || normalized.includes('partial')) {
+    const goalStatusMatch = normalized.match(/["']?goal_status["']?\s*:\s*["']?(complete|partial|blocked)\b/);
+    const goalStatus = goalStatusMatch?.[1];
+    const terminalIncomplete = /\bpass aborted\b|\brequest failed before completion\b|\bcodex cli run was cancelled\b|\bwas cancelled by the host\b|\bcancelled by the host\b|\bcanceled by the host\b|\bdid not complete\b|\bdid not proceed\b|\bnot completed successfully\b|\bremains incomplete\b|\bassessment remains incomplete\b|\bprogress has stalled\b|\bstopped: progress has stalled\b|\byou've hit your usage limit\b|\busage limit\b|\brate limit\b|\bunsupported model\b|\bblocked by policy\b|\bcould not generate wrap-up summary\b|\btool call failed\b/.test(normalized);
+    const explicitCompletion = /(?:^|\s)(?:verified:|confirmed:)|\bdone and verified\b|\bcompleted successfully\b|\bgoal sufficiently reached\b|\bready for commit\b/.test(normalized);
+    if (goalStatus === 'partial' || goalStatus === 'blocked' || terminalIncomplete) {
         return {
             level: 'partial',
             summary: failedCount > 0
                 ? `Partial confidence: ${failedCount} tool call${failedCount === 1 ? '' : 's'} failed during evidence gathering.`
-                : 'Partial confidence: the response includes uncertainty or incomplete evidence.',
+                : trace.length > 0
+                    ? `Partial progress: ${trace.length} executed tool call${trace.length === 1 ? '' : 's'}, but final completion was not established.`
+                    : 'Partial confidence: the response did not complete the requested outcome.',
+        };
+    }
+    if (goalStatus === 'complete' || explicitCompletion) {
+        if (failedCount > 0) {
+            return {
+                level: 'partial',
+                summary: `Partial confidence: ${failedCount} tool call${failedCount === 1 ? '' : 's'} failed during evidence gathering.`,
+            };
+        }
+        return {
+            level: 'verified',
+            summary: trace.length > 0
+                ? `Verified with ${trace.length} executed tool call${trace.length === 1 ? '' : 's'}.`
+                : 'Verified based on explicit evidence in the response.',
+        };
+    }
+    if (failedCount > 0 || trace.length > 0 || normalized.includes('likely') || normalized.includes('partial')) {
+        return {
+            level: 'partial',
+            summary: failedCount > 0
+                ? `Partial confidence: ${failedCount} tool call${failedCount === 1 ? '' : 's'} failed during evidence gathering.`
+                : trace.length > 0
+                    ? `Partial progress: ${trace.length} executed tool call${trace.length === 1 ? '' : 's'}, but final completion was not established.`
+                    : 'Partial confidence: the response includes uncertainty or incomplete evidence.',
         };
     }
     return {

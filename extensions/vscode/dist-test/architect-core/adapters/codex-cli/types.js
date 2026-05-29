@@ -7,25 +7,33 @@ exports.CODEX_INLINE_TOOL_SERVER = exports.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME 
 exports.CODEX_CLI_PROVIDER_ID = "codex-cli";
 exports.CODEX_MINIMUM_AUTHORITATIVE_TOOLS = Object.freeze([
     "query_resource",
-    "query_api_surface",
-    "read_source_code",
-    "search_source_code",
-    "list_directory",
-    "list_markdown_chapters",
-    "read_markdown_chapter",
     "graph_rag_retrieve",
     "shortest_path",
-    "query_db_schema",
+    "query_api_surface",
+    "read_source_code",
+    "list_directory",
+    "search_source_code",
+    "list_markdown_chapters",
+    "read_markdown_chapter",
+    "cognitive_status",
 ]);
+// Bridge-local verification is explicitly exposed when the host policy allows
+// it. Source and graph reads/mutations prefer DreamGraph's repo-aware upstream
+// tools so multi-repository instances do not depend on a single VS Code
+// workspace root.
 exports.CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS = Object.freeze([
     "run_command",
 ]);
 exports.CODEX_AUTHORITATIVE_TOOL_CATALOG = Object.freeze([
     ...exports.CODEX_MINIMUM_AUTHORITATIVE_TOOLS,
+    "read_local_file",
+    "run_command",
     "create_file",
     "edit_file",
     "delete_file",
     "rename_file",
+    "write_file",
+    "modify_entity",
     "edit_entity",
     "patch_file",
     "append_to_file",
@@ -39,7 +47,6 @@ exports.CODEX_AUTHORITATIVE_TOOL_CATALOG = Object.freeze([
     "record_architecture_decision",
     "query_architecture_decisions",
     "deprecate_architecture_decision",
-    "cognitive_status",
     "get_dream_insights",
     "query_dreams",
     "get_causal_insights",
@@ -71,7 +78,6 @@ exports.CODEX_AUTHORITATIVE_TOOL_CATALOG = Object.freeze([
     "git_log",
     "git_blame",
     "fetch_web_page",
-    ...exports.CODEX_BRIDGE_LOCAL_AUTHORITATIVE_TOOLS,
 ]);
 exports.CODEX_REQUIRED_AUTHORITATIVE_TOOLS = exports.CODEX_MINIMUM_AUTHORITATIVE_TOOLS;
 exports.DREAMGRAPH_AUTHORITATIVE_SERVER_NAME = "dreamgraph";

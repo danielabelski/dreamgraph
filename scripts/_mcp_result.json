@@ -1,0 +1,12 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"success\": true,\n  \"data\": {\n    \"target\": \"data_model\",\n    \"file\": \"data_model.json\",\n    \"mode\": \"merge\",\n    \"entries_received\": 1,\n    \"entries_inserted\": 0,\n    \"entries_updated\": 1,\n    \"total_entries\": 94,\n    \"index_entries\": 389,\n    \"validation_errors\": [],\n    \"message\": \"Enriched data_model: 0 inserted, 1 updated, 94 total entries. Index: 389 entries.\"\n  }\n}"
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 2
+}

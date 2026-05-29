@@ -4,6 +4,7 @@ exports.extractStructuredPassEnvelope = extractStructuredPassEnvelope;
 exports.buildRecommendedActionSetFromContent = buildRecommendedActionSetFromContent;
 const autonomy_js_1 = require("./autonomy.js");
 const autonomy_contract_js_1 = require("./autonomy-contract.js");
+const GOAL_COMPLETION_RE = /ready for commit|done and verified|goal sufficiently reached|\b(?:original goal|goal|task|request|assessment|implementation|change|work)\b[^.\n]{0,80}\bcompleted successfully\b/i;
 function extractStructuredPassEnvelope(content) {
     // Continuation passes can have empty/undefined assistant text (tool-only or
     // aborted). Treat as a neutral envelope rather than crashing.
@@ -31,7 +32,7 @@ function extractStructuredPassEnvelope(content) {
     }
     const nextSteps = extractRecommendedActions(safeContent);
     const lower = safeContent.toLowerCase();
-    const goalStatus = /goal sufficiently reached|done and verified|completed successfully|ready for commit/.test(lower)
+    const goalStatus = GOAL_COMPLETION_RE.test(lower)
         ? 'complete'
         : /blocked|cannot proceed|blocking failure/.test(lower)
             ? 'blocked'
@@ -173,6 +174,17 @@ function toActionFromStructured(step, fallbackPriority) {
         withinScope: step.within_scope ?? true,
         mutuallyExclusiveWith: step.mutually_exclusive_with,
         batchGroup: step.batch_group ?? normalized.batchGroup,
+        requiresTools: Array.isArray(step.requires_tools) ? step.requires_tools.filter((name) => typeof name === 'string' && name.trim().length > 0).map((name) => name.trim()) : undefined,
+        requiresSecrets: Array.isArray(step.requires_secrets) ? step.requires_secrets.filter((name) => typeof name === 'string' && name.trim().length > 0).map((name) => name.trim()) : undefined,
+        blockers: Array.isArray(step.blockers)
+            ? step.blockers
+                .filter((blocker) => !!blocker && typeof blocker.label === 'string' && blocker.label.trim().length > 0)
+                .map((blocker, index) => ({
+                id: blocker.id?.trim() || `structured_blocker_${index + 1}`,
+                label: blocker.label.trim(),
+                kind: blocker.kind === 'missing_tool' || blocker.kind === 'missing_secret' || blocker.kind === 'external' ? blocker.kind : 'external',
+            }))
+            : undefined,
         tool: typeof step.tool === 'string' && step.tool.trim() ? step.tool.trim() : undefined,
         toolArgs: step.tool_args && typeof step.tool_args === 'object' ? step.tool_args : undefined,
     };

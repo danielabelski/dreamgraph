@@ -27,6 +27,7 @@ export declare class DashboardViewProvider implements vscode.WebviewViewProvider
      * Called by connectToInstance when the real port is discovered.
      */
     updateDaemonUrl(host: string, port: number): void;
+    private _isValidPort;
     get isVisible(): boolean;
     resolveWebviewView(webviewView: vscode.WebviewView, _context: vscode.WebviewViewResolveContext, _token: vscode.CancellationToken): void;
     /**

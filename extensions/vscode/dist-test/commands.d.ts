@@ -44,6 +44,7 @@ export declare function switchInstanceCommand(svc: CommandServices): Promise<voi
 export declare function showStatusCommand(svc: CommandServices): void;
 export declare function openDashboardCommand(svc: CommandServices): Promise<void>;
 export declare function openExplorerCommand(svc: CommandServices): Promise<void>;
+export declare function openStandaloneArchitectCommand(svc: CommandServices): Promise<void>;
 export declare function toggleGpuMetricsCommand(): Promise<void>;
 export declare function restoreSidebarCommand(svc: CommandServices): Promise<void>;
 export declare function startDaemonCommand(svc: CommandServices): Promise<void>;

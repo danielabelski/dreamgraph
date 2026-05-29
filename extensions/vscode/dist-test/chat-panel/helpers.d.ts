@@ -28,6 +28,7 @@ export interface ToolTraceEntry {
     filesAffected: string[];
     durationMs: number;
     status: 'completed' | 'failed';
+    provenance?: 'audit' | 'transcript-witness';
 }
 export declare function summarizeToolArgs(input: unknown): string;
 export declare function stringifyToolResult(result: unknown): string;

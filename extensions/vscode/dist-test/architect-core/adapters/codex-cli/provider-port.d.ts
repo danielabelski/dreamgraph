@@ -2,10 +2,11 @@ import type { ArchitectLlm } from "../../../architect-llm.js";
 import type { ProviderPort } from "../../ports.js";
 import { type CodexCliDeps, type CodexCliRunResult } from "./orchestrator.js";
 import { type CliToolsManifest } from "./prompt-serializer.js";
+import type { CodexToolCallWitness } from "./types.js";
 import type { CodexCliMcpAuditLivePort, RecordedMcpToolCall } from "./orchestrator-ports.js";
 export interface CodexCliProviderPortOptions {
     readonly hostLlm: ArchitectLlm;
-    readonly invocationCwd: string;
+    readonly invocationCwd?: string;
     readonly timeoutMs: number;
     readonly idleTimeoutMs?: number;
     readonly baseEnv: Readonly<Record<string, string | undefined>>;
@@ -20,6 +21,7 @@ export interface CodexCliProviderPortOptions {
     readonly onRunResult?: (result: CodexCliRunResult) => void;
     readonly auditLive?: CodexCliMcpAuditLivePort;
     readonly onToolCall?: (runId: string, call: RecordedMcpToolCall) => void;
+    readonly onToolWitness?: (runId: string, witness: CodexToolCallWitness) => void;
     readonly historyKeepLast?: number;
     readonly markCurrentTurn?: boolean;
     readonly cliToolsManifest?: CliToolsManifest;

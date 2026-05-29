@@ -31,6 +31,8 @@ export interface ToolTraceEntry {
     argsSummary: string;
     filesAffected: string[];
     durationMs: number;
+    status?: 'completed' | 'failed';
+    provenance?: 'audit' | 'transcript-witness';
 }
 export type ExtensionToWebviewMessage = {
     type: 'addMessage';
@@ -107,6 +109,16 @@ export type ExtensionToWebviewMessage = {
         id: string;
         label: string;
         rationale?: string;
+        eligible?: boolean;
+        withinScope?: boolean;
+        requiresTools?: string[];
+        requiresSecrets?: string[];
+        blockers?: Array<{
+            id: string;
+            label: string;
+            kind: string;
+        }>;
+        capabilityChecked?: boolean;
     }[];
     doAllEligible: boolean;
 };

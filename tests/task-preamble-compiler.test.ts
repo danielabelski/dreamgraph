@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,12 +7,6 @@ import { initLlmProvider } from "../src/cognitive/llm.js";
 import type { TaskPreambleEvidenceItem } from "../src/cognitive/types.js";
 import { invalidateCache, setDataDirResolver } from "../src/utils/cache.js";
 import { getDataDir, setDataDirOverride } from "../src/utils/paths.js";
-=======
-import { afterEach, describe, expect, it } from "vitest";
-import { compileTaskPreamble } from "../src/cognitive/graph-rag.js";
-import { initLlmProvider } from "../src/cognitive/llm.js";
-import type { TaskPreambleEvidenceItem } from "../src/cognitive/types.js";
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 
 const remediationEvidence: TaskPreambleEvidenceItem = {
   anchor: "feature_adaptive_future_engine",
@@ -23,7 +16,6 @@ const remediationEvidence: TaskPreambleEvidenceItem = {
   priority: 0.9,
 };
 
-<<<<<<< HEAD
 const noProviderConfig = {
   provider: "none" as const,
   model: "",
@@ -92,31 +84,6 @@ afterEach(async () => {
 describe("compileTaskPreamble", () => {
   it("does not fail or add prompt context when no provider and no evidence are available", async () => {
     initLlmProvider(noProviderConfig);
-=======
-describe("compileTaskPreamble", () => {
-  afterEach(() => {
-    initLlmProvider({
-      provider: "none",
-      model: "",
-      baseUrl: "",
-      apiKey: "",
-      temperature: 0.7,
-      maxTokens: 2048,
-      timeoutMs: 120_000,
-    });
-  });
-
-  it("does not fail or add prompt context when no provider and no evidence are available", async () => {
-    initLlmProvider({
-      provider: "none",
-      model: "",
-      baseUrl: "",
-      apiKey: "",
-      temperature: 0.7,
-      maxTokens: 2048,
-      timeoutMs: 120_000,
-    });
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
 
     const result = await compileTaskPreamble({
       task: "repair unrelated formatting",
@@ -195,7 +162,6 @@ describe("compileTaskPreamble", () => {
     expect(result.omitted_context_reasons).toContain("bounded evidence exceeded prompt budget");
   });
 });
-<<<<<<< HEAD
 
 describe("getCognitivePreamble adaptive_future", () => {
   it("omits advisory next steps when no bounded preamble evidence qualifies", async () => {
@@ -292,5 +258,3 @@ describe("getCognitivePreamble adaptive_future", () => {
     );
   });
 });
-=======
->>>>>>> 8e089329524dca0bcbb40a8aa729ed8f6f5084ae
