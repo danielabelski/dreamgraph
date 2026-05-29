@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { Socket } from "node:net";
 import { createHash, randomUUID } from "node:crypto";
+import * as pty from "node-pty";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
@@ -151,6 +153,20 @@ const ARCHITECT_PROVIDER_OPTIONS: LlmProviderType[] = ["openai", "anthropic", "o
 const ARCHITECT_ADAPTER_OPTIONS = ["native_api_tool_loop", "codex-cli", "copilot-cli", "deterministic_fallback"] as const;
 const ARCHITECT_AUTONOMY_MODE_OPTIONS = ["autonomous", "supervised", "manual"] as const;
 const ARCHITECT_SELECTED_PLAN_ENV_KEY = "DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID";
+const ARCHITECT_XTERM_ASSETS: Record<string, { path: string; contentType: string }> = {
+  "/api/architect/v1/assets/xterm/xterm.css": {
+    path: resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "@xterm", "xterm", "css", "xterm.css"),
+    contentType: "text/css; charset=utf-8",
+  },
+  "/api/architect/v1/assets/xterm/xterm.js": {
+    path: resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "@xterm", "xterm", "lib", "xterm.js"),
+    contentType: "application/javascript; charset=utf-8",
+  },
+  "/api/architect/v1/assets/xterm/addon-fit.js": {
+    path: resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
+    contentType: "application/javascript; charset=utf-8",
+  },
+};
 type ArchitectAdapterType = typeof ARCHITECT_ADAPTER_OPTIONS[number];
 type ArchitectAutonomyMode = typeof ARCHITECT_AUTONOMY_MODE_OPTIONS[number];
 type ArchitectExecutionRoute = ArchitectAdapterType;
@@ -202,16 +218,25 @@ interface ActiveArchitectExecutionControl {
 interface ArchitectTerminalSession {
   id: string;
   title: string;
-  process: ChildProcessWithoutNullStreams;
+  process: pty.IPty;
   cwd: string;
   shell: string;
+  cols: number;
+  rows: number;
+  connection_state: "detached" | "connected";
   created_at: string;
   updated_at: string;
   closed_at: string | null;
   exit_code: number | null;
   output: string[];
+  sockets: Set<WebSocket>;
   subscribers: Set<(eventName: string, payload: unknown) => void>;
+  cleanup_started: boolean;
 }
+
+type ArchitectTerminalSocketMessage =
+  | { type: "input"; data: string }
+  | { type: "resize"; cols: number; rows: number };
 
 type ArchitectRuntimeRouteContext = ActiveArchitectSessionRuntime;
 
@@ -241,6 +266,9 @@ let activeArchitectPassState: ArchitectSessionPassState = {
 let activeArchitectExecutionControl: ActiveArchitectExecutionControl | null = null;
 let architectTerminalSequence = 0;
 const architectTerminalSessions = new Map<string, ArchitectTerminalSession>();
+const architectTerminalWebSocketServer = new WebSocketServer({ noServer: true });
+
+process.once("exit", () => closeAllArchitectTerminalSessions());
 
 async function ensureArchitectInstanceBinding(): Promise<void> {
   if (getActiveScope() || !process.env.DREAMGRAPH_INSTANCE_UUID) return;
@@ -588,6 +616,25 @@ function json(res: ServerResponse, statusCode: number, body: unknown, headers?: 
 function html(res: ServerResponse, statusCode: number, body: string): void {
   res.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
   res.end(body);
+}
+
+async function handleArchitectAssetRequest(res: ServerResponse, pathname: string): Promise<void> {
+  const asset = ARCHITECT_XTERM_ASSETS[pathname];
+  if (!asset) {
+    jsonError(res, 404, "not_found", "Architect asset not found");
+    return;
+  }
+  try {
+    const body = await readFile(asset.path);
+    res.writeHead(200, {
+      "Content-Type": asset.contentType,
+      "Cache-Control": "public, max-age=3600",
+    });
+    res.end(body);
+  } catch (error) {
+    logger.warn(`architect asset load failed (${pathname}): ${(error as Error).message}`);
+    jsonError(res, 404, "asset_unavailable", "Architect browser asset is unavailable");
+  }
 }
 
 function jsonError(res: ServerResponse, statusCode: number, code: string, message: string): void {
@@ -1077,7 +1124,7 @@ export function formatArchitectPlanStatusPayload(plan: ArchitectPlanDetail | nul
     `Last completed: ${architectStatusString(operational.last_completed_slice?.title ?? operational.last_completed_slice?.id, "none")}`,
     `Next slice: ${architectStatusString(operational.next_slice?.title ?? operational.next_slice?.id, "none")}`,
     `Checkpoints: ${plan.checkpoint_count ?? 0}; ADR bindings: ${(plan.adr_bindings ?? []).join(", ") || "none"}`,
-    `Resume: ${plan.resume_state?.last_resume_note ?? operational.resume_hint ?? "none"}`,
+    `Resume: ${operational.resume_hint ?? plan.resume_state?.last_resume_note ?? "none"}`,
   ];
   return lines.join("\n");
 }
@@ -1474,6 +1521,14 @@ function parseArchitectTerminalSubroute(pathname: string): { terminalId: string;
   };
 }
 
+function parseArchitectTerminalSocketRoute(pathname: string): { terminalId: string } | null {
+  const base = "/api/architect/v1/terminal/";
+  if (!pathname.startsWith(base)) return null;
+  const remainder = pathname.slice(base.length);
+  if (!remainder || remainder.includes("/")) return { terminalId: "" };
+  return { terminalId: decodeURIComponent(remainder) };
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let length = 0;
@@ -1591,6 +1646,9 @@ function buildArchitectTerminalSnapshot(session: ArchitectTerminalSession): Reco
     title: session.title,
     cwd: session.cwd,
     shell: session.shell,
+    cols: session.cols,
+    rows: session.rows,
+    connection_state: session.connection_state,
     created_at: session.created_at,
     updated_at: session.updated_at,
     closed_at: session.closed_at,
@@ -1605,15 +1663,52 @@ function buildArchitectTerminalSnapshot(session: ArchitectTerminalSession): Reco
   };
 }
 
+function sendArchitectTerminalSocketMessage(socket: WebSocket, payload: Record<string, unknown>): void {
+  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+}
+
+function broadcastArchitectTerminalSocketMessage(session: ArchitectTerminalSession, payload: Record<string, unknown>): void {
+  for (const socket of session.sockets) sendArchitectTerminalSocketMessage(socket, payload);
+}
+
 function emitArchitectTerminalEvent(session: ArchitectTerminalSession, eventName: string, payload: unknown): void {
   for (const subscriber of session.subscribers) subscriber(eventName, payload);
+}
+
+function emitArchitectTerminalData(session: ArchitectTerminalSession, data: string): void {
+  emitArchitectTerminalEvent(session, "terminal_output", { id: session.id, stream: "pty", text: data, updated_at: session.updated_at });
+  broadcastArchitectTerminalSocketMessage(session, { type: "data", data });
+}
+
+function emitArchitectTerminalError(session: ArchitectTerminalSession, message: string): void {
+  emitArchitectTerminalEvent(session, "terminal_output", { id: session.id, stream: "error", text: message, updated_at: session.updated_at });
+  broadcastArchitectTerminalSocketMessage(session, { type: "error", message });
 }
 
 function resolveArchitectTerminalShellCommand(): { command: string; args: string[]; shell: string } {
   if (process.platform === "win32") {
     return { command: "powershell.exe", args: ["-NoLogo"], shell: "PowerShell" };
   }
-  return { command: process.env.SHELL || "bash", args: ["-i"], shell: "bash" };
+  const command = process.env.SHELL || "bash";
+  return { command, args: ["-i"], shell: command.endsWith("bash") ? "bash" : command };
+}
+
+function markArchitectTerminalClosed(session: ArchitectTerminalSession, exitCode: number | null): void {
+  if (!session.closed_at) {
+    session.closed_at = new Date().toISOString();
+    session.updated_at = session.closed_at;
+    session.exit_code = exitCode;
+  }
+  session.connection_state = "detached";
+}
+
+function closeArchitectTerminalSockets(session: ArchitectTerminalSession): void {
+  const snapshot = buildArchitectTerminalSnapshot(session);
+  for (const socket of session.sockets) {
+    sendArchitectTerminalSocketMessage(socket, { type: "exit", terminal: snapshot });
+    socket.close(1000, "terminal closed");
+  }
+  session.sockets.clear();
 }
 
 function createArchitectTerminalSession(title: string | null): ArchitectTerminalSession {
@@ -1621,60 +1716,76 @@ function createArchitectTerminalSession(title: string | null): ArchitectTerminal
   const id = `terminal-${architectTerminalSequence}`;
   const cwd = getArchitectProjectRoot();
   const shellPlan = resolveArchitectTerminalShellCommand();
-  const child = spawn(shellPlan.command, shellPlan.args, {
+  const cols = 120;
+  const rows = 30;
+  const now = new Date().toISOString();
+  const term = pty.spawn(shellPlan.command, shellPlan.args, {
+    name: "xterm-256color",
+    cols,
+    rows,
     cwd,
     env: { ...process.env, TERM: process.env.TERM || "xterm-256color" },
-    windowsHide: true,
   });
-  const now = new Date().toISOString();
   const session: ArchitectTerminalSession = {
     id,
     title: title || `Terminal ${architectTerminalSequence}`,
-    process: child,
+    process: term,
     cwd,
     shell: shellPlan.shell,
+    cols,
+    rows,
+    connection_state: "detached",
     created_at: now,
     updated_at: now,
     closed_at: null,
     exit_code: null,
     output: [],
+    sockets: new Set(),
     subscribers: new Set(),
+    cleanup_started: false,
   };
-  const appendOutput = (stream: "stdout" | "stderr", chunk: Buffer): void => {
-    const text = chunk.toString("utf-8");
+  term.onData((text) => {
     session.output.push(text);
     if (session.output.length > 500) session.output.splice(0, session.output.length - 500);
     session.updated_at = new Date().toISOString();
-    emitArchitectTerminalEvent(session, "terminal_output", { id, stream, text, updated_at: session.updated_at });
-  };
-  child.stdout.on("data", (chunk: Buffer) => appendOutput("stdout", chunk));
-  child.stderr.on("data", (chunk: Buffer) => appendOutput("stderr", chunk));
-  child.on("error", (error) => {
-    const text = `Terminal failed to start: ${(error as Error).message}\n`;
-    session.output.push(text);
-    session.closed_at = new Date().toISOString();
-    session.updated_at = session.closed_at;
-    emitArchitectTerminalEvent(session, "terminal_output", { id, stream: "stderr", text, updated_at: session.updated_at });
-    emitArchitectTerminalEvent(session, "terminal_exit", buildArchitectTerminalSnapshot(session));
+    emitArchitectTerminalData(session, text);
   });
-  child.on("exit", (code) => {
-    session.closed_at = new Date().toISOString();
-    session.updated_at = session.closed_at;
-    session.exit_code = code;
+  term.onExit((event) => {
+    markArchitectTerminalClosed(session, event.exitCode);
     emitArchitectTerminalEvent(session, "terminal_exit", buildArchitectTerminalSnapshot(session));
+    closeArchitectTerminalSockets(session);
   });
   architectTerminalSessions.set(id, session);
   return session;
 }
 
 function closeArchitectTerminalSession(session: ArchitectTerminalSession): void {
-  if (!session.closed_at) {
-    session.process.kill();
-    session.closed_at = new Date().toISOString();
-    session.updated_at = session.closed_at;
+  const shouldKillProcess = !session.closed_at;
+  if (!session.cleanup_started) {
+    session.cleanup_started = true;
+    markArchitectTerminalClosed(session, session.exit_code);
   }
   emitArchitectTerminalEvent(session, "terminal_exit", buildArchitectTerminalSnapshot(session));
+  closeArchitectTerminalSockets(session);
   architectTerminalSessions.delete(session.id);
+
+  if (shouldKillProcess) {
+    const cleanupTimer = setTimeout(() => {
+      try {
+        session.process.kill();
+      } catch (error) {
+        const text = `Terminal cleanup failed: ${(error as Error).message}\n`;
+        session.output.push(text);
+        session.updated_at = new Date().toISOString();
+        emitArchitectTerminalError(session, text);
+      }
+    }, 0);
+    cleanupTimer.unref?.();
+  }
+}
+
+function closeAllArchitectTerminalSessions(): void {
+  for (const session of [...architectTerminalSessions.values()]) closeArchitectTerminalSession(session);
 }
 
 async function handleArchitectTerminalCreateRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1685,35 +1796,27 @@ async function handleArchitectTerminalCreateRequest(req: IncomingMessage, res: S
     jsonError(res, 400, "bad_request", (error as Error).message);
     return;
   }
-  const session = createArchitectTerminalSession(boundedTextField(body, "title", 80));
-  json(res, 200, { ok: true, contract: "architect", version: "v1", terminal: buildArchitectTerminalSnapshot(session) }, { "Cache-Control": "no-store" });
+  try {
+    const session = createArchitectTerminalSession(boundedTextField(body, "title", 80));
+    json(res, 200, { ok: true, contract: "architect", version: "v1", terminal: buildArchitectTerminalSnapshot(session) }, { "Cache-Control": "no-store" });
+  } catch (error) {
+    jsonError(res, 500, "terminal_spawn_failed", `Terminal failed to start: ${(error as Error).message}`);
+  }
 }
 
-async function handleArchitectTerminalInputRequest(req: IncomingMessage, res: ServerResponse, terminalId: string): Promise<void> {
+async function handleArchitectTerminalInputRequest(_req: IncomingMessage, res: ServerResponse, terminalId: string): Promise<void> {
   const session = architectTerminalSessions.get(terminalId);
   if (!session) {
     jsonError(res, 404, "not_found", "Terminal session not found");
     return;
   }
-  let body: Record<string, unknown>;
-  try {
-    body = await readJsonBody(req);
-  } catch (error) {
-    jsonError(res, 400, "bad_request", (error as Error).message);
-    return;
-  }
-  const input = boundedRawTextField(body, "input", 4096);
-  if (input == null) {
-    jsonError(res, 400, "bad_request", "Terminal input is required");
-    return;
-  }
-  if (session.closed_at || !session.process.stdin.writable) {
-    jsonError(res, 409, "terminal_closed", "Terminal session is closed");
-    return;
-  }
-  session.process.stdin.write(input);
-  session.updated_at = new Date().toISOString();
-  json(res, 200, { ok: true, terminal: buildArchitectTerminalSnapshot(session) }, { "Cache-Control": "no-store" });
+  json(res, 410, {
+    ok: false,
+    error: "terminal_websocket_required",
+    message: "Interactive terminal input is carried by WebSocket /api/architect/v1/terminal/:id.",
+    websocket_path: `/api/architect/v1/terminal/${encodeURIComponent(session.id)}`,
+    terminal: buildArchitectTerminalSnapshot(session),
+  }, { "Cache-Control": "no-store" });
 }
 
 async function handleArchitectTerminalRenameRequest(req: IncomingMessage, res: ServerResponse, terminalId: string): Promise<void> {
@@ -1764,12 +1867,113 @@ function handleArchitectTerminalEvents(req: IncomingMessage, res: ServerResponse
 function handleArchitectTerminalCloseRequest(res: ServerResponse, terminalId: string): void {
   const session = architectTerminalSessions.get(terminalId);
   if (!session) {
-    jsonError(res, 404, "not_found", "Terminal session not found");
+    json(res, 200, { ok: true, terminal: null, already_closed: true }, { "Cache-Control": "no-store" });
     return;
   }
-  const snapshot = buildArchitectTerminalSnapshot(session);
   closeArchitectTerminalSession(session);
-  json(res, 200, { ok: true, terminal: snapshot }, { "Cache-Control": "no-store" });
+  json(res, 200, { ok: true, terminal: buildArchitectTerminalSnapshot(session) }, { "Cache-Control": "no-store" });
+}
+
+function parseArchitectTerminalSocketMessage(raw: RawData): ArchitectTerminalSocketMessage | null {
+  const text = Buffer.isBuffer(raw) ? raw.toString("utf-8") : Array.isArray(raw) ? Buffer.concat(raw).toString("utf-8") : raw.toString();
+  if (text.length > 8192) return null;
+  const parsed = JSON.parse(text) as unknown;
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const message = parsed as Record<string, unknown>;
+  if (message.type === "input" && typeof message.data === "string") {
+    return { type: "input", data: message.data.slice(0, 4096) };
+  }
+  if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
+    const cols = Number(message.cols);
+    const rows = Number(message.rows);
+    if (cols >= 2 && cols <= 500 && rows >= 1 && rows <= 200) return { type: "resize", cols, rows };
+  }
+  return null;
+}
+
+function attachArchitectTerminalSocket(session: ArchitectTerminalSession, socket: WebSocket): void {
+  if (session.closed_at) {
+    sendArchitectTerminalSocketMessage(socket, { type: "exit", terminal: buildArchitectTerminalSnapshot(session) });
+    socket.close(1008, "terminal closed");
+    return;
+  }
+  session.sockets.add(socket);
+  session.connection_state = "connected";
+  session.updated_at = new Date().toISOString();
+  sendArchitectTerminalSocketMessage(socket, {
+    type: "snapshot",
+    terminal: buildArchitectTerminalSnapshot(session),
+    output: session.output.join(""),
+  });
+
+  socket.on("message", (raw) => {
+    let message: ArchitectTerminalSocketMessage | null = null;
+    try {
+      message = parseArchitectTerminalSocketMessage(raw);
+    } catch {
+      message = null;
+    }
+    if (!message) {
+      sendArchitectTerminalSocketMessage(socket, { type: "error", error: "bad_message", message: "Malformed terminal WebSocket message" });
+      socket.close(1003, "bad terminal message");
+      return;
+    }
+    if (session.closed_at) {
+      sendArchitectTerminalSocketMessage(socket, { type: "exit", terminal: buildArchitectTerminalSnapshot(session) });
+      socket.close(1008, "terminal closed");
+      return;
+    }
+    if (message.type === "input") {
+      session.process.write(message.data);
+      session.updated_at = new Date().toISOString();
+      return;
+    }
+    session.cols = message.cols;
+    session.rows = message.rows;
+    session.updated_at = new Date().toISOString();
+    session.process.resize(message.cols, message.rows);
+    emitArchitectTerminalEvent(session, "terminal_resize", buildArchitectTerminalSnapshot(session));
+    sendArchitectTerminalSocketMessage(socket, { type: "snapshot", terminal: buildArchitectTerminalSnapshot(session) });
+  });
+
+  socket.on("close", () => {
+    session.sockets.delete(socket);
+    if (session.sockets.size === 0 && !session.closed_at) {
+      closeArchitectTerminalSession(session);
+    }
+  });
+
+  socket.on("error", (error) => {
+    session.sockets.delete(socket);
+    const message = `Terminal WebSocket error: ${(error as Error).message}\n`;
+    session.output.push(message);
+    session.updated_at = new Date().toISOString();
+    emitArchitectTerminalError(session, message);
+  });
+}
+
+function rejectArchitectTerminalUpgrade(socket: Socket, statusCode: number, message: string): void {
+  socket.write(`HTTP/1.1 ${statusCode} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+  socket.destroy();
+}
+
+export async function handleArchitectTerminalUpgrade(req: IncomingMessage, socket: Socket, head: Buffer, pathname: string): Promise<boolean> {
+  await ensureArchitectInstanceBinding();
+  const route = parseArchitectTerminalSocketRoute(pathname);
+  if (!route) return false;
+  if (!route.terminalId) {
+    rejectArchitectTerminalUpgrade(socket, 400, "Bad Request");
+    return true;
+  }
+  const session = architectTerminalSessions.get(route.terminalId);
+  if (!session) {
+    rejectArchitectTerminalUpgrade(socket, 404, "Not Found");
+    return true;
+  }
+  architectTerminalWebSocketServer.handleUpgrade(req, socket, head, (ws) => {
+    attachArchitectTerminalSocket(session, ws);
+  });
+  return true;
 }
 
 async function handlePlanActionRequest(
@@ -3528,6 +3732,7 @@ function renderArchitectShell(): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DreamGraph Architect</title>
+  <link rel="stylesheet" href="/api/architect/v1/assets/xterm/xterm.css" />
   <style>
     :root {
       color-scheme: dark;
@@ -3714,10 +3919,14 @@ function renderArchitectShell(): string {
       box-sizing: border-box;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: rgba(255, 255, 255, 0.045);
+      background: #111815;
       color: var(--ink);
       padding: 5px 6px;
       font: 0.66rem/1.2 var(--sans);
+    }
+    .plan-filter-field select option {
+      background: #111815;
+      color: var(--ink);
     }
     .plan-list {
       display: grid;
@@ -3945,6 +4154,7 @@ function renderArchitectShell(): string {
       padding-bottom: 6px;
       min-width: 0;
       position: relative;
+      z-index: 5;
     }
     .architect-center-tabs {
       display: flex;
@@ -3954,13 +4164,29 @@ function renderArchitectShell(): string {
       align-items: center;
       min-width: 0;
     }
-    .architect-tab-button {
-      min-height: 28px;
-      max-width: 180px;
+    .architect-tab-item {
+      display: inline-flex;
+      align-items: center;
+      max-width: 210px;
+      min-width: 0;
       border: 1px solid var(--line);
       border-radius: 6px;
       background: rgba(255, 255, 255, 0.045);
       color: var(--muted);
+      overflow: hidden;
+    }
+    .architect-tab-item.is-active {
+      border-color: rgba(104, 216, 182, 0.54);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .architect-tab-button {
+      min-height: 28px;
+      max-width: 180px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
       cursor: pointer;
       padding: 4px 9px;
       font: 700 0.72rem/1.2 var(--sans);
@@ -3976,10 +4202,12 @@ function renderArchitectShell(): string {
       white-space: nowrap;
     }
     .architect-tab-close {
-      width: 16px;
-      height: 16px;
+      flex: 0 0 auto;
+      width: 20px;
+      height: 28px;
       border: 0;
-      border-radius: 4px;
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0;
       background: transparent;
       color: inherit;
       cursor: pointer;
@@ -3988,11 +4216,6 @@ function renderArchitectShell(): string {
     }
     .architect-tab-close:hover {
       background: rgba(255, 255, 255, 0.10);
-    }
-    .architect-tab-button[aria-selected="true"] {
-      border-color: rgba(104, 216, 182, 0.54);
-      background: var(--accent-soft);
-      color: var(--accent);
     }
     .architect-tab-add {
       flex: 0 0 auto;
@@ -4032,9 +4255,13 @@ function renderArchitectShell(): string {
       background: rgba(255, 255, 255, 0.08);
     }
     .architect-tab-panels {
+      position: relative;
+      z-index: 1;
       min-height: 0;
       height: 100%;
       overflow: hidden;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
     }
     .architect-tab-panel {
       min-height: 0;
@@ -4048,6 +4275,7 @@ function renderArchitectShell(): string {
     }
     .architect-tab-panel[hidden] {
       display: none !important;
+      pointer-events: none;
     }
     .architect-tab-panel.plan-workspace,
     .architect-tab-panel.adr-workspace {
@@ -4070,25 +4298,36 @@ function renderArchitectShell(): string {
     }
     .terminal-surface {
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: minmax(24px, auto) minmax(0, 1fr);
       gap: 8px;
       min-height: 0;
       height: 100%;
+      overflow: hidden;
     }
     .terminal-toolbar {
       display: flex;
-      flex-wrap: wrap;
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
       gap: 8px;
       align-items: center;
       justify-content: space-between;
+      min-width: 0;
+      max-height: 40px;
+      overflow: hidden;
       color: var(--muted);
       font-size: 0.72rem;
     }
+    .terminal-toolbar span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .terminal-console {
-      display: grid;
-      grid-template-rows: minmax(0, 1fr) auto;
+      position: relative;
       min-height: 0;
       height: 100%;
+      box-sizing: border-box;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #07100d;
@@ -4096,33 +4335,37 @@ function renderArchitectShell(): string {
       overflow: hidden;
       font: 0.78rem/1.45 var(--mono);
     }
-    .terminal-output {
-      min-height: 0;
-      margin: 0;
-      padding: 10px 10px 0;
-      white-space: pre-wrap;
-      overflow: auto;
-    }
-    .terminal-form {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 6px;
-      align-items: center;
-      padding: 4px 10px 10px;
-    }
-    .terminal-prompt {
-      color: var(--accent);
-      user-select: none;
-    }
-    .terminal-input {
+    .terminal-xterm-mount {
+      position: absolute;
+      inset: 8px 8px 16px 8px;
       min-width: 0;
-      min-height: 24px;
-      border: 0;
-      outline: 0;
-      background: transparent;
-      color: var(--ink);
-      padding: 0;
-      font: inherit;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .terminal-xterm-mount .xterm {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .terminal-xterm-mount .xterm-viewport,
+    .terminal-xterm-mount .xterm-screen {
+      border-radius: 6px;
+    }
+    .terminal-fallback {
+      position: absolute;
+      inset: 8px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      text-align: center;
+      font: 0.78rem/1.4 var(--mono);
+      pointer-events: none;
+      white-space: pre-wrap;
+    }
+    .terminal-fallback[hidden] {
+      display: none !important;
     }
     .runtime-controls {
       display: grid;
@@ -4976,6 +5219,8 @@ function renderArchitectShell(): string {
       <div class="architect-sidebar-handle" data-architect-resize-handle="right" role="separator" aria-orientation="vertical" aria-label="Resize context sidebar" tabindex="0"></div>
     </section>
   </main>
+  <script src="/api/architect/v1/assets/xterm/xterm.js"></script>
+  <script src="/api/architect/v1/assets/xterm/addon-fit.js"></script>
   <script>
     const initialRuntimePayload = ${JSON.stringify(buildMeta()).replace(/</g, "\\u003c")};
     const planListEl = document.getElementById('plan-list');
@@ -5103,7 +5348,16 @@ function renderArchitectShell(): string {
         closeable: true,
         panelId: 'architect-panel-' + id,
         terminalSessionId: null,
-        terminalEventSource: null,
+        terminalSocket: null,
+        terminalSocketReady: false,
+        terminalXterm: null,
+        terminalFitAddon: null,
+        terminalResizeObserver: null,
+        terminalResizeTimer: 0,
+        terminalResizeListener: null,
+        terminalInputDisposable: null,
+        terminalScheduleFit: null,
+        terminalBlurListener: null,
       };
     }
 
@@ -5112,7 +5366,20 @@ function renderArchitectShell(): string {
       return architectCenterTabs.some(function(tab) { return tab.id === requested; }) ? requested : 'chat';
     }
 
+    function handleArchitectTabPointerAction(event, action) {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      action();
+    }
+
     function renderArchitectTabButton(tab, activeTabId) {
+      const item = document.createElement('div');
+      item.className = 'architect-tab-item' + (tab.id === activeTabId ? ' is-active' : '');
+      item.dataset.architectTabItem = tab.id;
+      item.dataset.architectTabType = tab.type;
+      item.dataset.architectTabLifecycle = tab.lifecycle;
+
       const button = document.createElement('button');
       button.id = 'architect-tab-' + tab.id;
       button.className = 'architect-tab-button';
@@ -5123,34 +5390,35 @@ function renderArchitectShell(): string {
       button.dataset.architectTab = tab.id;
       button.dataset.architectTabType = tab.type;
       button.dataset.architectTabLifecycle = tab.lifecycle;
+      button.addEventListener('pointerdown', function(event) {
+        handleArchitectTabPointerAction(event, function() { setArchitectCenterTab(tab.id); });
+      });
       button.addEventListener('click', function() { setArchitectCenterTab(tab.id); });
 
       const label = document.createElement('span');
       label.className = 'architect-tab-label';
       label.textContent = tab.title + (tab.dirty ? ' *' : '');
       button.appendChild(label);
+      item.appendChild(button);
 
       if (tab.closeable) {
-        const close = document.createElement('span');
+        const close = document.createElement('button');
         close.className = 'architect-tab-close';
-        close.setAttribute('role', 'button');
-        close.setAttribute('tabindex', '0');
+        close.type = 'button';
         close.setAttribute('aria-label', 'Close ' + tab.title);
         close.title = 'Close ' + tab.title;
         close.textContent = 'x';
-        close.addEventListener('click', function(event) {
-          event.stopPropagation();
-          closeArchitectCenterTab(tab.id);
+        close.addEventListener('pointerdown', function(event) {
+          handleArchitectTabPointerAction(event, function() { closeArchitectCenterTab(tab.id); });
         });
-        close.addEventListener('keydown', function(event) {
-          if (event.key !== 'Enter' && event.key !== ' ') return;
+        close.addEventListener('click', function(event) {
           event.preventDefault();
           event.stopPropagation();
           closeArchitectCenterTab(tab.id);
         });
-        button.appendChild(close);
+        item.appendChild(close);
       }
-      return button;
+      return item;
     }
 
     function renderArchitectTabPanel(tab) {
@@ -5191,47 +5459,102 @@ function renderArchitectShell(): string {
       tab.dirty = false;
       const heading = document.querySelector('#' + tab.panelId + ' h2');
       if (heading) heading.textContent = title;
-      renderArchitectCenterTabs(tab.id);
+      const activePanel = architectCenterPanelContainer.querySelector('[data-architect-tab-panel]:not([hidden])');
+      const activeTabId = activePanel ? activePanel.dataset.architectTabPanel : tab.id;
+      renderArchitectCenterTabs(activeTabId);
     }
 
-    function bindTerminalEventSource(tab, output, status) {
-      if (!tab.terminalSessionId || tab.terminalEventSource) return;
-      const events = new EventSource('/api/architect/v1/terminals/' + encodeURIComponent(tab.terminalSessionId) + '/events');
-      tab.terminalEventSource = events;
-      events.addEventListener('terminal_snapshot', function(event) {
-        const payload = JSON.parse(event.data || '{}');
-        output.textContent = String(payload.output || '');
-        output.scrollTop = output.scrollHeight;
-        if (payload.terminal && payload.terminal.cwd) status.textContent = payload.terminal.shell + ' | ' + payload.terminal.cwd;
+    function connectTerminalWebSocket(tab, term, fitAddon, mount, status) {
+      if (!tab.terminalSessionId || tab.terminalSocket) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(protocol + '//' + window.location.host + '/api/architect/v1/terminal/' + encodeURIComponent(tab.terminalSessionId));
+      tab.terminalSocket = socket;
+      tab.terminalSocketReady = false;
+
+      function sendTerminalMessage(payload) {
+        if (!tab.terminalSocket || tab.terminalSocket.readyState !== WebSocket.OPEN) return;
+        tab.terminalSocket.send(JSON.stringify(payload));
+      }
+
+      function fitAndResize() {
+        if (!tab.terminalXterm || !tab.terminalFitAddon || mount.offsetParent === null || !mount.clientWidth || !mount.clientHeight) return;
+        try {
+          tab.terminalFitAddon.fit();
+          sendTerminalMessage({ type: 'resize', cols: tab.terminalXterm.cols, rows: tab.terminalXterm.rows });
+        } catch (error) {
+          status.textContent = error.message || 'Terminal fit failed.';
+        }
+      }
+
+      function scheduleFitAndResize() {
+        window.clearTimeout(tab.terminalResizeTimer || 0);
+        tab.terminalResizeTimer = window.setTimeout(fitAndResize, 30);
+      }
+
+      tab.terminalScheduleFit = scheduleFitAndResize;
+      tab.terminalResizeListener = scheduleFitAndResize;
+      socket.addEventListener('open', function() {
+        tab.terminalSocketReady = true;
+        status.textContent = 'Terminal connected.';
+        scheduleFitAndResize();
       });
-      events.addEventListener('terminal_output', function(event) {
-        const payload = JSON.parse(event.data || '{}');
-        appendTerminalOutput(output, String(payload.text || ''));
+      socket.addEventListener('message', function(event) {
+        let payload = null;
+        try { payload = JSON.parse(event.data || '{}'); } catch (_) { return; }
+        if (payload.type === 'snapshot') {
+          const terminal = payload.terminal || {};
+          if (terminal.title) updateTerminalTabTitle(tab, terminal.title);
+          if (terminal.shell || terminal.cwd) status.textContent = (terminal.shell || 'terminal') + ' | ' + (terminal.cwd || 'project root');
+          if (payload.output) term.write(String(payload.output));
+          scheduleFitAndResize();
+          return;
+        }
+        if (payload.type === 'data') {
+          term.write(String(payload.data || ''));
+          return;
+        }
+        if (payload.type === 'exit') {
+          const terminal = payload.terminal || {};
+          status.textContent = 'Terminal closed' + (terminal.exit_code == null ? '' : ' | exit ' + terminal.exit_code);
+          return;
+        }
+        if (payload.type === 'error') {
+          status.textContent = payload.message || payload.error || 'Terminal transport error.';
+        }
       });
-      events.addEventListener('terminal_exit', function(event) {
-        const payload = JSON.parse(event.data || '{}');
-        status.textContent = 'Terminal closed' + (payload.exit_code == null ? '' : ' | exit ' + payload.exit_code);
-        events.close();
-        tab.terminalEventSource = null;
+      socket.addEventListener('close', function() {
+        tab.terminalSocketReady = false;
+        if (tab.terminalSocket === socket) tab.terminalSocket = null;
+        if (!status.textContent.startsWith('Terminal closed')) status.textContent = 'Terminal disconnected.';
       });
-      events.addEventListener('terminal_rename', function(event) {
-        const payload = JSON.parse(event.data || '{}');
-        if (payload.title) updateTerminalTabTitle(tab, payload.title);
+      socket.addEventListener('error', function() {
+        status.textContent = 'Terminal WebSocket error.';
       });
-      events.onerror = function() {
-        status.textContent = 'Terminal event stream disconnected.';
-      };
+      tab.terminalInputDisposable = term.onData(function(data) {
+        sendTerminalMessage({ type: 'input', data: data });
+      });
+      window.addEventListener('resize', tab.terminalResizeListener);
+      if (typeof ResizeObserver !== 'undefined') {
+        tab.terminalResizeObserver = new ResizeObserver(scheduleFitAndResize);
+        tab.terminalResizeObserver.observe(mount);
+        tab.terminalResizeObserver.observe(architectCenterPanelContainer);
+      }
+      window.setTimeout(scheduleFitAndResize, 0);
+      window.setTimeout(scheduleFitAndResize, 120);
     }
 
-    async function ensureTerminalSession(tab, output, status) {
-      if (tab.terminalSessionId) return;
+    async function ensureTerminalSession(tab, term, fitAddon, mount, status) {
+      if (tab.terminalSessionId) {
+        connectTerminalWebSocket(tab, term, fitAddon, mount, status);
+        return;
+      }
       status.textContent = 'Starting terminal in project root...';
       const payload = await postTerminalRequest('/api/architect/v1/terminals', { title: tab.title });
       tab.terminalSessionId = payload.terminal && payload.terminal.id;
       if (payload.terminal && payload.terminal.title) updateTerminalTabTitle(tab, payload.terminal.title);
       const shell = (payload.terminal && payload.terminal.shell) || 'terminal';
       status.textContent = shell + ' | ' + ((payload.terminal && payload.terminal.cwd) || 'project root');
-      bindTerminalEventSource(tab, output, status);
+      connectTerminalWebSocket(tab, term, fitAddon, mount, status);
     }
 
     function renderTerminalArchitectTabPanel(tab, panel) {
@@ -5251,68 +5574,65 @@ function renderArchitectShell(): string {
       toolbar.appendChild(rename);
       const consoleSurface = document.createElement('div');
       consoleSurface.className = 'terminal-console';
-      const output = document.createElement('pre');
-      output.className = 'terminal-output';
-      output.textContent = 'Starting local terminal session. Terminal output is local convenience output, not daemon payload authority.\\n';
-      const form = document.createElement('form');
-      form.className = 'terminal-form';
-      const prompt = document.createElement('span');
-      prompt.className = 'terminal-prompt';
-      prompt.textContent = '>';
-      const input = document.createElement('input');
-      input.className = 'terminal-input';
-      input.type = 'text';
-      input.autocomplete = 'off';
-      input.spellcheck = false;
-      input.setAttribute('aria-label', 'Terminal command line');
-      input.placeholder = '';
-      form.appendChild(prompt);
-      form.appendChild(input);
-      consoleSurface.appendChild(output);
-      consoleSurface.appendChild(form);
+      const mount = document.createElement('div');
+      mount.className = 'terminal-xterm-mount';
+      mount.setAttribute('aria-label', 'Terminal');
+      const fallback = document.createElement('div');
+      fallback.className = 'terminal-fallback';
+      fallback.hidden = true;
+      consoleSurface.appendChild(mount);
+      consoleSurface.appendChild(fallback);
       surface.appendChild(toolbar);
       surface.appendChild(consoleSurface);
       panel.appendChild(heading);
       panel.appendChild(surface);
-      ensureTerminalSession(tab, output, status).catch(function(error) {
-        status.textContent = error.message || 'Terminal failed to start.';
-        appendTerminalOutput(output, '\\n' + status.textContent + '\\n');
+
+      const TerminalCtor = window.Terminal;
+      const FitAddonCtor = window.FitAddon && window.FitAddon.FitAddon;
+      if (!TerminalCtor || !FitAddonCtor) {
+        fallback.hidden = false;
+        fallback.textContent = 'Terminal browser assets failed to load.';
+        status.textContent = 'xterm assets unavailable.';
+        return;
+      }
+
+      const term = new TerminalCtor({
+        cursorBlink: true,
+        convertEol: false,
+        fontFamily: 'JetBrains Mono, Cascadia Code, IBM Plex Mono, SFMono-Regular, Consolas, monospace',
+        fontSize: 13,
+        theme: {
+          background: '#07100d',
+          foreground: '#edf5ee',
+          cursor: '#68d8b6',
+          selectionBackground: '#315c50',
+        },
       });
-      const commandHistory = [];
-      let historyIndex = 0;
-      output.addEventListener('click', function() { input.focus(); });
-      consoleSurface.addEventListener('click', function() { input.focus(); });
-      surface.addEventListener('click', function(event) {
-        if (event.target === rename) return;
-        input.focus();
+      const fitAddon = new FitAddonCtor();
+      tab.terminalXterm = term;
+      tab.terminalFitAddon = fitAddon;
+      term.loadAddon(fitAddon);
+      term.open(mount);
+      term.writeln('Starting local terminal session. Terminal output is local convenience output, not daemon payload authority.');
+      ensureTerminalSession(tab, term, fitAddon, mount, status).catch(function(error) {
+        fallback.hidden = false;
+        fallback.textContent = error.message || 'Terminal failed to start.';
+        status.textContent = fallback.textContent;
+        term.writeln('');
+        term.writeln(fallback.textContent);
       });
-      window.setTimeout(function() { input.focus(); }, 0);
-      input.addEventListener('keydown', function(event) {
-        if (event.key === 'ArrowUp') {
-          if (commandHistory.length === 0) return;
-          event.preventDefault();
-          historyIndex = Math.max(0, historyIndex - 1);
-          input.value = commandHistory[historyIndex] || '';
-          input.setSelectionRange(input.value.length, input.value.length);
-        } else if (event.key === 'ArrowDown') {
-          if (commandHistory.length === 0) return;
-          event.preventDefault();
-          historyIndex = Math.min(commandHistory.length, historyIndex + 1);
-          input.value = commandHistory[historyIndex] || '';
-          input.setSelectionRange(input.value.length, input.value.length);
-        }
+      consoleSurface.addEventListener('pointerdown', function(event) {
+        if (event.button !== 0) return;
+        term.focus();
       });
-      form.addEventListener('submit', function(event) {
-        event.preventDefault();
-        const value = input.value;
-        if (!tab.terminalSessionId) return;
-        input.value = '';
-        if (value) commandHistory.push(value);
-        historyIndex = commandHistory.length;
-        postTerminalRequest('/api/architect/v1/terminals/' + encodeURIComponent(tab.terminalSessionId) + '/input', { input: value + '\\n' }).catch(function(error) {
-          appendTerminalOutput(output, '\\n' + (error.message || 'Terminal input failed.') + '\\n');
-        });
-      });
+      tab.terminalBlurListener = function(event) {
+        if (consoleSurface.contains(event.target)) return;
+        blurArchitectTerminalTab(tab);
+      };
+      document.addEventListener('focusin', tab.terminalBlurListener, true);
+      window.setTimeout(function() {
+        if (tab.terminalScheduleFit) tab.terminalScheduleFit();
+      }, 0);
       rename.addEventListener('click', function() {
         if (!tab.terminalSessionId) return;
         const title = window.prompt('Terminal name', tab.title);
@@ -5323,6 +5643,10 @@ function renderArchitectShell(): string {
       });
     }
 
+    function blurArchitectTerminalTab(tab) {
+      if (tab && tab.terminalXterm && typeof tab.terminalXterm.blur === 'function') tab.terminalXterm.blur();
+    }
+
     function renderArchitectCenterTabs(activeTabId) {
       resetNode(architectCenterTabContainer);
       const normalized = resolveArchitectCenterTab(activeTabId);
@@ -5331,12 +5655,17 @@ function renderArchitectShell(): string {
         renderArchitectTabPanel(tab);
       }
       for (const panel of Array.from(architectCenterPanelContainer.querySelectorAll('[data-architect-tab-panel]'))) {
-        panel.hidden = panel.dataset.architectTabPanel !== normalized;
+        const isActivePanel = panel.dataset.architectTabPanel === normalized;
+        panel.hidden = !isActivePanel;
+        if (!isActivePanel && panel.dataset.architectTabType === 'terminal') {
+          const inactiveTab = architectCenterTabs.find(function(candidate) { return candidate.id === panel.dataset.architectTabPanel; });
+          blurArchitectTerminalTab(inactiveTab);
+        }
       }
       const activePanel = architectCenterPanelContainer.querySelector('[data-architect-tab-panel="' + normalized + '"]');
       if (activePanel && activePanel.dataset.architectTabType === 'terminal') {
-        const input = activePanel.querySelector('.terminal-input');
-        if (input) window.setTimeout(function() { input.focus(); }, 0);
+        const tab = architectCenterTabs.find(function(candidate) { return candidate.id === normalized; });
+        if (tab && tab.terminalScheduleFit) window.setTimeout(tab.terminalScheduleFit, 0);
       }
       return normalized;
     }
@@ -5349,10 +5678,34 @@ function renderArchitectShell(): string {
     function closeArchitectCenterTab(tabId) {
       const tab = architectCenterTabs.find(function(candidate) { return candidate.id === tabId; });
       if (!tab || !tab.closeable) return;
-      if (tab.terminalEventSource) {
-        tab.terminalEventSource.close();
-        tab.terminalEventSource = null;
+      window.clearTimeout(tab.terminalResizeTimer || 0);
+      tab.terminalResizeTimer = 0;
+      if (tab.terminalResizeListener) {
+        window.removeEventListener('resize', tab.terminalResizeListener);
+        tab.terminalResizeListener = null;
       }
+      if (tab.terminalBlurListener) {
+        document.removeEventListener('focusin', tab.terminalBlurListener, true);
+        tab.terminalBlurListener = null;
+      }
+      if (tab.terminalInputDisposable && typeof tab.terminalInputDisposable.dispose === 'function') {
+        tab.terminalInputDisposable.dispose();
+        tab.terminalInputDisposable = null;
+      }
+      if (tab.terminalSocket) {
+        tab.terminalSocket.close(1000, 'tab closed');
+        tab.terminalSocket = null;
+      }
+      if (tab.terminalResizeObserver) {
+        tab.terminalResizeObserver.disconnect();
+        tab.terminalResizeObserver = null;
+      }
+      if (tab.terminalXterm) {
+        tab.terminalXterm.dispose();
+        tab.terminalXterm = null;
+      }
+      tab.terminalFitAddon = null;
+      tab.terminalScheduleFit = null;
       if (tab.terminalSessionId) {
         postTerminalRequest('/api/architect/v1/terminals/' + encodeURIComponent(tab.terminalSessionId) + '/close', {}).catch(function() { /* best-effort cleanup */ });
       }
@@ -5393,7 +5746,18 @@ function renderArchitectShell(): string {
       ];
       registerArchitectTabType({ type: 'terminal', title: 'New Terminal', create: createTerminalArchitectTab });
       renderArchitectTabMenu();
+      let tabAddPointerHandled = false;
+      architectTabAddButton.addEventListener('pointerdown', function(event) {
+        handleArchitectTabPointerAction(event, function() {
+          tabAddPointerHandled = true;
+          architectTabMenu.hidden = !architectTabMenu.hidden;
+        });
+      });
       architectTabAddButton.addEventListener('click', function() {
+        if (tabAddPointerHandled) {
+          tabAddPointerHandled = false;
+          return;
+        }
         architectTabMenu.hidden = !architectTabMenu.hidden;
       });
       document.addEventListener('click', function(event) {
@@ -8148,6 +8512,11 @@ export async function handleArchitectRoute(
     await ensureArchitectInstanceBinding();
     if (req.method === "GET" && (pathname === "/architect" || pathname === "/architect/")) {
       html(res, 200, renderArchitectShell());
+      return true;
+    }
+
+    if (req.method === "GET" && ARCHITECT_XTERM_ASSETS[pathname]) {
+      await handleArchitectAssetRequest(res, pathname);
       return true;
     }
 

@@ -50,6 +50,13 @@ ok()    { echo -e "  ${GREEN}$* [ok]${NC}"; }
 warn()  { echo -e "  ${YELLOW}[!] $*${NC}"; }
 fail()  { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
 
+remove_install_node_modules() {
+    local path="$1"
+
+    [[ -d "$path" ]] || return 0
+    echo -e "  ${CYAN}Reusing existing node_modules; npm will update dependencies in place.${NC}"
+}
+
 run_logged() {
     local allow_failure="false"
     local quiet="false"
@@ -366,7 +373,7 @@ node -e "
 ok "package.json created"
 
 echo -e "  ${CYAN}Installing dependencies...${NC}"
-[[ -d "$BIN_DIR/node_modules" ]] && rm -rf "$BIN_DIR/node_modules"
+remove_install_node_modules "$BIN_DIR/node_modules"
 # Also ensure no stale lockfile is reused -- file: deps must be resolved fresh.
 [[ -f "$BIN_DIR/package-lock.json" ]] && rm -f "$BIN_DIR/package-lock.json"
 (

@@ -16,6 +16,7 @@
  *   dreamgraph --transport http --port 9000  # Streamable HTTP on :9000
  */
 
+import type { Socket } from "node:net";
 import { createServer } from "./server/server.js";
 import { handleDashboardRoute, setDashboardContext } from "./server/dashboard.js";
 import { handleApiRoute } from "./api/routes.js";
@@ -285,6 +286,22 @@ async function startHTTP(port: number): Promise<void> {
 
     res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("Not found");
+  });
+
+  httpServer.on("upgrade", async (req, socket: Socket, head) => {
+    const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+    if (!url.pathname.startsWith("/api/architect/v1/terminal/")) {
+      socket.destroy();
+      return;
+    }
+    try {
+      const { handleArchitectTerminalUpgrade } = await import("./architect/routes.js");
+      const handled = await handleArchitectTerminalUpgrade(req, socket, head, url.pathname);
+      if (!handled) socket.destroy();
+    } catch (error) {
+      logger.error(`Architect terminal WebSocket upgrade failed: ${(error as Error).message}`);
+      socket.destroy();
+    }
   });
 
   httpServer.listen(port, () => {

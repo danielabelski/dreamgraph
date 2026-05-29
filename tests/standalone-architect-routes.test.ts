@@ -973,8 +973,9 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("/api/architect/v1/terminals");
       expect(html).toContain("Terminal output is local convenience output, not daemon payload authority.");
       expect(html).toContain("terminal-console");
-      expect(html).toContain("commandHistory");
-      expect(html).toContain("value + '\\n'");
+      expect(html).toContain("const activePanel = architectCenterPanelContainer.querySelector('[data-architect-tab-panel]:not([hidden])');");
+      expect(html).toContain("const activeTabId = activePanel ? activePanel.dataset.architectTabPanel : tab.id;");
+      expect(html).not.toContain("commandHistory");
       expect(html).not.toContain("send.textContent = 'Send'");
       expect(html).toContain("data-architect-tab-panel=\"chat\"");
       expect(html).toContain("data-architect-tab-panel=\"plan\"");

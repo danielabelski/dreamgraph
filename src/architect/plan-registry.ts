@@ -729,27 +729,39 @@ function buildOperationalState(
   lastResumeNote: string | null,
 ): ArchitectOperationalPlanState {
   const activePhaseSlice = activePhase == null ? null : slices.find((slice) => slice.title === activePhase) ?? null;
+  const implementationSlices = slices.filter((slice) => slice.category === "slice");
   const implementationCheckpoints = checkpoints.filter(isImplementationCheckpoint);
   const latestImplementationCheckpoint = implementationCheckpoints.at(-1) ?? null;
   const latestCompletedCheckpoint = [...implementationCheckpoints].reverse().find(isCompletedCheckpoint) ?? null;
   const latestCompletedSlice = findSliceById(slices, latestCompletedCheckpoint?.slice_id);
-  const resumeHint = latestImplementationCheckpoint?.resume_note ?? latestCompletedCheckpoint?.resume_note ?? lastResumeNote;
-  const nextSlice = findNextSliceFromResume(slices, resumeHint, latestCompletedSlice?.id ?? latestCompletedCheckpoint?.slice_id ?? null);
   const latestImplementationSlice = findSliceById(slices, latestImplementationCheckpoint?.slice_id);
-  const latestImplementationComplete = latestImplementationCheckpoint ? isCompletedCheckpoint(latestImplementationCheckpoint) : false;
-  const activeSlice = latestImplementationComplete
-    ? nextSlice ?? latestImplementationSlice ?? activePhaseSlice
-    : latestImplementationSlice ?? nextSlice ?? activePhaseSlice;
   const completedSliceIds = new Set(
     implementationCheckpoints
       .filter(isCompletedCheckpoint)
       .map((checkpoint) => findSliceById(slices, checkpoint.slice_id)?.id ?? checkpoint.slice_id),
   );
+  const allImplementationSlicesComplete =
+    implementationSlices.length > 0 && implementationSlices.every((slice) => completedSliceIds.has(slice.id));
+  const rawResumeHint = latestImplementationCheckpoint?.resume_note ?? latestCompletedCheckpoint?.resume_note ?? lastResumeNote;
+  const nextSlice = allImplementationSlicesComplete
+    ? null
+    : findNextSliceFromResume(slices, rawResumeHint, latestCompletedSlice?.id ?? latestCompletedCheckpoint?.slice_id ?? null);
+  const latestImplementationComplete = latestImplementationCheckpoint ? isCompletedCheckpoint(latestImplementationCheckpoint) : false;
+  const activeSlice = allImplementationSlicesComplete
+    ? latestCompletedSlice ?? latestImplementationSlice ?? activePhaseSlice
+    : latestImplementationComplete
+      ? nextSlice ?? latestImplementationSlice ?? activePhaseSlice
+      : latestImplementationSlice ?? nextSlice ?? activePhaseSlice;
   const lifecycle = derivePlanLifecycle(planStatus, slices, implementationCheckpoints, completedSliceIds, nextSlice);
   const executionState = lifecycle === "completed" ? "complete" : deriveExecutionState(latestImplementationCheckpoint);
   const activeSliceRef = sliceRef(activeSlice, latestImplementationCheckpoint);
   const lastCompletedSliceRef = sliceRef(latestCompletedSlice, latestCompletedCheckpoint);
   const nextSliceRef = sliceRef(nextSlice);
+  const completedResumeHint =
+    lifecycle === "completed" && lastCompletedSliceRef
+      ? `completed after ${lastCompletedSliceRef.title ?? lastCompletedSliceRef.id}`
+      : null;
+  const resumeHint = completedResumeHint ?? rawResumeHint;
   const derivedActivePhase = deriveImplicitActivePhase(activePhase, planTitle, activeSliceRef ?? nextSliceRef ?? lastCompletedSliceRef);
   const currentSliceId = activeSliceRef?.id ?? lastCompletedSliceRef?.id ?? null;
   const currentSliceTitle = activeSliceRef?.title ?? lastCompletedSliceRef?.title ?? null;

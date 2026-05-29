@@ -53,6 +53,19 @@ function Get-ArrayCount {
     return @($Value).Count
 }
 
+function Remove-InstallNodeModules {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    # The standalone daemon itself is a node.exe process and may be running from
+    # this installation. Do not delete the live dependency tree; npm can converge
+    # it in place after the lockfile is refreshed.
+    Write-Host "  Reusing existing node_modules; npm will update dependencies in place." -ForegroundColor DarkGray
+}
+
 function Invoke-LoggedCommand {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -359,9 +372,7 @@ Write-Ok "package.json created"
 
 Write-Host "  Installing dependencies..." -ForegroundColor Cyan
 $nodeModulesDir = Join-Path $BinDir "node_modules"
-if (Test-Path $nodeModulesDir) {
-    Remove-Item -Recurse -Force $nodeModulesDir
-}
+Remove-InstallNodeModules -Path $nodeModulesDir
 # Also ensure no stale lockfile is reused — file: deps must be resolved fresh.
 $binLockFile = Join-Path $BinDir "package-lock.json"
 if (Test-Path $binLockFile) {
