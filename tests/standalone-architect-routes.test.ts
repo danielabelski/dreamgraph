@@ -695,6 +695,70 @@ describe("standalone Architect route hardening", () => {
     }
   });
 
+  it("does not project stale resume notes as next slice after all slices complete", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-completed-slice-projection-"));
+    const dataDir = join(tempRoot, "data");
+    const plansDir = join(tempRoot, "plans");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-completed-slice-projection-test",
+      projectRoot: tempRoot,
+      dataDir,
+    } as never);
+
+    try {
+      await mkdir(plansDir, { recursive: true });
+      await writeFile(join(plansDir, "completed-slice-projection.md"), [
+        "# Completed Slice Projection",
+        "",
+        "Status: Draft",
+        "",
+        "### Slice 1 - Foundation",
+        "",
+        "### Slice 2 - Layout",
+        "",
+        "### Slice 3 - Tests",
+        "",
+      ].join("\n"), "utf-8");
+      await writeFile(join(plansDir, "completed-slice-projection.implementation-log.md"), [
+        "# Completed Slice Projection Implementation Log",
+        "",
+        "### 2026-05-29T12:00:00.000Z - slice: Slice 1 - Foundation - status: completed",
+        "",
+        "- Verification: complete",
+        "",
+        "### 2026-05-29T12:10:00.000Z - slice: Slice 2 - Layout - status: completed",
+        "",
+        "- Resume note: continue with Slice 2 - Layout",
+        "",
+        "### 2026-05-29T12:20:00.000Z - slice: Slice 3 - Tests - status: completed",
+        "",
+        "- Verification: complete",
+        "",
+      ].join("\n"), "utf-8");
+
+      await withArchitectServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/architect/v1/plans/completed-slice-projection`);
+        const payload = await expectJsonOk(response);
+        const plan = payload.plan as { operational_state?: Record<string, unknown> };
+        const operational = plan.operational_state ?? {};
+        const activeSlice = operational.active_slice as { title?: string } | null;
+        const lastCompleted = operational.last_completed_slice as { title?: string } | null;
+
+        expect(operational.plan_lifecycle).toBe("completed");
+        expect(operational.execution_state).toBe("complete");
+        expect(operational.next_slice).toBeNull();
+        expect(String(activeSlice?.title ?? activeSlice?.id ?? "")).toContain("Slice 3");
+        expect(String(lastCompleted?.title ?? lastCompleted?.id ?? "")).toContain("Slice 3");
+        expect(String(operational.current_slice_title ?? "")).toContain("Slice 3");
+        expect(String(operational.resume_hint ?? "")).toContain("completed after Slice 3");
+        expect(String(operational.resume_hint ?? "")).not.toContain("continue with Slice 2");
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("formats status command JSON into chat-safe status text", () => {
     const rendered = formatArchitectStatusPayload({
       identity: { uuid: "instance-1", name: "Architect", status: "active", mode: "standalone", policy: "local" },
