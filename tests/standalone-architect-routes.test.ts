@@ -129,7 +129,8 @@ describe("standalone Architect route hardening", () => {
       expect(script).toBeTruthy();
       expect(() => new Script(script!, { filename: "architect-shell.js" })).not.toThrow();
       expect(script).toContain("function collapseWhitespace");
-      expect(script).toContain("String.fromCharCode(92) + 's+'");
+      expect(script).toContain("function isArchitectWhitespace");
+      expect(script).toContain("function splitArchitectWords");
       expect(script).toContain("function describeStructuredToolResult");
       expect(script).toContain("lines.join(String.fromCharCode(10))");
       expect(script).not.toContain("replace(/s+/g");
@@ -739,11 +740,12 @@ describe("standalone Architect route hardening", () => {
       await withArchitectServer(async (baseUrl) => {
         const response = await fetch(`${baseUrl}/api/architect/v1/plans/completed-slice-projection`);
         const payload = await expectJsonOk(response);
-        const plan = payload.plan as { operational_state?: Record<string, unknown> };
+        const plan = payload.plan as { status?: string | null; operational_state?: Record<string, unknown> };
         const operational = plan.operational_state ?? {};
         const activeSlice = operational.active_slice as { title?: string } | null;
         const lastCompleted = operational.last_completed_slice as { title?: string } | null;
 
+        expect(plan.status).toBe("completed");
         expect(operational.plan_lifecycle).toBe("completed");
         expect(operational.execution_state).toBe("complete");
         expect(operational.next_slice).toBeNull();
@@ -752,6 +754,14 @@ describe("standalone Architect route hardening", () => {
         expect(String(operational.current_slice_title ?? "")).toContain("Slice 3");
         expect(String(operational.resume_hint ?? "")).toContain("completed after Slice 3");
         expect(String(operational.resume_hint ?? "")).not.toContain("continue with Slice 2");
+
+        const listResponse = await fetch(`${baseUrl}/api/architect/v1/plans`);
+        const listPayload = await expectJsonOk(listResponse);
+        const plans = listPayload.plans as Array<{ id?: string; status?: string; operational_state?: Record<string, unknown> }>;
+        const filters = listPayload.plan_filters as { status_options?: string[] };
+        expect(plans.find((entry) => entry.id === "completed-slice-projection")?.status).toBe("completed");
+        expect(filters.status_options).toContain("completed");
+        expect(filters.status_options).not.toContain("Draft");
       });
     } finally {
       scopeSpy.mockRestore();
@@ -999,6 +1009,8 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("function clearSelectedPlan");
       expect(html).toContain("function parseChatSlashOverride");
       expect(html).toContain("function parseArchitectSlashCommand");
+      expect(html).toContain("function splitArchitectWords");
+      expect(html).toContain("const tokens = splitArchitectWords(text.slice(1));");
       expect(html).toContain("function tryHandleSlashCommand");
       expect(html).toContain("class=\"prompt-surface\"");
       expect(html).toContain("id=\"chat-scope-pill\"");

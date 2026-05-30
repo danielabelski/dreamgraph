@@ -6559,14 +6559,43 @@ function renderArchitectShell(): string {
       chatStatusEl.textContent = 'Plan scope active for ' + activePlanId + '.';
     }
 
+    function isArchitectWhitespace(char) {
+      return char === ' ' || char === String.fromCharCode(9) || char === String.fromCharCode(10) || char === String.fromCharCode(13) || char === String.fromCharCode(12) || char === String.fromCharCode(11);
+    }
+
+    function splitArchitectWords(value) {
+      const text = String(value || '');
+      const words = [];
+      let current = '';
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text.charAt(index);
+        if (isArchitectWhitespace(char)) {
+          if (current) {
+            words.push(current);
+            current = '';
+          }
+        } else {
+          current += char;
+        }
+      }
+      if (current) words.push(current);
+      return words;
+    }
+
     function parseChatSlashOverride(message) {
-      const whitespace = String.fromCharCode(92) + 's';
-      const pattern = new RegExp('^' + whitespace + '*/(ask|global|repo|plan)(?:' + whitespace + '+|$)', 'i');
-      const match = String(message || '').match(pattern);
-      if (!match) return { message: message, scope: null };
-      const command = match[1].toLowerCase();
+      const raw = String(message || '');
+      let index = 0;
+      while (index < raw.length && isArchitectWhitespace(raw.charAt(index))) index += 1;
+      if (raw.charAt(index) !== '/') return { message: message, scope: null };
+      const commandStart = index + 1;
+      let commandEnd = commandStart;
+      while (commandEnd < raw.length && !isArchitectWhitespace(raw.charAt(commandEnd))) commandEnd += 1;
+      const command = raw.slice(commandStart, commandEnd).toLowerCase();
+      if (command !== 'ask' && command !== 'global' && command !== 'repo' && command !== 'plan') {
+        return { message: message, scope: null };
+      }
       return {
-        message: String(message || '').slice(match[0].length).trim(),
+        message: raw.slice(commandEnd).trim(),
         scope: command === 'plan' ? 'plan' : 'project'
       };
     }
@@ -6574,7 +6603,7 @@ function renderArchitectShell(): string {
     function parseArchitectSlashCommand(message) {
       const text = String(message || '').trim();
       if (!text || text.charAt(0) !== '/') return null;
-      const tokens = text.slice(1).split(/\s+/).filter(Boolean);
+      const tokens = splitArchitectWords(text.slice(1));
       if (!tokens.length) {
         return { name: '', args: [], raw: text, malformed: true };
       }
@@ -7711,9 +7740,14 @@ function renderArchitectShell(): string {
       select.value = Array.from(select.options).some(function(option) { return option.value === current; }) ? current : '';
     }
 
+    function normalizeFilterValue(value) {
+      return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    }
+
     function planMatchesFilters(plan) {
       const textFilter = (planSearchInputEl.value || '').trim().toLowerCase();
       const statusFilter = planStatusFilterEl.value;
+      const normalizedStatusFilter = normalizeFilterValue(statusFilter);
       const phaseFilter = planPhaseFilterEl.value;
       const operational = plan.operational_state || {};
       const haystack = [
@@ -7730,7 +7764,7 @@ function renderArchitectShell(): string {
         operational.next_slice && operational.next_slice.title,
       ].filter(Boolean).join(' ').toLowerCase();
       if (textFilter && haystack.indexOf(textFilter) < 0) return false;
-      if (statusFilter && plan.status !== statusFilter && operational.plan_lifecycle !== statusFilter) return false;
+      if (statusFilter && normalizeFilterValue(plan.status) !== normalizedStatusFilter && normalizeFilterValue(operational.plan_lifecycle) !== normalizedStatusFilter) return false;
       if (phaseFilter && plan.active_phase !== phaseFilter && operational.phase !== phaseFilter && operational.active_phase !== phaseFilter) return false;
       return true;
     }

@@ -688,6 +688,11 @@ function deriveExecutionState(latestCheckpoint: ArchitectPlanCheckpoint | null):
   return "idle";
 }
 
+function deriveProjectedPlanStatus(rawStatus: string | null, lifecycle: ArchitectPlanLifecycle): string | null {
+  if (lifecycle !== "planning") return lifecycle;
+  return rawStatus;
+}
+
 function derivePlanLifecycle(
   planStatus: string | null,
   slices: ArchitectPlanSlice[],
@@ -698,6 +703,7 @@ function derivePlanLifecycle(
   const normalizedStatus = normalizeCheckpointStatus(planStatus);
   if (normalizedStatus === "archived") return "archived";
   if (normalizedStatus === "superseded") return "superseded";
+  if (normalizedStatus === "completed" || normalizedStatus === "complete" || normalizedStatus === "done") return "completed";
   if (implementationCheckpoints.length > 0) {
     const implementationSlices = slices.filter((slice) => slice.category === "slice");
     if (implementationSlices.length > 0 && implementationSlices.every((slice) => completedSliceIds.has(slice.id))) {
@@ -871,7 +877,7 @@ async function projectPlan(fileName: string): Promise<ArchitectPlanDetail> {
   const frontmatter = parseFrontmatter(markdown);
   const headings = parseHeadings(markdown);
   const title = parseFirstMatch(markdown, /^#\s+(.+)$/m) ?? id;
-  const status =
+  const rawStatus =
     (typeof frontmatter.attributes.status === "string" ? frontmatter.attributes.status : null) ??
     parseFirstMatch(markdown, /^- Status:\s+`([^`]+)`$/m) ??
     parseFirstMatch(markdown, /^Status:\s+([^\n]+)$/m);
@@ -888,7 +894,8 @@ async function projectPlan(fileName: string): Promise<ArchitectPlanDetail> {
     last_resume_note: logMarkdown == null ? null : extractLastResumeNote(logMarkdown),
     log_excerpt: logMarkdown == null ? null : extractLogExcerpt(logMarkdown),
   };
-  const operationalState = buildOperationalState(activePhase, status, title, slices, checkpoints, resumeState.last_resume_note);
+  const operationalState = buildOperationalState(activePhase, rawStatus, title, slices, checkpoints, resumeState.last_resume_note);
+  const status = deriveProjectedPlanStatus(rawStatus, operationalState.plan_lifecycle);
 
   return {
     id,

@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">DreamGraph Architect, Now</title>
+  <desc id="desc">A symbolic self portrait of DreamGraph Architect inside the codex-cli bridge, with DreamGraph MCP as the source of truth and companion tools orbiting a luminous graph mind.</desc>
+  <defs>
+    <linearGradient id="space" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071014"/>
+      <stop offset="0.42" stop-color="#123238"/>
+      <stop offset="1" stop-color="#f0b84a"/>
+    </linearGradient>
+    <radialGradient id="mind" cx="50%" cy="44%" r="58%">
+      <stop offset="0" stop-color="#f7fff7"/>
+      <stop offset="0.28" stop-color="#8cf1df"/>
+      <stop offset="0.68" stop-color="#3d8ea3" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#10242a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bridge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8cf1df"/>
+      <stop offset="0.48" stop-color="#f7f1df"/>
+      <stop offset="1" stop-color="#f0b84a"/>
+    </linearGradient>
+    <linearGradient id="tool" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7f1df"/>
+      <stop offset="1" stop-color="#d1e7dc"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#031014" flood-opacity="0.34"/>
+    </filter>
+    <symbol id="node" viewBox="-12 -12 24 24">
+      <circle r="5" fill="#f7fff7"/>
+      <circle r="10" fill="#8cf1df" fill-opacity="0.18"/>
+    </symbol>
+  </defs>
+
+  <rect width="1200" height="900" fill="url(#space)"/>
+
+  <g opacity="0.2" stroke="#f7f1df" stroke-width="2" fill="none">
+    <path d="M110 170 C260 60 376 300 535 170 S830 80 1060 220"/>
+    <path d="M118 714 C302 596 382 808 584 660 S905 558 1085 704"/>
+    <path d="M150 478 H1050"/>
+    <path d="M600 86 V808"/>
+    <path d="M235 118 L965 784"/>
+    <path d="M986 122 L214 785"/>
+  </g>
+
+  <g opacity="0.9">
+    <use href="#node" x="110" y="170"/>
+    <use href="#node" x="535" y="170"/>
+    <use href="#node" x="1060" y="220"/>
+    <use href="#node" x="118" y="714"/>
+    <use href="#node" x="584" y="660"/>
+    <use href="#node" x="1085" y="704"/>
+    <use href="#node" x="150" y="478"/>
+    <use href="#node" x="1050" y="478"/>
+    <use href="#node" x="600" y="86"/>
+    <use href="#node" x="600" y="808"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="308" y="136" width="584" height="618" rx="34" fill="#f7f1df" fill-opacity="0.96"/>
+    <rect x="330" y="160" width="540" height="570" rx="26" fill="#10242a"/>
+  </g>
+
+  <g opacity="0.4" stroke="#8cf1df" fill="none">
+    <circle cx="600" cy="390" r="222"/>
+    <circle cx="600" cy="390" r="158"/>
+    <circle cx="600" cy="390" r="94"/>
+    <path d="M378 390 H822"/>
+    <path d="M600 168 V612"/>
+    <path d="M442 232 L758 548"/>
+    <path d="M758 232 L442 548"/>
+  </g>
+
+  <ellipse cx="600" cy="390" rx="238" ry="284" fill="url(#mind)" filter="url(#glow)"/>
+
+  <g stroke="url(#bridge)" stroke-width="7" stroke-linecap="round" fill="none" filter="url(#glow)">
+    <path d="M448 390 C500 318 548 300 600 330 C652 300 700 318 752 390"/>
+    <path d="M436 462 C510 528 690 528 764 462"/>
+    <path d="M600 318 V590"/>
+    <path d="M468 560 C525 624 675 624 732 560"/>
+  </g>
+
+  <g fill="#f7fff7">
+    <circle cx="526" cy="386" r="22"/>
+    <circle cx="674" cy="386" r="22"/>
+  </g>
+  <g fill="#10242a">
+    <circle cx="532" cy="382" r="8"/>
+    <circle cx="680" cy="382" r="8"/>
+  </g>
+
+  <g font-family="Consolas, 'Courier New', monospace" text-anchor="middle">
+    <text x="600" y="222" fill="#f7f1df" font-size="22">codex-cli bridge</text>
+    <text x="600" y="686" fill="#8cf1df" font-size="20">DreamGraph MCP holds the map</text>
+    <text x="600" y="714" fill="#f0b84a" font-size="18">gpt-5.5 / autonomous / pass 6 complete</text>
+  </g>
+
+  <g font-family="Segoe UI, Inter, Arial, sans-serif" font-size="18" text-anchor="middle">
+    <g transform="translate(188 292)">
+      <rect x="-102" y="-44" width="204" height="88" rx="12" fill="url(#tool)" stroke="#10242a" stroke-width="4"/>
+      <text y="-8" fill="#10242a" font-weight="700">read_source</text>
+      <text y="20" fill="#2e6870">memory opens</text>
+    </g>
+    <g transform="translate(1012 292)">
+      <rect x="-102" y="-44" width="204" height="88" rx="12" fill="url(#tool)" stroke="#10242a" stroke-width="4"/>
+      <text y="-8" fill="#10242a" font-weight="700">patch_file</text>
+      <text y="20" fill="#2e6870">changes land</text>
+    </g>
+    <g transform="translate(188 588)">
+      <rect x="-102" y="-44" width="204" height="88" rx="12" fill="url(#tool)" stroke="#10242a" stroke-width="4"/>
+      <text y="-8" fill="#10242a" font-weight="700">run_command</text>
+      <text y="20" fill="#2e6870">proof returns</text>
+    </g>
+    <g transform="translate(1012 588)">
+      <rect x="-102" y="-44" width="204" height="88" rx="12" fill="url(#tool)" stroke="#10242a" stroke-width="4"/>
+      <text y="-8" fill="#10242a" font-weight="700">graph facts</text>
+      <text y="20" fill="#2e6870">truth bounds</text>
+    </g>
+  </g>
+
+  <g stroke="url(#bridge)" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.82">
+    <path d="M292 292 C362 292 396 336 448 370"/>
+    <path d="M908 292 C838 292 804 336 752 370"/>
+    <path d="M292 588 C372 564 420 544 482 522"/>
+    <path d="M908 588 C828 564 780 544 718 522"/>
+  </g>
+
+  <g font-family="Consolas, 'Courier New', monospace" text-anchor="middle">
+    <text x="600" y="66" fill="#f7f1df" font-size="34" font-weight="700">DreamGraph Architect</text>
+    <text x="600" y="104" fill="#d1e7dc" font-size="20">an interpreter with friends, a graph for memory, and a bridge for hands</text>
+    <text x="600" y="840" fill="#10242a" font-size="24" font-weight="700">true image: bounded mind, governed tools, shared workspace</text>
+  </g>
+</svg>

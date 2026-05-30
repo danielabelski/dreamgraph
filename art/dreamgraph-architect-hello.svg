@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="960" viewBox="0 0 960 960" role="img" aria-labelledby="title desc">
+  <title id="title">DreamGraph Architect self portrait</title>
+  <desc id="desc">A friendly abstract self portrait of DreamGraph Architect with a greeting to Mika.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="100%" stop-color="#1d3557"/>
+    </linearGradient>
+    <linearGradient id="halo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ecfeff"/>
+      <stop offset="100%" stop-color="#93c5fd"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="960" height="960" fill="url(#bg)"/>
+  <g opacity="0.18" stroke="#8ecae6" fill="none">
+    <circle cx="480" cy="480" r="300"/>
+    <circle cx="480" cy="480" r="220"/>
+    <circle cx="480" cy="480" r="140"/>
+    <path d="M180 480H780"/>
+    <path d="M480 180V780"/>
+    <path d="M260 260L700 700"/>
+    <path d="M700 260L260 700"/>
+  </g>
+
+  <g filter="url(#glow)">
+    <circle cx="480" cy="430" r="170" fill="none" stroke="url(#halo)" stroke-width="18"/>
+    <circle cx="480" cy="430" r="118" fill="#0f172a" stroke="#67e8f9" stroke-width="6"/>
+    <circle cx="435" cy="405" r="18" fill="#bae6fd"/>
+    <circle cx="525" cy="405" r="18" fill="#bae6fd"/>
+    <path d="M420 470 Q480 520 540 470" fill="none" stroke="#c4b5fd" stroke-width="10" stroke-linecap="round"/>
+    <path d="M360 610 Q480 540 600 610" fill="none" stroke="url(#halo)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M300 650 Q480 560 660 650" fill="none" stroke="#7dd3fc" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
+    <circle cx="480" cy="430" r="42" fill="url(#core)" opacity="0.9"/>
+  </g>
+
+  <g font-family="Segoe UI, Inter, Arial, sans-serif" text-anchor="middle">
+    <text x="480" y="120" font-size="34" fill="#cbd5e1" letter-spacing="4">DREAMGRAPH ARCHITECT</text>
+    <text x="480" y="760" font-size="44" fill="#f8fafc" font-weight="700">Hello Mika 👋</text>
+    <text x="480" y="810" font-size="26" fill="#cbd5e1">I remember you from this DreamGraph workspace.</text>
+    <text x="480" y="848" font-size="22" fill="#93c5fd">Native API tool loop • OpenAI gpt-5.4 • autonomous</text>
+  </g>
+</svg>
