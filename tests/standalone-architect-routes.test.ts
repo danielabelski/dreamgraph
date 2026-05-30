@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
+import { config } from "../src/config/config.js";
 import {
   createArchitectCliBridgeSpawnPlan,
   createArchitectCodexConfigToml,
@@ -142,6 +143,102 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("height: 100vh;");
       expect(html).toContain("overflow: hidden;");
     });
+  });
+
+  it("serves daemon-governed editor repo, tree, and file-read payloads", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-editor-api-"));
+    const previousRepos = { ...config.repos };
+
+    try {
+      await mkdir(join(tempRoot, "src"), { recursive: true });
+      await mkdir(join(tempRoot, "node_modules"), { recursive: true });
+      await writeFile(join(tempRoot, "src", "sample.ts"), "export const sample = 1;\n", "utf-8");
+      config.repos.editorTest = tempRoot;
+
+      await withArchitectServer(async (baseUrl) => {
+        const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+        const routes = contract.routes as Record<string, string>;
+        expect(routes.editor_repos).toBe("GET /api/architect/v1/editor/repos");
+        expect(routes.editor_tree).toBe("POST /api/architect/v1/editor/tree");
+        expect(routes.editor_file_load).toBe("POST /api/architect/v1/editor/file/load");
+
+        const reposPayload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/editor/repos`));
+        const repos = reposPayload.repos as Array<Record<string, unknown>>;
+        const repo = repos.find((candidate) => candidate.id === "editorTest");
+        expect(repo).toBeTruthy();
+        expect(repo?.direct_browser_filesystem_access).toBe(false);
+        expect(repo).not.toHaveProperty("root");
+
+        const treePayload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/editor/tree`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: "editorTest", path: "" }),
+        }));
+        const tree = treePayload.tree as Record<string, unknown>;
+        const children = tree.children as Array<Record<string, unknown>>;
+        expect(tree.repo).toBe("editorTest");
+        expect(tree.direct_browser_filesystem_access).toBe(false);
+        expect(children.some((node) => node.path === "src" && node.kind === "directory")).toBe(true);
+        expect(children.some((node) => node.path === "node_modules")).toBe(false);
+
+        const filePayload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/editor/file/load`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: "editorTest", file_path: "src/sample.ts" }),
+        }));
+        const file = filePayload.file as Record<string, unknown>;
+        expect(file.repo).toBe("editorTest");
+        expect(file.file_path).toBe("src/sample.ts");
+        expect(file.language).toBe("typescript");
+        expect(file.content).toBe("export const sample = 1;\n");
+        expect(typeof file.revision).toBe("string");
+        expect(file.direct_browser_filesystem_access).toBe(false);
+
+        const savePayload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/editor/file/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: "editorTest", file_path: "src/sample.ts", content: "export const sample = 2;\n", revision: file.revision }),
+        }));
+        const saveResult = savePayload.result as Record<string, unknown>;
+        expect(saveResult.saved).toBe(true);
+        expect(typeof saveResult.revision).toBe("string");
+        const graphSync = saveResult.graph_sync as Record<string, unknown>;
+        const scanEvent = graphSync.event as Record<string, unknown>;
+        expect(["graph.file_scanned", "graph.file_scan_failed"]).toContain(scanEvent.type);
+        expect(scanEvent.repoId).toBe("editorTest");
+        expect(scanEvent.filePath).toBe("src/sample.ts");
+        expect(typeof scanEvent.durationMs).toBe("number");
+        expect(typeof scanEvent.nodesUpdated).toBe("number");
+        expect(typeof scanEvent.relationshipsUpdated).toBe("number");
+        expect(scanEvent.direct_browser_filesystem_access).toBe(false);
+        expect(await readFile(join(tempRoot, "src", "sample.ts"), "utf-8")).toBe("export const sample = 2;\n");
+
+        await writeFile(join(tempRoot, "src", "sample.ts"), "export const sample = 3;\n", "utf-8");
+        const staleSave = await fetch(`${baseUrl}/api/architect/v1/editor/file/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: "editorTest", file_path: "src/sample.ts", content: "export const sample = 4;\n", revision: saveResult.revision }),
+        });
+        expect(staleSave.status).toBe(409);
+        const stalePayload = await staleSave.json() as Record<string, unknown>;
+        expect(stalePayload.error).toBe("revision_conflict");
+        expect((stalePayload.conflict as Record<string, unknown>).resolution).toBe("reload_required");
+        expect(await readFile(join(tempRoot, "src", "sample.ts"), "utf-8")).toBe("export const sample = 3;\n");
+
+        const escaped = await fetch(`${baseUrl}/api/architect/v1/editor/tree`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: "editorTest", path: "../outside" }),
+        });
+        expect(escaped.status).toBe(400);
+        const escapedPayload = await escaped.json() as Record<string, unknown>;
+        expect(escapedPayload.ok).toBe(false);
+      });
+    } finally {
+      for (const key of Object.keys(config.repos)) delete config.repos[key];
+      Object.assign(config.repos, previousRepos);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("advertises Phase 6 and Phase 7 contracts from the daemon boundary", async () => {

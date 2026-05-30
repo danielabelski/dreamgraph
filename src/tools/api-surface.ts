@@ -1270,6 +1270,131 @@ function resolveInheritedProperties(
 }
 
 // ---------------------------------------------------------------------------
+// Programmatic entry
+// ---------------------------------------------------------------------------
+
+export interface ExecuteExtractApiSurfaceInput {
+  path: string;
+  language?: string;
+  scope?: "public" | "all";
+  incremental?: boolean;
+  platform?: string;
+}
+
+export async function executeExtractApiSurface(
+  input: ExecuteExtractApiSurfaceInput,
+): Promise<ToolResponse<ExtractApiSurfaceOutput>> {
+  const inputPath = input.path;
+  const language = input.language ?? "auto";
+  const scope = input.scope ?? "public";
+  const incremental = input.incremental ?? true;
+  const platform = input.platform;
+
+  let absPath: string;
+  try {
+    absPath = resolveSafePath(inputPath);
+  } catch (err) {
+    return error("ACCESS_DENIED", err instanceof Error ? err.message : String(err));
+  }
+
+  const repo = findRepoFor(absPath);
+  if (!repo) {
+    return error("NO_REPO", `Path '${inputPath}' is not inside any configured repository.`);
+  }
+  const [, repoRoot] = repo;
+  const relPath = path.relative(repoRoot, absPath).replace(/\\/g, "/");
+  const langFilter = language === "auto" ? null : language as SupportedLanguage;
+
+  const stat = await fs.stat(absPath);
+  let filePaths: string[];
+  if (stat.isDirectory()) {
+    filePaths = await walkDirectory(absPath, repoRoot, langFilter);
+  } else {
+    filePaths = [absPath];
+  }
+
+  return withFileLock("api_surface.json", async () => {
+    const existing = await loadSurface();
+    if (!existing.repo_root) existing.repo_root = repoRoot;
+
+    const existingByPath = new Map<string, ApiModule>();
+    for (const mod of existing.modules) {
+      existingByPath.set(mod.file_path, mod);
+    }
+
+    let filesScanned = 0;
+    let filesUpdated = 0;
+    let filesSkipped = 0;
+    let classesFound = 0;
+    let functionsFound = 0;
+    let propertiesFound = 0;
+    const warnings: string[] = [];
+
+    for (const fp of filePaths) {
+      const fRelPath = path.relative(repoRoot, fp).replace(/\\/g, "/");
+
+      if (incremental) {
+        const existingMod = existingByPath.get(fRelPath);
+        if (existingMod?.provenance.extracted_at) {
+          try {
+            const fileStat = await fs.stat(fp);
+            const extractedAt = new Date(existingMod.provenance.extracted_at).getTime();
+            if (fileStat.mtimeMs <= extractedAt) {
+              filesSkipped++;
+              classesFound += existingMod.classes.length;
+              functionsFound += existingMod.functions.length;
+              propertiesFound += existingMod.classes.reduce((s, c) => s + c.properties.length, 0);
+              continue;
+            }
+          } catch {
+            // Proceed with extraction.
+          }
+        }
+      }
+
+      filesScanned++;
+      const extracted = await extractFile(fp, repoRoot, langFilter);
+      if (!extracted) {
+        warnings.push(`Skipped ${fRelPath}: unsupported or unreadable.`);
+        continue;
+      }
+
+      if (platform) extracted.platform = platform;
+
+      if (scope === "public") {
+        for (const cls of extracted.classes) {
+          cls.methods = cls.methods.filter((m) => m.visibility === "public");
+          cls.properties = cls.properties.filter(() => true);
+        }
+        extracted.functions = extracted.functions.filter((f) => f.is_exported);
+      }
+
+      classesFound += extracted.classes.length;
+      functionsFound += extracted.functions.length;
+      propertiesFound += extracted.classes.reduce((s, c) => s + c.properties.length, 0);
+      filesUpdated++;
+      existingByPath.set(fRelPath, extracted);
+    }
+
+    existing.modules = Array.from(existingByPath.values());
+    await saveSurface(existing);
+
+    return success<ExtractApiSurfaceOutput>({
+      repo_root: repoRoot,
+      path_scanned: relPath || ".",
+      files_scanned: filesScanned,
+      files_updated: filesUpdated,
+      files_skipped_incremental: filesSkipped,
+      classes_found: classesFound,
+      functions_found: functionsFound,
+      properties_found: propertiesFound,
+      warnings,
+      surface_version: new Date().toISOString(),
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tool registration
 // ---------------------------------------------------------------------------
 
@@ -1299,122 +1424,9 @@ export function registerApiSurfaceTools(server: McpServer): void {
         .describe("Optional platform tag (e.g., 'python-port', 'web'). Tags all extracted symbols for platform-filtered queries."),
     },
     async ({ path: inputPath, language, scope, incremental, platform }) => {
-      const result = await safeExecute<ExtractApiSurfaceOutput>(async (): Promise<ToolResponse<ExtractApiSurfaceOutput>> => {
-        // Resolve the target path
-        let absPath: string;
-        try {
-          absPath = resolveSafePath(inputPath);
-        } catch (err) {
-          return error("ACCESS_DENIED", err instanceof Error ? err.message : String(err));
-        }
-
-        const repo = findRepoFor(absPath);
-        if (!repo) {
-          return error("NO_REPO", `Path '${inputPath}' is not inside any configured repository.`);
-        }
-        const [repoName, repoRoot] = repo;
-        const relPath = path.relative(repoRoot, absPath).replace(/\\/g, "/");
-        const langFilter = language === "auto" ? null : language as SupportedLanguage;
-
-        // Discover files to extract
-        const stat = await fs.stat(absPath);
-        let filePaths: string[];
-        if (stat.isDirectory()) {
-          filePaths = await walkDirectory(absPath, repoRoot, langFilter);
-        } else {
-          filePaths = [absPath];
-        }
-
-        // Load current surface
-        const surface = await withFileLock("api_surface.json", async () => {
-          const existing = await loadSurface();
-          if (!existing.repo_root) existing.repo_root = repoRoot;
-
-          // Build mtime index for incremental mode
-          const existingByPath = new Map<string, ApiModule>();
-          for (const mod of existing.modules) {
-            existingByPath.set(mod.file_path, mod);
-          }
-
-          let filesScanned = 0;
-          let filesUpdated = 0;
-          let filesSkipped = 0;
-          let classesFound = 0;
-          let functionsFound = 0;
-          let propertiesFound = 0;
-          const warnings: string[] = [];
-
-          for (const fp of filePaths) {
-            const fRelPath = path.relative(repoRoot, fp).replace(/\\/g, "/");
-
-            // Incremental: skip if file hasn't changed
-            if (incremental) {
-              const existingMod = existingByPath.get(fRelPath);
-              if (existingMod?.provenance.extracted_at) {
-                try {
-                  const fileStat = await fs.stat(fp);
-                  const extractedAt = new Date(existingMod.provenance.extracted_at).getTime();
-                  if (fileStat.mtimeMs <= extractedAt) {
-                    filesSkipped++;
-                    // Preserve counts from existing module
-                    classesFound += existingMod.classes.length;
-                    functionsFound += existingMod.functions.length;
-                    propertiesFound += existingMod.classes.reduce((s, c) => s + c.properties.length, 0);
-                    continue;
-                  }
-                } catch { /* proceed with extraction */ }
-              }
-            }
-
-            filesScanned++;
-            const extracted = await extractFile(fp, repoRoot, langFilter);
-            if (!extracted) {
-              warnings.push(`Skipped ${fRelPath}: unsupported or unreadable.`);
-              continue;
-            }
-
-            // Apply platform tag
-            if (platform) extracted.platform = platform;
-
-            // Apply scope filter
-            if (scope === "public") {
-              for (const cls of extracted.classes) {
-                cls.methods = cls.methods.filter(m => m.visibility === "public");
-                cls.properties = cls.properties.filter(() => true); // keep all props for now
-              }
-              extracted.functions = extracted.functions.filter(f => f.is_exported);
-            }
-
-            // Count
-            classesFound += extracted.classes.length;
-            functionsFound += extracted.functions.length;
-            propertiesFound += extracted.classes.reduce((s, c) => s + c.properties.length, 0);
-            filesUpdated++;
-
-            // Merge into surface
-            existingByPath.set(fRelPath, extracted);
-          }
-
-          // Rebuild modules array
-          existing.modules = Array.from(existingByPath.values());
-          await saveSurface(existing);
-
-          return success<ExtractApiSurfaceOutput>({
-            repo_root: repoRoot,
-            path_scanned: relPath || ".",
-            files_scanned: filesScanned,
-            files_updated: filesUpdated,
-            files_skipped_incremental: filesSkipped,
-            classes_found: classesFound,
-            functions_found: functionsFound,
-            properties_found: propertiesFound,
-            warnings,
-            surface_version: new Date().toISOString(),
-          });
-        });
-
-        return surface;
-      });
+      const result = await safeExecute<ExtractApiSurfaceOutput>(
+        () => executeExtractApiSurface({ path: inputPath, language, scope, incremental, platform }),
+      );
 
       return {
         content: [{

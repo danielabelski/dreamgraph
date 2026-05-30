@@ -1955,6 +1955,7 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
           mimeType: attachment.mimeType,
           dataBase64: attachment.dataBase64,
           fileName: attachment.name,
+          filePath: attachment.path || undefined,
         });
       } else if (attachment.kind === 'image') {
         blocks.push({ type: 'text', text: `[Image attachment omitted: current model does not support image input] ${attachment.name}` });
@@ -2060,6 +2061,34 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     });
   }
 
+  private async _gcTempAttachments(tempDir: vscode.Uri): Promise<void> {
+    const ttlMs = 24 * 60 * 60 * 1000;
+    let entries: [string, vscode.FileType][] = [];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(tempDir);
+    } catch {
+      return;
+    }
+    const now = Date.now();
+    await Promise.all(entries.map(async ([name, type]) => {
+      if (type !== vscode.FileType.File) return;
+      const uri = vscode.Uri.joinPath(tempDir, name);
+      let info: vscode.FileStat | null = null;
+      try {
+        info = await vscode.workspace.fs.stat(uri);
+      } catch {
+        return;
+      }
+      if (info && now - info.mtime > ttlMs) {
+        try {
+          await vscode.workspace.fs.delete(uri, { useTrash: false });
+        } catch {
+          // Best-effort cleanup only.
+        }
+      }
+    }));
+  }
+
   private async _handlePastedImage(dataBase64: string, mimeType: string): Promise<void> {
     const capabilities = this.architectLlm?.getModelCapabilities() ?? { textAttachments: false, imageAttachments: false };
     if (!capabilities.imageAttachments) {
@@ -2073,14 +2102,20 @@ export class ChatPanel implements vscode.WebviewViewProvider, vscode.Disposable 
     }
     const ext = mimeType === 'image/png' ? '.png' : mimeType === 'image/jpeg' ? '.jpg' : mimeType === 'image/webp' ? '.webp' : '.png';
     const name = `clipboard-${Date.now()}${ext}`;
+    const tempDir = vscode.Uri.joinPath(this.context.globalStorageUri, 'architect-attachments');
+    await vscode.workspace.fs.createDirectory(tempDir);
+    await this._gcTempAttachments(tempDir);
+    const tempUri = vscode.Uri.joinPath(tempDir, name);
+    await vscode.workspace.fs.writeFile(tempUri, Buffer.from(dataBase64, 'base64'));
     this.attachments.push({
       id: `${Date.now()}-${Math.random()}`,
       name,
-      path: '',
+      path: tempUri.fsPath,
       mimeType,
       kind: 'image',
       size: rawSize,
       dataBase64,
+      note: 'temporary file reference',
     });
     await this._syncAttachments();
   }

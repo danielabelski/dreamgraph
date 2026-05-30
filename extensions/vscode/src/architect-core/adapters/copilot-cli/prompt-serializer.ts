@@ -47,10 +47,9 @@ function renderContentBlock(block: ArchitectContent): string {
   if (block.type === "text") {
     return block.text;
   }
-  // Image / binary block. The CLI cannot ingest it; emit a
-  // surface-uniform placeholder.
   const label = block.fileName ? `${block.fileName} (${block.mimeType})` : block.mimeType;
-  return `[image attachment elided — Copilot CLI surface does not support image input: ${label}]`;
+  if (block.filePath) return `[image attachment: ${label}]\n@${block.filePath}`;
+  return `[image attachment elided - no filesystem path available for CLI @file prompt: ${label}]`;
 }
 
 function renderMessageContent(content: ArchitectMessage["content"]): string {

@@ -41,10 +41,10 @@ export interface ArchitectConfig {
 
 export type ArchitectContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; mimeType: string; dataBase64: string; fileName?: string };
+  | { type: "image"; mimeType: string; dataBase64: string; fileName?: string; filePath?: string };
 
 export type ArchitectTextBlock = { type: "text"; text: string };
-export type ArchitectImageBlock = { type: "image"; mimeType: string; dataBase64: string; fileName?: string };
+export type ArchitectImageBlock = { type: "image"; mimeType: string; dataBase64: string; fileName?: string; filePath?: string };
 export type ArchitectContent = ArchitectTextBlock | ArchitectImageBlock;
 
 export interface ArchitectMessage {
@@ -269,9 +269,9 @@ export class ArchitectLlm implements vscode.Disposable {
         return { textAttachments: true, imageAttachments: false };
       case "copilot-cli":
       case "codex-cli":
-        // Native CLI provider ports serialize turns into a single prompt;
-        // no binary attachment surface exists.
-        return { textAttachments: false, imageAttachments: false };
+        // Native CLI provider ports serialize attachments as prompt-visible
+        // @file references, which the CLI can load from its prompt surface.
+        return { textAttachments: true, imageAttachments: true };
       default:
         return { textAttachments: false, imageAttachments: false };
     }

@@ -657,6 +657,33 @@ function findSliceById(slices: ArchitectPlanSlice[], sliceId: string | null | un
   return slices.find((slice) => slice.id === sliceId || slugifySliceSegment(slice.id) === normalized) ?? null;
 }
 
+function sliceOrdinal(slice: ArchitectPlanSlice): number | null {
+  const match = slice.id.match(/^slice-([0-9]+)(?:-|$)/i) ?? slice.title.match(/^Slice\s+([0-9]+)\b/i);
+  if (!match) return null;
+  const ordinal = Number.parseInt(match[1], 10);
+  return Number.isFinite(ordinal) ? ordinal : null;
+}
+
+function checkpointCompletedSliceIds(slices: ArchitectPlanSlice[], checkpoint: ArchitectPlanCheckpoint): string[] {
+  const direct = findSliceById(slices, checkpoint.slice_id);
+  if (direct) return [direct.id];
+  const normalized = slugifySliceSegment(checkpoint.slice_id);
+  const rangeMatch = normalized.match(/^slices?-([0-9]+)-(?:through|to)-([0-9]+)$/i);
+  if (!rangeMatch) return [];
+  const start = Number.parseInt(rangeMatch[1], 10);
+  const end = Number.parseInt(rangeMatch[2], 10);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  const low = Math.min(start, end);
+  const high = Math.max(start, end);
+  return slices
+    .filter((slice) => slice.category === "slice")
+    .filter((slice) => {
+      const ordinal = sliceOrdinal(slice);
+      return ordinal != null && ordinal >= low && ordinal <= high;
+    })
+    .map((slice) => slice.id);
+}
+
 function findNextSliceFromResume(slices: ArchitectPlanSlice[], resumeHint: string | null, afterSliceId: string | null): ArchitectPlanSlice | null {
   const implementationSlices = slices.filter((slice) => slice.category === "slice");
   if (resumeHint) {
@@ -739,13 +766,16 @@ function buildOperationalState(
   const implementationCheckpoints = checkpoints.filter(isImplementationCheckpoint);
   const latestImplementationCheckpoint = implementationCheckpoints.at(-1) ?? null;
   const latestCompletedCheckpoint = [...implementationCheckpoints].reverse().find(isCompletedCheckpoint) ?? null;
-  const latestCompletedSlice = findSliceById(slices, latestCompletedCheckpoint?.slice_id);
   const latestImplementationSlice = findSliceById(slices, latestImplementationCheckpoint?.slice_id);
   const completedSliceIds = new Set(
     implementationCheckpoints
       .filter(isCompletedCheckpoint)
-      .map((checkpoint) => findSliceById(slices, checkpoint.slice_id)?.id ?? checkpoint.slice_id),
+      .flatMap((checkpoint) => checkpointCompletedSliceIds(slices, checkpoint)),
   );
+  const latestCompletedSlice =
+    findSliceById(slices, latestCompletedCheckpoint?.slice_id) ??
+    [...implementationSlices].reverse().find((slice) => completedSliceIds.has(slice.id)) ??
+    null;
   const allImplementationSlicesComplete =
     implementationSlices.length > 0 && implementationSlices.every((slice) => completedSliceIds.has(slice.id));
   const rawResumeHint = latestImplementationCheckpoint?.resume_note ?? latestCompletedCheckpoint?.resume_note ?? lastResumeNote;
@@ -865,15 +895,22 @@ function buildEvidenceLinks(
   return [...unique.values()];
 }
 
-async function projectPlan(fileName: string): Promise<ArchitectPlanDetail> {
+interface ProjectPlanOptions {
+  id?: string;
+  path?: string;
+  logFileName?: string | null;
+  logPath?: string | null;
+}
+
+async function projectPlan(fileName: string, options?: ProjectPlanOptions): Promise<ArchitectPlanDetail> {
   const plansRoot = getArchitectPlansRoot();
   const planPath = resolve(plansRoot, fileName);
   const markdown = await readFile(planPath, "utf-8");
   const fileStat = await stat(planPath);
-  const id = basename(fileName, ".md");
-  const logFileName = `${id}.implementation-log.md`;
-  const logPath = resolve(plansRoot, logFileName);
-  const logMarkdown = await loadOptionalFile(logPath);
+  const id = options?.id ?? basename(fileName, ".md");
+  const logFileName = options?.logFileName === undefined ? `${id}.implementation-log.md` : options.logFileName;
+  const logPath = logFileName == null ? null : resolve(plansRoot, logFileName);
+  const logMarkdown = logPath == null ? null : await loadOptionalFile(logPath);
   const frontmatter = parseFrontmatter(markdown);
   const headings = parseHeadings(markdown);
   const title = parseFirstMatch(markdown, /^#\s+(.+)$/m) ?? id;
@@ -887,8 +924,8 @@ async function projectPlan(fileName: string): Promise<ArchitectPlanDetail> {
   const graphBindings = collectGraphBindings(markdown, adrBindings, catalog);
   const slices = extractSlices(markdown, headings, activePhase, catalog);
   const checkpoints = extractCheckpoints(logMarkdown);
-  const path = `plans/${fileName}`;
-  const logPathRelative = logMarkdown == null ? null : `plans/${logFileName}`;
+  const path = options?.path ?? `plans/${fileName}`;
+  const logPathRelative = logMarkdown == null ? null : (options?.logPath ?? (logFileName == null ? null : `plans/${logFileName}`));
   const resumeState = {
     last_log_heading: logMarkdown == null ? null : extractLastLogHeading(logMarkdown),
     last_resume_note: logMarkdown == null ? null : extractLastResumeNote(logMarkdown),
@@ -970,12 +1007,59 @@ export async function buildPlanSummary(fileName: string): Promise<ArchitectPlanS
   };
 }
 
+async function resolveArchivedPlanSnapshot(planId: string): Promise<{
+  fileName: string;
+  path: string;
+  logFileName: string | null;
+  logPath: string | null;
+} | null> {
+  const archiveRoot = resolve(getArchitectPlansRoot(), "archive");
+  let entries: Array<{ isFile(): boolean; name: string }>;
+  try {
+    entries = await readdir(archiveRoot, { withFileTypes: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw error;
+  }
+
+  const prefix = `${planId}.`;
+  const planFile = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".md") && !name.endsWith(".implementation-log.md"))
+    .sort((left, right) => right.localeCompare(left))[0];
+  if (!planFile) return null;
+
+  const snapshotId = basename(planFile, ".md");
+  const logFileName = entries.some((entry) => entry.isFile() && entry.name === `${snapshotId}.implementation-log.md`)
+    ? `archive/${snapshotId}.implementation-log.md`
+    : null;
+  return {
+    fileName: `archive/${planFile}`,
+    path: `plans/archive/${planFile}`,
+    logFileName,
+    logPath: logFileName == null ? null : `plans/${logFileName}`,
+  };
+}
+
 export async function loadPlanDetail(planId: string): Promise<ArchitectPlanDetail | null> {
   if (!isSafePlanId(planId)) return null;
   try {
     return await projectPlan(`${planId}.md`);
   } catch {
-    return null;
+    const archived = await resolveArchivedPlanSnapshot(planId);
+    if (!archived) return null;
+    try {
+      return await projectPlan(archived.fileName, {
+        id: planId,
+        path: archived.path,
+        logFileName: archived.logFileName,
+        logPath: archived.logPath,
+      });
+    } catch {
+      return null;
+    }
   }
 }
 

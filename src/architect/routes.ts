@@ -4,8 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import * as pty from "node-pty";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildPlanSummary as buildArchitectPlanSummary,
@@ -34,6 +34,8 @@ import { cmdRestart } from "../cli/commands/restart.js";
 import { cmdStatus } from "../cli/commands/status.js";
 import type { ParsedArgs } from "../cli/dg.js";
 import { getActiveScope, isInstanceMode, resolveInstanceAtStartup } from "../instance/lifecycle.js";
+import { config } from "../config/config.js";
+import { executeExtractApiSurface } from "../tools/api-surface.js";
 import { updateEngineEnvValues } from "../utils/engine-env.js";
 import { loadJsonData } from "../utils/cache.js";
 import { logger } from "../utils/logger.js";
@@ -149,6 +151,9 @@ const PLANS_ROOT = resolve(
 const EVENT_RING_SIZE = 128;
 const HEARTBEAT_MS = 15_000;
 const MAX_JSON_BODY_BYTES = 64 * 1024;
+const MAX_ATTACHMENT_UPLOAD_BODY_BYTES = 8 * 1024 * 1024;
+const MAX_ARCHITECT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const ARCHITECT_ATTACHMENT_GC_AGE_MS = 24 * 60 * 60 * 1000;
 const ARCHITECT_PROVIDER_OPTIONS: LlmProviderType[] = ["openai", "anthropic", "ollama", "lmstudio", "sampling", "none"];
 const ARCHITECT_ADAPTER_OPTIONS = ["native_api_tool_loop", "codex-cli", "copilot-cli", "deterministic_fallback"] as const;
 const ARCHITECT_AUTONOMY_MODE_OPTIONS = ["autonomous", "supervised", "manual"] as const;
@@ -166,7 +171,13 @@ const ARCHITECT_XTERM_ASSETS: Record<string, { path: string; contentType: string
     path: resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
     contentType: "application/javascript; charset=utf-8",
   },
+  "/api/architect/v1/assets/lucide/lucide.js": {
+    path: resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "lucide", "dist", "umd", "lucide.js"),
+    contentType: "application/javascript; charset=utf-8",
+  },
 };
+const ARCHITECT_MONACO_ASSET_BASE = "/api/architect/v1/assets/monaco/vs/";
+const ARCHITECT_MONACO_ASSET_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "monaco-editor", "min", "vs");
 type ArchitectAdapterType = typeof ARCHITECT_ADAPTER_OPTIONS[number];
 type ArchitectAutonomyMode = typeof ARCHITECT_AUTONOMY_MODE_OPTIONS[number];
 type ArchitectExecutionRoute = ArchitectAdapterType;
@@ -448,7 +459,10 @@ function buildArchitectAttachmentCapabilities(runtime: ActiveArchitectSessionRun
   const adapter = String(runtime.adapter || "native_api_tool_loop").toLowerCase();
   const provider = String(runtime.provider || "none").toLowerCase();
   const model = String(runtime.model || "").toLowerCase();
-  if (adapter === "codex-cli" || adapter === "copilot-cli" || adapter === "deterministic_fallback") {
+  if (adapter === "codex-cli" || adapter === "copilot-cli") {
+    return { textAttachments: true, imageAttachments: true };
+  }
+  if (adapter === "deterministic_fallback") {
     return { textAttachments: false, imageAttachments: false };
   }
   switch (provider) {
@@ -618,8 +632,28 @@ function html(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
+function getArchitectBrowserAsset(pathname: string): { path: string; contentType: string } | null {
+  const xtermAsset = ARCHITECT_XTERM_ASSETS[pathname];
+  if (xtermAsset) return xtermAsset;
+  if (!pathname.startsWith(ARCHITECT_MONACO_ASSET_BASE)) return null;
+  const assetRelativePath = normalizeArchitectEditorFilePath(pathname.slice(ARCHITECT_MONACO_ASSET_BASE.length));
+  if (!assetRelativePath) return null;
+  const assetPath = resolve(ARCHITECT_MONACO_ASSET_ROOT, assetRelativePath);
+  const assetRepoRelative = relative(ARCHITECT_MONACO_ASSET_ROOT, assetPath);
+  if (assetRepoRelative.startsWith("..") || isAbsolute(assetRepoRelative)) return null;
+  const extension = extname(assetPath).toLowerCase();
+  const contentType = extension === ".css"
+    ? "text/css; charset=utf-8"
+    : extension === ".json"
+      ? "application/json; charset=utf-8"
+      : extension === ".ttf" || extension === ".woff" || extension === ".woff2"
+        ? "font/woff2"
+        : "application/javascript; charset=utf-8";
+  return { path: assetPath, contentType };
+}
+
 async function handleArchitectAssetRequest(res: ServerResponse, pathname: string): Promise<void> {
-  const asset = ARCHITECT_XTERM_ASSETS[pathname];
+  const asset = getArchitectBrowserAsset(pathname);
   if (!asset) {
     jsonError(res, 404, "not_found", "Architect asset not found");
     return;
@@ -634,6 +668,366 @@ async function handleArchitectAssetRequest(res: ServerResponse, pathname: string
   } catch (error) {
     logger.warn(`architect asset load failed (${pathname}): ${(error as Error).message}`);
     jsonError(res, 404, "asset_unavailable", "Architect browser asset is unavailable");
+  }
+}
+
+function buildArchitectEditorRepoProjection(): Array<Record<string, string | boolean>> {
+  return Object.entries(config.repos).map(([id]) => ({
+    id,
+    name: id,
+    display_name: id,
+    direct_browser_filesystem_access: false,
+  }));
+}
+
+function normalizeArchitectEditorFilePath(value: string): string {
+  return String(value ?? "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+}
+
+function assertArchitectEditorPathInsideRepo(repoRoot: string, safePath: string, inputPath: string, repoId: string): void {
+  const repoRelative = relative(repoRoot, safePath);
+  if (repoRelative === "" || (!repoRelative.startsWith("..") && !isAbsolute(repoRelative))) {
+    return;
+  }
+  throw new Error(`Path '${inputPath}' escapes repo '${repoId}'.`);
+}
+
+function resolveArchitectEditorPath(repoId: string, inputPath: string, options?: { allowRoot?: boolean }): { repoRoot: string; safePath: string; relativePath: string } {
+  const repoRootRaw = config.repos[repoId];
+  if (!repoRootRaw) {
+    throw new Error(`Unknown repo '${repoId}'.`);
+  }
+  const repoRoot = resolve(repoRootRaw);
+  const normalized = normalizeArchitectEditorFilePath(inputPath);
+  if (!normalized && !options?.allowRoot) {
+    throw new Error("File path is required.");
+  }
+  const safePath = normalized ? resolve(repoRoot, normalized) : repoRoot;
+  assertArchitectEditorPathInsideRepo(repoRoot, safePath, inputPath, repoId);
+  return { repoRoot, safePath, relativePath: normalized };
+}
+
+function resolveArchitectEditorFile(repoId: string, filePath: string): { repoRoot: string; safePath: string; relativePath: string } {
+  return resolveArchitectEditorPath(repoId, filePath);
+}
+
+function detectArchitectEditorLanguage(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case ".ts":
+    case ".tsx":
+      return "typescript";
+    case ".js":
+    case ".jsx":
+    case ".mjs":
+    case ".cjs":
+      return "javascript";
+    case ".py":
+      return "python";
+    case ".cs":
+      return "csharp";
+    case ".json":
+      return "json";
+    case ".md":
+      return "markdown";
+    case ".css":
+      return "css";
+    case ".html":
+      return "html";
+    case ".xml":
+      return "xml";
+    case ".yaml":
+    case ".yml":
+      return "yaml";
+    default:
+      return "plaintext";
+  }
+}
+
+function isProbablyUnsupportedEditorBuffer(buffer: Buffer): boolean {
+  if (buffer.length === 0) return false;
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  let suspicious = 0;
+  for (const byte of sample) {
+    if (byte === 0) return true;
+    if (byte < 7 || (byte > 13 && byte < 32)) suspicious += 1;
+  }
+  return suspicious / sample.length > 0.08;
+}
+
+function buildArchitectEditorRevisionToken(repoId: string, relativePath: string, content: string, fileStat: { mtimeMs: number; size: number }): string {
+  return createHash("sha256")
+    .update(repoId)
+    .update("\0")
+    .update(relativePath)
+    .update("\0")
+    .update(String(fileStat.mtimeMs))
+    .update("\0")
+    .update(String(fileStat.size))
+    .update("\0")
+    .update(content)
+    .digest("hex");
+}
+
+function buildArchitectEditorTreeNode(repoId: string, parentPath: string, entryName: string, isDirectory: boolean): Record<string, unknown> {
+  const relativePath = normalizeArchitectEditorFilePath(parentPath ? `${parentPath}/${entryName}` : entryName);
+  return {
+    id: `${repoId}:${relativePath}`,
+    repo: repoId,
+    name: entryName,
+    path: relativePath,
+    kind: isDirectory ? "directory" : "file",
+    language: isDirectory ? null : detectArchitectEditorLanguage(relativePath),
+    lazy: isDirectory,
+    hidden: entryName.startsWith("."),
+  };
+}
+
+async function handleArchitectEditorRepos(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  sendJsonWithEtag(req, res, {
+    ok: true,
+    contract: "architect",
+    version: "v1",
+    ...buildMeta(),
+    editor_surface: {
+      source: "daemon_governed_editor_repo_projection",
+      direct_browser_filesystem_access: false,
+      mutation_authority: "daemon_governed_editor_save",
+    },
+    repos: buildArchitectEditorRepoProjection(),
+  });
+}
+
+async function handleArchitectEditorTreeRead(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    jsonError(res, 400, "bad_request", (error as Error).message || "Invalid editor tree payload");
+    return;
+  }
+  const repoId = String(body.repo ?? "").trim();
+  const treePath = String(body.path ?? "").trim();
+  try {
+    const { safePath, relativePath } = resolveArchitectEditorPath(repoId, treePath, { allowRoot: true });
+    const directoryStat = await stat(safePath);
+    if (!directoryStat.isDirectory()) {
+      jsonError(res, 400, "not_directory", "Editor tree path must be a directory");
+      return;
+    }
+    const entries = await readdir(safePath, { withFileTypes: true });
+    const nodes = entries
+      .filter((entry) => entry.name !== ".git" && entry.name !== "node_modules")
+      .slice(0, 500)
+      .map((entry) => buildArchitectEditorTreeNode(repoId, relativePath, entry.name, entry.isDirectory()))
+      .sort((left, right) => {
+        const leftKind = String(left.kind);
+        const rightKind = String(right.kind);
+        if (leftKind !== rightKind) return leftKind === "directory" ? -1 : 1;
+        return String(left.name).localeCompare(String(right.name));
+      });
+    json(res, 200, {
+      ok: true,
+      contract: "architect",
+      version: "v1",
+      ...buildMeta(),
+      tree: {
+        repo: repoId,
+        path: relativePath,
+        truncated: entries.length > 500,
+        direct_browser_filesystem_access: false,
+        children: nodes,
+      },
+    }, { "Cache-Control": "no-store" });
+  } catch (error) {
+    jsonError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function handleArchitectEditorFileLoad(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    jsonError(res, 400, "bad_request", (error as Error).message || "Invalid editor load payload");
+    return;
+  }
+  const repoId = String(body.repo ?? "").trim();
+  const filePath = String(body.file_path ?? "").trim();
+  const openAnyway = body.open_anyway === true;
+  try {
+    const { safePath, relativePath } = resolveArchitectEditorFile(repoId, filePath);
+    const fileStat = await stat(safePath);
+    if (!fileStat.isFile()) {
+      jsonError(res, 400, "not_file", "Editor load path must be a file");
+      return;
+    }
+    const rawContent = await readFile(safePath);
+    const unsupported = isProbablyUnsupportedEditorBuffer(rawContent);
+    if (unsupported && !openAnyway) {
+      json(res, 200, {
+        ok: true,
+        contract: "architect",
+        version: "v1",
+        ...buildMeta(),
+        file: {
+          repo: repoId,
+          file_path: relativePath,
+          display_name: basename(relativePath),
+          language: detectArchitectEditorLanguage(relativePath),
+          revision: buildArchitectEditorRevisionToken(repoId, relativePath, "", fileStat),
+          size_bytes: fileStat.size,
+          mtime_ms: fileStat.mtimeMs,
+          content: "",
+          unsupported_text_editor: true,
+          unsupported_reason: "binary_or_unsupported_text_encoding",
+          mutation_authority: "daemon_governed_editor_save",
+          direct_browser_filesystem_access: false,
+        },
+      }, { "Cache-Control": "no-store" });
+      return;
+    }
+    const content = rawContent.toString("utf-8");
+    json(res, 200, {
+      ok: true,
+      contract: "architect",
+      version: "v1",
+      ...buildMeta(),
+      file: {
+        repo: repoId,
+        file_path: relativePath,
+        display_name: basename(relativePath),
+        language: detectArchitectEditorLanguage(relativePath),
+        revision: buildArchitectEditorRevisionToken(repoId, relativePath, content, fileStat),
+        size_bytes: fileStat.size,
+        mtime_ms: fileStat.mtimeMs,
+        content,
+        unsupported_text_editor: unsupported,
+        mutation_authority: "daemon_governed_editor_save",
+        direct_browser_filesystem_access: false,
+      },
+    }, { "Cache-Control": "no-store" });
+  } catch (error) {
+    jsonError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function handleArchitectEditorFileSave(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    jsonError(res, 400, "bad_request", (error as Error).message || "Invalid editor save payload");
+    return;
+  }
+  const repoId = String(body.repo ?? "").trim();
+  const filePath = String(body.file_path ?? "").trim();
+  const content = typeof body.content === "string" ? body.content : null;
+  const expectedRevision = typeof body.revision === "string" ? body.revision.trim() : "";
+  if (!content && content !== "") {
+    jsonError(res, 400, "bad_request", "Editor save payload requires string content");
+    return;
+  }
+  try {
+    const { safePath, relativePath } = resolveArchitectEditorFile(repoId, filePath);
+    const currentStat = await stat(safePath);
+    if (!currentStat.isFile()) {
+      jsonError(res, 400, "not_file", "Editor save path must be a file");
+      return;
+    }
+    const currentContent = await readFile(safePath, "utf-8");
+    const currentRevision = buildArchitectEditorRevisionToken(repoId, relativePath, currentContent, currentStat);
+    if (expectedRevision && expectedRevision !== currentRevision) {
+      json(res, 409, {
+        ok: false,
+        error: "revision_conflict",
+        message: "Editor save rejected because the file changed after it was loaded.",
+        conflict: {
+          repo: repoId,
+          file_path: relativePath,
+          expected_revision: expectedRevision,
+          actual_revision: currentRevision,
+          resolution: "reload_required",
+          mutation_authority: "daemon_governed_editor_save",
+          direct_browser_filesystem_access: false,
+        },
+      }, { "Cache-Control": "no-store" });
+      return;
+    }
+    await writeFile(safePath, content, "utf-8");
+    const savedStat = await stat(safePath);
+    const savedRevision = buildArchitectEditorRevisionToken(repoId, relativePath, content, savedStat);
+    const scanStartedAt = Date.now();
+    let graphSync: Record<string, unknown>;
+    try {
+      const scanResult = await executeExtractApiSurface({
+        path: safePath,
+        scope: "all",
+        incremental: false,
+      });
+      const scanData = scanResult.success ? scanResult.data : null;
+      const scanEvent = {
+        type: "graph.file_scanned",
+        repoId,
+        filePath: relativePath,
+        durationMs: Date.now() - scanStartedAt,
+        nodesUpdated: scanData ? Number(scanData.classes_found) + Number(scanData.functions_found) : 0,
+        relationshipsUpdated: scanData ? Number(scanData.properties_found) : 0,
+        filesScanned: scanData ? Number(scanData.files_scanned) : 0,
+        filesUpdated: scanData ? Number(scanData.files_updated) : 0,
+        warnings: scanData?.warnings ?? [],
+        tool: "executeExtractApiSurface",
+        mutation_authority: "daemon_governed_editor_save",
+        direct_browser_filesystem_access: false,
+      };
+      graphSync = {
+        mode: "targeted_extract_api_surface",
+        tool: "executeExtractApiSurface",
+        event: scanEvent,
+        result: scanResult,
+      };
+      publishEvent("graph.file_scanned", scanEvent);
+    } catch (error) {
+      const scanEvent = {
+        type: "graph.file_scan_failed",
+        repoId,
+        filePath: relativePath,
+        durationMs: Date.now() - scanStartedAt,
+        nodesUpdated: 0,
+        relationshipsUpdated: 0,
+        error: error instanceof Error ? error.message : String(error),
+        tool: "executeExtractApiSurface",
+        mutation_authority: "daemon_governed_editor_save",
+        direct_browser_filesystem_access: false,
+      };
+      graphSync = {
+        mode: "targeted_extract_api_surface_failed",
+        tool: "executeExtractApiSurface",
+        event: scanEvent,
+        error: scanEvent.error,
+      };
+      publishEvent("graph.file_scan_failed", scanEvent);
+    }
+    const result = {
+      repo: repoId,
+      file_path: relativePath,
+      display_name: basename(relativePath),
+      saved: true,
+      revision: savedRevision,
+      previous_revision: currentRevision,
+      graph_sync: graphSync,
+      mutation_authority: "daemon_governed_editor_save",
+      direct_browser_filesystem_access: false,
+    };
+    publishEvent("architect.editor_save", result);
+    json(res, 200, {
+      ok: true,
+      contract: "architect",
+      version: "v1",
+      ...buildMeta(),
+      result,
+    }, { "Cache-Control": "no-store" });
+  } catch (error) {
+    jsonError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -1529,13 +1923,13 @@ function parseArchitectTerminalSocketRoute(pathname: string): { terminalId: stri
   return { terminalId: decodeURIComponent(remainder) };
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(req: IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let length = 0;
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     length += buffer.length;
-    if (length > MAX_JSON_BODY_BYTES) {
+    if (length > maxBytes) {
       throw new Error("body_too_large");
     }
     chunks.push(buffer);
@@ -1576,6 +1970,79 @@ function boundedRawTextField(body: Record<string, unknown>, field: string, maxLe
   const value = optionalRawTextField(body, field);
   if (value == null || value.length === 0) return null;
   return value.slice(0, maxLength);
+}
+
+function architectTempAttachmentDir(): string {
+  return resolve(getArchitectProjectRoot(), ".dreamgraph", "architect-attachments");
+}
+
+function safeAttachmentFilename(name: string, fallbackExt: string): string {
+  const base = basename(name || "attachment").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
+  const ext = extname(base) || fallbackExt;
+  const stem = extname(base) ? base.slice(0, -ext.length) : base;
+  return `${Date.now()}-${randomUUID()}-${stem || "attachment"}${ext}`;
+}
+
+async function gcArchitectTempAttachments(now = Date.now()): Promise<void> {
+  const dir = architectTempAttachmentDir();
+  if (!existsSync(dir)) return;
+  const entries = await readdir(dir, { withFileTypes: true });
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile()) return;
+    const filePath = resolve(dir, entry.name);
+    if (relative(dir, filePath).startsWith("..")) return;
+    const info = await stat(filePath).catch(() => null);
+    if (info && now - info.mtimeMs > ARCHITECT_ATTACHMENT_GC_AGE_MS) {
+      await rm(filePath, { force: true });
+    }
+  }));
+}
+
+function decodeAttachmentBase64(data: string): Buffer {
+  const comma = data.indexOf(",");
+  const payload = comma >= 0 ? data.slice(comma + 1) : data;
+  return Buffer.from(payload, "base64");
+}
+
+async function handleArchitectAttachmentUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req, MAX_ATTACHMENT_UPLOAD_BODY_BYTES);
+  } catch (error) {
+    const message = (error as Error).message;
+    jsonError(res, message === "body_too_large" ? 413 : 400, message === "body_too_large" ? "body_too_large" : "bad_json", message === "body_too_large" ? "Attachment payload is too large" : "Expected a JSON object request body");
+    return;
+  }
+
+  const name = textField(body, "name") ?? "attachment";
+  const mimeType = textField(body, "mimeType") ?? textField(body, "mime_type") ?? "application/octet-stream";
+  const dataBase64 = optionalRawTextField(body, "dataBase64") ?? optionalRawTextField(body, "data_base64");
+  if (!dataBase64) {
+    jsonError(res, 400, "bad_request", "Missing attachment data");
+    return;
+  }
+  const buffer = decodeAttachmentBase64(dataBase64);
+  if (buffer.length > MAX_ARCHITECT_ATTACHMENT_BYTES) {
+    jsonError(res, 413, "attachment_too_large", "Attachment exceeds 5 MB limit");
+    return;
+  }
+
+  const fallbackExt = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/webp" ? ".webp" : mimeType === "image/png" ? ".png" : ".bin";
+  const dir = architectTempAttachmentDir();
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await gcArchitectTempAttachments();
+  const filePath = resolve(dir, safeAttachmentFilename(name, fallbackExt));
+  await writeFile(filePath, buffer, { mode: 0o600 });
+  json(res, 201, {
+    success: true,
+    attachment: {
+      name,
+      mime_type: mimeType,
+      size: buffer.length,
+      file_path: filePath,
+      gc: { ttl_ms: ARCHITECT_ATTACHMENT_GC_AGE_MS },
+    },
+  }, { "Cache-Control": "no-store" });
 }
 
 function architectProviderField(body: Record<string, unknown>, field: string): LlmProviderType | null {
@@ -4132,12 +4599,12 @@ function renderArchitectShell(): string {
       min-width: 0;
       max-width: 100%;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 6px 8px;
+      border-radius: 6px;
+      padding: 3px 6px;
       background: rgba(255, 255, 255, 0.045);
       color: var(--muted);
-      font-size: 0.72rem;
-      line-height: 1.35;
+      font-size: 0.64rem;
+      line-height: 1.18;
       overflow-wrap: anywhere;
     }
     .chat-panel {
@@ -4148,10 +4615,10 @@ function renderArchitectShell(): string {
     }
     .architect-center-tab-strip {
       display: flex;
-      gap: 6px;
+      gap: 4px;
       align-items: center;
       border-bottom: 1px solid var(--line);
-      padding-bottom: 6px;
+      padding-bottom: 3px;
       min-width: 0;
       position: relative;
       z-index: 5;
@@ -4181,15 +4648,15 @@ function renderArchitectShell(): string {
       color: var(--accent);
     }
     .architect-tab-button {
-      min-height: 28px;
+      min-height: 22px;
       max-width: 180px;
       border: 0;
       border-radius: 0;
       background: transparent;
       color: inherit;
       cursor: pointer;
-      padding: 4px 9px;
-      font: 700 0.72rem/1.2 var(--sans);
+      padding: 2px 7px;
+      font: 700 0.66rem/1.15 var(--sans);
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -4219,8 +4686,8 @@ function renderArchitectShell(): string {
     }
     .architect-tab-add {
       flex: 0 0 auto;
-      width: 28px;
-      height: 28px;
+      width: 24px;
+      height: 22px;
       border: 1px solid var(--line);
       border-radius: 6px;
       background: rgba(255, 255, 255, 0.045);
@@ -4308,14 +4775,14 @@ function renderArchitectShell(): string {
       display: flex;
       flex: 0 0 auto;
       flex-wrap: nowrap;
-      gap: 8px;
+      gap: 5px;
       align-items: center;
       justify-content: space-between;
       min-width: 0;
-      max-height: 40px;
+      max-height: 28px;
       overflow: hidden;
       color: var(--muted);
-      font-size: 0.72rem;
+      font-size: 0.66rem;
     }
     .terminal-toolbar span {
       min-width: 0;
@@ -4766,17 +5233,17 @@ function renderArchitectShell(): string {
     .chips {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
-      margin: 6px 0 10px;
+      gap: 4px;
+      margin: 3px 0 6px;
     }
     .chip {
       max-width: 100%;
       border-radius: 999px;
-      padding: 4px 7px;
+      padding: 2px 5px;
       background: var(--accent-soft);
       color: var(--accent);
-      font-size: 0.7rem;
-      line-height: 1.2;
+      font-size: 0.62rem;
+      line-height: 1.12;
       overflow-wrap: anywhere;
     }
     .chip.warn {
@@ -4809,19 +5276,21 @@ function renderArchitectShell(): string {
     .action-row {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+      gap: 6px;
     }
     .action-button {
       width: 100%;
       min-width: 0;
-      min-height: 36px;
+      min-height: 28px;
       border: 1px solid var(--line);
-      border-radius: 7px;
+      border-radius: 6px;
       background: var(--panel-strong);
       color: var(--ink);
       cursor: pointer;
+      font-size: 0.78rem;
       font-weight: 600;
-      padding: 6px 8px;
+      line-height: 1.1;
+      padding: 3px 6px;
       overflow-wrap: anywhere;
     }
     .action-button:hover {
@@ -4831,21 +5300,27 @@ function renderArchitectShell(): string {
     .inline-actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 10px;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .architect-right-accordion .inline-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
+      align-items: center;
     }
     .mini-button {
       min-width: 0;
       max-width: 100%;
-      min-height: 32px;
+      min-height: 28px;
       border: 1px solid var(--line);
-      border-radius: 7px;
+      border-radius: 6px;
       background: rgba(104, 216, 182, 0.1);
       color: var(--ink);
       cursor: pointer;
-      padding: 6px 8px;
-      font-size: 0.78rem;
+      padding: 3px 6px;
+      font-size: 0.76rem;
       font-weight: 600;
+      line-height: 1.1;
       overflow-wrap: anywhere;
     }
     .mini-button:hover {
@@ -5307,6 +5782,7 @@ function renderArchitectShell(): string {
     const architectCenterTabStorageKey = 'architect.center.tab.v1';
     let architectCenterTabs = [];
     let architectTabSequence = 0;
+    let architectCodeEditorModulePromise = null;
     const architectTabTypeRegistry = new Map();
     const architectModelOptionsByProvider = {
       anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
@@ -5359,6 +5835,388 @@ function renderArchitectShell(): string {
         terminalScheduleFit: null,
         terminalBlurListener: null,
       };
+    }
+
+    function createCodeEditorArchitectTab() {
+      architectTabSequence += 1;
+      const id = 'code-editor-tab-' + architectTabSequence;
+      return {
+        id: id,
+        title: 'Code Editor ' + architectTabSequence,
+        type: 'code-editor',
+        lifecycle: 'dynamic',
+        dirty: false,
+        closeable: true,
+        panelId: 'architect-panel-' + id,
+        repoId: '',
+        filePath: '',
+        displayName: '',
+        language: 'plaintext',
+        monacoModelKey: '',
+        loadState: 'idle',
+        saveState: 'idle',
+        lastKnownRevision: '',
+        treeExpanded: {},
+        destroy: null,
+      };
+    }
+
+    function loadArchitectCodeEditorModule() {
+      if (!architectCodeEditorModulePromise) {
+        const moduleLines = [
+          "function setSurfaceText(node, value) { if (node) node.textContent = value || ''; }",
+          "function resetNode(node) { while (node && node.firstChild) node.removeChild(node.firstChild); }",
+          "function normalizeOptionsTab(tab) { if (!tab) throw new Error('Missing code editor tab state.'); return tab; }",
+          "async function readJsonResponse(response, fallbackMessage) { const payload = await response.json().catch(function() { return {}; }); if (!response.ok || payload.ok === false) throw new Error(payload.message || fallbackMessage); return payload; }",
+          "async function postEditorJson(path, body, fallbackMessage) { const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); return readJsonResponse(response, fallbackMessage); }",
+          "let architectMonacoPromise = null;",
+          "let architectLucidePromise = null;",
+          "function ensureArchitectLucide(root) {",
+          "  if (window.lucide && typeof window.lucide.createIcons === 'function') { window.lucide.createIcons({ root: root || document }); return Promise.resolve(window.lucide); }",
+          "  if (architectLucidePromise) return architectLucidePromise.then(function(lucide) { lucide.createIcons({ root: root || document }); return lucide; });",
+          "  architectLucidePromise = new Promise(function(resolve, reject) {",
+          "    const script = document.createElement('script');",
+          "    script.src = '/api/architect/v1/assets/lucide/lucide.js';",
+          "    script.async = true;",
+          "    script.onload = function() { if (!window.lucide) { reject(new Error('Lucide did not initialize.')); return; } window.lucide.createIcons({ root: root || document }); resolve(window.lucide); };",
+          "    script.onerror = function() { reject(new Error('Lucide icons failed to load.')); };",
+          "    document.head.appendChild(script);",
+          "  });",
+          "  return architectLucidePromise;",
+          "}",
+          "function setIconButton(button, icon, label) { button.textContent = ''; button.title = label; button.setAttribute('aria-label', label); const marker = document.createElement('i'); marker.setAttribute('data-lucide', icon); marker.setAttribute('aria-hidden', 'true'); marker.style.width = '16px'; marker.style.height = '16px'; button.appendChild(marker); }",
+          "function ensureArchitectMonaco() {",
+          "  if (window.monaco && window.monaco.editor) return Promise.resolve(window.monaco);",
+          "  if (architectMonacoPromise) return architectMonacoPromise;",
+          "  architectMonacoPromise = new Promise(function(resolve, reject) {",
+          "    const finish = function() { try { window.require.config({ paths: { vs: '/api/architect/v1/assets/monaco/vs' } }); window.require(['vs/editor/editor.main'], function() { resolve(window.monaco); }, reject); } catch (error) { reject(error); } };",
+          "    if (window.require) { finish(); return; }",
+          "    const script = document.createElement('script');",
+          "    script.src = '/api/architect/v1/assets/monaco/vs/loader.js';",
+          "    script.async = true;",
+          "    script.onload = finish;",
+          "    script.onerror = function() { reject(new Error('Monaco loader failed.')); };",
+          "    document.head.appendChild(script);",
+          "  });",
+          "  return architectMonacoPromise;",
+          "}",
+          "export async function mountCodeEditorArchitectTab(options) {",
+          "  const tab = normalizeOptionsTab(options.tab);",
+          "  const panel = options.panel;",
+          "  if (!panel) throw new Error('Missing code editor panel.');",
+          "  if (tab.__codeEditorMounted) return;",
+          "  tab.__codeEditorMounted = true;",
+          "  tab.treeExpanded = tab.treeExpanded || {};",
+          "  panel.textContent = '';",
+          "  panel.style.padding = '0';",
+          "  panel.style.overflow = 'hidden';",
+          "  const root = document.createElement('div');",
+          "  root.className = 'code-editor-root';",
+          "  root.style.display = 'grid';",
+          "  root.style.gridTemplateRows = 'auto minmax(0, 1fr) auto';",
+          "  root.style.height = '100%';",
+          "  root.style.minHeight = '0';",
+          "  root.style.gap = '5px';",
+          "  root.style.padding = '6px';",
+          "  const toolbar = document.createElement('div');",
+          "  toolbar.className = 'terminal-toolbar';",
+          "  toolbar.style.gap = '5px';",
+          "  toolbar.style.flexWrap = 'nowrap';",
+          "  const repoSelect = document.createElement('select');",
+          "  repoSelect.className = 'mini-button';",
+          "  repoSelect.setAttribute('aria-label', 'Repository');",
+          "  const refreshButton = document.createElement('button');",
+          "  refreshButton.type = 'button';",
+          "  refreshButton.className = 'mini-button';",
+          "  setIconButton(refreshButton, 'refresh-cw', 'Refresh tree');",
+          "  const revealButton = document.createElement('button');",
+          "  revealButton.type = 'button';",
+          "  revealButton.className = 'mini-button';",
+          "  setIconButton(revealButton, 'locate-fixed', 'Reveal current file');",
+          "  const currentFile = document.createElement('span');",
+          "  currentFile.className = 'meta';",
+          "  currentFile.style.overflow = 'hidden';",
+          "  currentFile.style.textOverflow = 'ellipsis';",
+          "  currentFile.style.whiteSpace = 'nowrap';",
+          "  currentFile.style.minWidth = '0';",
+          "  currentFile.style.flex = '1 1 180px';",
+          "  const saveButton = document.createElement('button');",
+          "  saveButton.type = 'button';",
+          "  saveButton.className = 'mini-button';",
+          "  setIconButton(saveButton, 'save', 'Save file');",
+          "  toolbar.appendChild(repoSelect);",
+          "  toolbar.appendChild(refreshButton);",
+          "  toolbar.appendChild(revealButton);",
+          "  toolbar.appendChild(currentFile);",
+          "  toolbar.appendChild(saveButton);",
+          "  const workspace = document.createElement('div');",
+          "  workspace.style.display = 'grid';",
+          "  workspace.style.gridTemplateColumns = 'minmax(160px, ' + String(tab.treeWidth || 260) + 'px) 6px minmax(0, 1fr)';",
+          "  workspace.style.minHeight = '0';",
+          "  workspace.style.gap = '0';",
+          "  const treePane = document.createElement('div');",
+          "  treePane.style.minHeight = '0';",
+          "  treePane.style.overflow = 'auto';",
+          "  treePane.style.borderRight = '1px solid rgba(148, 163, 184, 0.22)';",
+          "  treePane.style.padding = '18px 4px 4px 0';",
+          "  treePane.style.position = 'relative';",
+          "  const treeCollapseButton = document.createElement('button');",
+          "  treeCollapseButton.type = 'button';",
+          "  treeCollapseButton.className = 'mini-button';",
+          "  treeCollapseButton.style.position = 'absolute';",
+          "  treeCollapseButton.style.top = '0';",
+          "  treeCollapseButton.style.right = '4px';",
+          "  treeCollapseButton.style.width = '20px';",
+          "  treeCollapseButton.style.height = '18px';",
+          "  treeCollapseButton.style.padding = '0';",
+          "  setIconButton(treeCollapseButton, 'panel-left-close', 'Collapse repository explorer');",
+          "  treePane.appendChild(treeCollapseButton);",
+          "  const treeContent = document.createElement('div');",
+          "  treePane.appendChild(treeContent);",
+          "  const treeResizeHandle = document.createElement('div');",
+          "  treeResizeHandle.setAttribute('role', 'separator');",
+          "  treeResizeHandle.setAttribute('aria-orientation', 'vertical');",
+          "  treeResizeHandle.title = 'Resize repository explorer';",
+          "  treeResizeHandle.style.cursor = 'col-resize';",
+          "  treeResizeHandle.style.background = 'rgba(148, 163, 184, 0.18)';",
+          "  treeResizeHandle.style.width = '1px';",
+          "  treeResizeHandle.style.margin = '0 2px';",
+          "  const editorPane = document.createElement('div');",
+          "  editorPane.style.minHeight = '0';",
+          "  editorPane.style.display = 'grid';",
+          "  editorPane.style.gridTemplateRows = 'minmax(0, 1fr)';",
+          "  editorPane.style.position = 'relative';",
+          "  const monacoMount = document.createElement('div');",
+          "  monacoMount.style.minHeight = '0';",
+          "  monacoMount.style.height = '100%';",
+          "  monacoMount.style.width = '100%';",
+          "  const emptyState = document.createElement('div');",
+          "  emptyState.className = 'meta';",
+          "  emptyState.textContent = 'Select a file from the daemon-governed tree.';",
+          "  emptyState.style.position = 'absolute';",
+          "  emptyState.style.inset = '12px';",
+          "  const textarea = document.createElement('textarea');",
+          "  textarea.className = 'chat-input';",
+          "  textarea.spellcheck = false;",
+          "  textarea.style.display = 'none';",
+          "  textarea.style.height = '100%';",
+          "  textarea.style.minHeight = '0';",
+          "  textarea.style.resize = 'none';",
+          "  textarea.style.fontFamily = 'var(--vscode-editor-font-family, monospace)';",
+          "  textarea.disabled = true;",
+          "  editorPane.appendChild(monacoMount);",
+          "  editorPane.appendChild(emptyState);",
+          "  editorPane.appendChild(textarea);",
+          "  workspace.appendChild(treePane);",
+          "  workspace.appendChild(treeResizeHandle);",
+          "  workspace.appendChild(editorPane);",
+          "  const status = document.createElement('div');",
+          "  status.className = 'meta';",
+          "  status.textContent = 'Loading editor repositories...';",
+          "  root.appendChild(toolbar);",
+          "  root.appendChild(workspace);",
+          "  root.appendChild(status);",
+          "  panel.appendChild(root);",
+          "  function refreshTab() { if (typeof options.refreshTabs === 'function') options.refreshTabs(tab.id); }",
+          "  function selectedRepo() { return repoSelect.value || tab.repoId || ''; }",
+          "  function applyTreeLayout() { workspace.style.gridTemplateColumns = tab.treeCollapsed ? '24px 0 minmax(0, 1fr)' : 'minmax(160px, ' + String(tab.treeWidth || 260) + 'px) 6px minmax(0, 1fr)'; treeContent.hidden = tab.treeCollapsed === true; treeResizeHandle.hidden = tab.treeCollapsed === true; treeCollapseButton.title = tab.treeCollapsed ? 'Expand repository explorer' : 'Collapse repository explorer'; treeCollapseButton.setAttribute('aria-label', treeCollapseButton.title); setIconButton(treeCollapseButton, tab.treeCollapsed ? 'panel-left-open' : 'panel-left-close', treeCollapseButton.title); ensureArchitectLucide(root).catch(function() {}); }",
+          "  function syncTitle() {",
+          "    const name = tab.filePath ? (tab.displayName || tab.filePath.split('/').pop()) : 'Code Editor';",
+          "    tab.title = name || 'Code Editor';",
+          "    currentFile.textContent = tab.filePath ? (tab.repoId + ' / ' + tab.filePath + (tab.dirty ? ' *' : '')) : 'No file selected';",
+          "    refreshTab();",
+          "  }",
+          "  function setDirty(nextDirty) { tab.dirty = nextDirty === true; syncTitle(); }",
+          "  function updateActiveTreeItem() {",
+          "    Array.from(treePane.querySelectorAll('[data-editor-file-path]')).forEach(function(node) {",
+          "      const active = node.dataset.editorFilePath === tab.filePath;",
+          "      node.style.background = active ? 'rgba(96, 165, 250, 0.18)' : 'transparent';",
+          "      node.style.color = active ? '#dbeafe' : '';",
+          "    });",
+          "  }",
+          "  function currentEditorText() { return tab.monacoModel ? tab.monacoModel.getValue() : textarea.value; }",
+          "  function showUnsupportedFileState() {",
+          "    disposeEditorModel();",
+          "    if (tab.monacoEditor) tab.monacoEditor.setModel(null);",
+          "    textarea.value = '';",
+          "    textarea.disabled = true;",
+          "    textarea.style.display = 'none';",
+          "    emptyState.hidden = false;",
+          "    emptyState.textContent = 'The file is not displayed in the text editor because it is either binary or uses an unsupported text encoding.'; const open = document.createElement('button'); open.type = 'button'; open.className = 'mini-button'; open.textContent = 'Open Anyway'; open.style.marginTop = '8px'; open.addEventListener('click', function() { tab.openAnywayFilePath = tab.filePath; loadFile(tab.filePath).catch(function(error) { setSurfaceText(status, error && error.message ? error.message : String(error)); }); }); emptyState.appendChild(document.createElement('br')); emptyState.appendChild(open);",
+          "    saveButton.disabled = true;",
+          "  }",
+          "  function disposeEditorModel() {",
+          "    if (tab.monacoChangeDisposable && typeof tab.monacoChangeDisposable.dispose === 'function') tab.monacoChangeDisposable.dispose();",
+          "    tab.monacoChangeDisposable = null;",
+          "    if (tab.monacoModel && typeof tab.monacoModel.dispose === 'function') tab.monacoModel.dispose();",
+          "    tab.monacoModel = null;",
+          "  }",
+          "  async function bindEditorContent(content) {",
+          "    textarea.value = content;",
+          "    textarea.disabled = false;",
+          "    emptyState.hidden = true;",
+          "    const monaco = await ensureArchitectMonaco();",
+          "    disposeEditorModel();",
+          "    const uriPath = encodeURIComponent(tab.id) + '/' + tab.filePath.split('/').map(encodeURIComponent).join('/');",
+          "    const uri = monaco.Uri.parse('dreamgraph-editor:///' + uriPath);",
+          "    tab.monacoModel = monaco.editor.createModel(content, tab.language || 'plaintext', uri);",
+          "    if (monaco.editor && typeof monaco.editor.setTheme === 'function') monaco.editor.setTheme('vs-dark');",
+          "    if (!tab.monacoEditor) {",
+          "      tab.monacoEditor = monaco.editor.create(monacoMount, { model: tab.monacoModel, theme: 'vs-dark', automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 13 });",
+          "      if (monaco.KeyMod && monaco.KeyCode && typeof tab.monacoEditor.addCommand === 'function') tab.monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, triggerSaveCommand);",
+          "    } else {",
+          "      tab.monacoEditor.setModel(tab.monacoModel);",
+          "      tab.monacoEditor.layout();",
+          "    }",
+          "    tab.monacoChangeDisposable = tab.monacoModel.onDidChangeContent(function() { textarea.value = tab.monacoModel.getValue(); saveButton.disabled = false; setDirty(true); });",
+          "  }",
+          "  async function loadFile(filePath) {",
+          "    const repo = selectedRepo();",
+          "    if (!repo || !filePath) throw new Error('Repo and file path are required.');",
+          "    tab.loadState = 'loading';",
+          "    status.textContent = 'Loading ' + filePath + ' from daemon...';",
+          "    const payload = await postEditorJson('/api/architect/v1/editor/file/load', { repo: repo, file_path: filePath, open_anyway: tab.openAnywayFilePath === filePath }, 'Editor load failed.');",
+          "    const file = payload.file || {};",
+          "    tab.repoId = String(file.repo || repo);",
+          "    tab.filePath = String(file.file_path || filePath);",
+          "    tab.displayName = String(file.display_name || tab.filePath.split('/').pop() || tab.filePath);",
+          "    tab.language = String(file.language || 'plaintext');",
+          "    tab.lastKnownRevision = String(file.revision || '');",
+          "    tab.monacoModelKey = tab.repoId + ':' + tab.filePath;",
+          "    if (file.unsupported_text_editor && tab.openAnywayFilePath !== tab.filePath) { showUnsupportedFileState(); tab.loadState = 'unsupported'; revealButton.disabled = false; setDirty(false); updateActiveTreeItem(); status.textContent = 'Unsupported file: ' + tab.filePath; return; }",
+          "    tab.openAnywayFilePath = '';",
+          "    await bindEditorContent(String(file.content || ''));",
+          "    tab.loadState = 'loaded';",
+          "    revealButton.disabled = false;",
+          "    setDirty(false);",
+          "    updateActiveTreeItem();",
+          "    status.textContent = 'Loaded ' + tab.filePath + ' | ' + tab.language;",
+          "  }",
+          "  function renderTreeNode(node, depth, parent) {",
+          "    const row = document.createElement('div');",
+          "    row.role = 'button';",
+          "    row.tabIndex = 0;",
+          "    row.style.display = 'block';",
+          "    row.style.width = '100%';",
+          "    row.style.textAlign = 'left';",
+          "    row.style.margin = '0';",
+          "    row.style.padding = '1px 4px 1px ' + String(4 + depth * 13) + 'px';",
+          "    row.style.borderRadius = '3px';",
+          "    row.style.cursor = 'default';",
+          "    row.style.font = '0.72rem/1.25 var(--data-font, monospace)';",
+          "    row.style.opacity = node.hidden ? '0.48' : '1';",
+          "    row.textContent = (node.kind === 'directory' ? (tab.treeExpanded[node.path] ? 'v ' : '> ') : '  ') + String(node.name || node.path);",
+          "    if (node.kind === 'file') row.dataset.editorFilePath = String(node.path || '');",
+          "    parent.appendChild(row);",
+          "    const children = document.createElement('div');",
+          "    parent.appendChild(children);",
+          "    function activateRow() {",
+          "      if (node.kind === 'directory') {",
+          "        const path = String(node.path || '');",
+          "        if (tab.treeExpanded[path]) { delete tab.treeExpanded[path]; resetNode(children); row.textContent = '> ' + String(node.name || path || '.'); return; }",
+          "        tab.treeExpanded[path] = true; row.textContent = 'v ' + String(node.name || path || '.');",
+          "        loadTree(path, children, depth + 1).catch(function(error) { setSurfaceText(status, error && error.message ? error.message : String(error)); });",
+          "        return;",
+          "      }",
+          "      loadFile(String(node.path || '')).catch(function(error) { tab.loadState = 'error'; setSurfaceText(status, error && error.message ? error.message : String(error)); });",
+          "    }",
+          "    row.addEventListener('click', activateRow);",
+          "    row.addEventListener('keydown', function(event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activateRow(); } });",
+          "  }",
+          "  async function loadTree(path, container, depth) {",
+          "    const repo = selectedRepo();",
+          "    if (!repo) throw new Error('Repository is required.');",
+          "    resetNode(container);",
+          "    const pending = document.createElement('div');",
+          "    pending.className = 'meta';",
+          "    pending.textContent = 'Loading...';",
+          "    container.appendChild(pending);",
+          "    const payload = await postEditorJson('/api/architect/v1/editor/tree', { repo: repo, path: path || '' }, 'Editor tree load failed.');",
+          "    resetNode(container);",
+          "    const tree = payload.tree || {};",
+          "    const children = Array.isArray(tree.children) ? tree.children : [];",
+          "    if (!children.length) { const empty = document.createElement('div'); empty.className = 'meta'; empty.textContent = 'No files.'; container.appendChild(empty); return; }",
+          "    children.forEach(function(child) { renderTreeNode(child, depth || 0, container); });",
+          "    updateActiveTreeItem();",
+          "  }",
+          "  async function loadRepos() {",
+          "    const response = await fetch('/api/architect/v1/editor/repos');",
+          "    const payload = await readJsonResponse(response, 'Failed to load repos.');",
+          "    repoSelect.textContent = '';",
+          "    const repos = Array.isArray(payload.repos) ? payload.repos : [];",
+          "    repos.forEach(function(repo, index) {",
+          "      const option = document.createElement('option');",
+          "      option.value = String(repo.id || '');",
+          "      option.textContent = String(repo.display_name || repo.name || repo.id || 'repo');",
+          "      if (!tab.repoId && index === 0) tab.repoId = option.value;",
+          "      if (tab.repoId === option.value) option.selected = true;",
+          "      repoSelect.appendChild(option);",
+          "    });",
+          "    repoSelect.hidden = false;",
+          "    refreshButton.disabled = repos.length === 0;",
+          "    treeCollapseButton.disabled = repos.length === 0;",
+          "    revealButton.disabled = true;",
+          "    saveButton.disabled = true;",
+          "    if (!repos.length) { status.textContent = 'No configured repos available.'; return; }",
+          "    repoSelect.value = tab.repoId || repoSelect.value;",
+          "    status.textContent = 'Select a file from the daemon-governed tree.';",
+          "    await loadTree('', treeContent, 0);",
+          "  }",
+          "  function applyGraphScanResult(scan) {",
+          "    if (!scan || String(scan.repoId || '') !== String(tab.repoId || '') || String(scan.filePath || '') !== String(tab.filePath || '')) return;",
+          "    if (scan.type === 'graph.file_scan_failed') {",
+          "      tab.saveState = 'scan-failed';",
+          "      status.textContent = 'Saved ' + tab.filePath + ' ✓ | Graph scan failed';",
+          "      return;",
+          "    }",
+          "    tab.saveState = 'scan-complete';",
+          "    status.textContent = 'Saved ' + tab.filePath + ' ✓ | Graph updated ✓ (' + String(scan.nodesUpdated || 0) + ' nodes, ' + String(scan.relationshipsUpdated || 0) + ' relationships)';",
+          "  }",
+          "  async function saveFile() {",
+          "    const repo = selectedRepo();",
+          "    const filePath = tab.filePath;",
+          "    if (!repo || !filePath) throw new Error('A loaded file is required before save.');",
+          "    tab.saveState = 'saving';",
+          "    status.textContent = 'Saving ' + filePath + ' through daemon...';",
+          "    const payload = await postEditorJson('/api/architect/v1/editor/file/save', { repo: repo, file_path: filePath, content: currentEditorText(), revision: tab.lastKnownRevision }, 'Editor save failed.');",
+          "    const result = payload.result || {};",
+          "    tab.repoId = String(result.repo || repo);",
+          "    tab.filePath = String(result.file_path || filePath);",
+          "    tab.displayName = String(result.display_name || tab.filePath.split('/').pop() || tab.filePath);",
+          "    tab.lastKnownRevision = String(result.revision || tab.lastKnownRevision || '');",
+          "    tab.saveState = 'scanning';",
+          "    setDirty(false);",
+          "    status.textContent = 'Saved ' + tab.filePath + ' ✓ | Graph scanning...';",
+          "    if (result.graph_sync && result.graph_sync.event) applyGraphScanResult(result.graph_sync.event);",
+          "  }",
+          "  function triggerSaveCommand() { saveFile().catch(function(error) { tab.saveState = 'idle'; setSurfaceText(status, error && error.message ? error.message : String(error)); }); }",
+          "  textarea.addEventListener('input', function() { saveButton.disabled = false; setDirty(true); });",
+          "  textarea.addEventListener('keydown', function(event) { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); triggerSaveCommand(); } });",
+          "  repoSelect.addEventListener('change', function() { tab.repoId = repoSelect.value; tab.filePath = ''; tab.displayName = ''; tab.lastKnownRevision = ''; tab.monacoModelKey = ''; tab.treeExpanded = {}; tab.openAnywayFilePath = ''; textarea.value = ''; textarea.disabled = true; emptyState.hidden = false; saveButton.disabled = true; revealButton.disabled = true; disposeEditorModel(); if (tab.monacoEditor) tab.monacoEditor.setModel(null); setDirty(false); loadTree('', treeContent, 0).catch(function(error) { setSurfaceText(status, error && error.message ? error.message : String(error)); }); });",
+          "  refreshButton.addEventListener('click', function() { loadTree('', treeContent, 0).catch(function(error) { setSurfaceText(status, error && error.message ? error.message : String(error)); }); });",
+          "  revealButton.addEventListener('click', function() { const active = treePane.querySelector('[data-editor-file-path=\\\"' + tab.filePath.replace(/\\\"/g, '\\\\\\\"') + '\\\"]'); if (active && typeof active.scrollIntoView === 'function') active.scrollIntoView({ block: 'center' }); });",
+          "  treeCollapseButton.addEventListener('click', function() { tab.treeCollapsed = !tab.treeCollapsed; applyTreeLayout(); });",
+          "  treeResizeHandle.addEventListener('pointerdown', function(event) { event.preventDefault(); treeResizeHandle.setPointerCapture(event.pointerId); const startX = event.clientX; const startWidth = tab.treeWidth || treePane.getBoundingClientRect().width || 260; const onMove = function(moveEvent) { tab.treeWidth = Math.max(160, Math.min(520, startWidth + moveEvent.clientX - startX)); tab.treeCollapsed = false; applyTreeLayout(); }; const onUp = function() { treeResizeHandle.removeEventListener('pointermove', onMove); treeResizeHandle.removeEventListener('pointerup', onUp); treeResizeHandle.removeEventListener('pointercancel', onUp); }; treeResizeHandle.addEventListener('pointermove', onMove); treeResizeHandle.addEventListener('pointerup', onUp); treeResizeHandle.addEventListener('pointercancel', onUp); });",
+          "  saveButton.addEventListener('click', triggerSaveCommand);",
+          "  const graphScanListener = function(event) { applyGraphScanResult(event.detail || {}); };",
+          "  window.addEventListener('architect:graph-file-scan', graphScanListener);",
+          "  tab.destroy = function() { window.removeEventListener('architect:graph-file-scan', graphScanListener); disposeEditorModel(); if (tab.monacoEditor && typeof tab.monacoEditor.dispose === 'function') tab.monacoEditor.dispose(); tab.monacoEditor = null; tab.__codeEditorMounted = false; };",
+          "  ensureArchitectLucide(root).catch(function() { /* icons are progressive enhancement */ });",
+          "  loadRepos().then(function() { if (tab.filePath) updateActiveTreeItem(); syncTitle(); }).catch(function(error) { setSurfaceText(status, error && error.message ? error.message : String(error)); });",
+          "  syncTitle();",
+          "}",
+        ];
+        const url = URL.createObjectURL(new Blob([moduleLines.join(String.fromCharCode(10))], { type: 'text/javascript' }));
+        architectCodeEditorModulePromise = import(url).then(function(mod) {
+          mod.__dreamgraphModuleUrl = url;
+          return mod;
+        }).catch(function(error) {
+          try { URL.revokeObjectURL(url); } catch (_) { /* ignore */ }
+          architectCodeEditorModulePromise = null;
+          throw error;
+        });
+      }
+      return architectCodeEditorModulePromise;
     }
 
     function resolveArchitectCenterTab(tabId) {
@@ -5426,11 +6284,25 @@ function renderArchitectShell(): string {
       if (!panel) {
         panel = document.createElement('div');
         panel.id = tab.panelId;
-        panel.className = 'architect-tab-panel ' + (tab.type === 'terminal' ? 'terminal-workspace' : '');
+        panel.className = 'architect-tab-panel ' + (tab.type === 'terminal' ? 'terminal-workspace' : (tab.type === 'code-editor' ? 'code-editor-workspace' : ''));
         panel.setAttribute('role', 'tabpanel');
         panel.dataset.architectTabPanel = tab.id;
         panel.dataset.architectTabType = tab.type;
-        if (tab.type === 'terminal') renderTerminalArchitectTabPanel(tab, panel);
+        if (tab.type === 'terminal') {
+          renderTerminalArchitectTabPanel(tab, panel);
+        } else if (tab.type === 'code-editor') {
+          loadArchitectCodeEditorModule().then(function(mod) {
+            if (mod && typeof mod.mountCodeEditorArchitectTab === 'function') {
+              mod.mountCodeEditorArchitectTab({
+                tab: tab,
+                panel: panel,
+                refreshTabs: function(tabId) { setArchitectCenterTab(tabId || tab.id); },
+              });
+            }
+          }).catch(function(error) {
+            panel.textContent = error && error.message ? error.message : 'Failed to load code editor module.';
+          });
+        }
         architectCenterPanelContainer.appendChild(panel);
       }
       panel.setAttribute('aria-labelledby', 'architect-tab-' + tab.id);
@@ -5678,6 +6550,10 @@ function renderArchitectShell(): string {
     function closeArchitectCenterTab(tabId) {
       const tab = architectCenterTabs.find(function(candidate) { return candidate.id === tabId; });
       if (!tab || !tab.closeable) return;
+      if (typeof tab.destroy === 'function') {
+        try { tab.destroy(); } catch (_) { /* best-effort cleanup */ }
+        tab.destroy = null;
+      }
       window.clearTimeout(tab.terminalResizeTimer || 0);
       tab.terminalResizeTimer = 0;
       if (tab.terminalResizeListener) {
@@ -5744,6 +6620,7 @@ function renderArchitectShell(): string {
         createBuiltInArchitectTab('plan', 'Plan', 'plan', 'architect-panel-plan'),
         createBuiltInArchitectTab('adr', 'ADR Editor', 'adr', 'architect-panel-adr'),
       ];
+      registerArchitectTabType({ type: 'code-editor', title: 'New Code Editor', create: createCodeEditorArchitectTab });
       registerArchitectTabType({ type: 'terminal', title: 'New Terminal', create: createTerminalArchitectTab });
       renderArchitectTabMenu();
       let tabAddPointerHandled = false;
@@ -6373,7 +7250,10 @@ function renderArchitectShell(): string {
       const normalizedAdapter = String(adapter || 'native_api_tool_loop').toLowerCase();
       const normalizedProvider = String(provider || 'none').toLowerCase();
       const normalizedModel = String(model || '').toLowerCase();
-      if (normalizedAdapter === 'codex-cli' || normalizedAdapter === 'copilot-cli' || normalizedAdapter === 'deterministic_fallback') {
+      if (normalizedAdapter === 'codex-cli' || normalizedAdapter === 'copilot-cli') {
+        return { textAttachments: true, imageAttachments: true };
+      }
+      if (normalizedAdapter === 'deterministic_fallback') {
         return { textAttachments: false, imageAttachments: false };
       }
       if (normalizedProvider === 'anthropic') {
@@ -6453,20 +7333,40 @@ function renderArchitectShell(): string {
       };
     }
 
-    async function readImageAttachment(file) {
+    async function uploadTempAttachment(file) {
       const dataUrl = await new Promise(function(resolve, reject) {
         const reader = new FileReader();
         reader.onload = function() { resolve(String(reader.result || '')); };
         reader.onerror = function() { reject(reader.error || new Error('Attachment read failed.')); };
         reader.readAsDataURL(file);
       });
+      const response = await fetch('/api/architect/v1/attachments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: file.name || 'attachment',
+          mimeType: file.type || 'application/octet-stream',
+          size: file.size || 0,
+          dataBase64: String(dataUrl || ''),
+        }),
+      });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok || !payload.attachment || !payload.attachment.file_path) {
+        throw new Error(payload.message || ('Attachment upload failed with HTTP ' + response.status));
+      }
+      return payload.attachment;
+    }
+
+    async function readImageAttachment(file) {
+      const uploaded = await uploadTempAttachment(file);
       return {
         kind: 'image',
         name: file.name,
-        mimeType: file.type || 'image/png',
-        size: file.size || 0,
-        content: String(dataUrl || '').slice(0, 120000),
-        truncated: String(dataUrl || '').length > 120000,
+        mimeType: file.type || uploaded.mime_type || 'image/png',
+        size: uploaded.size || file.size || 0,
+        filePath: uploaded.file_path,
+        content: '@' + uploaded.file_path,
+        truncated: false,
       };
     }
 
@@ -6501,6 +7401,9 @@ function renderArchitectShell(): string {
       return pendingChatAttachments.map(function(attachment) {
         const heading = '[Attachment: ' + attachment.name + ' | ' + attachment.mimeType + ' | ' + formatAttachmentSize(attachment.size) + ']';
         const suffix = attachment.truncated ? '\\n[attachment content truncated for browser transport]' : '';
+        if (attachment.filePath) {
+          return heading + '\\n' + '@' + attachment.filePath + suffix;
+        }
         return heading + '\\n' + attachment.content + suffix;
       }).join('\\n\\n');
     }
@@ -7991,6 +8894,16 @@ function renderArchitectShell(): string {
       stream.addEventListener('architect.config', function(event) {
         appendTypedEventLine('config', event);
       });
+      stream.addEventListener('graph.file_scanned', function(event) {
+        const envelope = parseArchitectEvent(event);
+        appendTypedEventLine('graph-file-scanned', event);
+        window.dispatchEvent(new CustomEvent('architect:graph-file-scan', { detail: envelope.payload || {} }));
+      });
+      stream.addEventListener('graph.file_scan_failed', function(event) {
+        const envelope = parseArchitectEvent(event);
+        appendTypedEventLine('graph-file-scan-failed', event);
+        window.dispatchEvent(new CustomEvent('architect:graph-file-scan', { detail: envelope.payload || {} }));
+      });
       stream.onerror = function() {
         liveEventStatusEl.textContent = 'Events: reconnecting';
         liveEventStatusEl.title = 'The Architect event stream will retry automatically.';
@@ -8040,6 +8953,16 @@ function renderArchitectShell(): string {
     }
     chatAttachmentInputEl.addEventListener('change', function() {
       stageAttachmentFiles(chatAttachmentInputEl.files).catch(function(error) {
+        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+      });
+    });
+    chatInputEl.addEventListener('paste', function(event) {
+      const files = Array.from((event.clipboardData && event.clipboardData.files) || []).filter(function(file) {
+        return String(file.type || '').toLowerCase().indexOf('image/') === 0;
+      });
+      if (!files.length) return;
+      event.preventDefault();
+      stageAttachmentFiles(files).catch(function(error) {
         chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
       });
     });
@@ -8245,10 +9168,10 @@ function renderArchitectShell(): string {
       .architect-right-accordion > summary {
         display: flex;
         align-items: center;
-        min-height: 28px;
-        padding: 5px 8px;
+        min-height: 22px;
+        padding: 3px 6px;
         color: #cbd5e1;
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 700;
         letter-spacing: 0;
         cursor: pointer;
@@ -8271,15 +9194,15 @@ function renderArchitectShell(): string {
       }
 
       .architect-right-accordion > :not(summary) {
-        padding-inline: 8px;
+        padding-inline: 5px;
       }
 
       #right-sidebar-stack {
-        gap: 4px;
+        gap: 2px;
       }
 
       [data-architect-sidebar="right"] {
-        padding: 8px;
+        padding: 6px;
       }
 
       [data-architect-sidebar="right"] h2 {
@@ -8495,6 +9418,11 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
       terminal_rename: "POST /api/architect/v1/terminals/{terminalId}/rename",
       terminal_close: "POST /api/architect/v1/terminals/{terminalId}/close",
       terminal_events: "GET /api/architect/v1/terminals/{terminalId}/events",
+      editor_repos: "GET /api/architect/v1/editor/repos",
+      editor_tree: "POST /api/architect/v1/editor/tree",
+      editor_file_load: "POST /api/architect/v1/editor/file/load",
+      editor_file_save: "POST /api/architect/v1/editor/file/save",
+      editor_graph_events: "SSE graph.file_scanned|graph.file_scan_failed via /api/architect/v1/events",
       adrs: "/api/architect/v1/adrs",
       adr_preview: "/api/architect/v1/adrs/{adrId}",
       adr_edit_proposal: "POST /api/architect/v1/adrs/{adrId}/edits",
@@ -8549,13 +9477,52 @@ export async function handleArchitectRoute(
       return true;
     }
 
-    if (req.method === "GET" && ARCHITECT_XTERM_ASSETS[pathname]) {
+    if (req.method === "GET" && getArchitectBrowserAsset(pathname)) {
       await handleArchitectAssetRequest(res, pathname);
       return true;
     }
 
     if (req.method === "GET" && (pathname === "/api/architect" || pathname === "/api/architect/" || pathname === "/api/architect/v1" || pathname === "/api/architect/v1/")) {
       handleArchitectContract(req, res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/editor/repos") {
+      await handleArchitectEditorRepos(req, res);
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/architect/v1/editor/tree") {
+      await handleArchitectEditorTreeRead(req, res);
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/architect/v1/editor/file/load") {
+      await handleArchitectEditorFileLoad(req, res);
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/architect/v1/editor/file/save") {
+      await handleArchitectEditorFileSave(req, res);
+      return true;
+    }
+
+    if (pathname === "/api/architect/v1/attachments" && req.method !== "POST") {
+      res.writeHead(405, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        Allow: "POST",
+      });
+      res.end(JSON.stringify({
+        ok: false,
+        error: "method_not_allowed",
+        message: "Architect attachments must use POST application/json.",
+      }));
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/architect/v1/attachments") {
+      await handleArchitectAttachmentUpload(req, res);
       return true;
     }
 

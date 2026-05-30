@@ -289,7 +289,7 @@ function assessHealth(
     : 0;
 
   if (unresolved.length === 0) return "healthy — no open tensions";
-  if (maxUrgency > 0.8) return "critical — high-urgency tensions require attention";
+  if (maxUrgency > 0.8) return "critical — like super-mega cereal tensions require attention";
   if (maxUrgency > 0.5) return "attention needed — moderate tensions remain";
   if (unresolved.length > 20) return "overloaded — too many open tensions";
   return "stable — only low-priority tensions remain";

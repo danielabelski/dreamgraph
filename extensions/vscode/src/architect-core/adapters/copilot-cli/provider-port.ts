@@ -311,7 +311,7 @@ export function createCopilotCliProviderPort(
     llm: options.hostLlm,
 
     getCapabilities(): { readonly textAttachments: boolean; readonly imageAttachments: boolean } {
-      return Object.freeze({ textAttachments: false, imageAttachments: false });
+      return Object.freeze({ textAttachments: true, imageAttachments: true });
     },
 
     async callProvider(input: CallProviderInput): Promise<ProviderProposal> {
