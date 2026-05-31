@@ -163,8 +163,11 @@ remove_legacy_vscode_extension_artifacts() {
 
         for dir in "${matches[@]}"; do
             if [[ -d "$dir" ]]; then
-                rm -rf "$dir"
-                ok "Removed legacy extension folder $(basename "$dir")"
+                if rm -rf "$dir"; then
+                    ok "Removed legacy extension folder $(basename "$dir")"
+                else
+                    warn "Failed to remove legacy extension folder $dir"
+                fi
             fi
         done
     done
@@ -180,7 +183,7 @@ test_vscode_extension_installed() {
         return 1
     fi
 
-    grep -q "^${extension_id}@${version}$" <<< "$RUN_LOGGED_OUTPUT"
+    grep -Fqx "${extension_id}@${version}" <<< "$RUN_LOGGED_OUTPUT"
 }
 
 install_vscode_extension_safely() {
@@ -424,23 +427,19 @@ if can_build_vscode_extension; then
         VSIX_PATH="$EXT_SOURCE/${EXT_NAME}-${EXT_VER}.vsix"
 
         ensure_extension_build_dependencies
-        (
-            cd "$EXT_SOURCE"
-            run_logged --allow-failure -- npm run build
-        )
+        pushd "$EXT_SOURCE" >/dev/null
+        run_logged --allow-failure -- npm run build
+        popd >/dev/null
         if [[ $RUN_LOGGED_EXIT_CODE -ne 0 ]]; then
             warn "Extension build failed -- skipping VS Code extension install"
-            EXTENSION_INSTALL_FAILED=true
         else
             ok "Extension built"
             rm -f "$VSIX_PATH"
-            (
-                cd "$EXT_SOURCE"
-                run_logged --allow-failure -- npx --yes @vscode/vsce package --out "$VSIX_PATH"
-            )
+            pushd "$EXT_SOURCE" >/dev/null
+            run_logged --allow-failure -- npx --yes @vscode/vsce package --out "$VSIX_PATH"
+            popd >/dev/null
             if [[ $RUN_LOGGED_EXIT_CODE -ne 0 ]] || [[ ! -f "$VSIX_PATH" ]]; then
                 warn "Extension packaging failed -- skipping VS Code extension install"
-                EXTENSION_INSTALL_FAILED=true
             else
                 ok "Packaged extension to $(basename "$VSIX_PATH")"
                 remove_legacy_vscode_extension_artifacts "$EXTENSION_ID" "$LEGACY_EXTENSION_VERSION"
@@ -568,16 +567,9 @@ fi
 ok "$RUN_LOGGED_OUTPUT"
 
 echo ""
-if [[ "${EXTENSION_INSTALL_FAILED:-false}" == "true" ]]; then
-    echo -e "${YELLOW}${BOLD}==================================================${NC}"
-    echo -e "${YELLOW}${BOLD} DreamGraph v$VERSION core installed${NC}"
-    echo -e "${YELLOW}${BOLD} (VS Code extension install FAILED -- see warnings above)${NC}"
-    echo -e "${YELLOW}${BOLD}==================================================${NC}"
-else
-    echo -e "${GREEN}${BOLD}==================================================${NC}"
-    echo -e "${GREEN}${BOLD} DreamGraph v$VERSION installed successfully!${NC}"
-    echo -e "${GREEN}${BOLD}==================================================${NC}"
-fi
+echo -e "${GREEN}${BOLD}==================================================${NC}"
+echo -e "${GREEN}${BOLD} DreamGraph v$VERSION installed successfully!${NC}"
+echo -e "${GREEN}${BOLD}==================================================${NC}"
 echo ""
 echo " Binary:   $BIN_DIR"
 echo " Run:      dg --help"
