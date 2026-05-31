@@ -113,7 +113,7 @@ Use the host and port shown by `dg status`. If the port is `8100`, open:
 | Tab | URL | Use it for |
 |-----|-----|------------|
 | Dashboard | `http://127.0.0.1:8100/` | Health, status, schedules, configuration, and docs. |
-| Explorer | `http://127.0.0.1:8100/explorer/` | Visual orientation, search, relationships, and tensions. Keep the trailing slash. |
+| Explorer | `http://127.0.0.1:8100/explorer` | Visual orientation, search, relationships, and tensions. Both `/explorer` and `/explorer/` work. |
 | Architect | `http://127.0.0.1:8100/architect` | Your main working tab: ask questions, make plans, implement changes, and verify work. |
 
 Use them together simply:
@@ -201,7 +201,7 @@ If `8100` was already in use, DreamGraph may choose another port. Use the port r
 
 ### Explorer does not load
 
-Use `/explorer/` with the trailing slash.
+Both `/explorer` and `/explorer/` are supported. Confirm the daemon is running and use the host and port reported by `dg status`.
 
 ### I added more repositories but Architect cannot see them
 

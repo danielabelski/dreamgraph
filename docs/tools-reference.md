@@ -1094,7 +1094,7 @@ The Explorer is an interactive single-page graph UI (Sigma.js + React) bundled t
 
 | Route | Content-Type | Description |
 |-------|--------------|-------------|
-| `/explorer/` | `text/html` | Explorer SPA shell (loads bundled JS/CSS) |
+| `/explorer`, `/explorer/` | `text/html` | Explorer SPA shell (loads bundled JS/CSS) |
 | `/explorer/api/snapshot` | `application/json` | Current graph snapshot with `instance_uuid` and `etag` for optimistic concurrency |
 | `/explorer/api/candidates` | `application/json` | Pending `ValidationResult` candidates awaiting promote/reject. Each row is enriched with edge endpoints (`from`, `to`, `relation`, `edge_kind`, `strategy`, `dream_reason`) or node fields (`name`, `description`, `entity_type`, `intent`) so the SPA can render meaningful titles and inspect targets |
 | `/explorer/events` | `text/event-stream` | Live SSE stream � `snapshot.changed`, `cache.invalidated`, dream cycle ticks, mutation applied |

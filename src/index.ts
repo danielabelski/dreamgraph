@@ -272,8 +272,8 @@ async function startHTTP(port: number): Promise<void> {
       if (handled) return;
     }
 
-    // ---- /explorer/* — DreamGraph Explorer (Phase 0: read-only API) ----
-    if (url.pathname.startsWith("/explorer/")) {
+    // ---- /explorer + /explorer/* — DreamGraph Explorer ----
+    if (url.pathname === "/explorer" || url.pathname.startsWith("/explorer/")) {
       const handled = await handleExplorerRoute(req, res, url.pathname);
       if (handled) return;
     }

@@ -295,8 +295,8 @@ async function handleCandidates(res: ServerResponse): Promise<void> {
 /**
  * Returns true if the request was handled (response sent).
  *
- * Caller in src/index.ts is expected to test
- * `pathname.startsWith("/explorer/")` before dispatching.
+ * Caller in src/index.ts is expected to test for `/explorer` or a
+ * `pathname.startsWith("/explorer/")` match before dispatching.
  */
 export async function handleExplorerRoute(
   req: IncomingMessage,

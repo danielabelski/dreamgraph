@@ -107,8 +107,8 @@ DREAMGRAPH_LLM_ARCHITECT_MODEL=your-claude-model
 </tr>
 <tr>
 <td>Explorer</td>
-<td><code>http://127.0.0.1:8100/explorer/</code></td>
-<td>Visual orientation, search, relationships, and tensions. Keep the trailing slash.</td>
+<td><code>http://127.0.0.1:8100/explorer</code></td>
+<td>Visual orientation, search, relationships, and tensions. Both <code>/explorer</code> and <code>/explorer/</code> work.</td>
 </tr>
 <tr>
 <td>Architect</td>
@@ -165,7 +165,7 @@ dg status my-app
 </code></pre>
 <p>If <code>8100</code> was already in use, DreamGraph may choose another port. Use the port reported by <code>dg status</code>.</p>
 <h3>Explorer does not load</h3>
-<p>Use <code>/explorer/</code> with the trailing slash.</p>
+<p>Both <code>/explorer</code> and <code>/explorer/</code> are supported. Confirm the daemon is running and use the host and port reported by <code>dg status</code>.</p>
 <h3>I added more repositories but Architect cannot see them</h3>
 <p>Check <code>DREAMGRAPH_REPOS</code> in Dashboard &gt; Config, restart the instance, and run a deep scan again.</p>
 <h3>Where do I go next?</h3>
