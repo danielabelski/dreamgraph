@@ -18,7 +18,7 @@ DreamGraph is a graph-first cognitive daemon for MCP-enabled development environ
 
 It is built for repository understanding, architecture-aware reasoning, disciplined code change, and continuous graph enrichment through scans, workflows, ADR capture, tensions, and dream cycles.
 
-![DreamGraph Architect](assets/dreamgraph-browser.png)
+![DreamGraph Architect](assets/living-dreamgraph.png)
 
 DreamGraph works with single repositories, monorepos, and multi-repository systems. It can build graph links across repos that share workflows, APIs, databases, infrastructure, or ownership boundaries.
 
