@@ -1,18 +1,18 @@
 # Error Handling Flow
 
-> This workflow manages errors that occur during the operation of the DreamGraph application. It captures errors, logs them, and provides user-friendly messages when necessary.
+> This flow manages errors that occur during application execution. It ensures that errors are logged and appropriate feedback is provided to users.
 
-**Trigger:** Error occurrence  
-**Source files:** src/utils/errors.ts, src/utils/logger.ts  
+**Trigger:** Error occurrence in the application  
+**Source files:** src/utils/logger.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
     S1["Capture Error"]
-    S2["Log Error"]
+    S2["Log Error Details"]
     S1 --> S2
-    S3["Display Error Message"]
+    S3["Notify User"]
     S2 --> S3
 ```
 
@@ -20,13 +20,13 @@ flowchart TD
 
 ### 1. Capture Error
 
-Intercepts errors that occur during application execution.
+Detect and capture the error as it occurs.
 
-### 2. Log Error
+### 2. Log Error Details
 
-Logs the error details for debugging purposes.
+Record the error details for debugging purposes.
 
-### 3. Display Error Message
+### 3. Notify User
 
-Provides a user-friendly error message to the user.
+Provide feedback to the user regarding the error.
 

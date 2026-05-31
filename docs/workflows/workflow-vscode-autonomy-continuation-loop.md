@@ -1,38 +1,44 @@
 # VS Code Autonomy Continuation Loop
 
-> After each architect pass, the extension extracts the structured pass envelope, derives recommended actions, analyzes continuation safety against autonomy mode and pass budget, updates visible autonomy status, and may self-continue with a synthesized next prompt until the goal is reached, risk rises, or the budget is exhausted.
+> After each Architect pass, the extension broadcasts visible autonomy status, parses the structured continuation envelope, and may self-continue according to the selected mode and remaining pass/time budget. Header dropdown selections are persisted before later settings-sync paths rebuild autonomy state.
 
-**Trigger:** assistant pass completion in the VS Code architect chat panel  
-**Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/autonomy-loop.ts, extensions/vscode/src/autonomy-structured.ts, extensions/vscode/src/autonomy.ts, extensions/vscode/src/reporting.ts  
+**Trigger:** A user submits an Architect chat turn, selects an autonomy mode from the chat header, or an eligible continuation pass completes.  
+**Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/autonomy-loop.ts, extensions/vscode/src/autonomy.ts, extensions/vscode/src/reporting.ts, extensions/vscode/src/test/slice5-ui.test.ts, docs/workflows/workflow-vscode-autonomy-continuation-loop.md  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Detect requested/configured autonomy mode and pass budget"]
-    S2["Inject reporting/autonomy instruction blocks into the architect system prompt"]
+    S1["Resolve configured autonomy state"]
+    S2["Persist header mode selection"]
     S1 --> S2
-    S3["Extract structured pass envelope and recommended next actions from the response"]
+    S3["Broadcast visible counters"]
     S2 --> S3
-    S4["Analyze progress, uncertainty, and scope to decide continuation"]
+    S4["Analyze pass outcome"]
     S3 --> S4
-    S5["Broadcast autonomy status and actions to the webview"]
+    S5["Continue or pause"]
     S4 --> S5
-    S6["If allowed, synthesize the next prompt and run another bounded pass"]
-    S5 --> S6
 ```
 
 ## Steps
 
-### 1. Detect requested/configured autonomy mode and pass budget
+### 1. Resolve configured autonomy state
 
-### 2. Inject reporting/autonomy instruction blocks into the architect system prompt
+Read dreamgraph.architect.autonomyMode and autoPassBudget into a bounded AutonomyState when settings-sync paths run.
 
-### 3. Extract structured pass envelope and recommended next actions from the response
+### 2. Persist header mode selection
 
-### 4. Analyze progress, uncertainty, and scope to decide continuation
+When the chat header dropdown posts setAutonomyMode, apply that mode's profile, broadcast the new status, and persist the selected mode to configuration before later turns can rebuild from settings.
 
-### 5. Broadcast autonomy status and actions to the webview
+### 3. Broadcast visible counters
 
-### 6. If allowed, synthesize the next prompt and run another bounded pass
+Send autonomyStatus to the webview so the dropdown, mode label, pass budget, and time budget mirror host state.
+
+### 4. Analyze pass outcome
+
+Extract the structured pass envelope and recommended actions from the assistant response.
+
+### 5. Continue or pause
+
+Use mode policy, budget counters, scope, uncertainty, blockers, and user-input signals to decide whether to self-continue or stop for user action.
 

@@ -1,14 +1,14 @@
 # State Machine
 
-> Manages the states and transitions of various entities within the DreamGraph system. State machines ensure that entities follow defined workflows and policies.
+> Manages the various states and transitions of entities within the DreamGraph system. It ensures that entities move through defined states in a controlled manner.
 
 **Table:** `state_machine`  
-**Storage:** json  
+**Storage:** memory  
 
 ## Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| id | string | Unique identifier for the state machine. |
-| current_state | string | The current state of the machine. |
+| current_state | string | The current state of the entity managed by the state machine. |
+| transitions | array | List of possible transitions from the current state. |
 

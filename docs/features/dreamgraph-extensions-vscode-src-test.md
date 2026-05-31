@@ -7,5 +7,14 @@
 **Status:** active  
 **Source files:** extensions/vscode/src/test/autonomy-actions.test.ts, extensions/vscode/src/test/autonomy-budget-exhaustion.test.ts, extensions/vscode/src/test/autonomy-contract.test.ts, extensions/vscode/src/test/autonomy-loop.test.ts, extensions/vscode/src/test/autonomy-mode-switches.test.ts, extensions/vscode/src/test/autonomy-prompt.test.ts, extensions/vscode/src/test/autonomy-reporting.test.ts, extensions/vscode/src/test/autonomy-structured.test.ts, extensions/vscode/src/test/autonomy.test.ts, extensions/vscode/src/test/card-renderer.test.ts, extensions/vscode/src/test/chat-memory.test.ts, extensions/vscode/src/test/context-architecture-contract.test.ts, extensions/vscode/src/test/context-builder-environment.test.ts, extensions/vscode/src/test/context-builder-integration.test.ts, extensions/vscode/src/test/context-cache-invalidation.test.ts, extensions/vscode/src/test/context-cache-timeout-truncation.test.ts, extensions/vscode/src/test/context-output-logging.test.ts, extensions/vscode/src/test/entity-links.test.ts, extensions/vscode/src/test/environment-context.test.ts, extensions/vscode/src/test/render-markdown.test.ts, extensions/vscode/src/test/slice4-redaction.test.ts, extensions/vscode/src/test/slice4-ui.test.ts, extensions/vscode/src/test/slice4-verify.test.ts, extensions/vscode/src/test/slice5-actions.test.ts, extensions/vscode/src/test/slice5-next-pass.test.ts, extensions/vscode/src/test/slice5-ui.test.ts, extensions/vscode/src/test/timeout-diagnostics.test.ts, extensions/vscode/src/test/timeout-recovery.test.ts, extensions/vscode/src/test/webview-bundle.test.ts  
 
+## Relationships
+
+| Target | Type | Relationship | Strength | Description |
+|--------|------|--------------|----------|-------------|
+| dreamgraph_tests | feature | depends_on | strong | Test depends on the Tests feature for ensuring code quality. |
+| test_suite | feature | depends_on | strong | Test depends on the Test Suite for unit tests of various components. |
+| tests_suite | feature | depends_on | strong | Test depends on the Tests Suite for reliability and correctness. |
+| test_instance_isolation | feature | depends_on | strong | Test depends on Instance Isolation Tests for integrity validation. |
+
 **Tags:** testing, ts
 

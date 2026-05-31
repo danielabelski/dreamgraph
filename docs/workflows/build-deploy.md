@@ -1,18 +1,18 @@
 # Build and Deploy Process
 
-> This process compiles the TypeScript code into JavaScript and prepares the application for deployment. It ensures that all necessary files are included in the distribution package.
+> This process compiles the TypeScript code and prepares the application for deployment. It includes building both the server and the explorer components.
 
-**Trigger:** Build command  
-**Source files:** package.json, tsconfig.json  
+**Trigger:** Build command execution  
+**Source files:** package.json, scripts/build.sh  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
     S1["Compile TypeScript"]
-    S2["Prepare Distribution"]
+    S2["Install Explorer Dependencies"]
     S1 --> S2
-    S3["Deploy Application"]
+    S3["Build Explorer"]
     S2 --> S3
 ```
 
@@ -20,13 +20,13 @@ flowchart TD
 
 ### 1. Compile TypeScript
 
-Run the TypeScript compiler to generate JavaScript files.
+Run the TypeScript compiler to convert TypeScript files to JavaScript.
 
-### 2. Prepare Distribution
+### 2. Install Explorer Dependencies
 
-Gather all necessary files and assets for deployment.
+Install necessary dependencies for the explorer component.
 
-### 3. Deploy Application
+### 3. Build Explorer
 
-Deploy the application to the specified environment.
+Compile the explorer component for deployment.
 

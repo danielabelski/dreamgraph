@@ -1,6 +1,6 @@
 # Cognitive Engine
 
-> The core engine that drives the cognitive functionalities of DreamGraph. It processes inputs, manages cognitive tasks, and generates outputs based on the defined workflows.
+> The core processing unit that handles cognitive tasks, including decision-making and data analysis. It integrates various cognitive models and algorithms to provide intelligent responses.
 
 **Table:** `cognitive_engine`  
 **Storage:** memory  
@@ -9,6 +9,6 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| id | string | Unique identifier for the cognitive engine. |
-| version | string | Version of the cognitive engine. |
+| id | string | Unique identifier for the cognitive engine instance. |
+| status | string | Current operational status of the cognitive engine. |
 

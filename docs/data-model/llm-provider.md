@@ -1,14 +1,14 @@
 # LLM Provider
 
-> Handles interactions with large language models (LLMs) for generating responses and processing natural language input. This component is essential for cognitive tasks.
+> Low-level adapter for chat-completion and embedding calls against OpenAI-compatible endpoints (OpenAI, Anthropic, Ollama, llama.cpp, custom). Stateless; all orchestration (retries, fingerprints, accounting) lives in management_hub.
 
-**Table:** `llm_provider`  
-**Storage:** memory  
+**Table:** ``  
+**Storage:** unknown  
 
-## Fields
+## Relationships
 
-| Field | Type | Description |
-|-------|------|-------------|
-| provider_name | string | The name of the LLM provider. |
-| api_key | string | API key for accessing the LLM services. |
+| Target | Type | Description |
+|--------|------|-------------|
+| management_hub | wrapped_by | - |
+| llm_config | configured_by | - |
 

@@ -1,6 +1,6 @@
 # Configuration
 
-> Holds configuration settings for the DreamGraph server, including transport modes and default ports. It is used to initialize the server with the correct parameters based on user input.
+> Holds various configuration settings for the DreamGraph application, including environment variables and application-specific settings. It is essential for initializing the application correctly.
 
 **Table:** `configuration`  
 **Storage:** json  
@@ -9,6 +9,6 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| transport | string | The transport mode for the server, either 'stdio' or 'http'. |
-| port | number | The port number for HTTP mode. |
+| env | string | The environment in which the application is running (development, production, etc.). |
+| settings | object | Key-value pairs for application-specific settings. |
 

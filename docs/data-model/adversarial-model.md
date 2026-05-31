@@ -1,14 +1,15 @@
 # Adversarial Model
 
-> A model that simulates adversarial scenarios to test the robustness of the DreamGraph system. It helps identify weaknesses and improve system resilience.
+> Defines a model for adversarial scenarios within the DreamGraph system, allowing for the simulation and analysis of potential threats or challenges. It is used for enhancing system resilience.
 
 **Table:** `adversarial_model`  
-**Storage:** json  
+**Storage:** memory  
 
 ## Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | id | string | Unique identifier for the adversarial model. |
-| scenario | string | Description of the adversarial scenario being tested. |
+| scenarios | array | List of scenarios defined in the model. |
+| responses | array | Expected responses to adversarial scenarios. |
 

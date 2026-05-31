@@ -1,6 +1,6 @@
 # Configuration
 
-> Holds configuration settings for the DreamGraph server, including transport modes and port settings. This data is essential for initializing the server with the correct parameters.
+> Holds the configuration settings for the DreamGraph server, including compiler options and environment variables. It is used to configure the server's behavior and dependencies during runtime.
 
 **Table:** `config`  
 **Storage:** json  
@@ -9,6 +9,7 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| transport | string | The transport mode for the server, either 'stdio' or 'http'. |
-| port | number | The port number for the HTTP transport mode. |
+| compilerOptions | object | Compiler options for TypeScript. |
+| include | array | Files to include during compilation. |
+| exclude | array | Files to exclude during compilation. |
 

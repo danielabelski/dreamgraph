@@ -17,6 +17,26 @@
 | [ui-chat-panel](ui-chat-panel.md) | UI Chat Panel | active | Legacy parallel chat surface entry retained only for histori… | - |
 | [explorer-inspector](explorer-inspector.md) | Explorer Inspector | active | Context panel for viewing structured details, relationships,… | react |
 | [explorer-shell](explorer-shell.md) | Explorer Shell | active | Host the DreamGraph Explorer experience inside the Architect… | html |
+| [architect-chat-shell-v1](architect-chat-shell-v1.md) | Architect Chat Shell V1 | active | Provide the canonical dockable DreamGraph chat and architect… | vscode |
+| [dreamgraph.explorer.src.App.App](dreamgraph-explorer-src-app-app.md) | App | active | react component 'App' detected by scanner in explorer/src/Ap… | react |
+| [dreamgraph.explorer.src.CandidatesPanel.CandidatesPanel](dreamgraph-explorer-src-candidatespanel-candidatespanel.md) | CandidatesPanel | active | react component 'CandidatesPanel' detected by scanner in exp… | react |
+| [dreamgraph.explorer.src.EventDock.EventDock](dreamgraph-explorer-src-eventdock-eventdock.md) | EventDock | active | react component 'EventDock' detected by scanner in explorer/… | react |
+| [dreamgraph.explorer.src.FiltersPanel.FiltersPanel](dreamgraph-explorer-src-filterspanel-filterspanel.md) | FiltersPanel | active | react component 'FiltersPanel' detected by scanner in explor… | react |
+| [dreamgraph.explorer.src.Graph3DCanvas.Graph3DCanvas](dreamgraph-explorer-src-graph3dcanvas-graph3dcanvas.md) | Graph3DCanvas | active | react component 'Graph3DCanvas' detected by scanner in explo… | react |
+| [dreamgraph.explorer.src.GraphCanvas.GraphCanvas](dreamgraph-explorer-src-graphcanvas-graphcanvas.md) | GraphCanvas | active | react component 'GraphCanvas' detected by scanner in explore… | react |
+| [dreamgraph.explorer.src.Inspector.Inspector](dreamgraph-explorer-src-inspector-inspector.md) | Inspector | active | react component 'Inspector' detected by scanner in explorer/… | react |
+| [dreamgraph.explorer.src.main.Main](dreamgraph-explorer-src-main-main.md) | Main | active | react component 'Main' detected by scanner in explorer/src/m… | react |
+| [dreamgraph.explorer.src.PulseOverlay.PulseOverlay](dreamgraph-explorer-src-pulseoverlay-pulseoverlay.md) | PulseOverlay | active | react component 'PulseOverlay' detected by scanner in explor… | react |
+| [dreamgraph.explorer.src.ReasonField.ReasonField](dreamgraph-explorer-src-reasonfield-reasonfield.md) | ReasonField | active | react component 'ReasonField' detected by scanner in explore… | react |
+| [dreamgraph.explorer.src.SearchBar.SearchBar](dreamgraph-explorer-src-searchbar-searchbar.md) | SearchBar | active | react component 'SearchBar' detected by scanner in explorer/… | react |
+| [dreamgraph.explorer.src.TensionsPanel.TensionsPanel](dreamgraph-explorer-src-tensionspanel-tensionspanel.md) | TensionsPanel | active | react component 'TensionsPanel' detected by scanner in explo… | react |
+| [standalone_architect_browser_shell](standalone-architect-browser-shell.md) | Standalone Architect Browser Shell | active | Project-bound browser Architect surface for selecting plans,… | html |
+| [standalone_architect_chat](standalone-architect-chat.md) | Standalone Architect Chat | active | Browser-based Architect chat surface for project-bound Dream… | - |
+| [standalone_architect_adaptive_future_review](standalone-architect-adaptive-future-review.md) | Standalone Architect Adaptive Future Review | active | Show the selected plan's advisory Adaptive Future Review as … | - |
+| [standalone_architect_selected_plan_chat_update](standalone-architect-selected-plan-chat-update.md) | Standalone Architect Selected Plan Chat Update | active | Allows chat text entered while a plan is selected to become … | - |
+| [standalone_architect_chat_scope_indicator](standalone-architect-chat-scope-indicator.md) | Standalone Architect Chat Scope Indicator | active | Shows the current Architect chat context as compact prompt-s… | html |
+| [standalone_architect_terminal_tab](standalone-architect-terminal-tab.md) | Standalone Architect Terminal Tab | active | Provides an embedded project-root terminal inside the standa… | html |
+| [standalone_architect_living_plan](standalone-architect-living-plan.md) | Standalone Architect Living Plan | active | Project daemon-owned living plan state inside the standalone… | html |
 
 ## data_display
 
@@ -31,6 +51,10 @@
 | [changed_files_view](changed-files-view.md) | Changed Files View | active | Show a session-scoped list of files changed during the curre… | vscode |
 | [context_inspector_output](context-inspector-output.md) | Context Inspector Output | active | Expose the constructed DreamGraph context envelope, reasonin… | vscode |
 | [explorer-graph-canvas](explorer-graph-canvas.md) | Explorer Graph Canvas | active | Primary interactive visualization surface for exploring Drea… | react |
+| [examples.hello-events.greeting](examples-hello-events-greeting.md) | Greeting Banner | active | Display a friendly greeting from the hello-events plugin.… | react |
+| [standalone_architect_instance_binding_strip](standalone-architect-instance-binding-strip.md) | Standalone Architect Instance Binding Strip | active | Shows the daemon instance UUID, instance home, config direct… | html |
+| [standalone_architect_active_session_runtime](standalone-architect-active-session-runtime.md) | Standalone Architect Active Session Runtime | active | Expose the daemon-owned Architect runtime identity so select… | - |
+| [standalone_architect_plan_lifecycle_projection](standalone-architect-plan-lifecycle-projection.md) | Standalone Architect plan lifecycle projection | active | Displays daemon-derived plan lifecycle, execution state, las… | - |
 
 ## feedback
 
@@ -51,6 +75,10 @@
 | [ui_tool_progress_view](ui-tool-progress-view.md) | Tool Progress View | active | Expose live and historical tool execution progress inside th… | vscode |
 | [ui_status_bar_indicator](ui-status-bar-indicator.md) | DreamGraph Status Bar Indicator | active | Provide always-visible DreamGraph connection and cognitive-s… | vscode |
 | [explorer-event-dock](explorer-event-dock.md) | Explorer Event Dock | active | Live event surface showing recent graph, cognitive, and expl… | react |
+| [standalone_architect_chat_instance_binding](standalone-architect-chat-instance-binding.md) | Standalone Architect Chat Instance Binding | active | Show the operator which daemon instance and instance home di… | html |
+| [standalone_architect_browser_runtime_bootstrap](standalone-architect-browser-runtime-bootstrap.md) | Standalone Architect Browser Runtime Bootstrap | active | Replace initial loading placeholders with daemon-provided pr… | - |
+| [standalone_architect_tool_trace](standalone-architect-tool-trace.md) | Standalone Architect Tool Trace | active | Shows daemon-executed tool calls with status, duration, runt… | html |
+| [standalone_architect_compact_tool_trace_panel](standalone-architect-compact-tool-trace-panel.md) | Standalone Architect compact tool trace panel | active | Shows live daemon-emitted tool execution state for the curre… | - |
 
 ## layout
 
@@ -65,6 +93,8 @@
 |----|------|--------|---------|-----------|
 | [ui_command_action_picker](ui-command-action-picker.md) | Command Action Picker | active | Offer a quick-pick action surface for common DreamGraph exte… | vscode |
 | [ui_recommended_actions_bar](ui-recommended-actions-bar.md) | Recommended Actions Bar | active | Present structured suggested actions for a rendered DreamGra… | vscode |
+| [standalone_architect_chat_scope_pill](standalone-architect-chat-scope-pill.md) | Standalone Architect Chat Scope Pill | active | Lets operators choose whether a browser Architect prompt is … | html |
+| [standalone_architect_slash_command_runtime](standalone-architect-slash-command-runtime.md) | Standalone Architect Slash Command Runtime | active | Provide user-facing slash command affordances that dispatch … | html |
 
 ## data_input
 
@@ -72,6 +102,16 @@
 |----|------|--------|---------|-----------|
 | [explorer-search-bar](explorer-search-bar.md) | Explorer Search Bar | active | Global Explorer query input for locating entities, narrowing… | react |
 | [explorer-filters-panel](explorer-filters-panel.md) | Explorer Filters Panel | active | Controls the visible Explorer subgraph by applying semantic … | react |
+| [standalone_architect_model_route_selector](standalone-architect-model-route-selector.md) | Standalone Architect Model Route Selector | active | Lets the operator choose the standalone Architect adapter, A… | html |
+| [standalone_architect_terminal](standalone-architect-terminal.md) | Standalone Architect Terminal | active | Provide a daemon-owned xterm.js project terminal in the Stan… | html, node |
+
+## navigation
+
+| ID | Name | Status | Purpose | Platforms |
+|----|------|--------|---------|-----------|
+| [standalone_architect_plan_list_item](standalone-architect-plan-list-item.md) | Standalone Architect Plan List Item | active | Let users select a standalone Architect plan from the left r… | - |
+| [standalone_architect_selected_plan_persistence](standalone-architect-selected-plan-persistence.md) | Standalone Architect Selected Plan Persistence | active | Restores the last selected standalone Architect plan after d… | html |
+| [standalone_architect_dynamic_center_tabs](standalone-architect-dynamic-center-tabs.md) | Standalone Architect Dynamic Center Tabs | active | Provide a descriptor-driven center workspace tab framework f… | - |
 
 ## Deprecated / Transitional Legacy Entries
 

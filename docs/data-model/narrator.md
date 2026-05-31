@@ -1,6 +1,6 @@
 # Narrator
 
-> Provides a narrative layer over the cognitive processes, translating complex data and insights into human-readable formats. The Narrator enhances user understanding and engagement.
+> Manages the narrative generation capabilities of the DreamGraph system, providing context-aware storytelling and explanations based on the current state of the graph. It enhances user engagement and understanding.
 
 **Table:** `narrator`  
 **Storage:** memory  
@@ -9,6 +9,7 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| id | string | Unique identifier for the Narrator component. |
-| format | string | The format used for presenting narratives. |
+| id | string | Unique identifier for the narrator. |
+| context | object | Current context for narrative generation. |
+| output | string | Generated narrative output. |
 

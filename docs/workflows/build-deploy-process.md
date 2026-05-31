@@ -1,6 +1,6 @@
 # Build and Deploy Process
 
-> This workflow manages the build and deployment of the DreamGraph application. It compiles TypeScript code into JavaScript and prepares the application for deployment.
+> This process automates the building and deployment of the application. It compiles the TypeScript code and prepares the application for production use.
 
 **Trigger:** Build command execution  
 **Source files:** package.json, tsconfig.json  
@@ -10,23 +10,29 @@
 ```mermaid
 flowchart TD
     S1["Compile TypeScript"]
-    S2["Prepare Deployment"]
+    S2["Install Dependencies"]
     S1 --> S2
-    S3["Run Deployment Scripts"]
+    S3["Package Application"]
     S2 --> S3
+    S4["Deploy Application"]
+    S3 --> S4
 ```
 
 ## Steps
 
 ### 1. Compile TypeScript
 
-Transpiles TypeScript code into JavaScript using the TypeScript compiler.
+Use the TypeScript compiler to transpile the code into JavaScript.
 
-### 2. Prepare Deployment
+### 2. Install Dependencies
 
-Prepares the compiled code for deployment to the server.
+Install any necessary dependencies for the application.
 
-### 3. Run Deployment Scripts
+### 3. Package Application
 
-Executes any necessary scripts to deploy the application.
+Package the application files for deployment.
+
+### 4. Deploy Application
+
+Deploy the packaged application to the specified environment.
 

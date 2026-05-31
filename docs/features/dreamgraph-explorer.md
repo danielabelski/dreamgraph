@@ -1,8 +1,11 @@
-# DreamGraph Explorer
+# Explorer
 
-> Interactive graph exploration experience integrated into the Architect VS Code extension UI.
+> Explorer — 1 source file(s) in explorer/
 
-**Repository:**   
+**Repository:** dreamgraph  
 **Domain:** core  
-**Status:** production_ready  
+**Status:** active  
+**Source files:** explorer/vite.config.ts  
+
+**Tags:** typescript
 

@@ -1,6 +1,6 @@
 # Workflow
 
-> Defines a sequence of operations or tasks within the DreamGraph system. Workflows can be triggered based on specific events or conditions.
+> Describes a workflow within the DreamGraph system, detailing the sequence of operations or processes. Workflows are essential for orchestrating tasks and managing data flows.
 
 **Table:** `workflow`  
 **Storage:** json  

@@ -1,7 +1,14 @@
-# Instance Registry Hub
+# Instance Registry
 
-> Centralized management hub for all instances, enhancing integration and retrieval of instance-related data.. Intent: To provide a streamlined interface for managing instance lifecycle and related discovery processes.
+> Maintains a registry of all active instances of DreamGraph. It tracks their configurations, statuses, and lifecycle events.
 
-**Table:** ``  
-**Storage:** unknown  
+**Table:** `instance_registry`  
+**Storage:** json  
+
+## Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| instance_id | string | Unique identifier for the instance. |
+| status | string | Current status of the instance. |
 

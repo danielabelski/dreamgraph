@@ -10,6 +10,7 @@ import { config } from "../src/config/config.js";
 import {
   createArchitectCliBridgeSpawnPlan,
   createArchitectCodexConfigToml,
+  createArchitectCopilotPromptFileDirective,
   resolveArchitectCliBridgeExecutablePath,
   resolveArchitectCliBridgeToolNames,
 } from "../src/architect/cli-bridge.js";
@@ -84,6 +85,14 @@ describe("standalone Architect route hardening", () => {
     expect(content).toContain('"CommonProgramFiles(x86)" = "C:\\\\Program Files (x86)\\\\Common Files"');
     expect(content).toContain("[mcp_servers.dreamgraph.tools.run_command]");
     expect(content).toContain('[mcp_servers.dreamgraph.tools."query.resource"]');
+  });
+
+  it("builds a single-line Copilot prompt-file directive for Windows command shims", () => {
+    const directive = createArchitectCopilotPromptFileDirective("C:\\Temp\\dreamgraph-architect-copilot-cli\\prompt.md");
+
+    expect(directive).toContain("prompt.md");
+    expect(directive).toContain("DreamGraph MCP");
+    expect(directive).not.toMatch(/[\r\n]/);
   });
 
   it("resolves Windows CLI shims and wraps them before spawning", async () => {

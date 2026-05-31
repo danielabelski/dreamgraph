@@ -1,32 +1,26 @@
 # Testing Process
 
-> This process runs automated tests to verify the functionality and stability of the application. It ensures that changes do not introduce regressions and that the application behaves as expected.
+> This process runs automated tests to ensure the functionality and reliability of the application. It verifies that the application behaves as expected.
 
-**Trigger:** Test command  
-**Source files:** tests/instance-isolation.test.ts, vitest.config.ts  
+**Trigger:** Test command executed  
+**Source files:** tests/cognitive-producers.test.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Run Unit Tests"]
-    S2["Run Integration Tests"]
+    S1["Run Test Suite"]
+    S2["Report Results"]
     S1 --> S2
-    S3["Generate Test Reports"]
-    S2 --> S3
 ```
 
 ## Steps
 
-### 1. Run Unit Tests
+### 1. Run Test Suite
 
-Execute unit tests to validate individual components.
+Execute the defined test cases against the application.
 
-### 2. Run Integration Tests
+### 2. Report Results
 
-Execute integration tests to validate interactions between components.
-
-### 3. Generate Test Reports
-
-Compile results and generate reports for review.
+Output the results of the tests, indicating pass/fail status.
 

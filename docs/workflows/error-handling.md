@@ -1,32 +1,26 @@
 # Error Handling Flow
 
-> This process manages errors that occur during the execution of the application, providing feedback to users and logging errors for further analysis. It ensures that the application remains stable and user-friendly.
+> This workflow manages errors that occur within the application, ensuring that they are logged and communicated to the user appropriately.
 
 **Trigger:** Error occurrence  
-**Source files:** src/utils/errors.ts  
+**Source files:** src/utils/logger.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Capture Error"]
-    S2["Log Error"]
+    S1["Log Error"]
+    S2["Notify User"]
     S1 --> S2
-    S3["Notify User"]
-    S2 --> S3
 ```
 
 ## Steps
 
-### 1. Capture Error
+### 1. Log Error
 
-Detect and capture the error that has occurred.
+Log the error details for debugging purposes.
 
-### 2. Log Error
+### 2. Notify User
 
-Record the error details in the application logs for analysis.
-
-### 3. Notify User
-
-Provide feedback to the user about the error and possible next steps.
+Provide feedback to the user regarding the error.
 

@@ -1,19 +1,18 @@
-# VS Code Autonomy Modes and Pass Budgets
+# VS Code Autonomy Modes
 
-> Canonical VS Code architect-chat autonomy feature. Adds autonomy modes, pass budgets, continuation analysis, structured pass envelopes, recommended next actions, and additive webview status surfacing while preserving the rich chat panel UX.
+> VS Code Architect chat exposes user-selectable autonomy modes and bounded pass/time budgets. Header dropdown selections now persist to dreamgraph.architect.autonomyMode so subsequent send, rehydrate, and settings-sync paths keep the user-selected mode instead of reverting from stale configuration.
 
-**Repository:**   
+**Repository:** dreamgraph  
 **Domain:** core  
 **Status:** active  
-**Source files:** extensions/vscode/src/autonomy.ts, extensions/vscode/src/autonomy-loop.ts, extensions/vscode/src/autonomy-structured.ts, extensions/vscode/src/autonomy-contract.ts, extensions/vscode/src/reporting.ts, extensions/vscode/src/chat-panel.ts  
+**Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/autonomy.ts, extensions/vscode/src/reporting.ts, extensions/vscode/src/test/slice5-ui.test.ts, docs/features/feature-vscode-autonomy-modes.md  
 
 ## Relationships
 
 | Target | Type | Relationship | Strength | Description |
 |--------|------|--------------|----------|-------------|
-| feature_vscode_extension | feature | related_to | moderate |  |
-| feature_cognitive_output_rendering_plan | feature | related_to | moderate |  |
-| feature_agentic_tool_execution_loop | feature | related_to | moderate |  |
+| vscode_integration | feature | part_of | strong | Autonomy modes are part of the VS Code Architect chat experience. |
+| workflow_vscode_autonomy_continuation_loop | workflow | drives | strong | Mode selection controls continuation policy and visible budget counters. |
 
-**Tags:** vscode, autonomy, pass-budget, recommended-actions, chat-panel
+**Tags:** vscode, architect, autonomy, chat-panel, settings
 

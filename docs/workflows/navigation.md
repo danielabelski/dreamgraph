@@ -1,16 +1,16 @@
-# Navigation Process
+# Navigation Flow
 
-> This process handles navigation within the application, allowing users to move between different views or sections. It manages the state of the current view and updates the UI accordingly.
+> This workflow handles the navigation within the DreamGraph application, allowing users to move between different views and components seamlessly.
 
-**Trigger:** User navigates  
-**Source files:** src/server/dashboard.ts  
+**Trigger:** User navigates through the application  
+**Source files:** explorer/src/App.tsx  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Capture Navigation Event"]
-    S2["Update Current View"]
+    S1["Detect Navigation Event"]
+    S2["Update Application State"]
     S1 --> S2
     S3["Render New View"]
     S2 --> S3
@@ -18,15 +18,15 @@ flowchart TD
 
 ## Steps
 
-### 1. Capture Navigation Event
+### 1. Detect Navigation Event
 
-Detect when a user attempts to navigate to a different view.
+Listen for user navigation events within the application.
 
-### 2. Update Current View
+### 2. Update Application State
 
-Change the current view state to reflect the user's choice.
+Update the application state based on the user's navigation choice.
 
 ### 3. Render New View
 
-Display the new view to the user.
+Render the appropriate view based on the updated application state.
 

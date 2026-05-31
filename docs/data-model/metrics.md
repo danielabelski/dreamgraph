@@ -1,14 +1,14 @@
 # Metrics
 
-> Collects and analyzes performance metrics for the DreamGraph application. It helps in monitoring and optimizing application performance.
+> Collects and stores performance metrics for the DreamGraph application. It is used for monitoring and optimizing the application's performance.
 
 **Table:** `metrics`  
-**Storage:** memory  
+**Storage:** json  
 
 ## Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| cpuUsage | number | Current CPU usage percentage. |
-| memoryUsage | number | Current memory usage in MB. |
+| metric_id | string | Unique identifier for the metric. |
+| value | number | Value of the metric. |
 

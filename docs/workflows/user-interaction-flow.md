@@ -1,32 +1,38 @@
 # User Interaction Flow
 
-> This workflow handles user interactions through the command line or HTTP requests, processing commands and returning appropriate responses. It ensures that user inputs are validated and processed correctly.
+> This flow manages user interactions with the application, including handling requests and responses. It ensures that user inputs are processed correctly and appropriate outputs are generated.
 
-**Trigger:** User command input  
-**Source files:** src/api/routes.ts, src/cli/dg.ts  
+**Trigger:** User input via CLI or HTTP request  
+**Source files:** src/api/routes.ts, src/cognitive/engine.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
     S1["Receive User Input"]
-    S2["Validate Input"]
+    S2["Process Input"]
     S1 --> S2
-    S3["Process Command"]
+    S3["Generate Response"]
     S2 --> S3
+    S4["Send Response"]
+    S3 --> S4
 ```
 
 ## Steps
 
 ### 1. Receive User Input
 
-Listens for user commands via CLI or HTTP.
+Capture input from the user through the CLI or HTTP request.
 
-### 2. Validate Input
+### 2. Process Input
 
-Checks the validity of the user input against expected formats.
+Analyze and process the user input to determine the appropriate action.
 
-### 3. Process Command
+### 3. Generate Response
 
-Executes the command based on user input and returns the result.
+Create a response based on the processed input.
+
+### 4. Send Response
+
+Return the generated response to the user.
 

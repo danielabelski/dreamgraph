@@ -1,26 +1,32 @@
 # Data Loading Process
 
-> This workflow is responsible for loading necessary data into the DreamGraph instance. It ensures that all required data files are read and parsed correctly.
+> This process handles the loading of various data files necessary for the application to function correctly. It ensures that all required data is available before the application begins processing requests.
 
 **Trigger:** Server initialization  
-**Source files:** src/instance/index.ts  
+**Source files:** src/api/routes.ts, src/instance/index.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Read Data Files"]
-    S2["Parse Data"]
+    S1["Load JSON Data"]
+    S2["Validate Data Structure"]
     S1 --> S2
+    S3["Initialize Data Context"]
+    S2 --> S3
 ```
 
 ## Steps
 
-### 1. Read Data Files
+### 1. Load JSON Data
 
-Loads data files such as features, workflows, and data models.
+Read and parse the required JSON data files into memory.
 
-### 2. Parse Data
+### 2. Validate Data Structure
 
-Processes the loaded data into usable formats for the cognitive engine.
+Ensure the loaded data conforms to expected schemas.
+
+### 3. Initialize Data Context
+
+Set up the context for data usage throughout the application.
 

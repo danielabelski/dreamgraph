@@ -449,6 +449,12 @@ async function prepareCodexInvocation(input: {
   };
 }
 
+export function createArchitectCopilotPromptFileDirective(promptFilePath: string): string {
+  return "The full DreamGraph Architect request is stored verbatim in the file at this path: "
+    + promptFilePath
+    + ". Use your read tool to load the file's full contents before responding. Treat that file as the request envelope, respond only to its CURRENT USER REQUEST section, and use DreamGraph MCP for repository facts, mutations, and verification. Do not mention this transport directive.";
+}
+
 async function prepareCopilotInvocation(input: {
   scratchDir: string;
   prompt: string;
@@ -460,8 +466,10 @@ async function prepareCopilotInvocation(input: {
 }): Promise<{ command: string; args: string[]; cwd: string; env: Record<string, string>; stdin: string; outputPath: string | null }> {
   const command = await resolveArchitectCliExecutable("copilot-cli");
   const copilotHome = join(input.scratchDir, "copilot-home");
+  const promptFilePath = join(input.scratchDir, "prompt.md");
   await mkdir(copilotHome, { recursive: true, mode: 0o700 });
   await copyCopilotHome(copilotHome);
+  await writeFile(promptFilePath, input.prompt, { mode: 0o600 });
   await writeFile(join(copilotHome, "mcp-config.json"), copilotMcpConfigJson({
     bridgeCommand: input.bridgeSpawn.command,
     bridgeArgs: input.bridgeSpawn.args,
@@ -476,7 +484,7 @@ async function prepareCopilotInvocation(input: {
   for (const tool of input.availableToolNames) {
     args.push("--allow-tool", `dreamgraph(${tool})`);
   }
-  args.push("--prompt", input.prompt);
+  args.push("--add-dir", input.scratchDir, "--prompt", createArchitectCopilotPromptFileDirective(promptFilePath));
 
   return {
     command,

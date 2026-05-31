@@ -1,8 +1,8 @@
 # Graph Enrichment Process
 
-> This process enriches the knowledge graph with additional metadata, keywords, and cross-links to improve the cognitive engine's capabilities. It enhances the relationships between entities in the graph.
+> This process enriches the knowledge graph by adding metadata, links, and keywords to enhance the cognitive capabilities of the system.
 
-**Trigger:** Graph update  
+**Trigger:** Graph enrichment script executed  
 **Source files:** scripts/enrich-graph.mjs  
 
 ## Flowchart
@@ -12,7 +12,7 @@ flowchart TD
     S1["Load Existing Graph Data"]
     S2["Add Metadata and Links"]
     S1 --> S2
-    S3["Save Updated Graph Data"]
+    S3["Save Enriched Graph"]
     S2 --> S3
 ```
 
@@ -20,13 +20,13 @@ flowchart TD
 
 ### 1. Load Existing Graph Data
 
-Read the current graph data from the relevant files.
+Read existing graph data from files.
 
 ### 2. Add Metadata and Links
 
-Insert additional metadata and cross-links to the graph entities.
+Insert additional metadata and cross-links into the graph.
 
-### 3. Save Updated Graph Data
+### 3. Save Enriched Graph
 
 Write the enriched graph data back to the files.
 
