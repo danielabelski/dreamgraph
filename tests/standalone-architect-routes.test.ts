@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Script } from "node:vm";
@@ -137,12 +137,87 @@ describe("standalone Architect route hardening", () => {
       expect(script).not.toContain("replace(/s+/g");
       expect(script).not.toContain("JSON.stringify(parsed.value, null, 2)");
       expect(html).toContain("Project scope loading...");
+      expect(html).toContain("id=\"architect-pulse-strip\"");
+      expect(html).toContain("architect.pulse");
+      expect(html).toContain("id=\"living-plan-summary\"");
+      expect(html).toContain("id=\"living-plan-question-list\"");
+      expect(html).toContain("id=\"living-plan-nervous-point-list\"");
+      expect(html).toContain("Projected from the selected plan's Open Questions section.");
+      expect(html).toContain("renderList(livingPlanQuestionListEl, livingState.open_questions || []");
+      expect(html).toContain("renderList(livingPlanNervousPointListEl, livingState.nervous_points || []");
+      expect(html).toContain("Living Plan");
+      expect(html).not.toContain("Plan Organ" + "ism");
       expect(html).not.toContain("Instance binding loading...");
       expect(html).not.toContain("<h1>Architect</h1>");
       expect(html).not.toContain(">Architect Chat<");
       expect(html).toContain("height: 100vh;");
       expect(html).toContain("overflow: hidden;");
     });
+  });
+
+  it("serves the Architect pulse projection contract", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+      const routes = contract.routes as Record<string, string>;
+      expect(routes.pulse).toBe("GET /api/architect/v1/pulse");
+      expect(routes.desires).toBe("GET /api/architect/v1/desires");
+      expect(routes.dream_playback).toBe("GET /api/architect/v1/dreams/recent/playback");
+      expect(routes.tension_clusters).toBe("GET /api/architect/v1/tensions/clusters");
+
+      const payload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/pulse`));
+      const pulse = payload.pulse as Record<string, unknown>;
+      expect(typeof pulse.pulse_hash).toBe("string");
+      expect(pulse.authority_boundary).toMatchObject({
+        repository_authority: "dreamgraph_mcp",
+        mutation_mode: "governed_tools_only",
+        direct_filesystem_claims: false,
+      });
+      expect(pulse.weather).toHaveProperty("kind");
+      expect(pulse.cognitive).toHaveProperty("unresolved_tensions");
+
+      const desires = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/desires`));
+      expect(desires.ledger).toMatchObject({ source: "daemon_governed_projection", mutation_controls_enabled: false });
+
+      const playback = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/dreams/recent/playback`));
+      expect(playback.playback).toHaveProperty("source", "existing_cognitive_store_projection");
+
+      const clusters = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/tensions/clusters`));
+      expect(Array.isArray(clusters.clusters)).toBe(true);
+    });
+  });
+
+  it("stores temporary Architect image attachments under the bound instance runtime directory", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-attachment-"));
+    const projectRoot = join(tempRoot, "project");
+    const runtimeDir = join(tempRoot, "instance", "runtime");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-attachment-test",
+      projectRoot,
+      runtimeDir,
+    } as never);
+
+    try {
+      await mkdir(projectRoot, { recursive: true });
+      await withArchitectServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/architect/v1/attachments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: "clipboard.png",
+            mimeType: "image/png",
+            dataBase64: "aW1hZ2UtYnl0ZXM=",
+          }),
+        });
+        expect(response.status).toBe(201);
+        const payload = await response.json() as { attachment: { file_path: string } };
+        expect(payload.attachment.file_path.startsWith(join(runtimeDir, "temp"))).toBe(true);
+        await expect(readFile(payload.attachment.file_path, "utf8")).resolves.toBe("image-bytes");
+        await expect(stat(join(projectRoot, ".dreamgraph"))).rejects.toThrow();
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("serves daemon-governed editor repo, tree, and file-read payloads", async () => {
@@ -738,6 +813,31 @@ describe("standalone Architect route hardening", () => {
     });
   });
 
+  it("projects living plan state from markdown and implementation-log evidence", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const payload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans/living-dreamgraph`));
+      const plan = payload.plan as { living_state?: Record<string, unknown> };
+      const living = plan.living_state ?? {};
+      const currentSlice = living.current_slice as { title?: string } | null;
+      const questions = living.open_questions as string[];
+      const nervousPoints = living.nervous_points as string[];
+      const branches = living.branches as Array<{ title?: string; status?: string }>;
+      const anchors = living.evidence_anchors as Array<{ id?: string }>;
+
+      expect(living.source).toBe("markdown_log_projection");
+      expect(living.confidence).toBe("medium");
+      expect(living.review_state).toBe("implementation_ready");
+      expect(String(currentSlice?.title ?? "")).toContain("Slice E");
+      expect(questions.length).toBeGreaterThan(0);
+      expect(nervousPoints.length).toBeGreaterThan(0);
+      expect(branches.every((branch) => branch.status === "conceptual_candidate")).toBe(true);
+      expect(branches.some((branch) => String(branch.title).includes("Slice A"))).toBe(false);
+      expect(anchors.some((anchor) => anchor.id === "ADR-218")).toBe(true);
+      expect(String(living.last_changed_because ?? "")).toContain("Slice E");
+      expect(String(living.pulse ?? "")).toContain("questions=");
+    });
+  });
+
   it("treats implemented slice checkpoints as complete and advances to the next slice", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-slice-projection-"));
     const dataDir = join(tempRoot, "data");
@@ -1113,6 +1213,8 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("id=\"chat-scope-pill\"");
       expect(html).toContain("id=\"chat-attachment-button\"");
       expect(html).toContain("id=\"chat-attachment-input\"");
+      expect((html.match(/chatInputEl\.addEventListener\('paste'/g) || []).length).toBe(1);
+      expect(html).toContain("const files = Array.from((event.clipboardData && event.clipboardData.files) || []).filter(function(file) {");
       expect(html).toContain("🌍 Project");
       expect(html).toContain("Messages will use project-wide context");
       expect(html).toContain("📍 Plan: ");

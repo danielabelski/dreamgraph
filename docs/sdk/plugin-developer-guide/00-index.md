@@ -1,7 +1,7 @@
 # DreamGraph Plugin Developer Guide
 
 **Audience:** Engineers writing third-party plugins against `@dreamgraph/sdk`.
-**Engine baseline:** v12.0.0 "Hippodamus" (M0-M6 implemented; M5 webhooks shipped; M4 schedule actions deferred; Adaptive Future audit metadata available; architect beta documented as the standalone browser surface).
+**Engine baseline:** v12.1.0 "Living DreamGraph" (M0-M6 implemented; M5 webhooks shipped; M4 schedule actions deferred; Adaptive Future audit metadata available; standalone architect projections include pulse, playback, tension clusters, desires, and living-plan state).
 **Companion:** see the [Plugin Reference Manual](../plugin-reference/00-index.md) for strict, normative tables.
 
 This guide is task-oriented. It walks you from "what is a plugin" through a working

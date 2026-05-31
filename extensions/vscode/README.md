@@ -1,4 +1,4 @@
-# DreamGraph v12.0.0 — Hippodamus
+# DreamGraph v12.1.0 — Living DreamGraph
 ### The VS Code architect companion for the DreamGraph architect beta.
 
 DreamGraph is a model-agnostic, graph-grounded development agent. It replaces brute-force context dumping with architectural discipline, ensuring your project's logic remains persistent regardless of which LLM you choose to plug in.
@@ -9,7 +9,7 @@ DreamGraph is a model-agnostic, graph-grounded development agent. It replaces br
 * **Autonomous Normalization:** Background 'Dream Cycles' continuously map and resolve architectural tensions.
 * **100% Local Privacy:** Your database, your daemon, your keys. Sovereign by design.
 
-## Status: v12.0.0 "Hippodamus"
+## Status: v12.1.0 "Living DreamGraph"
 * **Architect beta:** Standalone browser architect is the primary beta focus of the v12 release.
 * **VS Code architect:** Editor-integrated companion chat remains available through the extension.
 * **Explorer:** Production-ready graph browsing and curated mutations.

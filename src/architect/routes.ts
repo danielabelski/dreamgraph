@@ -40,6 +40,15 @@ import { updateEngineEnvValues } from "../utils/engine-env.js";
 import { loadJsonData } from "../utils/cache.js";
 import { logger } from "../utils/logger.js";
 import type { ADRLogFile, ArchitectureDecisionRecord } from "../types/index.js";
+import { engine } from "../cognitive/engine.js";
+import {
+  buildArchitectPulseSnapshot,
+  formatArchitectPulseLine,
+  type ArchitectPulseSnapshot,
+} from "./pulse.js";
+import { buildArchitectDesireLedger } from "./desire-ledger.js";
+import { buildDreamPlayback } from "../cognitive/playback.js";
+import { buildTensionClusters } from "../cognitive/tension-clustering.js";
 
 interface ArchitectPlanSummary {
   id: string;
@@ -275,6 +284,8 @@ let activeArchitectPassState: ArchitectSessionPassState = {
   updated_at: new Date().toISOString(),
 };
 let activeArchitectExecutionControl: ActiveArchitectExecutionControl | null = null;
+let latestArchitectPulse: ArchitectPulseSnapshot | null = null;
+let lastPublishedArchitectPulseHash: string | null = null;
 let architectTerminalSequence = 0;
 const architectTerminalSessions = new Map<string, ArchitectTerminalSession>();
 const architectTerminalWebSocketServer = new WebSocketServer({ noServer: true });
@@ -422,6 +433,32 @@ function buildArchitectRuntimeLabel(runtime: Pick<ActiveArchitectSessionRuntime,
     return `${runtime.adapter}/${runtime.model || "none"}`;
   }
   return `${runtime.provider || "none"}/${runtime.model || "none"}`;
+}
+
+async function buildArchitectPulseProjection(): Promise<ArchitectPulseSnapshot> {
+  const runtime = buildActiveArchitectSessionRuntime();
+  const selected = getArchitectSelectedPlanConfig();
+  const plan = selected.planId ? await loadArchitectPlanDetail(selected.planId) : null;
+  return buildArchitectPulseSnapshot({
+    cognitive: await engine.getStatus(),
+    runtime,
+    plan: plan ? { id: plan.id, title: plan.title, operational_state: plan.operational_state } : null,
+  });
+}
+
+async function publishArchitectPulseIfChanged(force = false): Promise<ArchitectPulseSnapshot | null> {
+  try {
+    const pulse = await buildArchitectPulseProjection();
+    latestArchitectPulse = pulse;
+    if (force || pulse.pulse_hash !== lastPublishedArchitectPulseHash) {
+      lastPublishedArchitectPulseHash = pulse.pulse_hash;
+      publishEvent("architect.pulse", pulse);
+    }
+    return pulse;
+  } catch (error) {
+    logger.warn(`architect pulse projection failed: ${(error as Error).message}`);
+    return latestArchitectPulse;
+  }
 }
 
 function buildProjectScopePayload(): Record<string, unknown> {
@@ -608,12 +645,14 @@ function subscribe(listener: (event: ArchitectEvent) => void): () => void {
 }
 
 publishEvent("architect.status", buildArchitectStatusPayload());
+void publishArchitectPulseIfChanged(true);
 const heartbeat = setInterval(() => {
   publishEvent("architect.noop", {
     ...buildArchitectStatusPayload(),
     status: "idle",
     note: "Project-bound Architect chat and plan controls are live; browser requests stay daemon-scoped to the active instance and attached project root.",
   });
+  void publishArchitectPulseIfChanged(false);
 }, HEARTBEAT_MS);
 if (typeof heartbeat.unref === "function") {
   heartbeat.unref();
@@ -1973,7 +2012,9 @@ function boundedRawTextField(body: Record<string, unknown>, field: string, maxLe
 }
 
 function architectTempAttachmentDir(): string {
-  return resolve(getArchitectProjectRoot(), ".dreamgraph", "architect-attachments");
+  const scope = getActiveScope();
+  if (!scope) throw new Error("Architect attachment uploads require a bound DreamGraph instance.");
+  return resolve(scope.runtimeDir, "temp");
 }
 
 function safeAttachmentFilename(name: string, fallbackExt: string): string {
@@ -2944,6 +2985,50 @@ async function handlePlanDetail(req: IncomingMessage, res: ServerResponse, planI
   });
 }
 
+async function handleArchitectPulseRequest(res: ServerResponse): Promise<void> {
+  const pulse = await publishArchitectPulseIfChanged(false) ?? await buildArchitectPulseProjection();
+  json(res, 200, {
+    ok: true,
+    contract: "architect",
+    version: "v1",
+    pulse,
+  }, { "Cache-Control": "no-store" });
+}
+
+async function buildArchitectTensionClustersProjection() {
+  return buildTensionClusters((await engine.loadTensions()).signals);
+}
+
+async function handleArchitectTensionClustersRequest(res: ServerResponse): Promise<void> {
+  json(res, 200, { ok: true, contract: "architect", version: "v1", clusters: await buildArchitectTensionClustersProjection() });
+}
+
+async function handleArchitectDesiresRequest(res: ServerResponse): Promise<void> {
+  const selected = getArchitectSelectedPlanConfig();
+  const plan = selected.planId ? await loadArchitectPlanDetail(selected.planId) : null;
+  json(res, 200, {
+    ok: true,
+    contract: "architect",
+    version: "v1",
+    ledger: buildArchitectDesireLedger({
+      cognitive: await engine.getStatus(),
+      clusters: await buildArchitectTensionClustersProjection(),
+      plan: plan ? { id: plan.id, living_state: plan.living_state } : null,
+    }),
+  });
+}
+
+async function handleArchitectDreamPlaybackRequest(res: ServerResponse): Promise<void> {
+  const [history, dreamGraph, candidates, validated, tensions] = await Promise.all([
+    engine.loadDreamHistory(),
+    engine.loadDreamGraph(),
+    engine.loadCandidateEdges(),
+    engine.loadValidatedEdges(),
+    engine.loadTensions(),
+  ]);
+  json(res, 200, { ok: true, contract: "architect", version: "v1", playback: buildDreamPlayback({ history, dreamGraph, candidates, validated, tensions }) });
+}
+
 async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   let body: Record<string, unknown>;
   try {
@@ -3061,6 +3146,7 @@ async function handleArchitectSelectionRequest(req: IncomingMessage, res: Server
       project_scope: meta.project_scope,
       architect_selection: meta.architect_selection,
     });
+    void publishArchitectPulseIfChanged(false);
     json(res, 200, {
       ok: true,
       contract: "architect",
@@ -3109,6 +3195,7 @@ async function handleArchitectSelectionRequest(req: IncomingMessage, res: Server
     project_scope: meta.project_scope,
     architect_selection: meta.architect_selection,
   });
+  void publishArchitectPulseIfChanged(false);
   json(res, 200, {
     ok: true,
     contract: "architect",
@@ -3145,8 +3232,9 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
     "If asked which model, provider, adapter, route, autonomy state, or session you are running, answer from the Current execution runtime block. Never say this runtime identity is unknown inside DreamGraph.",
     `Project root: ${String(project.project_root ?? "unbound")}. Plans root: ${String(project.plans_root ?? "unbound")}.`,
     runtimeBlock,
+    latestArchitectPulse ? formatArchitectPulseLine(latestArchitectPulse) : null,
     planContext,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function deterministicArchitectChatReply(
@@ -3317,6 +3405,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     action: "started",
     ...buildArchitectExecutionControlPayload(runtime),
   });
+  void publishArchitectPulseIfChanged(false);
 
   if (adapter === "deterministic_fallback") {
     fallbackReason = "operator_selected_deterministic_fallback";
@@ -3519,6 +3608,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     plan_update: planUpdate,
     provenance: runtimeProvenance,
   });
+  void publishArchitectPulseIfChanged(false);
 
   if (activeArchitectExecutionControl?.controller === executionController) {
     activeArchitectExecutionControl = null;
@@ -4607,6 +4697,22 @@ function renderArchitectShell(): string {
       line-height: 1.18;
       overflow-wrap: anywhere;
     }
+    .architect-pulse-strip {
+      display: flex;
+      flex: 1 1 100%;
+      flex-wrap: wrap;
+      gap: 5px;
+      min-width: 0;
+      align-items: center;
+    }
+    .architect-pulse-strip .runtime-pill {
+      border-color: rgba(104, 216, 182, 0.22);
+    }
+    .architect-pulse-strip[data-weather="blocked"] .runtime-pill,
+    .architect-pulse-strip[data-weather="strained"] .runtime-pill {
+      border-color: rgba(255, 188, 107, 0.42);
+      color: #ffd7a3;
+    }
     .chat-panel {
       display: grid;
       grid-template-rows: auto auto auto minmax(0, 1fr);
@@ -5544,6 +5650,12 @@ function renderArchitectShell(): string {
         <span id="project-scope" class="runtime-pill">Project scope loading...</span>
         <span id="architect-model-config" class="runtime-pill">Architect model loading...</span>
         <span id="live-event-status" class="runtime-pill">Events connecting...</span>
+        <div id="architect-pulse-strip" class="architect-pulse-strip" data-weather="unknown" aria-label="Architect pulse">
+          <span id="architect-pulse-weather" class="runtime-pill">Pulse loading...</span>
+          <span id="architect-pulse-cognitive" class="runtime-pill">Cognitive: unknown</span>
+          <span id="architect-pulse-plan" class="runtime-pill">Plan: none</span>
+          <span id="architect-pulse-authority" class="runtime-pill">Authority: dreamgraph_mcp</span>
+        </div>
       </div>
       <div class="runtime-controls" aria-label="Architect controls">
         <label class="control-field">Provider / Adapter
@@ -5636,6 +5748,21 @@ function renderArchitectShell(): string {
           <summary>Registry Summary</summary>
           <div id="registry-summary" class="chips"></div>
         </details>
+        <details class="architect-right-accordion" open>
+          <summary>Living Plan</summary>
+          <div id="living-plan-summary" class="chips"></div>
+          <p id="living-plan-pulse" class="status">Select a plan to project its living state.</p>
+          <details class="living-plan-foldout">
+            <summary>Open questions <span id="living-plan-question-count" class="living-plan-count">0</span></summary>
+            <p class="meta">Projected from the selected plan's Open Questions section. These are unresolved items that can change the plan's confidence and next review prompt.</p>
+            <ul id="living-plan-question-list" class="living-plan-list"></ul>
+          </details>
+          <details class="living-plan-foldout">
+            <summary>Nervous points <span id="living-plan-nervous-point-count" class="living-plan-count">0</span></summary>
+            <p class="meta">Projected from risk, risk-register, nervous-point, and design-guardrail sections. They flag areas that deserve review; they are not mutation controls.</p>
+            <ul id="living-plan-nervous-point-list" class="living-plan-list"></ul>
+          </details>
+        </details>
         <details class="architect-right-accordion">
           <summary>Governed Actions</summary>
           <div class="action-row">
@@ -5710,9 +5837,20 @@ function renderArchitectShell(): string {
     const centerPlanTitleEl = document.getElementById('center-plan-title');
     const centerPlanChipsEl = document.getElementById('center-plan-chips');
     const registrySummaryEl = document.getElementById('registry-summary');
+    const livingPlanSummaryEl = document.getElementById('living-plan-summary');
+    const livingPlanPulseEl = document.getElementById('living-plan-pulse');
+    const livingPlanQuestionCountEl = document.getElementById('living-plan-question-count');
+    const livingPlanQuestionListEl = document.getElementById('living-plan-question-list');
+    const livingPlanNervousPointCountEl = document.getElementById('living-plan-nervous-point-count');
+    const livingPlanNervousPointListEl = document.getElementById('living-plan-nervous-point-list');
     const projectScopeEl = document.getElementById('project-scope');
     const architectModelConfigEl = document.getElementById('architect-model-config');
     const liveEventStatusEl = document.getElementById('live-event-status');
+    const architectPulseStripEl = document.getElementById('architect-pulse-strip');
+    const architectPulseWeatherEl = document.getElementById('architect-pulse-weather');
+    const architectPulseCognitiveEl = document.getElementById('architect-pulse-cognitive');
+    const architectPulsePlanEl = document.getElementById('architect-pulse-plan');
+    const architectPulseAuthorityEl = document.getElementById('architect-pulse-authority');
     const chatLogEl = document.getElementById('chat-log');
     const chatFormEl = document.getElementById('chat-form');
     const chatInputEl = document.getElementById('chat-input');
@@ -7696,6 +7834,36 @@ function renderArchitectShell(): string {
       architectModelConfigEl.title = 'session: ' + (runtime.session_id || 'unknown') + ' | route: ' + (runtime.execution_route || runtime.adapter || 'unknown') + ' | autonomy: ' + (runtime.autonomy_mode || 'unknown') + ' | provenance: ' + (runtime.provenance_authority || 'unknown') + ' | adapter source: ' + (runtime.adapter_source || 'unknown') + ' | model source: ' + (runtime.model_source || 'unknown') + ' | provider source: ' + (runtime.provider_source || 'unknown');
     }
 
+    function renderArchitectPulse(pulse) {
+      if (!pulse) return;
+      const cognitive = pulse.cognitive || {};
+      const weather = pulse.weather || {};
+      const plan = pulse.plan || {};
+      const readiness = cognitive.llm_ready == null ? 'unknown' : (cognitive.llm_ready ? 'ready' : 'not ready');
+      const reasons = Array.isArray(weather.reasons) ? weather.reasons.map(function(reason) { return reason.label || reason.id; }).filter(Boolean) : [];
+      architectPulseStripEl.dataset.weather = weather.kind || 'unknown';
+      architectPulseWeatherEl.textContent = 'Weather: ' + (weather.label || weather.kind || 'unknown');
+      architectPulseWeatherEl.title = reasons.length ? reasons.join(' | ') : 'No pulse reasons reported.';
+      architectPulseCognitiveEl.textContent = 'Cognitive: ' + (cognitive.state || 'unknown') + '/' + readiness + ' | tensions ' + String(cognitive.unresolved_tensions ?? '?') + ' | expiry ' + String(cognitive.expiring_next_cycle ?? '?');
+      architectPulseCognitiveEl.title = 'Top tension: ' + (cognitive.top_tension_id || 'none') + ' | hash: ' + (pulse.pulse_hash || 'unknown');
+      architectPulsePlanEl.textContent = plan.id ? 'Plan: ' + plan.id + ' ' + (plan.lifecycle || 'unknown') + '/' + (plan.execution || 'unknown') : 'Plan: none';
+      architectPulsePlanEl.title = 'Active: ' + (plan.active_slice || 'none') + ' | Next: ' + (plan.next_slice || 'none');
+      architectPulseAuthorityEl.textContent = 'Authority: ' + ((pulse.authority_boundary && pulse.authority_boundary.repository_authority) || 'dreamgraph_mcp');
+      architectPulseAuthorityEl.title = 'Mutation mode: ' + ((pulse.authority_boundary && pulse.authority_boundary.mutation_mode) || 'governed_tools_only') + ' | direct filesystem claims: false';
+    }
+
+    async function loadArchitectPulse() {
+      try {
+        const response = await fetch('/api/architect/v1/pulse', { cache: 'no-store' });
+        const payload = await response.json().catch(function() { return {}; });
+        if (!response.ok) throw new Error(payload.message || ('Pulse failed with HTTP ' + response.status));
+        renderArchitectPulse(payload.pulse);
+      } catch (error) {
+        architectPulseWeatherEl.textContent = 'Pulse unavailable';
+        architectPulseWeatherEl.title = String(error instanceof Error ? error.message : error);
+      }
+    }
+
     function normalizeRenderedText(content) {
       const newline = String.fromCharCode(10);
       let text = String(content || '')
@@ -8363,6 +8531,33 @@ function renderArchitectShell(): string {
       appendChip(registrySummaryEl, 'Checkpoints', String(registry.summary.checkpoint_count || 0), false);
       appendChip(registrySummaryEl, 'Verified', String(operationalState.verified_checkpoint_count || 0), false);
 
+      const livingState = plan.living_state || {
+        confidence: 'low',
+        review_state: 'draft',
+        open_questions: [],
+        nervous_points: [],
+        branches: [],
+        plan_asks: [],
+        pulse: 'No living plan projection available.',
+      };
+      resetNode(livingPlanSummaryEl);
+      appendChip(livingPlanSummaryEl, 'Confidence', livingState.confidence || 'low', false);
+      appendChip(livingPlanSummaryEl, 'Review', livingState.review_state || 'draft', false);
+      appendChip(livingPlanSummaryEl, 'Questions', String((livingState.open_questions || []).length), false);
+      appendChip(livingPlanSummaryEl, 'Nervous points', String((livingState.nervous_points || []).length), false);
+      appendChip(livingPlanSummaryEl, 'Branches', String((livingState.branches || []).length), false);
+      appendChip(livingPlanSummaryEl, 'Plan asks', String((livingState.plan_asks || []).length), false);
+      livingPlanPulseEl.textContent = livingState.pulse || 'No living plan pulse projected.';
+      livingPlanPulseEl.title = livingState.next_review_prompt || livingState.last_changed_because || livingState.current_hypothesis || '';
+      livingPlanQuestionCountEl.textContent = String((livingState.open_questions || []).length);
+      renderList(livingPlanQuestionListEl, livingState.open_questions || [], 'No open questions projected from this plan.', function(node, question) {
+        appendListItem(node, question, 'Unresolved plan question');
+      });
+      livingPlanNervousPointCountEl.textContent = String((livingState.nervous_points || []).length);
+      renderList(livingPlanNervousPointListEl, livingState.nervous_points || [], 'No nervous points projected from this plan.', function(node, nervousPoint) {
+        appendListItem(node, nervousPoint, 'Review-sensitive plan risk or guardrail');
+      });
+
       renderList(adrListEl, registry.adr_bindings, 'No ADR bindings projected yet.', function(node, adr) {
         appendAdrListItem(node, adr);
       });
@@ -8440,6 +8635,13 @@ function renderArchitectShell(): string {
       resetNode(planChipsEl);
       resetNode(centerPlanChipsEl);
       resetNode(registrySummaryEl);
+      resetNode(livingPlanSummaryEl);
+      livingPlanPulseEl.textContent = 'Select a plan to project its living state.';
+      livingPlanPulseEl.title = '';
+      livingPlanQuestionCountEl.textContent = '0';
+      renderList(livingPlanQuestionListEl, [], 'No plan selected.', function(node, item) { appendListItem(node, item, ''); });
+      livingPlanNervousPointCountEl.textContent = '0';
+      renderList(livingPlanNervousPointListEl, [], 'No plan selected.', function(node, item) { appendListItem(node, item, ''); });
       renderList(adrListEl, [], 'No plan selected.', function(node, item) { appendListItem(node, item, ''); });
       renderList(graphBindingListEl, [], 'No plan selected.', function(node, item) { appendListItem(node, item, ''); });
       renderList(sliceListEl, [], 'No plan selected.', function(node, item) { appendListItem(node, item, ''); });
@@ -8894,6 +9096,10 @@ function renderArchitectShell(): string {
       stream.addEventListener('architect.config', function(event) {
         appendTypedEventLine('config', event);
       });
+      stream.addEventListener('architect.pulse', function(event) {
+        const envelope = appendTypedEventLine('pulse', event);
+        renderArchitectPulse(envelope.payload);
+      });
       stream.addEventListener('graph.file_scanned', function(event) {
         const envelope = parseArchitectEvent(event);
         appendTypedEventLine('graph-file-scanned', event);
@@ -8925,14 +9131,6 @@ function renderArchitectShell(): string {
       } else {
         chatFormEl.dispatchEvent(new Event('submit', { cancelable: true }));
       }
-    });
-    chatInputEl.addEventListener('paste', function(event) {
-      const files = event.clipboardData && event.clipboardData.files;
-      if (!files || !files.length) return;
-      event.preventDefault();
-      stageAttachmentFiles(files).catch(function(error) {
-        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
-      });
     });
     chatAttachmentButtonEl.addEventListener('click', function() {
       if (chatAttachmentButtonEl.disabled) {
@@ -9064,6 +9262,7 @@ function renderArchitectShell(): string {
       planBodyEl.textContent = String(error instanceof Error ? error.message : error);
       centerPlanBodyEl.textContent = planBodyEl.textContent;
     });
+    loadArchitectPulse();
     connectEvents();
   </script>
     <style id="architect-sidebar-resize-style">
@@ -9205,15 +9404,65 @@ function renderArchitectShell(): string {
         padding: 6px;
       }
 
-      [data-architect-sidebar="right"] h2 {
+      [data-architect-sidebar="right"] #plan-title {
         margin: 0 24px 4px 0;
-        font-size: 0.95rem;
+        font-size: 0.82rem;
         line-height: 1.18;
       }
 
       [data-architect-sidebar="right"] .status {
         margin-top: 6px;
         font-size: 0.72rem;
+        line-height: 1.25;
+      }
+
+      .living-plan-foldout {
+        margin-top: 6px;
+        border-top: 1px solid rgba(148, 163, 184, 0.12);
+      }
+
+      .living-plan-foldout > summary {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 20px;
+        padding: 3px 0;
+        color: #cbd5e1;
+        cursor: pointer;
+        font-size: 0.68rem;
+        font-weight: 700;
+        list-style-position: inside;
+      }
+
+      .living-plan-count {
+        color: var(--muted);
+        font-size: 0.62rem;
+        font-weight: 700;
+      }
+
+      .living-plan-list {
+        display: grid;
+        gap: 4px;
+        margin: 4px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .living-plan-list li {
+        min-width: 0;
+        padding: 5px 6px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.035);
+        font-size: 0.68rem;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+      }
+
+      .living-plan-list strong {
+        display: block;
+        margin-bottom: 2px;
+        font-size: 0.68rem;
         line-height: 1.25;
       }
 
@@ -9400,6 +9649,10 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
       chat_response_transports: ["application/json", "text/event-stream"],
       config: "POST /api/architect/v1/config",
       selection: "POST /api/architect/v1/selection",
+      pulse: "GET /api/architect/v1/pulse",
+      desires: "GET /api/architect/v1/desires",
+      dream_playback: "GET /api/architect/v1/dreams/recent/playback",
+      tension_clusters: "GET /api/architect/v1/tensions/clusters",
       plans: "/api/architect/v1/plans",
       plan_detail: "/api/architect/v1/plans/{planId}",
       plan_create: "POST /api/architect/v1/plans",
@@ -9552,6 +9805,26 @@ export async function handleArchitectRoute(
 
     if (req.method === "POST" && pathname === "/api/architect/v1/selection") {
       await handleArchitectSelectionRequest(req, res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/pulse") {
+      await handleArchitectPulseRequest(res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/desires") {
+      await handleArchitectDesiresRequest(res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/dreams/recent/playback") {
+      await handleArchitectDreamPlaybackRequest(res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/tensions/clusters") {
+      await handleArchitectTensionClustersRequest(res);
       return true;
     }
 

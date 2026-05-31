@@ -1,0 +1,17 @@
+*.tgz
+*.vsix
+node_modules/
+.codex/
+.strategy/
+.vscode/
+.idea/
+plans/
+data/dream_graph.json
+data/dream_history.json
+data/tension_log.json
+data/candidate_edges.json
+data/validated_edges.json
+.env
+.env.local
+extensions/vscode/dist/
+explorer/node_modules/

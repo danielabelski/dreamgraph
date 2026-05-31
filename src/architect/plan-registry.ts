@@ -112,6 +112,35 @@ export interface ArchitectEvidenceLink {
   hint: string | null;
 }
 
+export type LivingPlanConfidence = "low" | "medium" | "high";
+export type LivingPlanReviewState = "draft" | "reviewed" | "implementation_ready";
+
+export interface LivingPlanBranch {
+  id: string;
+  title: string;
+  status: "conceptual_candidate";
+  validates_with: string | null;
+  falsified_by: string | null;
+  adr_bindings: string[];
+}
+
+export interface LivingPlanState {
+  source: "markdown_log_projection";
+  pulse: string;
+  confidence: LivingPlanConfidence;
+  current_slice: ArchitectPlanSliceRef | null;
+  current_hypothesis: string | null;
+  open_questions: string[];
+  evidence_anchors: ArchitectSemanticAnchor[];
+  nervous_points: string[];
+  branches: LivingPlanBranch[];
+  plan_asks: string[];
+  adr_bindings: string[];
+  last_changed_because: string | null;
+  review_state: LivingPlanReviewState;
+  next_review_prompt: string | null;
+}
+
 export type ArchitectPlanActionKind = "plan_action" | "review_gate";
 
 export interface ArchitectPlanActionAuditInput {
@@ -182,6 +211,7 @@ export interface ArchitectPlanDetail extends ArchitectPlanSummary {
     last_resume_note: string | null;
     log_excerpt: string | null;
   };
+  living_state: LivingPlanState;
   registry: ArchitectPlanRegistry;
 }
 
@@ -352,6 +382,102 @@ async function loadOptionalFile(filePath: string): Promise<string | null> {
 
 function uniqueStrings(values: Iterable<string>): string[] {
   return [...new Set([...values].filter(Boolean))].sort((left, right) => left.localeCompare(right));
+}
+
+function extractMarkdownListItems(body: string): string[] {
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*(?:[-*]|\d+[.)])\s+(.+)$/)?.[1]?.trim() ?? null)
+    .filter((item): item is string => Boolean(item));
+}
+
+function findSectionItems(markdown: string, headings: ArchitectHeading[], titlePattern: RegExp): string[] {
+  const headingIndex = headings.findIndex((heading) => titlePattern.test(heading.title));
+  if (headingIndex < 0) return [];
+  return extractMarkdownListItems(sectionBody(markdown, headings, headingIndex));
+}
+
+function parseLabeledBranchValue(body: string, label: string): string | null {
+  const pattern = new RegExp("^\\s*(?:[-*]\\s*)?" + escapeRegExp(label) + ":\\s*(.+)", "im");
+  return body.match(pattern)?.[1]?.trim() ?? null;
+}
+
+function deriveLivingPlanConfidence(operationalState: ArchitectOperationalPlanState, openQuestions: string[]): LivingPlanConfidence {
+  if (operationalState.verified_checkpoint_count > 0 && openQuestions.length === 0) return "high";
+  if (operationalState.completed_checkpoint_count > 0 || operationalState.checkpoint_count > 1) return "medium";
+  return "low";
+}
+
+function deriveLivingPlanReviewState(lifecycle: ArchitectPlanLifecycle): LivingPlanReviewState {
+  if (["implementation_ready", "implementing", "verifying", "completed"].includes(lifecycle)) return "implementation_ready";
+  if (lifecycle === "reviewed") return "reviewed";
+  return "draft";
+}
+
+export function buildLivingPlanState(input: {
+  markdown: string;
+  headings: ArchitectHeading[];
+  checkpoints: ArchitectPlanCheckpoint[];
+  graphBindings: ArchitectSemanticAnchor[];
+  adrBindings: string[];
+  operationalState: ArchitectOperationalPlanState;
+}): LivingPlanState {
+  const openQuestions = findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?Open Questions$/i);
+  const nervousPoints = uniqueStrings([
+    ...findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?(?:Nervous Points|Risks?|Risk Register)$/i),
+    ...findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?Design Guardrails$/i),
+  ]);
+  const planAsks = findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?Plan Asks$/i);
+  const candidateHeadings = input.headings.filter((heading) =>
+    /^Slice\s+[A-Za-z0-9]+[.:]?\s*/i.test(heading.title) && /Candidate Slices/i.test(heading.path),
+  );
+  const activeSliceId = input.operationalState.active_slice?.id ?? null;
+  const completedSliceId = input.operationalState.last_completed_slice?.id ?? null;
+  const completedBranchIds = new Set(
+    input.checkpoints
+      .filter(isCompletedCheckpoint)
+      .map((checkpoint) => slugifySliceSegment(checkpoint.slice_id)),
+  );
+  const branches = candidateHeadings
+    .map((heading) => {
+      const index = input.headings.indexOf(heading);
+      const classified = classifySlice(heading.title);
+      const body = index < 0 ? "" : sectionBody(input.markdown, input.headings, index);
+      return classified ? {
+        id: classified.sortId,
+        title: heading.title,
+        status: "conceptual_candidate" as const,
+        validates_with: parseLabeledBranchValue(body, "Validates with"),
+        falsified_by: parseLabeledBranchValue(body, "Falsified by"),
+        adr_bindings: extractAdrBindings(body, { attributes: {} }),
+      } : null;
+    })
+    .filter((branch): branch is LivingPlanBranch => branch != null && branch.id !== activeSliceId && branch.id !== completedSliceId)
+    .filter((branch) => !completedBranchIds.has(slugifySliceSegment(branch.id)));
+  const currentHypothesis = parseFirstMatch(input.markdown, /^Current review stance:\s*(.+)$/m);
+  const latestCheckpoint = input.checkpoints.at(-1) ?? null;
+  const currentSlice = input.operationalState.active_slice ?? input.operationalState.next_slice;
+  const pulse = `${input.operationalState.plan_lifecycle}/${input.operationalState.execution_state}; slice=${currentSlice?.title ?? "none"}; questions=${openQuestions.length}; branches=${branches.length}`;
+
+  return {
+    source: "markdown_log_projection",
+    pulse,
+    confidence: deriveLivingPlanConfidence(input.operationalState, openQuestions),
+    current_slice: currentSlice,
+    current_hypothesis: currentHypothesis,
+    open_questions: openQuestions,
+    evidence_anchors: [
+      ...input.graphBindings.filter((binding) => binding.kind === "adr"),
+      ...input.graphBindings.filter((binding) => binding.kind !== "adr"),
+    ].slice(0, 24),
+    nervous_points: nervousPoints,
+    branches,
+    plan_asks: planAsks,
+    adr_bindings: input.adrBindings,
+    last_changed_because: latestCheckpoint?.label ?? null,
+    review_state: deriveLivingPlanReviewState(input.operationalState.plan_lifecycle),
+    next_review_prompt: planAsks[0] ?? openQuestions[0] ?? null,
+  };
 }
 
 function pushBinding(store: Map<string, ArchitectSemanticAnchor>, binding: ArchitectSemanticAnchor): void {
@@ -932,6 +1058,7 @@ async function projectPlan(fileName: string, options?: ProjectPlanOptions): Prom
     log_excerpt: logMarkdown == null ? null : extractLogExcerpt(logMarkdown),
   };
   const operationalState = buildOperationalState(activePhase, rawStatus, title, slices, checkpoints, resumeState.last_resume_note);
+  const livingState = buildLivingPlanState({ markdown, headings, checkpoints, graphBindings, adrBindings, operationalState });
   const status = deriveProjectedPlanStatus(rawStatus, operationalState.plan_lifecycle);
 
   return {
@@ -950,6 +1077,7 @@ async function projectPlan(fileName: string, options?: ProjectPlanOptions): Prom
     markdown,
     headings: headings.map((heading) => ({ level: heading.level, title: heading.title, path: heading.path })),
     resume_state: resumeState,
+    living_state: livingState,
     registry: {
       source: "markdown_projection",
       summary: {

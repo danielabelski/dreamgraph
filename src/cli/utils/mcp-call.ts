@@ -35,7 +35,7 @@ export async function mcpCallTool(
 
   const client = new Client({
     name: "dreamgraph-cli",
-    version: "12.0.0",
+    version: "12.1.0",
   });
 
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -80,7 +80,7 @@ export async function mcpListTools(
 
   const client = new Client({
     name: "dreamgraph-cli",
-    version: "12.0.0",
+    version: "12.1.0",
   });
 
   try {

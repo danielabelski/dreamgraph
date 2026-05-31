@@ -42,7 +42,7 @@ Architect is beta because the browser shell is now usable as the primary DreamGr
 
 Before opening architect, you need:
 
-- DreamGraph v12.0.0 Hippodamus installed.
+- DreamGraph v12.1.0 Living DreamGraph installed.
 - A DreamGraph instance created with `dg init`.
 - A project attached to that instance, either during `dg init` or later with `dg attach`.
 - The daemon running in HTTP mode.

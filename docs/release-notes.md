@@ -1,5 +1,11 @@
 # DreamGraph Release Notes
 
+## v12.1.0 - Living DreamGraph
+
+DreamGraph v12.1.0 adds daemon-governed Architect Pulse, read-only dream playback, tension clustering, desire-ledger projections, and living-plan state for the standalone browser architect.
+
+See [`../RELEASE_NOTES_v12.1.0.md`](../RELEASE_NOTES_v12.1.0.md) for the full distribution notes.
+
 ## v12.0.0 - Hippodamus
 
 DreamGraph v12.0.0 ships the Hippodamus release line and marks the standalone browser-based **architect** as beta. The release focuses on architect beta as the daemon-served project work surface with selected-plan scope, runtime provenance, model/adapter route visibility, governed DreamGraph MCP tool use, and auditable tool traces. The editor-integrated chat surface is now documented as the **VS Code architect**.
