@@ -12,6 +12,8 @@
 
 **Website:** [dreamgraph.nofs.ai](https://dreamgraph.nofs.ai/) — overview, guide, downloads, and screenshots in a friendlier format than this README.
 
+**New here?** Use the [DreamGraph Easy Start guide](guide/00-easy-start.md) for a short path from install to Dashboard, Explorer, and Architect.
+
 DreamGraph is a graph-first cognitive daemon for MCP-enabled development environments. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so the graph—not any single file or one-off code read—becomes the system’s source of truth.
 
 **v12.0.0 Hippodamus introduces the standalone architect beta.** From this release onward, **architect** means the daemon-served standalone browser Architect surface. The editor-integrated chat surface is the **VS Code architect**. Architect beta brings project-bound chat, selected-plan scope, runtime provenance, model/adapter route visibility, governed DreamGraph MCP tool use, and auditable tool traces into the browser while keeping the daemon, graph, ADRs, and source mutations authoritative.

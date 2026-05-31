@@ -7,7 +7,7 @@
  */
 
 import { resolve } from "node:path";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { atomicWriteFile } from "../../utils/atomic-write.js";
 import {
   loadRegistry,
@@ -72,6 +72,8 @@ Options:
     console.error(`Instance not found: ${String(query).replace(/[^\w\-]/g, "?")}`);
     process.exit(1);
   }
+
+  await mkdir(resolve(projectRoot, "plans"), { recursive: true });
 
   const dir = masterDir ?? resolveMasterDir();
   const instanceJsonPath = resolve(dir, entry.uuid, "instance.json");

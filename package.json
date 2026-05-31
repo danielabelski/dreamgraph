@@ -31,7 +31,8 @@
     "cli": "node dist/cli/dg.js",
     "test": "vitest run",
     "docs:architecture-tree": "node scripts/generate-architecture-tree.mjs",
-    "docs:primary-workflows": "node scripts/generate-primary-workflow-docs.mjs"
+    "docs:primary-workflows": "node scripts/generate-primary-workflow-docs.mjs",
+    "docs:easy-start": "node scripts/generate-easy-start-docs.mjs"
   },
   "bundleDependencies": [
     "@dreamgraph/host",

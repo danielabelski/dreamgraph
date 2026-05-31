@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DreamGraph Easy Start</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; line-height: 1.55; color: #172033; }
+    body { max-width: 920px; margin: 0 auto; padding: 40px 28px 72px; }
+    h1, h2, h3 { color: #101827; line-height: 1.2; }
+    h1 { font-size: 2.25rem; }
+    h2 { margin-top: 2rem; border-top: 1px solid #d9dfeb; padding-top: 1rem; }
+    code { background: #eef2f7; border-radius: 4px; padding: 0.12rem 0.3rem; }
+    pre { background: #101827; color: #f8fafc; border-radius: 8px; padding: 1rem; overflow-x: auto; }
+    pre code { background: transparent; padding: 0; }
+    blockquote { margin: 1rem 0; padding: 0.7rem 1rem; background: #f3f6fb; border-left: 4px solid #6d5dfc; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #d9dfeb; padding: 0.55rem; text-align: left; vertical-align: top; }
+    th { background: #f3f6fb; }
+    a { color: #5546d8; }
+    @media print { body { max-width: none; padding: 20px; } a { color: inherit; text-decoration: none; } }
+  </style>
+</head>
+<body>
+<h1>DreamGraph Easy Start</h1>
+<blockquote>
+<p><strong>Start here.</strong> You do not need to understand the internals before using DreamGraph. Pick the path that matches your project, run the short command list, and keep three browser tabs open: Dashboard, Explorer, and Architect.</p>
+</blockquote>
+<p>DreamGraph v12 is browser-first. <strong>Architect</strong> is the main working surface. The Dashboard helps with setup and health. Explorer gives you a visual map when you need orientation.</p>
+<h2>Before you start</h2>
+<p>Install DreamGraph from the repository root:</p>
+<pre><code class="language-bash"># Windows
+scripts/install.ps1 -Force
+
+# macOS or Linux
+bash scripts/install.sh --force
+</code></pre>
+<p>Open a new terminal and verify the install:</p>
+<pre><code class="language-bash">dg --version
+</code></pre>
+<p>You should see DreamGraph CLI v12.1.0 or newer.</p>
+<h2>Pick your setup path</h2>
+<h3>A. Start a completely new project</h3>
+<p>Use this when the project folder is empty or does not exist yet.</p>
+<pre><code class="language-bash">mkdir my-app
+cd my-app
+dg init --name my-app --project . --transport http
+dg start my-app --http
+dg scan my-app --depth deep
+</code></pre>
+<p>DreamGraph creates <code>plans/</code> automatically. You do not need to create it by hand.</p>
+<h3>B. Read an existing project</h3>
+<p>Run these commands from the existing repository root:</p>
+<pre><code class="language-bash">cd path/to/existing-project
+dg init --name existing-project --project . --transport http
+dg start existing-project --http
+dg scan existing-project --depth deep
+</code></pre>
+<p>The scan reads the project and prepares DreamGraph&#39;s project map. It does not rewrite your application code.</p>
+<h3>C. Read a multi-repo system</h3>
+<p>Choose one folder as the main project root. This is usually the folder that contains your system-level README, workspace file, or deployment configuration.</p>
+<pre><code class="language-bash">cd path/to/system-root
+dg init --name platform --project . --transport http
+dg attach . --instance platform --repo api=../platform-api
+dg start platform --http
+dg scan platform --depth deep
+</code></pre>
+<p>For additional repositories, open the Dashboard Config page and add a <code>DREAMGRAPH_REPOS</code> JSON map to the instance <code>engine.env</code> file:</p>
+<pre><code class="language-dotenv">DREAMGRAPH_REPOS={&quot;api&quot;:&quot;C:/work/platform-api&quot;,&quot;web&quot;:&quot;C:/work/platform-web&quot;,&quot;infra&quot;:&quot;C:/work/platform-infra&quot;}
+</code></pre>
+<p>Restart after changing configuration:</p>
+<pre><code class="language-bash">dg restart platform
+</code></pre>
+<p>Keep the list focused. Add the repositories that belong to the system you want Architect to reason about.</p>
+<h3>D. Bring an existing Codex or Claude workflow</h3>
+<p>You do not need to migrate chat history. Keep your repository where it is and initialize DreamGraph against that folder.</p>
+<p>For Codex CLI, install and sign in to Codex as usual. Open Architect and choose:</p>
+<ul>
+<li>Adapter: <code>Codex CLI</code></li>
+<li>Model: your preferred Codex model or <code>auto</code></li>
+</ul>
+<p>For Claude, use the Anthropic API route. In Dashboard &gt; Config, set:</p>
+<pre><code class="language-dotenv">DREAMGRAPH_LLM_PROVIDER=anthropic
+DREAMGRAPH_LLM_API_KEY=your-api-key
+DREAMGRAPH_LLM_ARCHITECT_PROVIDER=anthropic
+DREAMGRAPH_LLM_ARCHITECT_ADAPTER=native_api_tool_loop
+DREAMGRAPH_LLM_ARCHITECT_MODEL=your-claude-model
+</code></pre>
+<p>Then restart the instance. DreamGraph does not currently import Claude Code conversations or expose a Claude Code inline CLI adapter. The supported Claude path is Anthropic API configuration.</p>
+<h2>Open the three browser tabs</h2>
+<p>Run:</p>
+<pre><code class="language-bash">dg status my-app
+</code></pre>
+<p>Use the host and port shown by <code>dg status</code>. If the port is <code>8100</code>, open:</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>URL</th>
+<th>Use it for</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Dashboard</td>
+<td><code>http://127.0.0.1:8100/</code></td>
+<td>Health, status, schedules, configuration, and docs.</td>
+</tr>
+<tr>
+<td>Explorer</td>
+<td><code>http://127.0.0.1:8100/explorer/</code></td>
+<td>Visual orientation, search, relationships, and tensions. Keep the trailing slash.</td>
+</tr>
+<tr>
+<td>Architect</td>
+<td><code>http://127.0.0.1:8100/architect</code></td>
+<td>Your main working tab: ask questions, make plans, implement changes, and verify work.</td>
+</tr>
+</tbody></table>
+<p>Use them together simply:</p>
+<ol>
+<li>Start in <strong>Architect</strong> and describe what you want in normal language.</li>
+<li>Use <strong>Explorer</strong> when you want to understand how parts of the system connect.</li>
+<li>Use <strong>Dashboard</strong> when setup, health, or configuration needs attention.</li>
+</ol>
+<h2>What to ask Architect first</h2>
+<p>For a new project:</p>
+<pre><code class="language-text">Help me define the smallest useful first version of this project. Create a plan and start with the simplest working slice.
+</code></pre>
+<p>For an existing project:</p>
+<pre><code class="language-text">Read this project and explain the main user-facing parts, the important workflows, and the first risks I should review. Keep it practical.
+</code></pre>
+<p>For a large multi-repo system:</p>
+<pre><code class="language-text">Map the repositories at a high level. Tell me which repo owns each major responsibility, then identify the first three cross-repo workflows worth reviewing.
+</code></pre>
+<h2>Daily commands</h2>
+<p>Most days, these are enough:</p>
+<pre><code class="language-bash">dg status my-app
+dg start my-app --http
+dg restart my-app
+dg stop my-app
+dg scan my-app --depth deep
+</code></pre>
+<p>Use <code>dg scan</code> after attaching a project, after adding repositories, or after major structural changes.</p>
+<h2>Questions and troubleshooting</h2>
+<h3>Do I need to create <code>plans/</code> manually?</h3>
+<p>No. DreamGraph creates <code>&lt;project&gt;/plans/</code> when you initialize or attach a project. Architect also safeguards plan creation if the folder is missing.</p>
+<h3>I already use Codex. What changes?</h3>
+<p>Keep using Codex authentication. In Architect, select the Codex CLI adapter. DreamGraph supplies project context and governed repository tools through the browser workflow.</p>
+<h3>I already use Claude Code. What changes?</h3>
+<p>Your repository stays unchanged. Configure the Anthropic API provider for Architect. Claude Code transcript import and a Claude Code inline CLI adapter are not currently supported.</p>
+<h3>Can I use a local model?</h3>
+<p>Yes. Dashboard &gt; Config can point DreamGraph to Ollama or LM Studio. Use the existing <a href="../guide/04-llm-setup.md">LLM setup guide</a> when you want local model details.</p>
+<h3>Which tab should I leave open?</h3>
+<p>Leave Architect open. Keep Explorer beside it for orientation. Visit Dashboard when you need status or configuration.</p>
+<h3>Architect opens the wrong project</h3>
+<p>Run:</p>
+<pre><code class="language-bash">dg status my-app
+dg attach path/to/correct-project --instance my-app
+dg restart my-app
+</code></pre>
+<h3>The browser does not open</h3>
+<p>Confirm the daemon is running in HTTP mode:</p>
+<pre><code class="language-bash">dg start my-app --http
+dg status my-app
+</code></pre>
+<p>If <code>8100</code> was already in use, DreamGraph may choose another port. Use the port reported by <code>dg status</code>.</p>
+<h3>Explorer does not load</h3>
+<p>Use <code>/explorer/</code> with the trailing slash.</p>
+<h3>I added more repositories but Architect cannot see them</h3>
+<p>Check <code>DREAMGRAPH_REPOS</code> in Dashboard &gt; Config, restart the instance, and run a deep scan again.</p>
+<h3>Where do I go next?</h3>
+<p>Continue with the detailed <a href="../guide/README.md">user guide</a> only when you need more detail.</p>
+
+</body>
+</html>

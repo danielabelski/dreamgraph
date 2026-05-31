@@ -6,6 +6,8 @@ This same guide is also published on the website: **[dreamgraph.nofs.ai](https:/
 
 If you are looking for the auto-generated reference (every tool, every parameter, every schema), that lives in [`docs/`](../docs/). This guide is the part you read first.
 
+For the shortest route from install to a working browser setup, start with **[DreamGraph Easy Start](00-easy-start.md)**.
+
 ---
 
 ## Who this guide is for
@@ -23,6 +25,7 @@ You do **not** need to read the guide top-to-bottom. Jump to whichever page matc
 
 | # | Page | What you'll learn |
 |---|------|-------------------|
+| 0 | [DreamGraph Easy Start](00-easy-start.md) | The shortest setup path for a new project, existing repo, multi-repo system, Codex CLI, or Anthropic API. |
 | 1 | [What is DreamGraph?](01-what-is-dreamgraph.md) | The mental model. Graph + dreams + cognitive engine, in plain language. |
 | 2 | [Installation](02-installation.md) | One-command install, prerequisites, common install gotchas. |
 | 3 | [Your first instance](03-first-instance.md) | `dg init`, attaching a repo, starting the daemon. |
@@ -82,4 +85,4 @@ Most days you will never type `dg` after starting the daemon. You'll talk to arc
 
 ---
 
-Ready? Start with **[What is DreamGraph?](01-what-is-dreamgraph.md)**
+Ready? Start with **[DreamGraph Easy Start](00-easy-start.md)**

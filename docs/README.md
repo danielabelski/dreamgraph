@@ -20,6 +20,7 @@ This directory contains DreamGraph documentation, but the **canonical living doc
 
 Some files in this directory are hand-written narrative or reference documents. They may provide additional background, but they are not the authoritative inventory of the current system state unless explicitly regenerated.
 
+- [Easy Start](easy-start.md) — the shortest browser-first setup path, also available as [HTML](easy-start.html) and [PDF](easy-start.pdf).
 - [Adaptive Future Engine](adaptive-future-engine.md) — advisory candidate-future ranking and audit-trail overview.
 - [Release Notes](release-notes.md) — manually curated implementation/release notes for notable features.
 

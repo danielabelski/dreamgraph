@@ -231,6 +231,9 @@ export async function createInstance(
   for (const subdir of INSTANCE_DIRS) {
     await mkdir(resolve(instanceRoot, subdir), { recursive: true });
   }
+  if (opts.projectRoot) {
+    await mkdir(resolve(opts.projectRoot, "plans"), { recursive: true });
+  }
 
   // 2. Write instance.json
   const instance: DreamGraphInstance = {
