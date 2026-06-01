@@ -24,6 +24,7 @@ interface PluginManifest {
   policies:            { id: string }[];            // default []
   archetypeProviders:  { id: string }[];            // default []
   markdownFences:      { language: string }[];      // default []
+  architectTabs:       PluginManifestArchitectTab[]; // default []
   policy:              PluginPolicy;                // default { phasePermissions: [], writableFiles: [] }
   config?:             { schema?: string };
 }
@@ -51,6 +52,9 @@ The schema is **strict**: unknown top-level fields are rejected with
 | `policies[].id`                    | lowercase `[a-z0-9._-]+`                                              | `manifest_invalid`                     |
 | `archetypeProviders[].id`          | lowercase `[a-z0-9._-]+`                                              | `manifest_invalid`                     |
 | `markdownFences[].language`        | lowercase `[a-z0-9._-]+`                                              | `markdown_fence_language_invalid`      |
+| `architectTabs[].id`               | lowercase `[a-z0-9._-]+`, MUST start with `<plugin-id>.`               | `manifest_invalid`                     |
+| `architectTabs[].renderer`         | currently `checklist` only                                             | `manifest_invalid`                     |
+| `architectTabs[].planConnectivity` | `required | optional | none`                                           | `manifest_invalid`                     |
 | `policy.phasePermissions`          | each ∈ `analysis | execution | reflection`                            | `manifest_invalid`                     |
 | `policy.writableFiles`             | array of strings                                                      | `manifest_invalid`                     |
 
@@ -66,4 +70,5 @@ const manifest = parsePluginManifest(JSON.parse(plugin_json_text));
 ## Example
 
 See [examples/hello-events/plugin.json](../../../examples/hello-events/plugin.json)
-for a manifest exercising every M6 seam.
+for a manifest exercising every M6 seam and [examples/action-checklist/plugin.json](../../../examples/action-checklist/plugin.json)
+for a standalone Architect tab manifest.

@@ -21,6 +21,10 @@ each seam call site.
 | `schedule:register_action`    | (reserved, M4) `defineScheduleAction(...)`                         | always denied today                                                                                    | reserved |
 | `webhooks:emit`               | (reserved, post-MVP) `ctx.webhooks.dispatch(...)`                  | always denied today (use core webhook subscriptions instead)                                           | reserved |
 | `providers:register`          | (reserved, post-1.0) provider adapter seam                         | always denied today                                                                                    | reserved |
+| `architect:register_tab`      | `ctx.architect.tabs.register(definition)`                          | missing capability -> `architect_tab_capability_missing`; undeclared tab -> `architect_tab_undeclared` | live |
+| `architect:read_plan`         | `ctx.architect.planState.read(key, context)`                       | missing explicit plan -> `architect_plan_required`; missing plan -> `architect_plan_not_found`          | live |
+| `architect:write_plan_state`  | `ctx.architect.planState.write(key, value, context)`               | missing capability -> `architect_plan_state_capability_missing`; stale revision -> `architect_revision_stale` | live |
+| `architect:register_sidebar_summary` | project sidebar summary and badges from a tab snapshot       | undeclared effect -> `effect_undeclared`                                                                | live |
 
 A capability not present in `manifest.capabilities` MUST cause the matching seam
 call to be refused with `<seam>_capability_missing`. The host MUST NOT silently

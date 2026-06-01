@@ -47,8 +47,18 @@ import {
   type ArchitectPulseSnapshot,
 } from "./pulse.js";
 import { buildArchitectDesireLedger } from "./desire-ledger.js";
+import { buildOnboardingReadinessProjection } from "./onboarding-readiness.js";
+import { ArchitectRepoSetupError, buildArchitectRepoSetupProjection, persistArchitectRepoSetup } from "./repo-setup.js";
+import { readOnboardingTelemetryEvents, recordOnboardingTelemetryEvent } from "./onboarding-telemetry.js";
 import { buildDreamPlayback } from "../cognitive/playback.js";
 import { buildTensionClusters } from "../cognitive/tension-clustering.js";
+import {
+  ArchitectContributionError,
+  dispatchArchitectTabAction,
+  listArchitectTabs,
+  loadArchitectTabSnapshot,
+} from "../plugins/architect-contributions.js";
+import { ArchitectPlanStateError } from "../plugins/architect-plan-state.js";
 
 interface ArchitectPlanSummary {
   id: string;
@@ -163,9 +173,41 @@ const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_ATTACHMENT_UPLOAD_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_ARCHITECT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const ARCHITECT_ATTACHMENT_GC_AGE_MS = 24 * 60 * 60 * 1000;
+const ARCHITECT_DOOM_SPIKE_BUNDLE_SOURCE_URL = "https://v8.js-dos.com/bundles/doom.jsdos";
+const ARCHITECT_DOOM_SPIKE_BUNDLE_SHA256 = "40d74b90f3527480d2256c75ef443777bd5bebde95133cfe3ba01b2390516712";
+const ARCHITECT_DOOM_SPIKE_BUNDLE_MAX_BYTES = 8 * 1024 * 1024;
+let architectDoomSpikeBundleAcquisition: Promise<Record<string, unknown>> | null = null;
+let architectDoomSpikeBundleDownload: Record<string, unknown> | null = null;
+
+function isArchitectDoomEnabled(): boolean {
+  return process.env.DREAMGRAPH_ENABLE_DOOM?.trim().toLowerCase() === "true";
+}
+
 const ARCHITECT_PROVIDER_OPTIONS: LlmProviderType[] = ["openai", "anthropic", "ollama", "lmstudio", "sampling", "none"];
 const ARCHITECT_ADAPTER_OPTIONS = ["native_api_tool_loop", "codex-cli", "copilot-cli", "deterministic_fallback"] as const;
 const ARCHITECT_AUTONOMY_MODE_OPTIONS = ["autonomous", "supervised", "manual"] as const;
+
+export function buildArchitectProviderReadiness(input: { adapter?: unknown; provider?: unknown; model?: unknown }): Record<string, unknown> {
+  const adapter = ARCHITECT_ADAPTER_OPTIONS.includes(input.adapter as typeof ARCHITECT_ADAPTER_OPTIONS[number])
+    ? input.adapter as typeof ARCHITECT_ADAPTER_OPTIONS[number]
+    : "native_api_tool_loop";
+  const provider = ARCHITECT_PROVIDER_OPTIONS.includes(input.provider as LlmProviderType) ? input.provider as LlmProviderType : "none";
+  const model = typeof input.model === "string" ? input.model.trim() : "";
+  const authority = "dreamgraph_mcp";
+  if (adapter === "codex-cli" || adapter === "copilot-cli") {
+    return { ready: true, adapter, provider: "none", model, authority, kind: "cli_subscription", detail: `${adapter} subscription route is ready. Repository authority remains DreamGraph MCP.` };
+  }
+  if (adapter === "deterministic_fallback") {
+    return { ready: true, adapter, provider: "none", model: "", authority, kind: "deterministic", detail: "Deterministic fallback is ready without AI configuration." };
+  }
+  if (provider === "none") return { ready: false, adapter, provider, model, authority, kind: "api_or_local", detail: "Choose an API or local provider." };
+  if (!model) return { ready: false, adapter, provider, model, authority, kind: "api_or_local", detail: "Choose a model before testing this route." };
+  if ((provider === "openai" || provider === "anthropic") && !process.env.DREAMGRAPH_LLM_API_KEY?.trim()) {
+    return { ready: false, adapter, provider, model, authority, kind: "api", detail: `Set DREAMGRAPH_LLM_API_KEY for ${provider}.` };
+  }
+  const kind = provider === "ollama" || provider === "lmstudio" ? "local" : "api";
+  return { ready: true, adapter, provider, model, authority, kind, detail: kind === "local" ? `${provider} configuration is complete. Send a prompt to confirm the local service is running.` : `${provider} API configuration is complete.` };
+}
 const ARCHITECT_SELECTED_PLAN_ENV_KEY = "DREAMGRAPH_ARCHITECT_SELECTED_PLAN_ID";
 const ARCHITECT_XTERM_ASSETS: Record<string, { path: string; contentType: string }> = {
   "/api/architect/v1/assets/xterm/xterm.css": {
@@ -187,6 +229,8 @@ const ARCHITECT_XTERM_ASSETS: Record<string, { path: string; contentType: string
 };
 const ARCHITECT_MONACO_ASSET_BASE = "/api/architect/v1/assets/monaco/vs/";
 const ARCHITECT_MONACO_ASSET_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "monaco-editor", "min", "vs");
+const ARCHITECT_JS_DOS_ASSET_BASE = "/api/architect/v1/assets/js-dos/";
+const ARCHITECT_JS_DOS_ASSET_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "node_modules", "js-dos", "dist");
 type ArchitectAdapterType = typeof ARCHITECT_ADAPTER_OPTIONS[number];
 type ArchitectAutonomyMode = typeof ARCHITECT_AUTONOMY_MODE_OPTIONS[number];
 type ArchitectExecutionRoute = ArchitectAdapterType;
@@ -561,6 +605,7 @@ function buildArchitectStatusPayload(): Record<string, unknown> {
     project_scope: buildProjectScopePayload(),
     runtime,
     architect_runtime: runtime,
+    onboarding_readiness: buildOnboardingReadinessProjection(runtime),
     architect_llm: buildArchitectLlmPayload(runtime),
     browser_surface: {
       theme: "dark",
@@ -574,11 +619,17 @@ function buildArchitectStatusPayload(): Record<string, unknown> {
       chat_request_content_type: "application/json",
       chat_response_transports: ["application/json", "text/event-stream"],
       config: "POST /api/architect/v1/config",
+      provider_readiness: "POST /api/architect/v1/provider-readiness",
+      repo_setup: "GET|POST /api/architect/v1/repo-setup",
+      onboarding_events: "GET|POST /api/architect/v1/onboarding-events",
       plans: "/api/architect/v1/plans",
       plan_create: "POST /api/architect/v1/plans",
       plan_archive: "POST /api/architect/v1/plans/{planId}/archive",
       plan_detail: "/api/architect/v1/plans/{planId}",
       plan_actions: "POST /api/architect/v1/plans/{planId}/actions",
+      plugin_tabs: "GET /api/architect/v1/plugin-tabs",
+      plugin_tab_snapshot: "GET /api/architect/v1/plugin-tabs/{tabTypeId}/snapshot?planId={planId}",
+      plugin_tab_actions: "POST /api/architect/v1/plugin-tabs/{tabTypeId}/actions",
       future_review: "/api/architect/v1/plans/{planId}/future-review",
       review_gates: "POST /api/architect/v1/plans/{planId}/review-gates",
       schedules: "/api/architect/v1/schedules",
@@ -671,23 +722,40 @@ function html(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
+function resolveArchitectJsDosAssetRoot(): string {
+  const projectRoot = getActiveScope()?.projectRoot;
+  if (projectRoot) {
+    const projectAssetRoot = resolve(projectRoot, "node_modules", "js-dos", "dist");
+    if (existsSync(projectAssetRoot)) return projectAssetRoot;
+  }
+  return ARCHITECT_JS_DOS_ASSET_ROOT;
+}
+
 function getArchitectBrowserAsset(pathname: string): { path: string; contentType: string } | null {
   const xtermAsset = ARCHITECT_XTERM_ASSETS[pathname];
   if (xtermAsset) return xtermAsset;
-  if (!pathname.startsWith(ARCHITECT_MONACO_ASSET_BASE)) return null;
-  const assetRelativePath = normalizeArchitectEditorFilePath(pathname.slice(ARCHITECT_MONACO_ASSET_BASE.length));
+  const assetBase = pathname.startsWith(ARCHITECT_MONACO_ASSET_BASE)
+    ? ARCHITECT_MONACO_ASSET_BASE
+    : isArchitectDoomEnabled() && pathname.startsWith(ARCHITECT_JS_DOS_ASSET_BASE)
+      ? ARCHITECT_JS_DOS_ASSET_BASE
+      : null;
+  if (!assetBase) return null;
+  const assetRoot = assetBase === ARCHITECT_MONACO_ASSET_BASE ? ARCHITECT_MONACO_ASSET_ROOT : resolveArchitectJsDosAssetRoot();
+  const assetRelativePath = normalizeArchitectEditorFilePath(pathname.slice(assetBase.length));
   if (!assetRelativePath) return null;
-  const assetPath = resolve(ARCHITECT_MONACO_ASSET_ROOT, assetRelativePath);
-  const assetRepoRelative = relative(ARCHITECT_MONACO_ASSET_ROOT, assetPath);
+  const assetPath = resolve(assetRoot, assetRelativePath);
+  const assetRepoRelative = relative(assetRoot, assetPath);
   if (assetRepoRelative.startsWith("..") || isAbsolute(assetRepoRelative)) return null;
   const extension = extname(assetPath).toLowerCase();
   const contentType = extension === ".css"
     ? "text/css; charset=utf-8"
     : extension === ".json"
       ? "application/json; charset=utf-8"
-      : extension === ".ttf" || extension === ".woff" || extension === ".woff2"
-        ? "font/woff2"
-        : "application/javascript; charset=utf-8";
+      : extension === ".wasm"
+        ? "application/wasm"
+        : extension === ".ttf" || extension === ".woff" || extension === ".woff2"
+          ? "font/woff2"
+          : "application/javascript; charset=utf-8";
   return { path: assetPath, contentType };
 }
 
@@ -708,6 +776,229 @@ async function handleArchitectAssetRequest(res: ServerResponse, pathname: string
     logger.warn(`architect asset load failed (${pathname}): ${(error as Error).message}`);
     jsonError(res, 404, "asset_unavailable", "Architect browser asset is unavailable");
   }
+}
+
+function architectDoomSpikeBundlePath(): string {
+  const scope = getActiveScope();
+  if (!scope) throw new Error("Architect Doom spike bundle acquisition requires a bound DreamGraph instance.");
+  return resolve(scope.runtimeDir, "cache", "architect-doom", "doom-shareware.jsdos");
+}
+
+async function inspectArchitectDoomSpikeBundle(): Promise<Record<string, unknown>> {
+  const filePath = architectDoomSpikeBundlePath();
+  const info = await stat(filePath).catch(() => null);
+  if (!info?.isFile()) {
+    return {
+      acquired: false,
+      source_url: ARCHITECT_DOOM_SPIKE_BUNDLE_SOURCE_URL,
+      source_kind: "js_dos_hosted_doom_shareware_bundle",
+      approval_required: true,
+      local_bundle_url: null,
+      download: architectDoomSpikeBundleDownload,
+    };
+  }
+  const body = await readFile(filePath);
+  const sha256 = createHash("sha256").update(body).digest("hex");
+  if (body.length > ARCHITECT_DOOM_SPIKE_BUNDLE_MAX_BYTES || sha256 !== ARCHITECT_DOOM_SPIKE_BUNDLE_SHA256) {
+    await rm(filePath, { force: true });
+    throw new Error("Cached Architect Doom spike bundle failed integrity verification.");
+  }
+  return {
+    acquired: true,
+    source_url: ARCHITECT_DOOM_SPIKE_BUNDLE_SOURCE_URL,
+    source_kind: "js_dos_hosted_doom_shareware_bundle",
+    approval_required: true,
+    local_bundle_url: `/api/architect/v1/doom/spike-bundle?sha256=${sha256}`,
+    size: body.length,
+    sha256,
+    acquired_at: info.mtime.toISOString(),
+  };
+}
+
+async function acquireArchitectDoomSpikeBundle(): Promise<Record<string, unknown>> {
+  const current = await inspectArchitectDoomSpikeBundle();
+  if (current.acquired === true) return current;
+  if (architectDoomSpikeBundleAcquisition) return await architectDoomSpikeBundleAcquisition;
+  architectDoomSpikeBundleAcquisition = (async () => {
+    const response = await fetch(ARCHITECT_DOOM_SPIKE_BUNDLE_SOURCE_URL);
+    if (!response.ok) throw new Error(`Doom shareware bundle download failed (${response.status}).`);
+    const totalBytes = Number(response.headers.get("content-length")) || null;
+    const chunks: Buffer[] = [];
+    let downloadedBytes = 0;
+    architectDoomSpikeBundleDownload = { state: "downloading", downloaded_bytes: downloadedBytes, total_bytes: totalBytes };
+    if (response.body) {
+      for await (const chunk of response.body) {
+        const bytes = Buffer.from(chunk);
+        chunks.push(bytes);
+        downloadedBytes += bytes.length;
+        if (downloadedBytes > ARCHITECT_DOOM_SPIKE_BUNDLE_MAX_BYTES) throw new Error("Doom shareware bundle exceeds the pinned size limit.");
+        architectDoomSpikeBundleDownload = { state: "downloading", downloaded_bytes: downloadedBytes, total_bytes: totalBytes };
+      }
+    } else {
+      const bytes = Buffer.from(await response.arrayBuffer());
+      chunks.push(bytes);
+      downloadedBytes = bytes.length;
+    }
+    const body = Buffer.concat(chunks);
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    if (body.length > ARCHITECT_DOOM_SPIKE_BUNDLE_MAX_BYTES || sha256 !== ARCHITECT_DOOM_SPIKE_BUNDLE_SHA256) {
+      throw new Error("Doom shareware bundle failed pinned integrity verification.");
+    }
+    const filePath = architectDoomSpikeBundlePath();
+    await mkdir(resolve(filePath, ".."), { recursive: true, mode: 0o700 });
+    const pendingPath = `${filePath}.${randomUUID()}.pending`;
+    await writeFile(pendingPath, body, { mode: 0o600 });
+    await rename(pendingPath, filePath);
+    architectDoomSpikeBundleDownload = { state: "complete", downloaded_bytes: body.length, total_bytes: body.length };
+    return await inspectArchitectDoomSpikeBundle();
+  })().catch((error: unknown) => {
+    architectDoomSpikeBundleDownload = { state: "failed", message: (error as Error).message };
+    throw error;
+  }).finally(() => {
+    architectDoomSpikeBundleAcquisition = null;
+  });
+  return await architectDoomSpikeBundleAcquisition;
+}
+
+async function handleArchitectDoomSpikeBundleStatus(res: ServerResponse): Promise<void> {
+  json(res, 200, { ok: true, bundle: await inspectArchitectDoomSpikeBundle() }, { "Cache-Control": "no-store" });
+}
+
+async function handleArchitectDoomSpikeBundleAcquire(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJsonBody(req);
+  if (body.approved !== true) {
+    jsonError(res, 400, "approval_required", "Explicit user approval is required before downloading the Doom shareware bundle.");
+    return;
+  }
+  json(res, 201, { ok: true, bundle: await acquireArchitectDoomSpikeBundle() }, { "Cache-Control": "no-store" });
+}
+
+async function handleArchitectDoomSpikeBundleRead(res: ServerResponse): Promise<void> {
+  const bundle = await inspectArchitectDoomSpikeBundle();
+  if (bundle.acquired !== true) {
+    jsonError(res, 404, "bundle_not_acquired", "Download the Doom shareware bundle with explicit user approval first.");
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "application/octet-stream",
+    "Cache-Control": "no-store",
+    "Content-Length": String(bundle.size),
+  });
+  res.end(await readFile(architectDoomSpikeBundlePath()));
+}
+
+function renderArchitectDoomSpikeHarness(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DreamGraph Architect js-dos Spike</title>
+  <link rel="stylesheet" href="/api/architect/v1/assets/js-dos/js-dos.css" />
+  <style>
+    html, body { height: 100%; margin: 0; background: #111827; color: #e5e7eb; font: 14px system-ui, sans-serif; }
+    body { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    header { display: flex; gap: 8px; align-items: center; padding: 10px; background: #1f2937; }
+    button { padding: 6px 10px; }
+    #dos { min-height: 0; }
+    #status { margin-left: auto; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <header>
+    <button id="approve" type="button">Approve Doom Shareware Download</button>
+    <button id="pause" type="button" disabled>Pause</button>
+    <button id="resume" type="button" disabled>Resume</button>
+    <button id="exit" type="button" disabled>Exit</button>
+    <span id="status">Checking local fixture cache...</span>
+  </header>
+  <div id="dos"></div>
+  <script>
+    const statusEl = document.getElementById('status');
+    const approveButton = document.getElementById('approve');
+    const pauseButton = document.getElementById('pause');
+    const resumeButton = document.getElementById('resume');
+    const exitButton = document.getElementById('exit');
+    const dosRoot = document.getElementById('dos');
+    let props = null;
+    let startedAt = 0;
+    let runtimePromise = null;
+
+    function setStatus(message) { statusEl.textContent = message; }
+    function loadRuntime() {
+      if (runtimePromise) return runtimePromise;
+      runtimePromise = new Promise(function(resolve, reject) {
+        const script = document.createElement('script');
+        script.src = '/api/architect/v1/assets/js-dos/js-dos.js';
+        script.onload = function() { window.Dos ? resolve(window.Dos) : reject(new Error('js-dos did not initialize.')); };
+        script.onerror = function() { reject(new Error('Local js-dos runtime failed to load.')); };
+        document.head.appendChild(script);
+      }).catch(function(error) {
+        runtimePromise = null;
+        throw error;
+      });
+      return runtimePromise;
+    }
+    async function stop() {
+      if (!props) return;
+      const active = props;
+      props = null;
+      pauseButton.disabled = true;
+      resumeButton.disabled = true;
+      exitButton.disabled = true;
+      await active.stop();
+      dosRoot.replaceChildren();
+      setStatus('Exited cleanly. Open a new spike session to restart.');
+    }
+    async function start() {
+      if (props) return;
+      const Dos = await loadRuntime();
+      startedAt = performance.now();
+      props = Dos(dosRoot, {
+        url: '/api/architect/v1/doom/spike-bundle?sha256=${ARCHITECT_DOOM_SPIKE_BUNDLE_SHA256}',
+        pathPrefix: '/api/architect/v1/assets/js-dos/emulators/',
+        autoStart: true,
+        noNetworking: true,
+        noCloud: true,
+        onEvent: function(event) {
+          if (event === 'ci-ready') setStatus('Running from local daemon assets. First start: ' + Math.round(performance.now() - startedAt) + ' ms.');
+        },
+      });
+      pauseButton.disabled = false;
+      resumeButton.disabled = false;
+      exitButton.disabled = false;
+      setStatus('Starting local js-dos worker...');
+    }
+    async function refresh() {
+      const response = await fetch('/api/architect/v1/doom/spike-bundle/status', { cache: 'no-store' });
+      const payload = await response.json();
+      const bundle = payload.bundle || {};
+      approveButton.disabled = bundle.acquired === true;
+      approveButton.textContent = bundle.acquired === true ? 'Doom Shareware Acquired' : 'Approve Doom Shareware Download';
+      setStatus(bundle.acquired === true ? 'Fixture cached locally. Starting spike...' : 'Approval required before downloading ' + bundle.source_url);
+      if (bundle.acquired === true) await start();
+    }
+    approveButton.addEventListener('click', async function() {
+      approveButton.disabled = true;
+      setStatus('Acquiring pinned official fixture...');
+      try {
+        const response = await fetch('/api/architect/v1/doom/spike-bundle/acquire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approved: true }) });
+        const payload = await response.json().catch(function() { return {}; });
+        if (!response.ok) throw new Error(payload.message || 'Fixture acquisition failed.');
+        await refresh();
+      } catch (error) {
+        setStatus(error.message || String(error));
+        if (approveButton.textContent !== 'Doom Shareware Acquired') approveButton.disabled = false;
+      }
+    });
+    pauseButton.addEventListener('click', function() { if (props) { props.setPaused(true); setStatus('Paused.'); } });
+    resumeButton.addEventListener('click', function() { if (props) { props.setPaused(false); setStatus('Resumed.'); } });
+    exitButton.addEventListener('click', function() { void stop(); });
+    window.addEventListener('beforeunload', function() { void stop(); });
+    refresh().catch(function(error) { setStatus(error.message || String(error)); approveButton.disabled = false; });
+  </script>
+</body>
+</html>`;
 }
 
 function buildArchitectEditorRepoProjection(): Array<Record<string, string | boolean>> {
@@ -1347,6 +1638,7 @@ function buildMeta(): Record<string, unknown> {
     project_scope: buildProjectScopePayload(),
     runtime,
     architect_runtime: runtime,
+    onboarding_readiness: buildOnboardingReadinessProjection(runtime),
     architect_llm: buildArchitectLlmPayload(runtime),
     execution_control: buildArchitectExecutionControlSnapshot(runtime),
     selected_plan_id: selection.planId,
@@ -1447,7 +1739,7 @@ export function formatArchitectStatusPayload(payload: unknown, fallbackInstanceI
     `Mode: ${architectStatusString(identity.mode)} | Policy: ${architectStatusString(identity.policy)}`,
     `Project: ${architectStatusString(project.root, "not attached")}`,
     `Daemon: ${daemonState}${pid == null ? "" : `, pid ${pid}`}${port == null ? "" : `, port ${port}`}, uptime ${uptime}`,
-    `Cognitive: ${architectStatusNumber(cognitive.graph_nodes) ?? 0} nodes, ${architectStatusNumber(cognitive.graph_edges) ?? 0} edges, ${architectStatusNumber(cognitive.validated_edges) ?? 0} validated edges`,
+    `Cognitive: ${architectStatusNumber(cognitive.graph_nodes) ?? 0} nodes, ${architectStatusNumber(cognitive.graph_edges) ?? 0} edges, ${architectStatusNumber(cognitive.candidate_edges) ?? 0} candidate edges, ${architectStatusNumber(cognitive.validated_edges) ?? 0} validated edges, ${architectStatusNumber(cognitive.tensions) ?? 0} tensions, ${architectStatusNumber(cognitive.adr_decisions) ?? 0} ADR decisions, ${architectStatusNumber(cognitive.ui_elements) ?? 0} UI elements`,
     `Activity: ${architectStatusNumber(cognitive.dream_cycles) ?? 0} dream cycles, ${architectStatusNumber(cognitive.tool_calls) ?? 0} tool calls`,
   ];
   return lines.join("\n");
@@ -1928,6 +2220,57 @@ function parseArchitectPlanSubroute(pathname: string): { planId: string; suffix:
     planId: decodeURIComponent(encodedPlanId),
     suffix: rest.length > 0 ? rest.join("/") : null,
   };
+}
+
+function parseArchitectPluginTabSubroute(pathname: string): { tabTypeId: string; suffix: string | null } | null {
+  const base = "/api/architect/v1/plugin-tabs/";
+  if (!pathname.startsWith(base)) return null;
+  const remainder = pathname.slice(base.length);
+  if (!remainder) return { tabTypeId: "", suffix: null };
+  const [encodedTabTypeId, ...rest] = remainder.split("/");
+  return { tabTypeId: decodeURIComponent(encodedTabTypeId), suffix: rest.length > 0 ? rest.join("/") : null };
+}
+
+function architectPluginTabError(res: ServerResponse, error: unknown): void {
+  if (error instanceof ArchitectContributionError || error instanceof ArchitectPlanStateError) {
+    const status = error.code === "architect_plan_required" || error.code === "architect_action_schema_invalid" ? 400
+      : error.code === "architect_revision_stale" ? 409
+      : 404;
+    jsonError(res, status, error.code, error.message);
+    return;
+  }
+  throw error;
+}
+
+async function handleArchitectPluginTabsIndex(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  sendJsonWithEtag(req, res, { ok: true, tabs: listArchitectTabs(), runtime: { trustedHostExecution: true, browserModulesEmbedded: false } });
+}
+
+async function handleArchitectPluginTabSnapshot(req: IncomingMessage, res: ServerResponse, tabTypeId: string): Promise<void> {
+  try {
+    const planId = new URL(req.url ?? "", "http://127.0.0.1").searchParams.get("planId");
+    sendJsonWithEtag(req, res, { ok: true, snapshot: await loadArchitectTabSnapshot(tabTypeId, planId) });
+  } catch (error) {
+    architectPluginTabError(res, error);
+  }
+}
+
+async function handleArchitectPluginTabAction(req: IncomingMessage, res: ServerResponse, tabTypeId: string): Promise<void> {
+  try {
+    const body = await readJsonBody(req);
+    const planId = typeof body.planId === "string" ? body.planId : null;
+    const revision = typeof body.revision === "string" ? body.revision : null;
+    if (!body.action || typeof body.action !== "object" || Array.isArray(body.action)) {
+      jsonError(res, 400, "architect_action_schema_invalid", "Action payload must be an object");
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("cache-control", "no-store");
+    res.end(JSON.stringify({ ok: true, snapshot: await dispatchArchitectTabAction(tabTypeId, planId, body.action, revision) }));
+  } catch (error) {
+    architectPluginTabError(res, error);
+  }
 }
 
 function parseArchitectAdrSubroute(pathname: string): ArchitectAdrSubroute | null {
@@ -3027,6 +3370,53 @@ async function handleArchitectDreamPlaybackRequest(res: ServerResponse): Promise
     engine.loadTensions(),
   ]);
   json(res, 200, { ok: true, contract: "architect", version: "v1", playback: buildDreamPlayback({ history, dreamGraph, candidates, validated, tensions }) });
+}
+
+async function handleArchitectRepoSetupRead(res: ServerResponse): Promise<void> {
+  json(res, 200, { ok: true, contract: "architect", version: "v1", repo_setup: await buildArchitectRepoSetupProjection() });
+}
+
+async function handleArchitectRepoSetupWrite(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const body = await readJsonBody(req);
+    const repoSetup = await persistArchitectRepoSetup(body.repositories);
+    await recordOnboardingTelemetryEvent({ event: "repo_setup_completed", category: repoSetup.mode });
+    publishEvent("architect.repo_setup", { status: "configured", repo_setup: repoSetup });
+    json(res, 200, { ok: true, contract: "architect", version: "v1", repo_setup: repoSetup, onboarding_readiness: buildOnboardingReadinessProjection() });
+  } catch (error) {
+    if (error instanceof ArchitectRepoSetupError) {
+      jsonError(res, error.status, error.code, error.message);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    jsonError(res, message === "body_too_large" ? 413 : 400, message === "body_too_large" ? "body_too_large" : "bad_request", message);
+  }
+}
+
+async function handleArchitectProviderReadinessRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const body = await readJsonBody(req);
+    const readiness = buildArchitectProviderReadiness(body);
+    await recordOnboardingTelemetryEvent({ event: "provider_tested", category: `${String(readiness.kind || "unknown")}_${readiness.ready ? "success" : "failure"}` });
+    json(res, 200, { ok: true, contract: "architect", version: "v1", readiness });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    jsonError(res, message === "body_too_large" ? 413 : 400, message === "body_too_large" ? "body_too_large" : "bad_request", message);
+  }
+}
+
+async function handleArchitectOnboardingEventRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const event = await recordOnboardingTelemetryEvent(await readJsonBody(req));
+    json(res, 201, { ok: true, contract: "architect", version: "v1", event });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    jsonError(res, message === "body_too_large" ? 413 : 400, message === "body_too_large" ? "body_too_large" : "bad_request", message);
+  }
+}
+
+async function handleArchitectOnboardingEventsRead(res: ServerResponse): Promise<void> {
+  json(res, 200, { ok: true, contract: "architect", version: "v1", events: await readOnboardingTelemetryEvents() });
 }
 
 async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -4283,7 +4673,7 @@ async function handleArchitectScheduleActionRequest(
 }
 
 function renderArchitectShell(): string {
-  return `<!DOCTYPE html>
+  let shell = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -4715,7 +5105,7 @@ function renderArchitectShell(): string {
     }
     .chat-panel {
       display: grid;
-      grid-template-rows: auto auto auto minmax(0, 1fr);
+      grid-template-rows: auto auto auto auto minmax(0, 1fr);
       gap: 8px;
       overflow: hidden;
     }
@@ -4830,6 +5220,7 @@ function renderArchitectShell(): string {
     .architect-tab-panels {
       position: relative;
       z-index: 1;
+      grid-row: -2 / -1;
       min-height: 0;
       height: 100%;
       overflow: hidden;
@@ -4843,8 +5234,9 @@ function renderArchitectShell(): string {
     }
     .architect-tab-panel.chat-workspace {
       display: grid;
-      grid-template-rows: minmax(0, 1fr) auto;
+      grid-template-rows: minmax(0, 1fr) minmax(0, auto) auto;
       gap: 8px;
+      overflow: hidden;
     }
     .architect-tab-panel[hidden] {
       display: none !important;
@@ -4864,6 +5256,56 @@ function renderArchitectShell(): string {
     .architect-tab-panel.terminal-workspace > h2 {
       display: none;
     }
+    /* architect-doom-css:start */
+    .architect-tab-panel.doom-workspace > h2 {
+      display: none;
+    }
+    .architect-tab-panel.doom-workspace {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .doom-surface {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 8px;
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    .doom-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+    .doom-first-run-card {
+      display: grid;
+      gap: 5px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+    .doom-first-run-card[hidden] {
+      display: none;
+    }
+    .doom-first-run-card progress {
+      width: min(360px, 100%);
+    }
+    .doom-viewport {
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #000;
+    }
+    /* architect-doom-css:end */
     .architect-tab-panel h2 {
       margin: 0 0 8px;
       font-size: 1rem;
@@ -4940,6 +5382,12 @@ function renderArchitectShell(): string {
     .terminal-fallback[hidden] {
       display: none !important;
     }
+    .provider-setup { display: grid; gap: 7px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: rgba(104, 216, 182, 0.055); }
+    .provider-setup[hidden] { display: none; }
+    .provider-setup-header, .provider-choice-row, .provider-setup-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; }
+    .provider-setup-actions { justify-content: flex-end; }
+    .runtime-advanced summary { cursor: pointer; color: var(--muted); font-size: 0.72rem; }
+    .architect-provider-show { margin-left: 8px; }
     .runtime-controls {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -5157,6 +5605,85 @@ function renderArchitectShell(): string {
       text-transform: none;
       letter-spacing: 0;
     }
+    .architect-welcome {
+      display: grid;
+      gap: 12px;
+      min-height: 0;
+      max-height: min(58vh, 520px);
+      overflow: auto;
+      border: 1px solid rgba(104, 216, 182, 0.34);
+      border-radius: 12px;
+      padding: 14px;
+      background: rgba(104, 216, 182, 0.075);
+    }
+    .architect-welcome[hidden] {
+      display: none;
+    }
+    .architect-welcome-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .architect-welcome h2,
+    .architect-welcome p {
+      margin: 0;
+    }
+    .architect-welcome-summary,
+    .architect-welcome-warnings {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .architect-welcome-missions,
+    .architect-recipe-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 8px;
+    }
+    .architect-recipe-library { border: 1px solid var(--line); border-radius: 8px; padding: 9px; background: rgba(255, 255, 255, 0.045); }
+    .architect-recipe-library summary { cursor: pointer; font-weight: 800; }
+    .architect-recipe-group { margin-top: 9px; }
+    .architect-recipe-group h3 { margin: 0 0 6px; color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    .architect-mission-card {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.055);
+      color: var(--ink);
+      cursor: pointer;
+      padding: 10px;
+      text-align: left;
+    }
+    .architect-mission-card:hover {
+      border-color: rgba(104, 216, 182, 0.5);
+      background: rgba(104, 216, 182, 0.14);
+    }
+    .architect-mission-card strong,
+    .architect-mission-card span {
+      display: block;
+    }
+    .architect-mission-artifact {
+      color: var(--muted);
+      font-size: 0.72rem;
+      line-height: 1.35;
+    }
+    .architect-welcome-reopen {
+      flex: 0 0 auto;
+    }
+    .architect-repo-setup {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px;
+      background: rgba(255, 255, 255, 0.045);
+    }
+    .architect-repo-setup summary { cursor: pointer; font-weight: 800; }
+    .architect-repo-setup-grid { display: grid; gap: 7px; margin-top: 8px; }
+    .architect-repo-row { display: grid; grid-template-columns: minmax(90px, 0.65fr) minmax(90px, 0.6fr) minmax(180px, 2fr) auto; gap: 6px; }
+    .architect-repo-row input, .architect-repo-row select { min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); padding: 6px; }
+    .architect-repo-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .chat-form {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
@@ -5171,6 +5698,13 @@ function renderArchitectShell(): string {
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.055);
       padding: 8px;
+    }
+    .prompt-surface-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
     }
     .chat-input {
       width: 100%;
@@ -5657,7 +6191,20 @@ function renderArchitectShell(): string {
           <span id="architect-pulse-authority" class="runtime-pill">Authority: dreamgraph_mcp</span>
         </div>
       </div>
-      <div class="runtime-controls" aria-label="Architect controls">
+      <section id="architect-provider-setup" class="provider-setup" aria-label="Architect provider setup">
+        <div class="provider-setup-header"><strong>How should Architect answer?</strong><div class="provider-setup-actions"><button id="architect-provider-test" class="mini-button" type="button">Test setup</button><button id="architect-provider-dismiss" class="mini-button" type="button">Hide</button></div></div>
+        <label class="meta"><input id="architect-provider-suppress" type="checkbox"> Do not show this setup box again</label>
+        <div class="provider-choice-row">
+          <button class="mini-button" type="button" data-provider-choice="codex-cli">CLI subscription</button>
+          <button class="mini-button" type="button" data-provider-choice="api">API provider</button>
+          <button class="mini-button" type="button" data-provider-choice="local">Local model</button>
+          <button class="mini-button" type="button" data-provider-choice="deterministic_fallback">No AI fallback</button>
+        </div>
+        <p id="architect-provider-status" class="meta">Choose a route, then test readiness. Advanced controls remain available below.</p>
+      </section>
+      <details class="runtime-advanced">
+        <summary>Advanced runtime controls <button id="architect-provider-show" class="mini-button architect-provider-show" type="button" hidden>Show setup</button></summary>
+        <div class="runtime-controls" aria-label="Architect controls">
         <label class="control-field">Provider / Adapter
           <select id="architect-adapter-select">
             <option value="native_api_tool_loop">Native API tool loop</option>
@@ -5689,7 +6236,8 @@ function renderArchitectShell(): string {
         <label class="control-field">Passes
           <span id="architect-pass-view" class="pass-view">0 passes | 0 tools</span>
         </label>
-      </div>
+        </div>
+      </details>
       <div class="architect-center-tab-strip">
         <div id="architect-center-tabs" class="architect-center-tabs" role="tablist" aria-label="Center workspace"></div>
         <button id="architect-tab-add" class="architect-tab-add" type="button" aria-label="Create center tab" title="Create center tab">+</button>
@@ -5698,9 +6246,41 @@ function renderArchitectShell(): string {
       <div id="architect-tab-panels" class="architect-tab-panels">
         <div id="architect-panel-chat" class="architect-tab-panel chat-workspace" role="tabpanel" aria-labelledby="architect-tab-chat" data-architect-tab-panel="chat">
           <div id="chat-log" class="chat-log" aria-live="polite"></div>
+          <section id="architect-welcome" class="architect-welcome" aria-labelledby="architect-welcome-title" hidden>
+            <div class="architect-welcome-header">
+              <div>
+                <h2 id="architect-welcome-title">What do you want to do with this project?</h2>
+                <p class="meta">Pick a mission. Architect will state the first artifact and keep repository work daemon-governed.</p>
+              </div>
+              <button id="architect-welcome-dismiss" class="mini-button" type="button">Dismiss</button>
+            </div>
+            <div id="architect-welcome-summary" class="architect-welcome-summary"></div>
+            <div id="architect-welcome-warnings" class="architect-welcome-warnings"></div>
+            <details id="architect-repo-setup" class="architect-repo-setup">
+              <summary>Connect repositories</summary>
+              <p id="architect-repo-setup-scope" class="meta">Repositories define the project scope Architect may inspect through DreamGraph MCP.</p>
+              <div id="architect-repo-setup-grid" class="architect-repo-setup-grid"></div>
+              <div class="architect-repo-actions">
+                <button id="architect-repo-add" class="mini-button" type="button">Add related repo</button>
+                <button id="architect-repo-save" class="mini-button" type="button">Save repositories</button>
+                <button id="architect-repo-map" class="mini-button" type="button">Build first project map</button>
+              </div>
+              <p id="architect-repo-setup-status" class="meta">Loading daemon repository inventory...</p>
+            </details>
+            <details class="architect-recipe-library">
+              <summary>Start from a recipe</summary>
+              <p class="meta">Choose a task by project shape. Each recipe states the first artifact and how to verify it.</p>
+              <div id="architect-recipe-groups"></div>
+            </details>
+            <div id="architect-welcome-missions" class="architect-welcome-missions"></div>
+            <a id="architect-guide-link" href="/architect-guide">Learn how Architect works</a>
+          </section>
           <form id="chat-form" class="chat-form">
             <div class="prompt-surface">
-              <button id="chat-scope-pill" class="scope-pill" type="button" data-scope="project" aria-pressed="false" aria-label="Toggle chat scope">🌍 Project</button>
+              <div class="prompt-surface-header">
+                <button id="chat-scope-pill" class="scope-pill" type="button" data-scope="project" aria-pressed="false" aria-label="Toggle chat scope">🌍 Project</button>
+                <button id="architect-welcome-reopen" class="scope-pill architect-welcome-reopen" type="button" hidden>Choose a mission</button>
+              </div>
               <textarea id="chat-input" class="chat-input" name="message" rows="1" placeholder="Ask Architect about this project or the selected plan..."></textarea>
               <div class="chat-attachment-row">
                 <div class="chat-attachment-cluster">
@@ -5747,6 +6327,10 @@ function renderArchitectShell(): string {
         <details class="architect-right-accordion" open>
           <summary>Registry Summary</summary>
           <div id="registry-summary" class="chips"></div>
+        </details>
+        <details class="architect-right-accordion" open>
+          <summary>Plugin Tab Summary</summary>
+          <div id="plugin-tab-summary" class="chips"></div>
         </details>
         <details class="architect-right-accordion" open>
           <summary>Living Plan</summary>
@@ -5837,6 +6421,7 @@ function renderArchitectShell(): string {
     const centerPlanTitleEl = document.getElementById('center-plan-title');
     const centerPlanChipsEl = document.getElementById('center-plan-chips');
     const registrySummaryEl = document.getElementById('registry-summary');
+    const pluginTabSummaryEl = document.getElementById('plugin-tab-summary');
     const livingPlanSummaryEl = document.getElementById('living-plan-summary');
     const livingPlanPulseEl = document.getElementById('living-plan-pulse');
     const livingPlanQuestionCountEl = document.getElementById('living-plan-question-count');
@@ -5845,6 +6430,12 @@ function renderArchitectShell(): string {
     const livingPlanNervousPointListEl = document.getElementById('living-plan-nervous-point-list');
     const projectScopeEl = document.getElementById('project-scope');
     const architectModelConfigEl = document.getElementById('architect-model-config');
+    const architectProviderSetupEl = document.getElementById('architect-provider-setup');
+    const architectProviderStatusEl = document.getElementById('architect-provider-status');
+    const architectProviderTestEl = document.getElementById('architect-provider-test');
+    const architectProviderDismissEl = document.getElementById('architect-provider-dismiss');
+    const architectProviderSuppressEl = document.getElementById('architect-provider-suppress');
+    const architectProviderShowEl = document.getElementById('architect-provider-show');
     const liveEventStatusEl = document.getElementById('live-event-status');
     const architectPulseStripEl = document.getElementById('architect-pulse-strip');
     const architectPulseWeatherEl = document.getElementById('architect-pulse-weather');
@@ -5852,6 +6443,21 @@ function renderArchitectShell(): string {
     const architectPulsePlanEl = document.getElementById('architect-pulse-plan');
     const architectPulseAuthorityEl = document.getElementById('architect-pulse-authority');
     const chatLogEl = document.getElementById('chat-log');
+    const architectWelcomeEl = document.getElementById('architect-welcome');
+    const architectWelcomeSummaryEl = document.getElementById('architect-welcome-summary');
+    const architectWelcomeWarningsEl = document.getElementById('architect-welcome-warnings');
+    const architectWelcomeMissionsEl = document.getElementById('architect-welcome-missions');
+    const architectWelcomeDismissEl = document.getElementById('architect-welcome-dismiss');
+    const architectWelcomeReopenEl = document.getElementById('architect-welcome-reopen');
+    const architectRepoSetupEl = document.getElementById('architect-repo-setup');
+    const architectRepoSetupScopeEl = document.getElementById('architect-repo-setup-scope');
+    const architectRepoSetupGridEl = document.getElementById('architect-repo-setup-grid');
+    const architectRepoSetupStatusEl = document.getElementById('architect-repo-setup-status');
+    const architectRepoAddEl = document.getElementById('architect-repo-add');
+    const architectRepoSaveEl = document.getElementById('architect-repo-save');
+    const architectRepoMapEl = document.getElementById('architect-repo-map');
+    const architectRecipeGroupsEl = document.getElementById('architect-recipe-groups');
+    const architectGuideLinkEl = document.getElementById('architect-guide-link');
     const chatFormEl = document.getElementById('chat-form');
     const chatInputEl = document.getElementById('chat-input');
     const chatScopePillEl = document.getElementById('chat-scope-pill');
@@ -5913,6 +6519,31 @@ function renderArchitectShell(): string {
     let activeAttachmentCapabilities = { textAttachments: false, imageAttachments: false };
     let pendingChatAttachments = [];
     const architectControlStorageKey = 'architect.chat.controls.v1';
+    const architectProviderSetupStorageKey = 'architect.provider.setup.suppressed.v1';
+    const architectWelcomeStorageKey = 'architect.onboarding.welcome.dismissed.v1';
+    const architectOnboardingVisitStorageKey = 'architect.onboarding.visit.v1';
+    const architectOnboardingMissions = [
+      { id: 'understand-project', title: 'Understand this project', artifact: 'Project overview with key modules, entry points, and suggested next tasks.', prompt: 'Explain what this project is and where to start. Produce a project overview with key modules, entry points, and suggested next tasks.', planBearing: false },
+      { id: 'plan-feature', title: 'Plan a feature', artifact: 'Reviewable plan with scope, risks, slices, and verification path.', prompt: 'Help me plan a feature. Start by asking for the feature idea, then maintain a reviewable plan with scope, risks, slices, and verification path.', planBearing: true },
+      { id: 'clean-prototype', title: 'Clean up a prototype', artifact: 'Ranked cleanup report with one bounded first slice.', prompt: 'Find the safest cleanup starting point. Produce a ranked cleanup report with one bounded first slice.', planBearing: true },
+      { id: 'map-architecture', title: 'Map architecture and risks', artifact: 'Architecture and risk map grounded in graph evidence.', prompt: 'Map the important architecture and risks in this project. Produce an architecture and risk map grounded in graph evidence.', planBearing: true },
+      { id: 'cross-repo', title: 'Work across repositories', artifact: 'Cross-repo inventory and dependency questions.', prompt: 'Explain how the connected repositories relate and what a change may touch. Produce a cross-repo inventory and dependency questions.', planBearing: false },
+      { id: 'weekly-review', title: 'Set up weekly review', artifact: 'Scheduled review proposal and report preview.', prompt: 'Propose a weekly project review. Produce a scheduled review proposal and report preview before applying any schedule change.', planBearing: true },
+    ];
+    const architectRecipeGroups = [
+      { title: 'Prototype or small app', recipes: [
+        ['Explain this app before I change it', 'Project overview', 'Cite modules and entry points', false], ['Find the safest first cleanup', 'Ranked cleanup report', 'Name one bounded verified slice', true], ['Add a small feature with a plan', 'Implementation plan', 'Include build and test checks', true], ['Generate a missing README', 'README draft', 'Check commands against repository evidence', true], ['Prepare release notes', 'Release notes draft', 'Ground changes in repository history', false],
+      ] },
+      { title: 'Existing service or legacy repo', recipes: [
+        ['Find entry points and runtime dependencies', 'Runtime inventory', 'Cite source files and config', false], ['Map API and data-model risks', 'API and data risk map', 'List evidence and open questions', true], ['Find stale docs before a migration', 'Documentation drift report', 'Cross-check docs against source', false], ['Propose the smallest verified repair', 'Bounded repair plan', 'Name the narrow verification command', true], ['Record an architecture decision', 'ADR proposal', 'State alternatives and guard rails', true],
+      ] },
+      { title: 'Multi-repo system', recipes: [
+        ['Inventory repos and their roles', 'Cross-repo inventory', 'Use configured repository scope', false], ['Trace a concept across services', 'Cross-service trace', 'Cite each repository hop', false], ['Identify cross-repo change risks', 'Change-risk report', 'List affected repos and checks', true], ['Create a coordinated implementation plan', 'Multi-repo plan', 'Split verification by repo', true], ['Set up recurring architecture review', 'Review schedule proposal', 'Preview the report before scheduling', true],
+      ] },
+      { title: 'Plugin or tool integration', recipes: [
+        ['Inventory available plugins and MCP tools', 'Capability inventory', 'Use daemon runtime facts', false], ['Inspect plugin trust and availability', 'Plugin trust report', 'Cite manifest and runtime state', false], ['Connect a local workflow', 'Workflow integration plan', 'Name governed actions and checks', true], ['Review tool traces and governed actions', 'Trace review', 'Separate evidence from convenience output', false],
+      ] },
+    ];
     const architectCenterTabContainer = document.getElementById('architect-center-tabs');
     const architectCenterPanelContainer = document.getElementById('architect-tab-panels');
     const architectTabAddButton = document.getElementById('architect-tab-add');
@@ -5921,7 +6552,7 @@ function renderArchitectShell(): string {
     let architectCenterTabs = [];
     let architectTabSequence = 0;
     let architectCodeEditorModulePromise = null;
-    const architectTabTypeRegistry = new Map();
+${isArchitectDoomEnabled() ? "    let architectDoomRuntimePromise = null;\n" : ""}    const architectTabTypeRegistry = new Map();
     const architectModelOptionsByProvider = {
       anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
       openai: ['gpt-5.5', 'gpt-5', 'gpt-5.4', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini', 'o3', 'o4-mini'],
@@ -5950,6 +6581,92 @@ function renderArchitectShell(): string {
       };
     }
 
+    function createPluginArchitectTab(descriptor) {
+      architectTabSequence += 1;
+      const id = 'plugin-tab-' + architectTabSequence;
+      return {
+        id: id,
+        title: descriptor.title,
+        type: descriptor.id,
+        lifecycle: 'plugin',
+        dirty: false,
+        closeable: true,
+        panelId: 'architect-panel-' + id,
+        pluginDescriptor: descriptor,
+        pluginSnapshot: null,
+      };
+    }
+
+    async function hydrateArchitectPluginTabTypes() {
+      const response = await fetch('/api/architect/v1/plugin-tabs', { cache: 'no-store' });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok || payload.ok === false) throw new Error(payload.message || 'Failed to load Architect plugin tabs.');
+      for (const descriptor of Array.from(architectTabTypeRegistry.values())) {
+        if (descriptor.lifecycle === 'plugin') architectTabTypeRegistry.delete(descriptor.type);
+      }
+      for (const descriptor of (Array.isArray(payload.tabs) ? payload.tabs : [])) {
+        registerArchitectTabType({ type: descriptor.id, title: descriptor.title, lifecycle: 'plugin', create: function() { return createPluginArchitectTab(descriptor); } });
+      }
+      renderArchitectTabMenu();
+    }
+
+    async function loadArchitectPluginTabSnapshot(tab, panel) {
+      resetNode(panel);
+      const status = document.createElement('p');
+      status.textContent = activePlanId ? 'Loading checklist...' : 'Select a plan to use this plugin tab.';
+      panel.appendChild(status);
+      if (!activePlanId) return;
+      const response = await fetch('/api/architect/v1/plugin-tabs/' + encodeURIComponent(tab.type) + '/snapshot?planId=' + encodeURIComponent(activePlanId), { cache: 'no-store' });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok || payload.ok === false) { status.textContent = payload.message || 'Plugin tab is unavailable.'; return; }
+      tab.pluginSnapshot = payload.snapshot;
+      const state = payload.snapshot && payload.snapshot.state || {};
+      resetNode(pluginTabSummaryEl);
+      if (state.summary && state.summary.label) appendChip(pluginTabSummaryEl, tab.title, state.summary.label, false);
+      for (const badge of (Array.isArray(state.badges) ? state.badges : [])) appendChip(pluginTabSummaryEl, badge.id, badge.label || '', false);
+      resetNode(panel);
+      const heading = document.createElement('h2');
+      heading.textContent = tab.title;
+      panel.appendChild(heading);
+      const summary = document.createElement('p');
+      summary.className = 'muted';
+      summary.textContent = state.summary && state.summary.label || 'Checklist state loaded from daemon.';
+      panel.appendChild(summary);
+      for (const badge of (Array.isArray(state.badges) ? state.badges : [])) {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = badge.label || badge.id;
+        panel.appendChild(chip);
+      }
+      const list = document.createElement('div');
+      list.className = 'stack';
+      for (const item of (Array.isArray(state.items) ? state.items : [])) {
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = !!item.completed;
+        input.addEventListener('change', async function() {
+          input.disabled = true;
+          const actionResponse = await fetch('/api/architect/v1/plugin-tabs/' + encodeURIComponent(tab.type) + '/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planId: activePlanId, revision: state.revision || null, action: { type: 'toggle', itemId: item.id } }) });
+          const actionPayload = await actionResponse.json().catch(function() { return {}; });
+          if (!actionResponse.ok || actionPayload.ok === false) { status.textContent = actionPayload.message || 'Checklist action failed.'; input.disabled = false; return; }
+          await loadArchitectPluginTabSnapshot(tab, panel);
+        });
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(' ' + item.label));
+        list.appendChild(label);
+      }
+      panel.appendChild(list);
+    }
+
+    function refreshOpenArchitectPluginTabs() {
+      for (const tab of architectCenterTabs) {
+        if (tab.lifecycle !== 'plugin') continue;
+        const panel = document.getElementById(tab.panelId);
+        if (panel) void loadArchitectPluginTabSnapshot(tab, panel);
+      }
+    }
+
     function createTerminalArchitectTab() {
       architectTabSequence += 1;
       const id = 'terminal-tab-' + architectTabSequence;
@@ -5974,6 +6691,253 @@ function renderArchitectShell(): string {
         terminalBlurListener: null,
       };
     }
+
+    /* architect-doom-script:start */
+    function createDoomArchitectTab() {
+      architectTabSequence += 1;
+      const id = 'doom-tab-' + architectTabSequence;
+      return {
+        id: id,
+        title: 'Doom Session ' + architectTabSequence,
+        type: 'doom',
+        lifecycle: 'dynamic',
+        dirty: false,
+        closeable: true,
+        panelId: 'architect-panel-' + id,
+        doomProps: null,
+        doomBundleUrl: null,
+        doomMuted: false,
+        doomPaused: false,
+        doomSuspended: false,
+        doomLifecyclePromise: Promise.resolve(),
+        doomRoot: null,
+        doomStatus: null,
+        destroy: null,
+      };
+    }
+
+    function loadArchitectDoomRuntime() {
+      if (architectDoomRuntimePromise) return architectDoomRuntimePromise;
+      architectDoomRuntimePromise = new Promise(function(resolve, reject) {
+        if (window.Dos) { resolve(window.Dos); return; }
+        const script = document.createElement('script');
+        script.src = '/api/architect/v1/assets/js-dos/js-dos.js';
+        script.async = true;
+        script.onload = function() { window.Dos ? resolve(window.Dos) : reject(new Error('js-dos did not initialize.')); };
+        script.onerror = function() { reject(new Error('Local js-dos runtime failed to load.')); };
+        document.head.appendChild(script);
+      }).catch(function(error) {
+        architectDoomRuntimePromise = null;
+        throw error;
+      });
+      return architectDoomRuntimePromise;
+    }
+
+    function setArchitectDoomPaused(tab, paused, message) {
+      tab.doomPaused = paused;
+      if (tab.doomProps && typeof tab.doomProps.setPaused === 'function') tab.doomProps.setPaused(paused);
+      if (tab.doomStatus && message) tab.doomStatus.textContent = message;
+    }
+
+    async function stopArchitectDoomTab(tab, message) {
+      const active = tab.doomProps;
+      tab.doomProps = null;
+      if (active && typeof active.stop === 'function') await active.stop();
+      if (tab.doomRoot) tab.doomRoot.replaceChildren();
+      if (tab.doomStatus && message) tab.doomStatus.textContent = message;
+    }
+
+    function queueArchitectDoomTask(tab, task) {
+      tab.doomLifecyclePromise = (tab.doomLifecyclePromise || Promise.resolve()).catch(function() { /* prior lifecycle failure is already surfaced */ }).then(task);
+      return tab.doomLifecyclePromise;
+    }
+
+    function suspendArchitectDoomTab(tab) {
+      if (!tab || !tab.doomProps || tab.doomSuspended) return;
+      tab.doomSuspended = true;
+      setArchitectDoomPaused(tab, true, 'Stopping Doom while tab is inactive...');
+      void queueArchitectDoomTask(tab, function() { return stopArchitectDoomTab(tab, 'Stopped while tab is inactive. Switch back to restart.'); }).catch(function(error) {
+        if (tab.doomStatus) tab.doomStatus.textContent = error.message || 'Failed to stop inactive Doom session.';
+      });
+    }
+
+    function resumeArchitectDoomTab(tab) {
+      if (!tab || !tab.doomSuspended || !tab.doomBundleUrl) return;
+      tab.doomSuspended = false;
+      void queueArchitectDoomTask(tab, function() { return startArchitectDoomTab(tab); }).catch(function(error) {
+        if (tab.doomStatus) tab.doomStatus.textContent = error.message || 'Failed to restart Doom session.';
+      });
+    }
+
+    async function startArchitectDoomTab(tab) {
+      if (!tab.doomBundleUrl) throw new Error('Download Doom Shareware first.');
+      await stopArchitectDoomTab(tab, 'Starting Doom Shareware...');
+      const Dos = await loadArchitectDoomRuntime();
+      tab.doomPaused = false;
+      tab.doomSuspended = false;
+      tab.doomProps = Dos(tab.doomRoot, {
+        url: tab.doomBundleUrl,
+        pathPrefix: '/api/architect/v1/assets/js-dos/emulators/',
+        autoStart: true,
+        noNetworking: true,
+        noCloud: true,
+        onEvent: function(event) {
+          if (event === 'ci-ready' && tab.doomStatus) tab.doomStatus.textContent = 'Playing. Click the game to use the keyboard.';
+        },
+      });
+      if (tab.doomMuted && typeof tab.doomProps.setVolume === 'function') tab.doomProps.setVolume(0);
+    }
+
+    async function readArchitectDoomBundlePayload(response, fallbackMessage) {
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok || payload.ok === false) throw new Error(payload.message || fallbackMessage);
+      return payload;
+    }
+
+    async function reloadDoomArchitectTabPanel(tab) {
+      await stopArchitectDoomTab(tab, 'Reloading Doom tab...');
+      const panel = document.getElementById(tab.panelId);
+      if (!panel) return;
+      panel.replaceChildren();
+      tab.doomRoot = null;
+      tab.doomStatus = null;
+      renderDoomArchitectTabPanel(tab, panel);
+    }
+
+    function updateArchitectDoomDownloadProgress(download, progress, status) {
+      if (!download || download.state !== 'downloading') return;
+      const downloadedBytes = Number(download.downloaded_bytes) || 0;
+      const totalBytes = Number(download.total_bytes) || 0;
+      progress.hidden = false;
+      if (totalBytes > 0) {
+        progress.value = Math.min(100, Math.round(downloadedBytes * 100 / totalBytes));
+        status.textContent = 'Downloading Doom Shareware... ' + progress.value + '%';
+      } else {
+        progress.removeAttribute('value');
+        status.textContent = 'Downloading Doom Shareware...';
+      }
+    }
+
+    async function loadArchitectDoomRecommendedBundleStatus(tab, card, approve, progress, status) {
+      try {
+        const payload = await readArchitectDoomBundlePayload(await fetch('/api/architect/v1/doom/spike-bundle/status', { cache: 'no-store' }), 'Failed to check the Doom Shareware download.');
+        if (payload.bundle && payload.bundle.acquired === true) {
+          tab.doomBundleUrl = payload.bundle.local_bundle_url;
+          card.hidden = true;
+          status.textContent = 'Ready. Click Start to play.';
+          return;
+        }
+        card.hidden = false;
+        approve.disabled = Boolean(payload.bundle && payload.bundle.download && payload.bundle.download.state === 'downloading');
+        updateArchitectDoomDownloadProgress(payload.bundle && payload.bundle.download, progress, status);
+        if (!approve.disabled) status.textContent = '';
+      } catch (error) {
+        card.hidden = false;
+        approve.disabled = true;
+        status.textContent = error.message || 'Failed to check the Doom Shareware download.';
+      }
+    }
+
+    function renderDoomArchitectTabPanel(tab, panel) {
+      const heading = document.createElement('h2');
+      heading.textContent = tab.title;
+      const surface = document.createElement('div');
+      surface.className = 'doom-surface';
+      const toolbar = document.createElement('div');
+      toolbar.className = 'doom-toolbar';
+      const recommended = document.createElement('div');
+      recommended.className = 'doom-first-run-card';
+      const recommendedText = document.createElement('span');
+      recommendedText.textContent = 'Download Doom Shareware to start playing.';
+      const approveRecommended = document.createElement('button');
+      approveRecommended.type = 'button';
+      approveRecommended.textContent = 'Download Doom Shareware';
+      const downloadProgress = document.createElement('progress');
+      downloadProgress.max = 100;
+      downloadProgress.hidden = true;
+      downloadProgress.setAttribute('aria-label', 'Doom Shareware download progress');
+      recommended.appendChild(recommendedText);
+      recommended.appendChild(approveRecommended);
+      recommended.appendChild(downloadProgress);
+      const start = document.createElement('button');
+      start.type = 'button';
+      start.textContent = 'Start';
+      const pause = document.createElement('button');
+      pause.type = 'button';
+      pause.textContent = 'Pause';
+      const resume = document.createElement('button');
+      resume.type = 'button';
+      resume.textContent = 'Resume';
+      const mute = document.createElement('button');
+      mute.type = 'button';
+      mute.textContent = 'Mute';
+      const fullscreen = document.createElement('button');
+      fullscreen.type = 'button';
+      fullscreen.textContent = 'Fullscreen';
+      const reset = document.createElement('button');
+      reset.type = 'button';
+      reset.textContent = 'Reset';
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.textContent = 'Close Session';
+      const status = document.createElement('span');
+      status.textContent = 'Loading...';
+      const root = document.createElement('div');
+      root.className = 'doom-viewport';
+      root.setAttribute('aria-label', 'Doom Shareware viewport');
+      toolbar.appendChild(start);
+      toolbar.appendChild(pause);
+      toolbar.appendChild(resume);
+      toolbar.appendChild(mute);
+      toolbar.appendChild(fullscreen);
+      toolbar.appendChild(reset);
+      toolbar.appendChild(close);
+      toolbar.appendChild(status);
+      surface.appendChild(recommended);
+      surface.appendChild(toolbar);
+      surface.appendChild(root);
+      panel.appendChild(heading);
+      panel.appendChild(surface);
+      tab.doomRoot = root;
+      tab.doomStatus = status;
+      void loadArchitectDoomRecommendedBundleStatus(tab, recommended, approveRecommended, downloadProgress, status);
+      approveRecommended.addEventListener('click', function() {
+        approveRecommended.disabled = true;
+        downloadProgress.hidden = false;
+        downloadProgress.removeAttribute('value');
+        status.textContent = 'Downloading Doom Shareware...';
+        const progressTimer = window.setInterval(function() {
+          fetch('/api/architect/v1/doom/spike-bundle/status', { cache: 'no-store' }).then(function(response) {
+            return readArchitectDoomBundlePayload(response, 'Failed to read Doom Shareware download progress.');
+          }).then(function(payload) {
+            updateArchitectDoomDownloadProgress(payload.bundle && payload.bundle.download, downloadProgress, status);
+          }).catch(function() { /* acquisition request surfaces the terminal error */ });
+        }, 250);
+        fetch('/api/architect/v1/doom/spike-bundle/acquire', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: true }),
+        }).then(function(response) {
+          return readArchitectDoomBundlePayload(response, 'Failed to download Doom Shareware.');
+        }).then(function() {
+          window.clearInterval(progressTimer);
+          return reloadDoomArchitectTabPanel(tab);
+        }).catch(function(error) {
+          window.clearInterval(progressTimer);
+          approveRecommended.disabled = false;
+          status.textContent = error.message || 'Failed to download Doom Shareware.';
+        });
+      });
+      start.addEventListener('click', function() { startArchitectDoomTab(tab).catch(function(error) { status.textContent = error.message || 'Failed to start Doom Shareware.'; }); });
+      pause.addEventListener('click', function() { setArchitectDoomPaused(tab, true, 'Paused.'); });
+      resume.addEventListener('click', function() { setArchitectDoomPaused(tab, false, 'Resumed.'); });
+      mute.addEventListener('click', function() { tab.doomMuted = !tab.doomMuted; if (tab.doomProps && typeof tab.doomProps.setVolume === 'function') tab.doomProps.setVolume(tab.doomMuted ? 0 : 1); mute.textContent = tab.doomMuted ? 'Unmute' : 'Mute'; });
+      fullscreen.addEventListener('click', function() { if (tab.doomProps && typeof tab.doomProps.setFullScreen === 'function') tab.doomProps.setFullScreen(true); });
+      reset.addEventListener('click', function() { startArchitectDoomTab(tab).catch(function(error) { status.textContent = error.message || 'Failed to reset Doom Shareware.'; }); });
+      close.addEventListener('click', function() { closeArchitectCenterTab(tab.id); });
+      tab.destroy = function() { void stopArchitectDoomTab(tab, 'Closed.'); tab.doomRoot = null; tab.doomStatus = null; };
+    }
+    /* architect-doom-script:end */
 
     function createCodeEditorArchitectTab() {
       architectTabSequence += 1;
@@ -6422,12 +7386,14 @@ function renderArchitectShell(): string {
       if (!panel) {
         panel = document.createElement('div');
         panel.id = tab.panelId;
-        panel.className = 'architect-tab-panel ' + (tab.type === 'terminal' ? 'terminal-workspace' : (tab.type === 'code-editor' ? 'code-editor-workspace' : ''));
+        panel.className = 'architect-tab-panel ' + (tab.type === 'terminal' ? 'terminal-workspace' : (tab.type === 'doom' ? 'doom-workspace' : (tab.type === 'code-editor' ? 'code-editor-workspace' : '')));
         panel.setAttribute('role', 'tabpanel');
         panel.dataset.architectTabPanel = tab.id;
         panel.dataset.architectTabType = tab.type;
         if (tab.type === 'terminal') {
           renderTerminalArchitectTabPanel(tab, panel);
+        } else if (tab.type === 'doom') {
+          renderDoomArchitectTabPanel(tab, panel);
         } else if (tab.type === 'code-editor') {
           loadArchitectCodeEditorModule().then(function(mod) {
             if (mod && typeof mod.mountCodeEditorArchitectTab === 'function') {
@@ -6440,6 +7406,8 @@ function renderArchitectShell(): string {
           }).catch(function(error) {
             panel.textContent = error && error.message ? error.message : 'Failed to load code editor module.';
           });
+        } else if (tab.lifecycle === 'plugin') {
+          void loadArchitectPluginTabSnapshot(tab, panel);
         }
         architectCenterPanelContainer.appendChild(panel);
       }
@@ -6671,11 +7639,19 @@ function renderArchitectShell(): string {
           const inactiveTab = architectCenterTabs.find(function(candidate) { return candidate.id === panel.dataset.architectTabPanel; });
           blurArchitectTerminalTab(inactiveTab);
         }
+        if (!isActivePanel && panel.dataset.architectTabType === 'doom') {
+          const inactiveTab = architectCenterTabs.find(function(candidate) { return candidate.id === panel.dataset.architectTabPanel; });
+          suspendArchitectDoomTab(inactiveTab);
+        }
       }
       const activePanel = architectCenterPanelContainer.querySelector('[data-architect-tab-panel="' + normalized + '"]');
       if (activePanel && activePanel.dataset.architectTabType === 'terminal') {
         const tab = architectCenterTabs.find(function(candidate) { return candidate.id === normalized; });
         if (tab && tab.terminalScheduleFit) window.setTimeout(tab.terminalScheduleFit, 0);
+      }
+      if (activePanel && activePanel.dataset.architectTabType === 'doom') {
+        const tab = architectCenterTabs.find(function(candidate) { return candidate.id === normalized; });
+        resumeArchitectDoomTab(tab);
       }
       return normalized;
     }
@@ -6760,7 +7736,8 @@ function renderArchitectShell(): string {
       ];
       registerArchitectTabType({ type: 'code-editor', title: 'New Code Editor', create: createCodeEditorArchitectTab });
       registerArchitectTabType({ type: 'terminal', title: 'New Terminal', create: createTerminalArchitectTab });
-      renderArchitectTabMenu();
+${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', title: 'New Doom Session', create: createDoomArchitectTab });\n" : ""}      renderArchitectTabMenu();
+      void hydrateArchitectPluginTabTypes().catch(function(error) { appendEventLine('[plugin-tabs] ' + (error && error.message ? error.message : 'Failed to hydrate plugin tabs.')); });
       let tabAddPointerHandled = false;
       architectTabAddButton.addEventListener('pointerdown', function(event) {
         handleArchitectTabPointerAction(event, function() {
@@ -7262,6 +8239,47 @@ function renderArchitectShell(): string {
       architectControlPersistTimer = window.setTimeout(function() {
         persistArchitectControls().catch(function() { /* status is rendered by persistArchitectControls */ });
       }, 180);
+    }
+
+    function isArchitectProviderSetupSuppressed() {
+      try {
+        return window.localStorage.getItem(architectProviderSetupStorageKey) === 'suppressed';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function setArchitectProviderSetupVisible(visible, persistSuppression) {
+      architectProviderSetupEl.hidden = !visible;
+      architectProviderShowEl.hidden = visible;
+      if (!visible && persistSuppression && architectProviderSuppressEl.checked) {
+        try { window.localStorage.setItem(architectProviderSetupStorageKey, 'suppressed'); } catch (_) { /* storage may be unavailable */ }
+      }
+    }
+
+    function applyArchitectProviderChoice(choice) {
+      if (choice === 'codex-cli') {
+        architectAdapterSelectEl.value = 'codex-cli';
+      } else if (choice === 'deterministic_fallback') {
+        architectAdapterSelectEl.value = 'deterministic_fallback';
+      } else {
+        architectAdapterSelectEl.value = 'native_api_tool_loop';
+        architectProviderSelectEl.value = choice === 'local' ? 'ollama' : 'openai';
+      }
+      syncArchitectControlState('');
+      saveArchitectControls();
+      architectProviderStatusEl.textContent = 'Selected ' + choice.replace(/[_-]+/g, ' ') + '. Testing readiness is recommended.';
+    }
+
+    async function testArchitectProviderReadiness() {
+      architectProviderStatusEl.textContent = 'Testing selected Architect route...';
+      const response = await fetch('/api/architect/v1/provider-readiness', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedArchitectControls()) });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok) throw new Error(payload.message || ('Provider readiness failed with HTTP ' + response.status));
+      const readiness = payload.readiness || {};
+      architectProviderStatusEl.textContent = (readiness.ready ? 'Ready: ' : 'Needs attention: ') + (readiness.detail || 'No readiness detail returned.');
+      if (readiness.ready) setArchitectProviderSetupVisible(false, true);
+      return readiness;
     }
 
     function architectRouteLabel(controls) {
@@ -8635,6 +9653,7 @@ function renderArchitectShell(): string {
       resetNode(planChipsEl);
       resetNode(centerPlanChipsEl);
       resetNode(registrySummaryEl);
+      resetNode(pluginTabSummaryEl);
       resetNode(livingPlanSummaryEl);
       livingPlanPulseEl.textContent = 'Select a plan to project its living state.';
       livingPlanPulseEl.title = '';
@@ -8659,6 +9678,7 @@ function renderArchitectShell(): string {
       planBodyEl.textContent = message || 'No plan selected. Project-scope chat remains available.';
       centerPlanBodyEl.textContent = planBodyEl.textContent;
       setChatScope('project');
+      refreshOpenArchitectPluginTabs();
     }
 
     async function clearSelectedPlan() {
@@ -8689,6 +9709,7 @@ function renderArchitectShell(): string {
       }
       actionStatusEl.textContent = 'Governed actions ready for ' + planId;
       renderPlan(payload.plan);
+      refreshOpenArchitectPluginTabs();
       await persistSelectedPlan(planId);
       await loadFutureReview(planId, loadToken);
       await loadSchedules(planId, loadToken);
@@ -8813,6 +9834,182 @@ function renderArchitectShell(): string {
         chatStatusEl.textContent = 'Using ' + architectRuntimeLabel(runtime) + ' | scope ' + (result.chat_scope || dispatchScope) + ' | model source ' + (runtime.model_source || route.model_source || 'unknown') + ' | session ' + (runtime.session_id || 'unknown') + ' | tools ' + (toolLoop.advertised_tool_count || 0) + '/' + (toolLoop.available_tool_count || 0) + ' | trace ' + trace.length + (route.fallback_reason ? ' | ' + route.fallback_reason : '');
       } finally {
         setChatProcessing(false);
+      }
+    }
+
+    function setArchitectWelcomeVisible(visible, rememberDismissal) {
+      architectWelcomeEl.hidden = !visible;
+      architectWelcomeReopenEl.hidden = visible;
+      if (rememberDismissal) window.localStorage.setItem(architectWelcomeStorageKey, visible ? 'false' : 'true');
+    }
+
+    function appendArchitectWelcomeChip(container, label, value, warning) {
+      const chip = document.createElement('span');
+      chip.className = 'chip' + (warning ? ' warn' : '');
+      chip.textContent = label + ': ' + value;
+      container.appendChild(chip);
+    }
+
+    function renderArchitectWelcome(payload) {
+      const readiness = payload && payload.onboarding_readiness || {};
+      const project = readiness.project || {};
+      const repositories = readiness.repositories || {};
+      const projectMap = readiness.project_map || {};
+      const runtime = readiness.architect_runtime || {};
+      resetNode(architectWelcomeSummaryEl);
+      resetNode(architectWelcomeWarningsEl);
+      resetNode(architectWelcomeMissionsEl);
+      appendArchitectWelcomeChip(architectWelcomeSummaryEl, 'Project', project.instance_name || project.status || 'choose project', project.status !== 'attached');
+      appendArchitectWelcomeChip(architectWelcomeSummaryEl, 'Project map', projectMap.status || 'unknown', projectMap.status !== 'ready');
+      appendArchitectWelcomeChip(architectWelcomeSummaryEl, 'Repositories', String(repositories.count || 0), !repositories.count);
+      appendArchitectWelcomeChip(architectWelcomeSummaryEl, 'AI connection', runtime.status || 'unknown', runtime.status !== 'ready');
+      appendArchitectWelcomeChip(architectWelcomeSummaryEl, 'Stack', projectMap.status === 'ready' ? 'learned from project map' : 'available after project map', projectMap.status !== 'ready');
+      for (const check of (Array.isArray(readiness.required_to_start) ? readiness.required_to_start : [])) {
+        if (check.status === 'ready') continue;
+        const warning = document.createElement('div');
+        warning.className = 'chip warn';
+        warning.textContent = check.label + ': ' + (check.detail || 'Needs attention') + ' ';
+        if (check.action && check.action.kind === 'open_route') {
+          const link = document.createElement('a');
+          link.href = check.action.target;
+          link.textContent = check.action.label;
+          warning.appendChild(link);
+        } else if (check.action) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'mini-button';
+          button.textContent = check.action.label;
+          button.addEventListener('click', function() { sendChatMessage('Run the governed ' + check.action.target + ' action and report the result.').catch(function(error) { chatStatusEl.textContent = String(error instanceof Error ? error.message : error); }); });
+          warning.appendChild(button);
+        }
+        architectWelcomeWarningsEl.appendChild(warning);
+      }
+      if (!architectWelcomeWarningsEl.childNodes.length) appendArchitectWelcomeChip(architectWelcomeWarningsEl, 'Readiness', 'required checks passed', false);
+      for (const mission of architectOnboardingMissions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'architect-mission-card';
+        button.dataset.missionId = mission.id;
+        const title = document.createElement('strong');
+        title.textContent = mission.title;
+        const artifact = document.createElement('span');
+        artifact.className = 'architect-mission-artifact';
+        artifact.textContent = 'First artifact: ' + mission.artifact;
+        button.appendChild(title);
+        button.appendChild(artifact);
+        button.addEventListener('click', function() { launchArchitectMission(mission).catch(function(error) { chatStatusEl.textContent = String(error instanceof Error ? error.message : error); }); });
+        architectWelcomeMissionsEl.appendChild(button);
+      }
+      const dismissed = window.localStorage.getItem(architectWelcomeStorageKey) === 'true';
+      setArchitectWelcomeVisible(!dismissed, false);
+    }
+
+    async function recordArchitectOnboardingEvent(event) {
+      try {
+        await fetch('/api/architect/v1/onboarding-events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(event) });
+      } catch (_) { /* local telemetry must never block onboarding */ }
+    }
+
+    async function launchArchitectMission(mission) {
+      const startedAt = Date.now();
+      const missionId = String(mission.id || mission.title || 'recipe').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, 64);
+      void recordArchitectOnboardingEvent({ event: 'mission_launched', mission_id: missionId });
+      setArchitectWelcomeVisible(false, true);
+      chatStatusEl.textContent = 'Launching mission: ' + mission.title + '...';
+      if (mission.planBearing) {
+        const plan = await ensureDaemonPlanForMission(mission.title);
+        await loadPlans(plan.id, { activatePlanScope: true });
+      } else {
+        setChatScope('project');
+      }
+      await sendChatMessage(mission.prompt);
+      void recordArchitectOnboardingEvent({ event: 'mission_completed', mission_id: missionId, duration_ms: Date.now() - startedAt });
+    }
+
+    function renderArchitectRecipes() {
+      resetNode(architectRecipeGroupsEl);
+      for (const group of architectRecipeGroups) {
+        const section = document.createElement('section');
+        section.className = 'architect-recipe-group';
+        const title = document.createElement('h3');
+        title.textContent = group.title;
+        const grid = document.createElement('div');
+        grid.className = 'architect-recipe-grid';
+        for (const recipe of group.recipes) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'architect-mission-card';
+          button.innerHTML = '<strong></strong><span class="architect-mission-artifact"></span>';
+          button.querySelector('strong').textContent = recipe[0];
+          button.querySelector('span').textContent = 'Artifact: ' + recipe[1] + ' | Verify: ' + recipe[2];
+          button.addEventListener('click', function() { launchArchitectMission({ title: recipe[0], artifact: recipe[1], planBearing: recipe[3], prompt: recipe[0] + '. Produce: ' + recipe[1] + '. Verification expectation: ' + recipe[2] + '. Suggest the next useful recipe after the artifact.' }).catch(function(error) { chatStatusEl.textContent = String(error instanceof Error ? error.message : error); }); });
+          grid.appendChild(button);
+        }
+        section.appendChild(title); section.appendChild(grid); architectRecipeGroupsEl.appendChild(section);
+      }
+    }
+
+    function appendArchitectRepoRow(repo) {
+      const row = document.createElement('div');
+      row.className = 'architect-repo-row';
+      const name = document.createElement('input');
+      name.placeholder = 'repo-name';
+      name.value = repo && repo.name || '';
+      name.dataset.repoField = 'name';
+      const role = document.createElement('select');
+      role.dataset.repoField = 'role';
+      for (const value of ['primary', 'frontend', 'backend', 'shared', 'docs', 'infra', 'other']) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        role.appendChild(option);
+      }
+      role.value = repo && repo.role || 'other';
+      const path = document.createElement('input');
+      path.placeholder = 'Absolute repository path';
+      path.value = repo && repo.path || '';
+      path.dataset.repoField = 'path';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'mini-button';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', function() { row.remove(); });
+      row.appendChild(name); row.appendChild(role); row.appendChild(path); row.appendChild(remove);
+      architectRepoSetupGridEl.appendChild(row);
+    }
+
+    function collectArchitectRepos() {
+      return Array.from(architectRepoSetupGridEl.querySelectorAll('.architect-repo-row')).map(function(row) {
+        return { name: row.querySelector('[data-repo-field="name"]').value, role: row.querySelector('[data-repo-field="role"]').value, path: row.querySelector('[data-repo-field="path"]').value };
+      });
+    }
+
+    function renderArchitectRepoSetup(repoSetup) {
+      resetNode(architectRepoSetupGridEl);
+      architectRepoSetupScopeEl.textContent = repoSetup.scope_explanation || 'Repositories define the MCP-governed project scope.';
+      for (const repo of (repoSetup.repositories || [])) appendArchitectRepoRow(repo);
+      if (!architectRepoSetupGridEl.childNodes.length) appendArchitectRepoRow({ role: 'primary' });
+      architectRepoMapEl.textContent = repoSetup.first_map_action && repoSetup.first_map_action.label || 'Build first project map';
+      architectRepoSetupStatusEl.textContent = (repoSetup.repositories || []).length + ' connected repo(s) | map ' + (repoSetup.project_map && repoSetup.project_map.status || 'unknown') + (repoSetup.persisted ? '' : ' | attach an instance to persist changes');
+    }
+
+    async function loadArchitectRepoSetup() {
+      const response = await fetch('/api/architect/v1/repo-setup', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Repository setup failed with HTTP ' + response.status);
+      const payload = await response.json();
+      renderArchitectRepoSetup(payload.repo_setup || {});
+    }
+
+    async function saveArchitectRepoSetup() {
+      architectRepoSetupStatusEl.textContent = 'Validating and saving repositories...';
+      const response = await fetch('/api/architect/v1/repo-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repositories: collectArchitectRepos() }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || payload.error || 'Repository setup failed with HTTP ' + response.status);
+      renderArchitectRepoSetup(payload.repo_setup || {});
+      if (payload.onboarding_readiness) {
+        renderArchitectWelcome({ onboarding_readiness: payload.onboarding_readiness });
+        const required = payload.onboarding_readiness.required_to_start || [];
+        void recordArchitectOnboardingEvent({ event: 'checklist_snapshot', ready_count: required.filter(function(check) { return check.status === 'ready'; }).length, required_count: required.length });
       }
     }
 
@@ -9004,28 +10201,34 @@ function renderArchitectShell(): string {
       }
     }
 
+    async function ensureDaemonPlanForMission(title) {
+      const compactTitle = String(title || '').trim();
+      const existing = planIndexCache.find(function(plan) { return String(plan.title || '').trim().toLowerCase() === compactTitle.toLowerCase(); });
+      return existing || await createDaemonPlan(compactTitle);
+    }
+
+    async function createDaemonPlan(title) {
+      const compactTitle = String(title || '').trim();
+      if (!compactTitle) throw new Error('Enter a plan title first.');
+      const response = await fetch('/api/architect/v1/plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: compactTitle }),
+      });
+      const payload = await response.json().catch(function() { return {}; });
+      if (!response.ok) throw new Error(payload.message || ('Plan create failed with HTTP ' + response.status));
+      const plan = payload.plan || {};
+      appendEventLine('[plan-action] created ' + (plan.id || compactTitle));
+      return plan;
+    }
+
     async function createPlanFromPanel() {
       const title = window.prompt('Plan title', 'New Architect Plan');
       if (title === null) return;
-      const compactTitle = title.trim();
-      if (!compactTitle) {
-        railStatusEl.textContent = 'Enter a plan title first.';
-        return;
-      }
       createPlanButtonEl.disabled = true;
       railStatusEl.textContent = 'Creating plan...';
       try {
-        const response = await fetch('/api/architect/v1/plans', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: compactTitle }),
-        });
-        const payload = await response.json().catch(function() { return {}; });
-        if (!response.ok) {
-          throw new Error(payload.message || ('Plan create failed with HTTP ' + response.status));
-        }
-        const plan = payload.plan || {};
-        appendEventLine('[plan-action] created ' + (plan.id || compactTitle));
+        const plan = await createDaemonPlan(title);
         await loadPlans(plan.id);
       } finally {
         createPlanButtonEl.disabled = false;
@@ -9120,9 +10323,28 @@ function renderArchitectShell(): string {
     renderRuntime(initialRuntimePayload);
     hydrateArchitectCenterTabs();
     hydrateArchitectControls(initialRuntimePayload);
+    const initialArchitectReadiness = initialRuntimePayload && initialRuntimePayload.onboarding_readiness && initialRuntimePayload.onboarding_readiness.architect_runtime || {};
+    architectProviderSuppressEl.checked = isArchitectProviderSetupSuppressed();
+    setArchitectProviderSetupVisible(initialArchitectReadiness.status !== 'ready' && !architectProviderSuppressEl.checked);
+    document.querySelectorAll('[data-provider-choice]').forEach(function(button) { button.addEventListener('click', function() { applyArchitectProviderChoice(button.dataset.providerChoice); }); });
+    architectProviderTestEl.addEventListener('click', function() { testArchitectProviderReadiness().catch(function(error) { architectProviderStatusEl.textContent = 'Needs attention: ' + String(error instanceof Error ? error.message : error); }); });
+    architectProviderDismissEl.addEventListener('click', function() { setArchitectProviderSetupVisible(false, true); });
+    architectProviderShowEl.addEventListener('click', function(event) { event.preventDefault(); event.stopPropagation(); setArchitectProviderSetupVisible(true); });
+    architectGuideLinkEl.addEventListener('click', function() { void recordArchitectOnboardingEvent({ event: 'guide_opened', source: 'architect' }); });
+    try {
+      if (window.localStorage.getItem(architectOnboardingVisitStorageKey) === 'visited') void recordArchitectOnboardingEvent({ event: 'second_session_return' });
+      window.localStorage.setItem(architectOnboardingVisitStorageKey, 'visited');
+    } catch (_) { /* local storage may be unavailable */ }
     renderChatScopePill();
     updateAutonomyPassView('idle', 0);
-    appendChatMessage('assistant', 'Architect chat is ready. Select a plan on the left or ask about the active project.');
+    renderArchitectWelcome(initialRuntimePayload);
+    renderArchitectRecipes();
+    loadArchitectRepoSetup().catch(function(error) { architectRepoSetupStatusEl.textContent = String(error instanceof Error ? error.message : error); });
+    architectWelcomeDismissEl.addEventListener('click', function() { setArchitectWelcomeVisible(false, true); });
+    architectWelcomeReopenEl.addEventListener('click', function() { setArchitectWelcomeVisible(true, true); });
+    architectRepoAddEl.addEventListener('click', function() { appendArchitectRepoRow({ role: 'other' }); architectRepoSetupEl.open = true; });
+    architectRepoSaveEl.addEventListener('click', function() { saveArchitectRepoSetup().catch(function(error) { architectRepoSetupStatusEl.textContent = String(error instanceof Error ? error.message : error); }); });
+    architectRepoMapEl.addEventListener('click', function() { sendChatMessage('Run the governed scan_project action for the configured repository inventory and report the resulting project map status.').catch(function(error) { chatStatusEl.textContent = String(error instanceof Error ? error.message : error); }); });
     chatInputEl.addEventListener('keydown', function(event) {
       if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
       event.preventDefault();
@@ -9632,6 +10854,12 @@ function renderArchitectShell(): string {
     </script>
 </body>
 </html>`;
+  if (!isArchitectDoomEnabled()) {
+    shell = shell
+      .replace(/\/\* architect-doom-css:start \*\/[\s\S]*?\/\* architect-doom-css:end \*\//g, "")
+      .replace(/\/\* architect-doom-script:start \*\/[\s\S]*?\/\* architect-doom-script:end \*\//g, "function suspendArchitectDoomTab() {}\n    function resumeArchitectDoomTab() {}");
+  }
+  return shell;
 }
 
 function handleArchitectContract(req: IncomingMessage, res: ServerResponse): void {
@@ -9642,12 +10870,16 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
     ...buildMeta(),
     routes: {
       shell: "/architect",
+      ...(isArchitectDoomEnabled() ? { doom_spike_harness: "/architect/doom-spike" } : {}),
       contract: "/api/architect",
       chat: "/api/architect/v1/chat",
       chat_method: "POST",
       chat_request_content_type: "application/json",
       chat_response_transports: ["application/json", "text/event-stream"],
       config: "POST /api/architect/v1/config",
+      provider_readiness: "POST /api/architect/v1/provider-readiness",
+      repo_setup: "GET|POST /api/architect/v1/repo-setup",
+      onboarding_events: "GET|POST /api/architect/v1/onboarding-events",
       selection: "POST /api/architect/v1/selection",
       pulse: "GET /api/architect/v1/pulse",
       desires: "GET /api/architect/v1/desires",
@@ -9657,6 +10889,9 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
       plan_detail: "/api/architect/v1/plans/{planId}",
       plan_create: "POST /api/architect/v1/plans",
       plan_archive: "POST /api/architect/v1/plans/{planId}/archive",
+      plugin_tabs: "GET /api/architect/v1/plugin-tabs",
+      plugin_tab_snapshot: "GET /api/architect/v1/plugin-tabs/{tabTypeId}/snapshot?planId={planId}",
+      plugin_tab_actions: "POST /api/architect/v1/plugin-tabs/{tabTypeId}/actions",
       events: "/api/architect/v1/events",
       plan_actions: "/api/architect/v1/plans/{planId}/actions",
       review_gates: "/api/architect/v1/plans/{planId}/review-gates",
@@ -9671,6 +10906,11 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
       terminal_rename: "POST /api/architect/v1/terminals/{terminalId}/rename",
       terminal_close: "POST /api/architect/v1/terminals/{terminalId}/close",
       terminal_events: "GET /api/architect/v1/terminals/{terminalId}/events",
+      ...(isArchitectDoomEnabled() ? {
+        doom_spike_bundle_status: "GET /api/architect/v1/doom/spike-bundle/status",
+        doom_spike_bundle_acquire: "POST /api/architect/v1/doom/spike-bundle/acquire",
+        doom_spike_bundle: "GET /api/architect/v1/doom/spike-bundle",
+      } : {}),
       editor_repos: "GET /api/architect/v1/editor/repos",
       editor_tree: "POST /api/architect/v1/editor/tree",
       editor_file_load: "POST /api/architect/v1/editor/file/load",
@@ -9730,6 +10970,11 @@ export async function handleArchitectRoute(
       return true;
     }
 
+    if (isArchitectDoomEnabled() && req.method === "GET" && pathname === "/architect/doom-spike") {
+      html(res, 200, renderArchitectDoomSpikeHarness());
+      return true;
+    }
+
     if (req.method === "GET" && getArchitectBrowserAsset(pathname)) {
       await handleArchitectAssetRequest(res, pathname);
       return true;
@@ -9737,6 +10982,21 @@ export async function handleArchitectRoute(
 
     if (req.method === "GET" && (pathname === "/api/architect" || pathname === "/api/architect/" || pathname === "/api/architect/v1" || pathname === "/api/architect/v1/")) {
       handleArchitectContract(req, res);
+      return true;
+    }
+
+    if (isArchitectDoomEnabled() && req.method === "GET" && pathname === "/api/architect/v1/doom/spike-bundle/status") {
+      await handleArchitectDoomSpikeBundleStatus(res);
+      return true;
+    }
+
+    if (isArchitectDoomEnabled() && req.method === "POST" && pathname === "/api/architect/v1/doom/spike-bundle/acquire") {
+      await handleArchitectDoomSpikeBundleAcquire(req, res);
+      return true;
+    }
+
+    if (isArchitectDoomEnabled() && req.method === "GET" && pathname === "/api/architect/v1/doom/spike-bundle") {
+      await handleArchitectDoomSpikeBundleRead(res);
       return true;
     }
 
@@ -9803,6 +11063,31 @@ export async function handleArchitectRoute(
       return true;
     }
 
+    if (req.method === "POST" && pathname === "/api/architect/v1/provider-readiness") {
+      await handleArchitectProviderReadinessRequest(req, res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/onboarding-events") {
+      await handleArchitectOnboardingEventsRead(res);
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/architect/v1/onboarding-events") {
+      await handleArchitectOnboardingEventRequest(req, res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/repo-setup") {
+      await handleArchitectRepoSetupRead(res);
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/architect/v1/repo-setup") {
+      await handleArchitectRepoSetupWrite(req, res);
+      return true;
+    }
+
     if (req.method === "POST" && pathname === "/api/architect/v1/selection") {
       await handleArchitectSelectionRequest(req, res);
       return true;
@@ -9866,6 +11151,25 @@ export async function handleArchitectRoute(
 
     if (req.method === "GET" && pathname === "/api/architect/v1/plans") {
       await handlePlansIndex(req, res);
+      return true;
+    }
+
+    if (req.method === "GET" && (pathname === "/api/architect/v1/plugin-tabs" || pathname === "/api/architect/v1/plugin-tabs/")) {
+      await handleArchitectPluginTabsIndex(req, res);
+      return true;
+    }
+
+    const pluginTabSubroute = parseArchitectPluginTabSubroute(pathname);
+    if (pluginTabSubroute && !pluginTabSubroute.tabTypeId) {
+      jsonError(res, 400, "bad_request", "Missing Architect plugin tab type id");
+      return true;
+    }
+    if (req.method === "GET" && pluginTabSubroute?.suffix === "snapshot") {
+      await handleArchitectPluginTabSnapshot(req, res, pluginTabSubroute.tabTypeId);
+      return true;
+    }
+    if (req.method === "POST" && pluginTabSubroute?.suffix === "actions") {
+      await handleArchitectPluginTabAction(req, res, pluginTabSubroute.tabTypeId);
       return true;
     }
 

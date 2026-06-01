@@ -100,11 +100,14 @@ PluginContext</a>
 <ul>
 <li><a href="#51-the-allow-surface" id="toc-51-the-allow-surface">5.1
 The allow surface</a></li>
-<li><a href="#52-the-deny-list" id="toc-52-the-deny-list">5.2 The deny
+<li><a href="#52-architect-tabs-and-plan-state"
+id="toc-52-architect-tabs-and-plan-state">5.2 Architect tabs and plan
+state</a></li>
+<li><a href="#53-the-deny-list" id="toc-53-the-deny-list">5.3 The deny
 list</a></li>
-<li><a href="#53-the-signal" id="toc-53-the-signal">5.3 The
+<li><a href="#54-the-signal" id="toc-54-the-signal">5.4 The
 <code>signal</code></a></li>
-<li><a href="#54-logging" id="toc-54-logging">5.4 Logging</a></li>
+<li><a href="#55-logging" id="toc-55-logging">5.5 Logging</a></li>
 </ul></li>
 </ul>
 </nav>
@@ -128,15 +131,26 @@ context-api</a> for the strict TypeScript signatures.</p>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> policies<span class="op">:</span>       { propose }<span class="op">;</span></span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> archetypes<span class="op">:</span>     { registerProvider }<span class="op">;</span></span>
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> markdownFences<span class="op">:</span> { register }<span class="op">;</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span> AbortSignal<span class="op">;</span>          <span class="co">// aborted on disable / timeout</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> architect<span class="op">:</span>      { tabs<span class="op">:</span> { register }<span class="op">;</span> planState<span class="op">:</span> { read<span class="op">;</span> write } }<span class="op">;</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span> AbortSignal<span class="op">;</span>          <span class="co">// aborted on disable / timeout</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <p>Every register / propose / subscribe call returns an
 <code>unregister</code>/<code>unsubscribe</code> function. <strong>You
 do not need to call it on shutdown</strong> — the host prunes all
 contributions automatically when the plugin is disabled or the instance
 shuts down. Use the returned functions only when you want a contribution
 to disappear <em>before</em> deactivation (rare).</p>
-<h2 id="52-the-deny-list">5.2 The deny list</h2>
+<h2 id="52-architect-tabs-and-plan-state">5.2 Architect tabs and plan
+state</h2>
+<p><code>ctx.architect.tabs.register()</code> contributes a
+manifest-declared standalone Architect tab rendered by the host.
+<code>ctx.architect.planState.read()</code> and <code>.write()</code>
+access daemon-owned namespaced state with explicit plan ids and revision
+tokens. Browser clients receive validated descriptors and snapshots
+only. See <a href="13-architect-tabs.html">Architect tabs</a>.</p>
+<p><code>ctx.ui.register()</code> remains a separate metadata-only
+semantic UI registry seam; it does not execute browser code.</p>
+<h2 id="53-the-deny-list">5.3 The deny list</h2>
 <p><code>ctx</code> deliberately does <strong>not</strong> expose:</p>
 <ul>
 <li>Raw <code>fs</code>, <code>process</code>, <code>require</code>,
@@ -161,7 +175,7 @@ plugins run in the daemon's process and <em>can</em> reach Node globals
 if they want to. Doing so is a trust violation and grounds for
 quarantine, not a sandbox escape. See §9 for the full trust
 narrative.</p>
-<h2 id="53-the-signal">5.3 The <code>signal</code></h2>
+<h2 id="54-the-signal">5.4 The <code>signal</code></h2>
 <p><code>ctx.signal</code> is an <code>AbortSignal</code> the host
 aborts when:</p>
 <ul>
@@ -174,7 +188,7 @@ aborts when:</p>
 (<code>fetch(url, { signal })</code>, your own loops). You are not
 required to use it, but ignoring it means your plugin can keep running
 for a few extra seconds during shutdown.</p>
-<h2 id="54-logging">5.4 Logging</h2>
+<h2 id="55-logging">5.5 Logging</h2>
 <p><code>ctx.logger</code> is namespaced under
 <code>plugin:&lt;id&gt;</code>. Lines appear in the daemon's log stream
 and are mirrored to the event bus as standard log events. Do

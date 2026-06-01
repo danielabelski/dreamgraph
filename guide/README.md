@@ -41,6 +41,7 @@ You do **not** need to read the guide top-to-bottom. Jump to whichever page matc
 | 13 | [Glossary](13-glossary.md) | Plain-language definitions for DreamGraph terms. |
 | 14 | [Adaptive Future Engine](14-adaptive-future-engine.md) | What AFE is, where it runs, how it is deployed, and how to read its audit trails. |
 | 15 | [Architect beta](15-architect-beta.md) | The standalone browser-based architect beta introduced in v12.0.0 Hippodamus. |
+| 16 | [Architect For Dummies](architect-for-dummies.md) | Task-first onboarding, screen tour, recipes, slash commands, and authority limits. |
 
 ## Topical reference (read as needed)
 
@@ -51,6 +52,7 @@ You do **not** need to read the guide top-to-bottom. Jump to whichever page matc
 | [Glossary](13-glossary.md) | "Wait, what's a *latent candidate* again?" |
 | [Adaptive Future Engine](14-adaptive-future-engine.md) | You want to understand candidate-future ranking and audit trails. |
 | [Architect beta](15-architect-beta.md) | You want the standalone browser architect surface rather than the VS Code architect. |
+| [Architect For Dummies](architect-for-dummies.md) | You want the shortest task-first walkthrough of the current Architect controls. |
 
 ---
 

@@ -188,6 +188,22 @@ capabilities</a>:</p>
 <td><code>markdown:register_fence</code></td>
 <td>register a webview markdown fence language</td>
 </tr>
+<tr>
+<td><code>architect:register_tab</code></td>
+<td>register a manifest-declared standalone Architect tab</td>
+</tr>
+<tr>
+<td><code>architect:read_plan</code></td>
+<td>read explicit plan-bound Architect state</td>
+</tr>
+<tr>
+<td><code>architect:write_plan_state</code></td>
+<td>persist daemon-owned namespaced Architect state</td>
+</tr>
+<tr>
+<td><code>architect:register_sidebar_summary</code></td>
+<td>project Architect sidebar summary and badges</td>
+</tr>
 </tbody>
 </table>
 <p>A capability not present in the manifest's <code>capabilities</code>
@@ -267,6 +283,22 @@ registry)</td>
 <td><code>register_provider_adapter</code></td>
 <td>(reserved) provider adapter</td>
 </tr>
+<tr>
+<td><code>render_architect_tab</code></td>
+<td>project a host-rendered standalone Architect tab</td>
+</tr>
+<tr>
+<td><code>read_architect_plan_projection</code></td>
+<td>load an explicit plan-bound Architect snapshot</td>
+</tr>
+<tr>
+<td><code>write_architect_plan_state</code></td>
+<td>persist daemon-owned namespaced Architect state</td>
+</tr>
+<tr>
+<td><code>render_architect_sidebar_summary</code></td>
+<td>project sidebar summary and badge data</td>
+</tr>
 </tbody>
 </table>
 <h2 id="45-naming-rules--both-ids-and-tool-names">4.5 Naming rules —
@@ -311,6 +343,13 @@ dot-prefixed)</td>
 <td>lowercase <code>[a-z0-9._-]+</code>, no collision</td>
 <td><code>markdown_fence_language_invalid</code> /
 <code>_collision</code></td>
+</tr>
+<tr>
+<td>Architect tab <code>id</code></td>
+<td>starts with <code>&lt;plugin-id&gt;.</code>; runtime declaration
+matches manifest</td>
+<td><code>architect_tab_id_unprefixed</code> /
+<code>architect_tab_undeclared</code></td>
 </tr>
 </tbody>
 </table>

@@ -1,46 +1,21 @@
-# DreamGraph SDK M0/M1 Foundation
+# DreamGraph Plugin SDK
 
-This directory records the operational contract for the first SDK foundation phase.
+This directory documents the shipped DreamGraph plugin SDK and trusted in-process host runtime.
 
 ## Scope
 
-M0/M1 establishes package shape, manifest validation, vocabulary, and audit discipline. It does **not** load or execute third-party plugins.
+`@dreamgraph/sdk` provides plugin authoring types, manifest validation, telemetry vocabulary, reject reasons, declaration helpers, and public seam contracts. `@dreamgraph/host` provides the daemon-owned `PluginContext` runtime boundary. Plugins are discovered through normal instance administration, validated before import, and activated only under the existing trust and engine compatibility rules.
 
-Implemented package boundaries:
+The standalone Architect extension seam is first-class and declarative. Trusted plugins can register host-rendered tab types through `ctx.architect.tabs.register()` and persist namespaced plan state through `ctx.architect.planState`. Browser clients receive validated descriptors and JSON snapshots through versioned daemon routes; they do not load plugin modules or gain repository, plan-file, graph, or filesystem authority.
 
-- `@dreamgraph/sdk`: plugin authoring types, manifest schema, no-op declaration helpers.
-- `@dreamgraph/host`: host-facing status/administrative stub only.
+## Documentation
 
-## M1 boundary
+- [Plugin Developer Guide](plugin-developer-guide/00-index.md)
+- [Plugin Reference Manual](plugin-reference/00-index.md)
+- [PluginContext overview](plugin-context.md)
+- [`examples/hello-events`](../../examples/hello-events/) for the broad SDK seam walkthrough
+- [`examples/action-checklist`](../../examples/action-checklist/) for standalone Architect tabs, explicit plan scope, daemon persistence, governed actions, sidebar summaries, and badges
 
-Allowed in this phase:
+## Trust boundary
 
-- `definePlugin`, `defineTool`, `defineResource`, and event handler declaration helpers.
-- Zod-backed manifest validation.
-- Stable vs experimental event kind exports.
-- Schema fixtures and package validation.
-
-Not allowed in this phase:
-
-- Runtime plugin loading.
-- In-process plugin execution.
-- Host-mediated network/process authority.
-- Provider adapter execution.
-- New seams beyond the roadmap vocabulary.
-
-## Capability vocabulary locked for M1
-
-- `events:read`
-- `events:read:experimental`
-- `events:emit`
-- `tools:register`
-- `resources:register`
-- `resources:read`
-- `ui:register`
-- `policy:propose`
-- `schedule:register_action`
-- `webhooks:emit`
-- `archetypes:provide`
-- `providers:register`
-
-Experimental event subscriptions must declare `events:read:experimental` once host enforcement exists. Until then, the SDK only exposes the vocabulary and manifest schema.
+Trusted in-process plugin execution is an API trust boundary, not a sandbox. The host mediates supported seams, applies capability and effect gates, emits telemetry, and removes active contributions on unload or reload. Arbitrary browser JavaScript, HTML, remote scripts, iframes, direct DOM callbacks, and direct browser persistence are not Architect SDK surfaces.

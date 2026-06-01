@@ -53,6 +53,12 @@ import {
   removePluginMarkdownFences,
   removePluginPolicyProposals,
 } from "./closure-stores.js";
+import {
+  createArchitectPlanStateSurface,
+  registerArchitectTab,
+  removeArchitectTabsByPlugin,
+  _resetArchitectContributionsForTest,
+} from "./architect-contributions.js";
 
 class GraphEventBusTelemetryBridge implements TelemetryEmitter {
   emit<K extends PluginTelemetryEventKind>(
@@ -391,6 +397,23 @@ async function activateLoadedPlugin(
           definition,
         });
       },
+    },
+    architect: {
+      tabs: {
+        register(definition) {
+          const unregister = registerArchitectTab(plugin.manifest, definition);
+          unsubscribers.push(unregister);
+          telemetry.emit("plugin.output.accepted", buildAccepted({
+            identity,
+            correlation_id: `${plugin.manifest.id}:${definition.id}:${Date.now().toString(36)}`,
+            effect: "render_architect_tab",
+            seam: "architect_tab",
+            target: definition.id,
+          }));
+          return unregister;
+        },
+      },
+      planState: createArchitectPlanStateSurface(plugin.manifest),
     },
     signal: abortController.signal,
   });
@@ -1119,6 +1142,7 @@ export async function unloadPluginById(
   for (const c of _contributedResources.get(pluginId) ?? []) c.active = false;
   _contributedTools.delete(pluginId);
   _contributedResources.delete(pluginId);
+  removeArchitectTabsByPlugin(pluginId);
 
   // M6 — drop any UI elements this plugin contributed to ui_registry.json.
   // We do this best-effort: a registry write failure must not block unload.
@@ -1248,4 +1272,5 @@ export function _resetPluginManagerForTest(): void {
   _lastDiscovered = [];
   _contributedTools.clear();
   _contributedResources.clear();
+  _resetArchitectContributionsForTest();
 }

@@ -19,6 +19,7 @@ source wins (and a doc bug should be filed).
 7. [CLI](07-cli.md) — `dg plugin` subcommands.
 8. [Host configuration](08-host-config.md) — env vars and `instance.json`.
 9. [Telemetry events](09-telemetry-events.md) — the `plugin.*` stream.
+10. [Architect tabs](10-architect-tabs.md) — declarative tab contract, plan state, routes, lifecycle, and telemetry.
 
 ## Conventions
 

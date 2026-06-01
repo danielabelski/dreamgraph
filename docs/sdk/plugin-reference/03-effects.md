@@ -28,6 +28,10 @@ The host enforces both at every host-mediated effect call:
 | `provide_archetypes`         | Feed federation archetypes.                                               | `archetypes:provide`        |
 | `render_markdown_fence`      | Declare a webview markdown fence.                                         | `markdown:register_fence`   |
 | `register_provider_adapter`  | (reserved, post-1.0) provider adapter.                                    | `providers:register`        |
+| `render_architect_tab`       | Project a host-rendered standalone Architect tab.                         | `architect:register_tab`    |
+| `read_architect_plan_projection` | Load explicit plan-bound Architect state.                           | `architect:read_plan`       |
+| `write_architect_plan_state` | Persist daemon-owned namespaced Architect state.                          | `architect:write_plan_state` |
+| `render_architect_sidebar_summary` | Project sidebar summary and badge data.                             | `architect:register_sidebar_summary` |
 
 ## Always-forbidden effects
 
@@ -49,3 +53,6 @@ defensive intent.
 | `ctx.policies.propose`                            | `propose_policy`                     |
 | `ctx.archetypes.registerProvider`                 | `provide_archetypes`                 |
 | `ctx.markdownFences.register`                     | `render_markdown_fence`              |
+| `ctx.architect.tabs.register`                     | `render_architect_tab`               |
+| `ctx.architect.planState.read`                    | `read_architect_plan_projection`     |
+| `ctx.architect.planState.write`                   | `write_architect_plan_state`         |

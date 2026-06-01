@@ -1,4 +1,8 @@
 import type {
+  ArchitectPlanContext,
+  ArchitectPlanWriteContext,
+  ArchitectStoredState,
+  ArchitectTabTypeDefinition,
   ArchetypeProviderDefinition,
   MarkdownFenceDefinition,
   PluginManifest,
@@ -122,6 +126,15 @@ export interface PluginMarkdownFencesSurface {
   register(definition: MarkdownFenceDefinition): () => void;
 }
 
+/** Declarative Architect tabs with daemon-owned plan state. */
+export interface PluginArchitectSurface {
+  tabs: { register(definition: ArchitectTabTypeDefinition): () => void };
+  planState: {
+    read<T>(key: string, context: ArchitectPlanContext): Promise<ArchitectStoredState<T> | null>;
+    write<T>(key: string, value: T, context: ArchitectPlanWriteContext): Promise<ArchitectStoredState<T>>;
+  };
+}
+
 export interface PluginContext {
   readonly plugin: PluginIdentitySurface;
   readonly instance: PluginInstanceSurface;
@@ -133,6 +146,7 @@ export interface PluginContext {
   readonly policies: PluginPoliciesSurface;
   readonly archetypes: PluginArchetypesSurface;
   readonly markdownFences: PluginMarkdownFencesSurface;
+  readonly architect: PluginArchitectSurface;
   readonly signal: AbortSignal;
 }
 
@@ -147,6 +161,7 @@ export interface PluginContextDependencies {
   policies: PluginPoliciesSurface;
   archetypes: PluginArchetypesSurface;
   markdownFences: PluginMarkdownFencesSurface;
+  architect: PluginArchitectSurface;
   signal: AbortSignal;
 }
 
@@ -164,6 +179,7 @@ export function createPluginContext(
     policies: deps.policies,
     archetypes: deps.archetypes,
     markdownFences: deps.markdownFences,
+    architect: deps.architect,
     signal: deps.signal,
   };
 }

@@ -145,6 +145,26 @@ registry).</td>
 <td>(reserved, post-1.0) provider adapter.</td>
 <td><code>providers:register</code></td>
 </tr>
+<tr>
+<td><code>render_architect_tab</code></td>
+<td>Project a host-rendered standalone Architect tab.</td>
+<td><code>architect:register_tab</code></td>
+</tr>
+<tr>
+<td><code>read_architect_plan_projection</code></td>
+<td>Load explicit plan-bound Architect state.</td>
+<td><code>architect:read_plan</code></td>
+</tr>
+<tr>
+<td><code>write_architect_plan_state</code></td>
+<td>Persist daemon-owned namespaced Architect state.</td>
+<td><code>architect:write_plan_state</code></td>
+</tr>
+<tr>
+<td><code>render_architect_sidebar_summary</code></td>
+<td>Project sidebar summary and badge data.</td>
+<td><code>architect:register_sidebar_summary</code></td>
+</tr>
 </tbody>
 </table>
 <h2 id="always-forbidden-effects">Always-forbidden effects</h2>
@@ -194,6 +214,18 @@ completeness so plugin authors know to put them in
 <tr>
 <td><code>ctx.markdownFences.register</code></td>
 <td><code>render_markdown_fence</code></td>
+</tr>
+<tr>
+<td><code>ctx.architect.tabs.register</code></td>
+<td><code>render_architect_tab</code></td>
+</tr>
+<tr>
+<td><code>ctx.architect.planState.read</code></td>
+<td><code>read_architect_plan_projection</code></td>
+</tr>
+<tr>
+<td><code>ctx.architect.planState.write</code></td>
+<td><code>write_architect_plan_state</code></td>
 </tr>
 </tbody>
 </table>

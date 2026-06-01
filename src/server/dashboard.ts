@@ -21,6 +21,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve, basename, extname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { config, updateDatabaseConnectionString } from "../config/config.js";
 import { engine } from "../cognitive/engine.js";
 import { getActiveScope, isInstanceMode, getToolCallCount, getEffectiveDataDir } from "../instance/lifecycle.js";
@@ -42,6 +43,8 @@ import { testDbConnection, resetDbPool, runDatastoreScan } from "../tools/db-sen
 import { loadJsonData, loadJsonArray } from "../utils/cache.js";
 import { writeEngineEnv } from "../utils/engine-env.js";
 import { logger } from "../utils/logger.js";
+import { buildOnboardingReadinessProjection } from "../architect/onboarding-readiness.js";
+import { recordOnboardingTelemetryEvent } from "../architect/onboarding-telemetry.js";
 
 /* ------------------------------------------------------------------ */
 /*  Dashboard context — set by index.ts at HTTP startup               */
@@ -53,6 +56,7 @@ interface DashboardContext {
 }
 
 let _ctx: DashboardContext = { getSessionCount: () => 0, port: 8100 };
+const PACKAGE_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 
 /**
  * Persist the current LLM configuration (base + dreamer + normalizer)
@@ -287,6 +291,19 @@ const CSS = `
   .index-card:hover { border-color: var(--accent); text-decoration: none; }
   .index-card h3 { color: var(--text); margin: 0 0 8px; font-size: 18px; }
   .index-card p { color: var(--text-dim); font-size: 13px; margin: 0; }
+  .start-here { border: 1px solid rgba(88,166,255,.55); background: linear-gradient(135deg, rgba(88,166,255,.12), var(--surface) 42%); border-radius: 10px; padding: 24px; }
+  .start-here-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .start-here-header h2 { border: 0; color: var(--text); font-size: 22px; margin: 0 0 6px; padding: 0; }
+  .start-here-header p, .readiness-detail, .readiness-repos { color: var(--text-dim); font-size: 13px; }
+  .start-here-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .start-here-actions .btn:hover, .readiness-action:hover { text-decoration: none; }
+  .readiness-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 20px; }
+  .readiness-summary-item { background: rgba(13,17,23,.45); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  .readiness-summary-item strong { display: block; font-size: 12px; margin-bottom: 5px; }
+  .readiness-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 12px; margin-top: 12px; }
+  .readiness-check { border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .readiness-check-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .readiness-action { display: inline-block; margin-top: 8px; font-size: 12px; font-weight: 600; }
 
   /* Form styles for editable config */
   .config-form { margin-top: 12px; }
@@ -339,6 +356,8 @@ const CSS = `
 
   @media (max-width: 600px) {
     .grid { grid-template-columns: 1fr; }
+    .start-here-header { flex-direction: column; }
+    .readiness-checks { grid-template-columns: 1fr; }
     main { padding: 0 12px; }
     .config-form .form-row { flex-direction: column; align-items: flex-start; }
     .config-form label { min-width: auto; }
@@ -353,6 +372,27 @@ const CSS = `
 async function renderIndex(): Promise<string> {
   const scope = getActiveScope();
   const projectName = scope?.projectRoot?.split(/[\\/]/).pop() ?? "—";
+  const readiness = buildOnboardingReadinessProjection();
+
+  const readinessBadge = (status: string): string => {
+    const badgeClass = status === "ready" || status === "attached"
+      ? "badge-green"
+      : status === "useful_later"
+        ? "badge-blue"
+        : "badge-yellow";
+    return `<span class="badge ${badgeClass}">${esc(status.replace(/_/g, " "))}</span>`;
+  };
+  const actionHref = (action: typeof readiness.suggested_next_action): string =>
+    action.kind === "open_route" ? action.target : "/architect";
+  const renderCheck = (check: typeof readiness.required_to_start[number]): string => `
+      <div class="readiness-check">
+        <div class="readiness-check-head"><strong>${esc(check.label)}</strong>${readinessBadge(check.status)}</div>
+        <div class="readiness-detail">${esc(check.detail)}</div>
+        ${check.action ? `<a class="readiness-action" href="${escAttr(actionHref(check.action))}">${esc(check.action.label)} →</a>` : ""}
+      </div>`;
+  const repositoryNames = readiness.repositories.names.length > 0
+    ? readiness.repositories.names.map((name) => esc(name)).join(", ")
+    : "No repositories connected yet";
 
   let body = `
     <div class="index-hero">
@@ -363,6 +403,36 @@ async function renderIndex(): Promise<string> {
         : "Running in legacy mode (no instance isolation)"
       }</p>
     </div>
+    <section class="start-here" aria-labelledby="start-here-title">
+      <div class="start-here-header">
+        <div>
+          <h2 id="start-here-title">Start Here</h2>
+          <p>Check the basics, fix the first item that needs attention, then open Architect.</p>
+        </div>
+        ${readinessBadge(readiness.suggested_next_action.id === "open_architect" ? "ready" : "needs_attention")}
+      </div>
+      <div class="readiness-summary">
+        <div class="readiness-summary-item"><strong>DreamGraph service</strong>${readinessBadge(readiness.service.status)}</div>
+        <div class="readiness-summary-item"><strong>Project</strong>${readinessBadge(readiness.project.status)}</div>
+        <div class="readiness-summary-item"><strong>Project map</strong>${readinessBadge(readiness.project_map.status)}</div>
+        <div class="readiness-summary-item"><strong>AI connection</strong>${readinessBadge(readiness.architect_runtime.status)}</div>
+        <div class="readiness-summary-item"><strong>Repositories</strong><span class="mono">${readiness.repositories.count}</span> connected</div>
+      </div>
+      <p class="readiness-repos" style="margin-top:10px">Connected repositories: ${repositoryNames}</p>
+      <p style="margin-top:12px"><strong>Recommended next action:</strong> ${esc(readiness.suggested_next_action.label)}</p>
+      <div class="start-here-actions">
+        <a class="btn btn-primary" href="/architect">Open Architect</a>
+        <a class="btn btn-secondary" href="#setup-details">View setup details</a>
+        <a class="btn btn-secondary" href="/architect-guide">Architect beginner guide</a>
+        ${readiness.suggested_next_action.id === "open_architect" ? "" : `<a class="btn btn-secondary" href="${escAttr(actionHref(readiness.suggested_next_action))}">${esc(readiness.suggested_next_action.label)}</a>`}
+      </div>
+      <div id="setup-details">
+        <h3>Required to start</h3>
+        <div class="readiness-checks">${readiness.required_to_start.map(renderCheck).join("")}</div>
+        <h3>Useful later</h3>
+        <div class="readiness-checks">${readiness.useful_later.map(renderCheck).join("")}</div>
+      </div>
+    </section>
     <div class="index-cards">
       <a class="index-card" href="/status">
         <h3>📊 Status</h3>
@@ -379,6 +449,10 @@ async function renderIndex(): Promise<string> {
       <a class="index-card" href="/docs">
         <h3>📖 Docs</h3>
         <p>Project documentation — architecture, cognitive engine, tools reference, data model, workflows.</p>
+      </a>
+      <a class="index-card" href="/architect-guide">
+        <h3>Architect Beginner Guide</h3>
+        <p>Task-first setup, screen tour, recipes, slash commands, and authority limits.</p>
       </a>
       <a class="index-card" href="/health">
         <h3>💚 Health</h3>
@@ -2322,6 +2396,12 @@ async function renderDocs(): Promise<string> {
   return renderDocFile(files[0], files);
 }
 
+async function renderArchitectGuide(): Promise<string> {
+  const content = await readFile(resolve(PACKAGE_ROOT, "guide", "architect-for-dummies.md"), "utf-8");
+  const body = `<style>${MD_CSS}</style><article class="docs-content"><p><a href="/">Back to Dashboard</a> | <a href="/architect">Open Architect</a></p>${markdownToHtml(content)}</article>`;
+  return await shell("Architect Beginner Guide", body, "docs");
+}
+
 async function renderDocFile(filename: string, files?: string[]): Promise<string> {
   if (!files) files = await getDocFiles();
 
@@ -2417,6 +2497,7 @@ export async function handleDashboardRoute(
           available: status.llm?.available ?? false,
         },
         instance: isInstanceMode() ? getActiveScope()?.uuid : null,
+        onboarding_readiness: buildOnboardingReadinessProjection(),
       });
     } else {
       html(res, 200, await renderHealth());
@@ -2433,6 +2514,11 @@ export async function handleDashboardRoute(
     const url = new URL(req.url ?? "/config", `http://${req.headers.host ?? 'localhost'}`);
     const saved = url.searchParams.get("saved") ?? undefined;
     html(res, 200, await renderConfig(saved));
+    return true;
+  }
+  if (req.method === "GET" && pathname === "/architect-guide") {
+    await recordOnboardingTelemetryEvent({ event: "guide_opened", source: "dashboard" });
+    html(res, 200, await renderArchitectGuide());
     return true;
   }
   if (req.method === "GET" && pathname === "/docs") {

@@ -20,6 +20,7 @@ interface PluginContext {
   readonly policies:       { propose };
   readonly archetypes:     { registerProvider };
   readonly markdownFences: { register };
+  readonly architect:      { tabs: { register }; planState: { read; write } };
   readonly signal: AbortSignal;          // aborted on disable / timeout
 }
 ```
@@ -30,7 +31,13 @@ contributions automatically when the plugin is disabled or the instance shuts
 down. Use the returned functions only when you want a contribution to disappear
 *before* deactivation (rare).
 
-## 5.2 The deny list
+## 5.2 Architect tabs and plan state
+
+`ctx.architect.tabs.register()` contributes a manifest-declared standalone Architect tab rendered by the host. `ctx.architect.planState.read()` and `.write()` access daemon-owned namespaced state with explicit plan ids and revision tokens. Browser clients receive validated descriptors and snapshots only. See [Architect tabs](13-architect-tabs.md).
+
+`ctx.ui.register()` remains a separate metadata-only semantic UI registry seam; it does not execute browser code.
+
+## 5.3 The deny list
 
 `ctx` deliberately does **not** expose:
 
@@ -51,7 +58,7 @@ daemon's process and *can* reach Node globals if they want to. Doing so is a
 trust violation and grounds for quarantine, not a sandbox escape. See §9 for
 the full trust narrative.
 
-## 5.3 The `signal`
+## 5.4 The `signal`
 
 `ctx.signal` is an `AbortSignal` the host aborts when:
 
@@ -64,7 +71,7 @@ Pass it to long-running work that supports cancellation (`fetch(url, { signal })
 your own loops). You are not required to use it, but ignoring it means your
 plugin can keep running for a few extra seconds during shutdown.
 
-## 5.4 Logging
+## 5.5 Logging
 
 `ctx.logger` is namespaced under `plugin:<id>`. Lines appear in the daemon's log
 stream and are mirrored to the event bus as standard log events. Do **not** use

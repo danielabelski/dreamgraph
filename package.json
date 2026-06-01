@@ -72,6 +72,7 @@
     "@types/pg": "^8.20.0",
     "@types/turndown": "^5.0.6",
     "@types/ws": "^8.18.1",
+    "js-dos": "8.3.20",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

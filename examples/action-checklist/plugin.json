@@ -1,0 +1,12 @@
+{
+  "id": "examples.action-checklist",
+  "version": "1.0.0",
+  "displayName": "Action Checklist",
+  "description": "Reference declarative standalone Architect checklist tab.",
+  "engine": { "dreamgraph": ">=10.0.0" },
+  "main": "index.js",
+  "intent": "Contribute a daemon-persisted plan-bound Action Checklist Architect tab.",
+  "capabilities": ["architect:register_tab", "architect:read_plan", "architect:write_plan_state", "architect:register_sidebar_summary"],
+  "expectedEffects": ["render_architect_tab", "read_architect_plan_projection", "write_architect_plan_state", "render_architect_sidebar_summary"],
+  "architectTabs": [{ "id": "examples.action-checklist.checklist", "renderer": "checklist", "planConnectivity": "required" }]
+}

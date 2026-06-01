@@ -95,7 +95,8 @@
 <body>
 <header id="title-block-header">
 <h1 class="title">DreamGraph Plugin Developer Manual</h1>
-<p class="subtitle">Guide and Reference Manual --- v10.5.0 Renata</p>
+<p class="subtitle">Guide and Reference Manual --- v12.1.0 Living
+DreamGraph</p>
 </header>
 <nav id="TOC" role="doc-toc">
 <ul>
@@ -191,11 +192,14 @@ PluginContext</a>
 <ul>
 <li><a href="#51-the-allow-surface" id="toc-51-the-allow-surface">5.1
 The allow surface</a></li>
-<li><a href="#52-the-deny-list" id="toc-52-the-deny-list">5.2 The deny
+<li><a href="#52-architect-tabs-and-plan-state"
+id="toc-52-architect-tabs-and-plan-state">5.2 Architect tabs and plan
+state</a></li>
+<li><a href="#53-the-deny-list" id="toc-53-the-deny-list">5.3 The deny
 list</a></li>
-<li><a href="#53-the-signal" id="toc-53-the-signal">5.3 The
+<li><a href="#54-the-signal" id="toc-54-the-signal">5.4 The
 <code>signal</code></a></li>
-<li><a href="#54-logging" id="toc-54-logging">5.4 Logging</a></li>
+<li><a href="#55-logging" id="toc-55-logging">5.5 Logging</a></li>
 </ul></li>
 <li><a href="#6-seams-tools-and-resources"
 id="toc-6-seams-tools-and-resources">6. Seams: tools and resources</a>
@@ -294,6 +298,18 @@ id="toc-123-pitfalls-compendium">12.3 Pitfalls (compendium)</a></li>
 <li><a href="#124-the-shipping-checklist"
 id="toc-124-the-shipping-checklist">12.4 The shipping checklist</a></li>
 </ul></li>
+<li><a href="#13-architect-tabs" id="toc-13-architect-tabs">13.
+Architect tabs</a>
+<ul>
+<li><a href="#131-manifest-declaration"
+id="toc-131-manifest-declaration">13.1 Manifest declaration</a></li>
+<li><a href="#132-registering-a-tab" id="toc-132-registering-a-tab">13.2
+Registering a tab</a></li>
+<li><a href="#133-browser-routes" id="toc-133-browser-routes">13.3
+Browser routes</a></li>
+<li><a href="#134-walkthrough" id="toc-134-walkthrough">13.4
+Walkthrough</a></li>
+</ul></li>
 <li><a href="#part-ii-----plugin-reference-manual"
 id="toc-part-ii-----plugin-reference-manual">Part II --- Plugin
 Reference Manual</a></li>
@@ -385,9 +401,29 @@ id="toc-discovery-roots-recap">Discovery roots (recap)</a></li>
 <li><a href="#telemetry-events-normative"
 id="toc-telemetry-events-normative">Telemetry events (normative)</a>
 <ul>
-<li><a href="#common-base" id="toc-common-base">Common base</a></li>
-<li><a href="#per-kind" id="toc-per-kind">Per kind</a></li>
+<li><a href="#event-kinds" id="toc-event-kinds">Event kinds</a></li>
+<li><a href="#handler-seams" id="toc-handler-seams">Handler
+seams</a></li>
+<li><a href="#accepted-output-seams"
+id="toc-accepted-output-seams">Accepted output seams</a></li>
+<li><a href="#rejected-output-seams"
+id="toc-rejected-output-seams">Rejected output seams</a></li>
 <li><a href="#stability" id="toc-stability">Stability</a></li>
+</ul></li>
+<li><a href="#architect-tabs-normative"
+id="toc-architect-tabs-normative">Architect tabs (normative)</a>
+<ul>
+<li><a href="#manifest-declaration"
+id="toc-manifest-declaration">Manifest declaration</a></li>
+<li><a href="#context-api" id="toc-context-api">Context API</a></li>
+<li><a href="#tab-definition" id="toc-tab-definition">Tab
+definition</a></li>
+<li><a href="#capabilities-and-effects"
+id="toc-capabilities-and-effects">Capabilities and effects</a></li>
+<li><a href="#lifecycle-and-telemetry"
+id="toc-lifecycle-and-telemetry">Lifecycle and telemetry</a></li>
+<li><a href="#browser-contract" id="toc-browser-contract">Browser
+contract</a></li>
 </ul></li>
 </ul>
 </nav>
@@ -398,10 +434,12 @@ Guide</h1>
 Guide</h1>
 <p><strong>Audience:</strong> Engineers writing third-party plugins
 against <code>@dreamgraph/sdk</code>. <strong>Engine baseline:</strong>
-v10.5.0 "Renata" (M0–M6 implemented; M5 webhooks shipped; M4 schedule
-actions deferred). <strong>Companion:</strong> see the <a
-href="../plugin-reference/00-index.md">Plugin Reference Manual</a> for
-strict, normative tables.</p>
+v12.1.0 "Living DreamGraph" (M0-M6 implemented; M5 webhooks shipped; M4
+schedule actions deferred; Adaptive Future audit metadata available;
+standalone architect projections include pulse, playback, tension
+clusters, desires, and living-plan state). <strong>Companion:</strong>
+see the <a href="../plugin-reference/00-index.md">Plugin Reference
+Manual</a> for strict, normative tables.</p>
 <p>This guide is task-oriented. It walks you from "what is a plugin"
 through a working example, then explains every seam, the trust model,
 lifecycle, telemetry, testing, and the practices DreamGraph expects.</p>
@@ -431,6 +469,9 @@ lifecycle</a> — discovery, trust, restart, hot-disable.</li>
 testing</a> — <code>plugin.*</code> events and the test harness.</li>
 <li><a href="12-best-practices.md">Best practices and pitfalls</a> —
 naming, naming, naming. And quotas.</li>
+<li><a href="13-architect-tabs.md">Architect tabs</a> — declarative
+standalone Architect tabs, explicit plan scope, persistence, and
+actions.</li>
 </ol>
 <blockquote>
 <p><strong>Building this guide locally as HTML/PDF:</strong> run
@@ -903,6 +944,22 @@ capabilities</a>:</p>
 <td><code>markdown:register_fence</code></td>
 <td>register a webview markdown fence language</td>
 </tr>
+<tr>
+<td><code>architect:register_tab</code></td>
+<td>register a manifest-declared standalone Architect tab</td>
+</tr>
+<tr>
+<td><code>architect:read_plan</code></td>
+<td>read explicit plan-bound Architect state</td>
+</tr>
+<tr>
+<td><code>architect:write_plan_state</code></td>
+<td>persist daemon-owned namespaced Architect state</td>
+</tr>
+<tr>
+<td><code>architect:register_sidebar_summary</code></td>
+<td>project Architect sidebar summary and badges</td>
+</tr>
 </tbody>
 </table>
 <p>A capability not present in the manifest's <code>capabilities</code>
@@ -982,6 +1039,22 @@ registry)</td>
 <td><code>register_provider_adapter</code></td>
 <td>(reserved) provider adapter</td>
 </tr>
+<tr>
+<td><code>render_architect_tab</code></td>
+<td>project a host-rendered standalone Architect tab</td>
+</tr>
+<tr>
+<td><code>read_architect_plan_projection</code></td>
+<td>load an explicit plan-bound Architect snapshot</td>
+</tr>
+<tr>
+<td><code>write_architect_plan_state</code></td>
+<td>persist daemon-owned namespaced Architect state</td>
+</tr>
+<tr>
+<td><code>render_architect_sidebar_summary</code></td>
+<td>project sidebar summary and badge data</td>
+</tr>
 </tbody>
 </table>
 <h2 id="45-naming-rules--both-ids-and-tool-names">4.5 Naming rules —
@@ -1027,6 +1100,13 @@ dot-prefixed)</td>
 <td><code>markdown_fence_language_invalid</code> /
 <code>_collision</code></td>
 </tr>
+<tr>
+<td>Architect tab <code>id</code></td>
+<td>starts with <code>&lt;plugin-id&gt;.</code>; runtime declaration
+matches manifest</td>
+<td><code>architect_tab_id_unprefixed</code> /
+<code>architect_tab_undeclared</code></td>
+</tr>
 </tbody>
 </table>
 <p><strong>Per ADR-128</strong>, tool names must carry primary
@@ -1057,15 +1137,26 @@ class="sourceCode ts"><code class="sourceCode typescript"><span id="cb14-1"><a h
 <span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> policies<span class="op">:</span>       { propose }<span class="op">;</span></span>
 <span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> archetypes<span class="op">:</span>     { registerProvider }<span class="op">;</span></span>
 <span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> markdownFences<span class="op">:</span> { register }<span class="op">;</span></span>
-<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span> AbortSignal<span class="op">;</span>          <span class="co">// aborted on disable / timeout</span></span>
-<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> architect<span class="op">:</span>      { tabs<span class="op">:</span> { register }<span class="op">;</span> planState<span class="op">:</span> { read<span class="op">;</span> write } }<span class="op">;</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span> AbortSignal<span class="op">;</span>          <span class="co">// aborted on disable / timeout</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <p>Every register / propose / subscribe call returns an
 <code>unregister</code>/<code>unsubscribe</code> function. <strong>You
 do not need to call it on shutdown</strong> — the host prunes all
 contributions automatically when the plugin is disabled or the instance
 shuts down. Use the returned functions only when you want a contribution
 to disappear <em>before</em> deactivation (rare).</p>
-<h2 id="52-the-deny-list">5.2 The deny list</h2>
+<h2 id="52-architect-tabs-and-plan-state">5.2 Architect tabs and plan
+state</h2>
+<p><code>ctx.architect.tabs.register()</code> contributes a
+manifest-declared standalone Architect tab rendered by the host.
+<code>ctx.architect.planState.read()</code> and <code>.write()</code>
+access daemon-owned namespaced state with explicit plan ids and revision
+tokens. Browser clients receive validated descriptors and snapshots
+only. See <a href="13-architect-tabs.md">Architect tabs</a>.</p>
+<p><code>ctx.ui.register()</code> remains a separate metadata-only
+semantic UI registry seam; it does not execute browser code.</p>
+<h2 id="53-the-deny-list">5.3 The deny list</h2>
 <p><code>ctx</code> deliberately does <strong>not</strong> expose:</p>
 <ul>
 <li>Raw <code>fs</code>, <code>process</code>, <code>require</code>,
@@ -1090,7 +1181,7 @@ plugins run in the daemon's process and <em>can</em> reach Node globals
 if they want to. Doing so is a trust violation and grounds for
 quarantine, not a sandbox escape. See §9 for the full trust
 narrative.</p>
-<h2 id="53-the-signal">5.3 The <code>signal</code></h2>
+<h2 id="54-the-signal">5.4 The <code>signal</code></h2>
 <p><code>ctx.signal</code> is an <code>AbortSignal</code> the host
 aborts when:</p>
 <ul>
@@ -1103,7 +1194,7 @@ aborts when:</p>
 (<code>fetch(url, { signal })</code>, your own loops). You are not
 required to use it, but ignoring it means your plugin can keep running
 for a few extra seconds during shutdown.</p>
-<h2 id="54-logging">5.4 Logging</h2>
+<h2 id="55-logging">5.5 Logging</h2>
 <p><code>ctx.logger</code> is namespaced under
 <code>plugin:&lt;id&gt;</code>. Lines appear in the daemon's log stream
 and are mirrored to the event bus as standard log events. Do
@@ -1844,6 +1935,83 @@ this).</label></p></li>
 <code>status: "loaded"</code>.</label></p></li>
 </ul>
 <p>\newpage</p>
+<h1 id="13-architect-tabs">13. Architect tabs</h1>
+<p><a href="12-best-practices.md">&lt;- Best practices</a> · <a
+href="../plugin-reference/10-architect-tabs.md">Reference: Architect
+tabs</a></p>
+<p>Trusted plugins can contribute first-class tabs to the daemon-served
+standalone Architect surface through <code>ctx.architect</code>. The
+browser boundary is declarative: plugin handlers run in the host
+process, while browser clients receive validated descriptors and JSON
+snapshots rendered by host-supported renderer kinds.</p>
+<p>The initial renderer is <code>checklist</code>. Arbitrary browser
+JavaScript, HTML, remote scripts, inline scripts, iframes, and direct
+DOM callbacks are not supported.</p>
+<h2 id="131-manifest-declaration">13.1 Manifest declaration</h2>
+<p>Declare every tab statically in <code>plugin.json</code>:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;capabilities&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;architect:register_tab&quot;</span><span class="ot">,</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;architect:read_plan&quot;</span><span class="ot">,</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;architect:write_plan_state&quot;</span><span class="ot">,</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;architect:register_sidebar_summary&quot;</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;expectedEffects&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;render_architect_tab&quot;</span><span class="ot">,</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;read_architect_plan_projection&quot;</span><span class="ot">,</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;write_architect_plan_state&quot;</span><span class="ot">,</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;render_architect_sidebar_summary&quot;</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;architectTabs&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;examples.action-checklist.checklist&quot;</span><span class="fu">,</span></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;renderer&quot;</span><span class="fu">:</span> <span class="st">&quot;checklist&quot;</span><span class="fu">,</span></span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;planConnectivity&quot;</span><span class="fu">:</span> <span class="st">&quot;required&quot;</span></span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>Tab ids MUST start with <code>&lt;plugin-id&gt;.</code>. Runtime
+registration MUST match the manifest declaration.</p>
+<h2 id="132-registering-a-tab">13.2 Registering a tab</h2>
+<p>Use <code>defineArchitectTab()</code> from
+<code>@dreamgraph/sdk</code>, then register the result with
+<code>ctx.architect.tabs.register()</code>. The returned callback
+unregisters the contribution early; normal disable, unload, and reload
+paths remove active contributions automatically.</p>
+<p>Plan state is daemon-owned and namespaced by instance, plugin id,
+plan id, tab type id, and key. Read and write it through
+<code>ctx.architect.planState</code>. Writes use revision tokens so
+stale browser actions fail instead of overwriting newer state.</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> stored <span class="op">=</span> <span class="cf">await</span> ctx<span class="op">.</span><span class="at">architect</span><span class="op">.</span><span class="at">planState</span><span class="op">.</span><span class="fu">read</span>(<span class="st">&quot;checklist&quot;</span><span class="op">,</span> context)<span class="op">;</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> next <span class="op">=</span> <span class="cf">await</span> ctx<span class="op">.</span><span class="at">architect</span><span class="op">.</span><span class="at">planState</span><span class="op">.</span><span class="fu">write</span>(<span class="st">&quot;checklist&quot;</span><span class="op">,</span> value<span class="op">,</span> {</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span>context<span class="op">,</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">revision</span><span class="op">:</span> stored<span class="op">?.</span><span class="at">revision</span> <span class="op">??</span> <span class="kw">null</span><span class="op">,</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>Plan-bound operations require an explicit <code>planId</code>. A
+project-scope view does not silently bind to a selected or first
+plan.</p>
+<h2 id="133-browser-routes">13.3 Browser routes</h2>
+<p>Standalone Architect clients use versioned daemon routes under
+<code>/api/architect/v1/plugin-tabs</code> to list descriptors, fetch
+plan snapshots, and dispatch structured actions. Sidebar summaries and
+badges are projections from the same daemon snapshot. Store paths and
+plugin modules are never exposed to the browser.</p>
+<h2 id="134-walkthrough">13.4 Walkthrough</h2>
+<p>See <a
+href="../../../examples/action-checklist/"><code>examples/action-checklist</code></a>
+for a complete reference plugin. It seeds Slice A-E checklist state on
+first load, toggles items through schema-validated actions, projects
+checklist progress and badges, persists state across reload, and unloads
+cleanly.</p>
+<p><code>ctx.ui.register()</code> remains a separate semantic metadata
+seam. It does not execute plugin browser code and does not register
+standalone Architect tabs.</p>
+<p><a href="12-best-practices.md">&lt;- Best practices</a> · <a
+href="../plugin-reference/10-architect-tabs.md">Reference: Architect
+tabs</a></p>
+<p>\newpage</p>
 <h1 id="part-ii-----plugin-reference-manual">Part II --- Plugin
 Reference Manual</h1>
 <p>\newpage</p>
@@ -1851,7 +2019,7 @@ Reference Manual</h1>
 Manual</h1>
 <p><strong>Audience:</strong> Plugin authors and host implementors
 needing strict, normative tables. <strong>Engine baseline:</strong>
-v10.5.0 "Renata". <strong>Companion:</strong> see the <a
+v12.1.0 "Living DreamGraph". <strong>Companion:</strong> see the <a
 href="../plugin-developer-guide/00-index.md">Plugin Developer Guide</a>
 for task-oriented walkthroughs.</p>
 <p>This reference is the source of truth. Where the guide and the
@@ -1878,6 +2046,8 @@ subcommands.</li>
 <code>instance.json</code>.</li>
 <li><a href="09-telemetry-events.md">Telemetry events</a> — the
 <code>plugin.*</code> stream.</li>
+<li><a href="10-architect-tabs.md">Architect tabs</a> — declarative tab
+contract, plan state, routes, lifecycle, and telemetry.</li>
 </ol>
 <h2 id="conventions">Conventions</h2>
 <ul>
@@ -1891,29 +2061,30 @@ root.</li>
 <p>\newpage</p>
 <h1 id="manifest-schema-normative">Manifest schema (normative)</h1>
 <h2 id="top-level-shape">Top-level shape</h2>
-<div class="sourceCode" id="cb27"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginManifest {</span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>                  <span class="dt">string</span><span class="op">;</span>                      <span class="co">// PluginIdSchema</span></span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>                      <span class="co">// ≥ 1 char</span></span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  displayName<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span>                      <span class="co">// ≥ 1 char</span></span>
-<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  description<span class="op">?:</span>        <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  author<span class="op">?:</span>             <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  license<span class="op">?:</span>            <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  engine<span class="op">:</span>              { dreamgraph<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span>      <span class="co">// semver range</span></span>
-<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>  main<span class="op">:</span>                <span class="dt">string</span><span class="op">;</span>                      <span class="co">// path to ESM entry</span></span>
-<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>  intent<span class="op">:</span>              <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>     PluginEffect[]<span class="op">;</span>              <span class="co">// ≥ 1</span></span>
-<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">:</span>    PluginEffect[]<span class="op">;</span>              <span class="co">// default []</span></span>
-<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>  capabilities<span class="op">:</span>        PluginCapability[]<span class="op">;</span>          <span class="co">// ≥ 1</span></span>
-<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  tools<span class="op">:</span>               { name<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>          <span class="co">// default []</span></span>
-<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>  resources<span class="op">:</span>           { uriNamespace<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>  <span class="co">// default []</span></span>
-<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>  ui<span class="op">:</span>                  { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
-<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>  policies<span class="op">:</span>            { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
-<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>  archetypeProviders<span class="op">:</span>  { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
-<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>  markdownFences<span class="op">:</span>      { language<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>      <span class="co">// default []</span></span>
-<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span>              PluginPolicy<span class="op">;</span>                <span class="co">// default { phasePermissions: [], writableFiles: [] }</span></span>
-<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a>  config<span class="op">?:</span>             { schema<span class="op">?:</span> <span class="dt">string</span> }<span class="op">;</span></span>
-<span id="cb27-22"><a href="#cb27-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginManifest {</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>                  <span class="dt">string</span><span class="op">;</span>                      <span class="co">// PluginIdSchema</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>                      <span class="co">// ≥ 1 char</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>  displayName<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span>                      <span class="co">// ≥ 1 char</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>  description<span class="op">?:</span>        <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>  author<span class="op">?:</span>             <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>  license<span class="op">?:</span>            <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>  engine<span class="op">:</span>              { dreamgraph<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span>      <span class="co">// semver range</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>  main<span class="op">:</span>                <span class="dt">string</span><span class="op">;</span>                      <span class="co">// path to ESM entry</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>  intent<span class="op">:</span>              <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>     PluginEffect[]<span class="op">;</span>              <span class="co">// ≥ 1</span></span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">:</span>    PluginEffect[]<span class="op">;</span>              <span class="co">// default []</span></span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>  capabilities<span class="op">:</span>        PluginCapability[]<span class="op">;</span>          <span class="co">// ≥ 1</span></span>
+<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a>  tools<span class="op">:</span>               { name<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>          <span class="co">// default []</span></span>
+<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a>  resources<span class="op">:</span>           { uriNamespace<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>  <span class="co">// default []</span></span>
+<span id="cb29-16"><a href="#cb29-16" aria-hidden="true" tabindex="-1"></a>  ui<span class="op">:</span>                  { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
+<span id="cb29-17"><a href="#cb29-17" aria-hidden="true" tabindex="-1"></a>  policies<span class="op">:</span>            { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
+<span id="cb29-18"><a href="#cb29-18" aria-hidden="true" tabindex="-1"></a>  archetypeProviders<span class="op">:</span>  { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
+<span id="cb29-19"><a href="#cb29-19" aria-hidden="true" tabindex="-1"></a>  markdownFences<span class="op">:</span>      { language<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>      <span class="co">// default []</span></span>
+<span id="cb29-20"><a href="#cb29-20" aria-hidden="true" tabindex="-1"></a>  architectTabs<span class="op">:</span>       PluginManifestArchitectTab[]<span class="op">;</span> <span class="co">// default []</span></span>
+<span id="cb29-21"><a href="#cb29-21" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span>              PluginPolicy<span class="op">;</span>                <span class="co">// default { phasePermissions: [], writableFiles: [] }</span></span>
+<span id="cb29-22"><a href="#cb29-22" aria-hidden="true" tabindex="-1"></a>  config<span class="op">?:</span>             { schema<span class="op">?:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb29-23"><a href="#cb29-23" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <p>The schema is <strong>strict</strong>: unknown top-level fields are
 rejected with <code>manifest_invalid</code>.</p>
 <h2 id="field-level-constraints">Field-level constraints</h2>
@@ -2003,6 +2174,22 @@ rejected with <code>manifest_invalid</code>.</p>
 <td><code>markdown_fence_language_invalid</code></td>
 </tr>
 <tr>
+<td><code>architectTabs[].id</code></td>
+<td>lowercase <code>[a-z0-9._-]+</code>, MUST start with
+<code>&lt;plugin-id&gt;.</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>architectTabs[].renderer</code></td>
+<td>currently <code>checklist</code> only</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>architectTabs[].planConnectivity</code></td>
+<td>`required</td>
+<td>optional</td>
+</tr>
+<tr>
 <td><code>policy.phasePermissions</code></td>
 <td>each ∈ `analysis</td>
 <td>execution</td>
@@ -2015,15 +2202,17 @@ rejected with <code>manifest_invalid</code>.</p>
 </tbody>
 </table>
 <h2 id="validation-entry-point">Validation entry point</h2>
-<div class="sourceCode" id="cb28"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { parsePluginManifest<span class="op">,</span> PluginManifestSchema } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> manifest <span class="op">=</span> <span class="fu">parsePluginManifest</span>(<span class="bu">JSON</span><span class="op">.</span><span class="fu">parse</span>(plugin_json_text))<span class="op">;</span></span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a><span class="co">// throws ZodError with reason &quot;manifest_invalid&quot; on failure</span></span></code></pre></div>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { parsePluginManifest<span class="op">,</span> PluginManifestSchema } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> manifest <span class="op">=</span> <span class="fu">parsePluginManifest</span>(<span class="bu">JSON</span><span class="op">.</span><span class="fu">parse</span>(plugin_json_text))<span class="op">;</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="co">// throws ZodError with reason &quot;manifest_invalid&quot; on failure</span></span></code></pre></div>
 <h2 id="example">Example</h2>
 <p>See <a
 href="../../../examples/hello-events/plugin.json">examples/hello-events/plugin.json</a>
-for a manifest exercising every M6 seam.</p>
+for a manifest exercising every M6 seam and <a
+href="../../../examples/action-checklist/plugin.json">examples/action-checklist/plugin.json</a>
+for a standalone Architect tab manifest.</p>
 <p>\newpage</p>
 <h1 id="capabilities-normative">Capabilities (normative)</h1>
 <p>A capability is a coarse permission a plugin MUST declare to use a
@@ -2127,6 +2316,35 @@ collision → <code>markdown_fence_language_collision</code></td>
 <td>(reserved, post-1.0) provider adapter seam</td>
 <td>always denied today</td>
 <td>reserved</td>
+</tr>
+<tr>
+<td><code>architect:register_tab</code></td>
+<td><code>ctx.architect.tabs.register(definition)</code></td>
+<td>missing capability -&gt;
+<code>architect_tab_capability_missing</code>; undeclared tab -&gt;
+<code>architect_tab_undeclared</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>architect:read_plan</code></td>
+<td><code>ctx.architect.planState.read(key, context)</code></td>
+<td>missing explicit plan -&gt; <code>architect_plan_required</code>;
+missing plan -&gt; <code>architect_plan_not_found</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>architect:write_plan_state</code></td>
+<td><code>ctx.architect.planState.write(key, value, context)</code></td>
+<td>missing capability -&gt;
+<code>architect_plan_state_capability_missing</code>; stale revision
+-&gt; <code>architect_revision_stale</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>architect:register_sidebar_summary</code></td>
+<td>project sidebar summary and badges from a tab snapshot</td>
+<td>undeclared effect -&gt; <code>effect_undeclared</code></td>
+<td>live</td>
 </tr>
 </tbody>
 </table>
@@ -2237,6 +2455,26 @@ registry).</td>
 <td>(reserved, post-1.0) provider adapter.</td>
 <td><code>providers:register</code></td>
 </tr>
+<tr>
+<td><code>render_architect_tab</code></td>
+<td>Project a host-rendered standalone Architect tab.</td>
+<td><code>architect:register_tab</code></td>
+</tr>
+<tr>
+<td><code>read_architect_plan_projection</code></td>
+<td>Load explicit plan-bound Architect state.</td>
+<td><code>architect:read_plan</code></td>
+</tr>
+<tr>
+<td><code>write_architect_plan_state</code></td>
+<td>Persist daemon-owned namespaced Architect state.</td>
+<td><code>architect:write_plan_state</code></td>
+</tr>
+<tr>
+<td><code>render_architect_sidebar_summary</code></td>
+<td>Project sidebar summary and badge data.</td>
+<td><code>architect:register_sidebar_summary</code></td>
+</tr>
 </tbody>
 </table>
 <h2 id="always-forbidden-effects">Always-forbidden effects</h2>
@@ -2286,6 +2524,18 @@ completeness so plugin authors know to put them in
 <tr>
 <td><code>ctx.markdownFences.register</code></td>
 <td><code>render_markdown_fence</code></td>
+</tr>
+<tr>
+<td><code>ctx.architect.tabs.register</code></td>
+<td><code>render_architect_tab</code></td>
+</tr>
+<tr>
+<td><code>ctx.architect.planState.read</code></td>
+<td><code>read_architect_plan_projection</code></td>
+</tr>
+<tr>
+<td><code>ctx.architect.planState.write</code></td>
+<td><code>write_architect_plan_state</code></td>
 </tr>
 </tbody>
 </table>
@@ -2476,6 +2726,62 @@ detected).</td>
 <code>llm_capability_missing</code>.</p>
 <h3 id="providers-reserved"><code>providers</code> (reserved)</h3>
 <p><code>provider_capability_missing</code>.</p>
+<h3 id="architect"><code>architect</code></h3>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>architect_tab_capability_missing</code></td>
+<td><code>architect:register_tab</code> not declared.</td>
+</tr>
+<tr>
+<td><code>architect_plan_state_capability_missing</code></td>
+<td>Required Architect plan-state capability not declared.</td>
+</tr>
+<tr>
+<td><code>architect_tab_id_unprefixed</code></td>
+<td>Tab id does not start with <code>&lt;plugin-id&gt;.</code>.</td>
+</tr>
+<tr>
+<td><code>architect_tab_collision</code></td>
+<td>Another active contribution owns the tab id.</td>
+</tr>
+<tr>
+<td><code>architect_tab_undeclared</code></td>
+<td>Runtime tab registration does not match
+<code>manifest.architectTabs</code>.</td>
+</tr>
+<tr>
+<td><code>architect_action_unknown</code></td>
+<td>Requested action id is not registered for the tab.</td>
+</tr>
+<tr>
+<td><code>architect_action_schema_invalid</code></td>
+<td>Action payload fails the registered JSON schema.</td>
+</tr>
+<tr>
+<td><code>architect_plan_required</code></td>
+<td>A plan-bound operation omitted its explicit plan id.</td>
+</tr>
+<tr>
+<td><code>architect_plan_not_found</code></td>
+<td>The requested plan does not exist.</td>
+</tr>
+<tr>
+<td><code>architect_revision_stale</code></td>
+<td>State write revision does not match current daemon state.</td>
+</tr>
+<tr>
+<td><code>architect_tab_unavailable</code></td>
+<td>Tab descriptor or handler is no longer active.</td>
+</tr>
+</tbody>
+</table>
 <h2 id="host-execution-boundary">Host execution boundary</h2>
 <table>
 <thead>
@@ -2519,166 +2825,177 @@ plugin not <code>trusted</code>.</td>
 </tbody>
 </table>
 <h2 id="helpers">Helpers</h2>
-<div class="sourceCode" id="cb29"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { rejectSeamOf<span class="op">,</span> isPluginRejectReason } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="fu">rejectSeamOf</span>(<span class="st">&quot;tool_name_unprefixed&quot;</span>)<span class="op">;</span>      <span class="co">// &quot;tools&quot;</span></span>
-<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="fu">isPluginRejectReason</span>(<span class="st">&quot;nope&quot;</span>)<span class="op">;</span>              <span class="co">// false</span></span></code></pre></div>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { rejectSeamOf<span class="op">,</span> isPluginRejectReason } <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="fu">rejectSeamOf</span>(<span class="st">&quot;tool_name_unprefixed&quot;</span>)<span class="op">;</span>      <span class="co">// &quot;tools&quot;</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="fu">isPluginRejectReason</span>(<span class="st">&quot;nope&quot;</span>)<span class="op">;</span>              <span class="co">// false</span></span></code></pre></div>
 <p>\newpage</p>
 <h1 id="plugincontext-api-normative">PluginContext API (normative)</h1>
 <h2 id="top-level">Top-level</h2>
-<div class="sourceCode" id="cb30"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginContext {</span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> plugin<span class="op">:</span>         { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> version<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> instance<span class="op">:</span>       { uuid<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> logger<span class="op">:</span>         PluginLogger<span class="op">;</span></span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> events<span class="op">:</span>         PluginEventEmitSurface<span class="op">;</span></span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> tools<span class="op">:</span>          PluginToolsSurface<span class="op">;</span></span>
-<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> resources<span class="op">:</span>      PluginResourcesSurface<span class="op">;</span></span>
-<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> ui<span class="op">:</span>             PluginUiSurface<span class="op">;</span></span>
-<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> policies<span class="op">:</span>       PluginPoliciesSurface<span class="op">;</span></span>
-<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> archetypes<span class="op">:</span>     PluginArchetypesSurface<span class="op">;</span></span>
-<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> markdownFences<span class="op">:</span> PluginMarkdownFencesSurface<span class="op">;</span></span>
-<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span>         AbortSignal<span class="op">;</span></span>
-<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginContext {</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> plugin<span class="op">:</span>         { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> version<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> instance<span class="op">:</span>       { uuid<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> logger<span class="op">:</span>         PluginLogger<span class="op">;</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> events<span class="op">:</span>         PluginEventEmitSurface<span class="op">;</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> tools<span class="op">:</span>          PluginToolsSurface<span class="op">;</span></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> resources<span class="op">:</span>      PluginResourcesSurface<span class="op">;</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> ui<span class="op">:</span>             PluginUiSurface<span class="op">;</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> policies<span class="op">:</span>       PluginPoliciesSurface<span class="op">;</span></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> archetypes<span class="op">:</span>     PluginArchetypesSurface<span class="op">;</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> markdownFences<span class="op">:</span> PluginMarkdownFencesSurface<span class="op">;</span></span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> architect<span class="op">:</span>      PluginArchitectSurface<span class="op">;</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> signal<span class="op">:</span>         AbortSignal<span class="op">;</span></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h2 id="surfaces">Surfaces</h2>
-<div class="sourceCode" id="cb31"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginLogger {</span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">debug</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">info</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">warn</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">error</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginEventEnvelope {</span>
-<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> kind<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> payload<span class="op">:</span> <span class="dt">unknown</span><span class="op">;</span></span>
-<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> PluginEventHandler <span class="op">=</span> (e<span class="op">:</span> PluginEventEnvelope) <span class="kw">=&gt;</span> <span class="dt">void</span> <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
-<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginEventEmitSurface {</span>
-<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">emit</span>(kind<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> payload<span class="op">:</span> <span class="dt">unknown</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
-<span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">subscribe</span>(kind<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> handler<span class="op">:</span> PluginEventHandler)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span></span>
-<span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb31-18"><a href="#cb31-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb31-19"><a href="#cb31-19" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginToolsSurface          { <span class="fu">register</span>(d<span class="op">:</span> ToolDefinition)<span class="op">:</span>              () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
-<span id="cb31-20"><a href="#cb31-20" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginResourcesSurface      { <span class="fu">register</span>(d<span class="op">:</span> ResourceDefinition)<span class="op">:</span>          () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
-<span id="cb31-21"><a href="#cb31-21" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginUiSurface             { <span class="fu">register</span>(d<span class="op">:</span> UiElementDefinition)<span class="op">:</span>         () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
-<span id="cb31-22"><a href="#cb31-22" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginPoliciesSurface       { <span class="fu">propose</span> (p<span class="op">:</span> PolicyProposal)<span class="op">:</span>              () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
-<span id="cb31-23"><a href="#cb31-23" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginArchetypesSurface     { <span class="fu">registerProvider</span>(d<span class="op">:</span> ArchetypeProviderDefinition)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
-<span id="cb31-24"><a href="#cb31-24" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginMarkdownFencesSurface { <span class="fu">register</span>(d<span class="op">:</span> MarkdownFenceDefinition)<span class="op">:</span>     () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span></code></pre></div>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginLogger {</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">debug</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">info</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">warn</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">error</span>(message<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> meta<span class="op">?:</span> <span class="dt">object</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginEventEnvelope {</span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> kind<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">readonly</span> payload<span class="op">:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> PluginEventHandler <span class="op">=</span> (e<span class="op">:</span> PluginEventEnvelope) <span class="kw">=&gt;</span> <span class="dt">void</span> <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginEventEmitSurface {</span>
+<span id="cb33-15"><a href="#cb33-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">emit</span>(kind<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> payload<span class="op">:</span> <span class="dt">unknown</span>)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb33-16"><a href="#cb33-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">subscribe</span>(kind<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> handler<span class="op">:</span> PluginEventHandler)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb33-17"><a href="#cb33-17" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb33-18"><a href="#cb33-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-19"><a href="#cb33-19" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginToolsSurface          { <span class="fu">register</span>(d<span class="op">:</span> ToolDefinition)<span class="op">:</span>              () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb33-20"><a href="#cb33-20" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginResourcesSurface      { <span class="fu">register</span>(d<span class="op">:</span> ResourceDefinition)<span class="op">:</span>          () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb33-21"><a href="#cb33-21" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginUiSurface             { <span class="fu">register</span>(d<span class="op">:</span> UiElementDefinition)<span class="op">:</span>         () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb33-22"><a href="#cb33-22" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginPoliciesSurface       { <span class="fu">propose</span> (p<span class="op">:</span> PolicyProposal)<span class="op">:</span>              () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb33-23"><a href="#cb33-23" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginArchetypesSurface     { <span class="fu">registerProvider</span>(d<span class="op">:</span> ArchetypeProviderDefinition)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb33-24"><a href="#cb33-24" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginMarkdownFencesSurface { <span class="fu">register</span>(d<span class="op">:</span> MarkdownFenceDefinition)<span class="op">:</span>     () <span class="kw">=&gt;</span> <span class="dt">void</span><span class="op">;</span> }</span>
+<span id="cb33-25"><a href="#cb33-25" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginArchitectSurface {</span>
+<span id="cb33-26"><a href="#cb33-26" aria-hidden="true" tabindex="-1"></a>  tabs<span class="op">:</span> { <span class="fu">register</span>(d<span class="op">:</span> ArchitectTabTypeDefinition)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span> }<span class="op">;</span></span>
+<span id="cb33-27"><a href="#cb33-27" aria-hidden="true" tabindex="-1"></a>  planState<span class="op">:</span> {</span>
+<span id="cb33-28"><a href="#cb33-28" aria-hidden="true" tabindex="-1"></a>    <span class="fu">read</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> context<span class="op">:</span> ArchitectPlanContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchitectStoredState<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;;</span></span>
+<span id="cb33-29"><a href="#cb33-29" aria-hidden="true" tabindex="-1"></a>    <span class="fu">write</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> value<span class="op">:</span> T<span class="op">,</span> context<span class="op">:</span> ArchitectPlanWriteContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchitectStoredState<span class="op">&lt;</span>T<span class="op">&gt;&gt;;</span></span>
+<span id="cb33-30"><a href="#cb33-30" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb33-31"><a href="#cb33-31" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The complete Architect tab definition, lifecycle, route, capability,
+and effect contract is in <a href="10-architect-tabs.md">Architect
+tabs</a>.</p>
 <h2 id="seam-definition-shapes">Seam definition shapes</h2>
 <h3 id="tooldefinition"><code>ToolDefinition</code></h3>
-<div class="sourceCode" id="cb32"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ToolDefinition<span class="op">&lt;</span>Input <span class="op">=</span> <span class="dt">unknown</span><span class="op">,</span> Output <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>          <span class="co">// &lt;plugin-id&gt;.&lt;tool&gt;</span></span>
-<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>  inputSchema<span class="op">:</span>      JsonSchema<span class="op">;</span>      <span class="co">// converted to Zod by host</span></span>
-<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>  PluginEffect[]<span class="op">;</span>  <span class="co">// must include &quot;emit_tool&quot;</span></span>
-<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span></span>
-<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>  handler<span class="op">:</span> (input<span class="op">:</span> Input<span class="op">,</span> ctx<span class="op">:</span> { pluginId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> signal<span class="op">?:</span> AbortSignal })</span>
-<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">=&gt;</span> Output <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span>Output<span class="op">&gt;;</span></span>
-<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="resourcedefinition"><code>ResourceDefinition</code></h3>
-<div class="sourceCode" id="cb33"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ResourceDefinition<span class="op">&lt;</span>Params <span class="op">=</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;,</span> Output <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
-<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>  uriNamespace<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span>          <span class="co">// plugin://&lt;plugin-id&gt;/...</span></span>
-<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>  description<span class="op">?:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>  outputSchema<span class="op">?:</span>    JsonSchema<span class="op">;</span></span>
-<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>  PluginEffect[]<span class="op">;</span>  <span class="co">// must include &quot;emit_resource&quot;</span></span>
-<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span></span>
-<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>  handler<span class="op">:</span> (req<span class="op">:</span> { uri<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> params<span class="op">?:</span> Params }<span class="op">,</span></span>
-<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>            ctx<span class="op">:</span> { pluginId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> signal<span class="op">?:</span> AbortSignal })</span>
-<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">=&gt;</span> Output <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span>Output<span class="op">&gt;;</span></span>
-<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="uielementdefinition"><code>UiElementDefinition</code></h3>
 <div class="sourceCode" id="cb34"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> UiElementCategory <span class="op">=</span></span>
-<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;data_display&quot;</span> <span class="op">|</span> <span class="st">&quot;data_input&quot;</span> <span class="op">|</span> <span class="st">&quot;navigation&quot;</span></span>
-<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;feedback&quot;</span>     <span class="op">|</span> <span class="st">&quot;layout&quot;</span>     <span class="op">|</span> <span class="st">&quot;action&quot;</span> <span class="op">|</span> <span class="st">&quot;composite&quot;</span><span class="op">;</span></span>
-<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> UiElementDefinition {</span>
-<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span>              <span class="co">// starts with &lt;plugin-id&gt;.</span></span>
-<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>  purpose<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a>  category<span class="op">:</span>     UiElementCategory<span class="op">;</span></span>
-<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>  inputs<span class="op">:</span>       UiElementInput[]<span class="op">;</span></span>
-<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a>  outputs<span class="op">:</span>      UiElementOutput[]<span class="op">;</span></span>
-<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a>  interactions<span class="op">:</span> UiElementInteraction[]<span class="op">;</span></span>
-<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a>  children<span class="op">?:</span>    <span class="dt">string</span>[]<span class="op">;</span></span>
-<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>  implementations<span class="op">?:</span> UiElementImplementation[]<span class="op">;</span></span>
-<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>  used_by<span class="op">?:</span>     <span class="dt">string</span>[]<span class="op">;</span></span>
-<span id="cb34-16"><a href="#cb34-16" aria-hidden="true" tabindex="-1"></a>  tags<span class="op">?:</span>        <span class="dt">string</span>[]<span class="op">;</span></span>
-<span id="cb34-17"><a href="#cb34-17" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span>  <span class="co">// typically [&quot;mutate_ui_registry&quot;]</span></span>
-<span id="cb34-18"><a href="#cb34-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="policyproposal"><code>PolicyProposal</code></h3>
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ToolDefinition<span class="op">&lt;</span>Input <span class="op">=</span> <span class="dt">unknown</span><span class="op">,</span> Output <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>          <span class="co">// &lt;plugin-id&gt;.&lt;tool&gt;</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>  inputSchema<span class="op">:</span>      JsonSchema<span class="op">;</span>      <span class="co">// converted to Zod by host</span></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>  PluginEffect[]<span class="op">;</span>  <span class="co">// must include &quot;emit_tool&quot;</span></span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>  handler<span class="op">:</span> (input<span class="op">:</span> Input<span class="op">,</span> ctx<span class="op">:</span> { pluginId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> signal<span class="op">?:</span> AbortSignal })</span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">=&gt;</span> Output <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span>Output<span class="op">&gt;;</span></span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="resourcedefinition"><code>ResourceDefinition</code></h3>
 <div class="sourceCode" id="cb35"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PolicyProposal {</span>
-<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>  rationale<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>  applies_to<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
-<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>  phases<span class="op">:</span>     PhasePermission[]<span class="op">;</span></span>
-<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>  severity<span class="op">:</span>   <span class="st">&quot;block&quot;</span> <span class="op">|</span> <span class="st">&quot;warn&quot;</span> <span class="op">|</span> <span class="st">&quot;info&quot;</span><span class="op">;</span></span>
-<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>  weakens<span class="op">?:</span>   <span class="kw">false</span><span class="op">;</span>     <span class="co">// MUST be false; reserved</span></span>
-<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ResourceDefinition<span class="op">&lt;</span>Params <span class="op">=</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;,</span> Output <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>  uriNamespace<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span>          <span class="co">// plugin://&lt;plugin-id&gt;/...</span></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>  description<span class="op">?:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>  outputSchema<span class="op">?:</span>    JsonSchema<span class="op">;</span></span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">:</span>  PluginEffect[]<span class="op">;</span>  <span class="co">// must include &quot;emit_resource&quot;</span></span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>  forbiddenEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span></span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>  handler<span class="op">:</span> (req<span class="op">:</span> { uri<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> params<span class="op">?:</span> Params }<span class="op">,</span></span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>            ctx<span class="op">:</span> { pluginId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> signal<span class="op">?:</span> AbortSignal })</span>
+<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">=&gt;</span> Output <span class="op">|</span> <span class="bu">Promise</span><span class="op">&lt;</span>Output<span class="op">&gt;;</span></span>
+<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="uielementdefinition"><code>UiElementDefinition</code></h3>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> UiElementCategory <span class="op">=</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;data_display&quot;</span> <span class="op">|</span> <span class="st">&quot;data_input&quot;</span> <span class="op">|</span> <span class="st">&quot;navigation&quot;</span></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;feedback&quot;</span>     <span class="op">|</span> <span class="st">&quot;layout&quot;</span>     <span class="op">|</span> <span class="st">&quot;action&quot;</span> <span class="op">|</span> <span class="st">&quot;composite&quot;</span><span class="op">;</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> UiElementDefinition {</span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span>              <span class="co">// starts with &lt;plugin-id&gt;.</span></span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>  purpose<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a>  category<span class="op">:</span>     UiElementCategory<span class="op">;</span></span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>  inputs<span class="op">:</span>       UiElementInput[]<span class="op">;</span></span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>  outputs<span class="op">:</span>      UiElementOutput[]<span class="op">;</span></span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>  interactions<span class="op">:</span> UiElementInteraction[]<span class="op">;</span></span>
+<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>  children<span class="op">?:</span>    <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a>  implementations<span class="op">?:</span> UiElementImplementation[]<span class="op">;</span></span>
+<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a>  used_by<span class="op">?:</span>     <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb36-16"><a href="#cb36-16" aria-hidden="true" tabindex="-1"></a>  tags<span class="op">?:</span>        <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb36-17"><a href="#cb36-17" aria-hidden="true" tabindex="-1"></a>  expectedEffects<span class="op">?:</span> PluginEffect[]<span class="op">;</span>  <span class="co">// typically [&quot;mutate_ui_registry&quot;]</span></span>
+<span id="cb36-18"><a href="#cb36-18" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="policyproposal"><code>PolicyProposal</code></h3>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PolicyProposal {</span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>  rationale<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>  applies_to<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>  phases<span class="op">:</span>     PhasePermission[]<span class="op">;</span></span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>  severity<span class="op">:</span>   <span class="st">&quot;block&quot;</span> <span class="op">|</span> <span class="st">&quot;warn&quot;</span> <span class="op">|</span> <span class="st">&quot;info&quot;</span><span class="op">;</span></span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>  weakens<span class="op">?:</span>   <span class="kw">false</span><span class="op">;</span>     <span class="co">// MUST be false; reserved</span></span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h3
 id="archetypeproviderdefinition"><code>ArchetypeProviderDefinition</code></h3>
-<div class="sourceCode" id="cb36"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeRecord {</span>
-<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>  summary<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>  tags<span class="op">?:</span>    <span class="dt">string</span>[]<span class="op">;</span></span>
-<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>  payload<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
-<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypePayload {</span>
-<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>  source<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>  archetypes<span class="op">:</span> ArchetypeRecord[]<span class="op">;</span></span>
-<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeProviderDefinition {</span>
-<span id="cb36-16"><a href="#cb36-16" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb36-17"><a href="#cb36-17" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb36-18"><a href="#cb36-18" aria-hidden="true" tabindex="-1"></a>  url<span class="op">?:</span>     <span class="dt">string</span><span class="op">;</span>            <span class="co">// reserved for remote polling</span></span>
-<span id="cb36-19"><a href="#cb36-19" aria-hidden="true" tabindex="-1"></a>  poll_interval_s<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb36-20"><a href="#cb36-20" aria-hidden="true" tabindex="-1"></a>  inline<span class="op">?:</span>  ArchetypePayload<span class="op">;</span></span>
-<span id="cb36-21"><a href="#cb36-21" aria-hidden="true" tabindex="-1"></a>  fetch<span class="op">?:</span>   () <span class="kw">=&gt;</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchetypePayload<span class="op">&gt;;</span></span>
-<span id="cb36-22"><a href="#cb36-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeRecord {</span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  summary<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>  tags<span class="op">?:</span>    <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>  payload<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypePayload {</span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a>  source<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a>  version<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a>  archetypes<span class="op">:</span> ArchetypeRecord[]<span class="op">;</span></span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb38-14"><a href="#cb38-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-15"><a href="#cb38-15" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeProviderDefinition {</span>
+<span id="cb38-16"><a href="#cb38-16" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb38-17"><a href="#cb38-17" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb38-18"><a href="#cb38-18" aria-hidden="true" tabindex="-1"></a>  url<span class="op">?:</span>     <span class="dt">string</span><span class="op">;</span>            <span class="co">// reserved for remote polling</span></span>
+<span id="cb38-19"><a href="#cb38-19" aria-hidden="true" tabindex="-1"></a>  poll_interval_s<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb38-20"><a href="#cb38-20" aria-hidden="true" tabindex="-1"></a>  inline<span class="op">?:</span>  ArchetypePayload<span class="op">;</span></span>
+<span id="cb38-21"><a href="#cb38-21" aria-hidden="true" tabindex="-1"></a>  fetch<span class="op">?:</span>   () <span class="kw">=&gt;</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchetypePayload<span class="op">&gt;;</span></span>
+<span id="cb38-22"><a href="#cb38-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h3
 id="markdownfencedefinition"><code>MarkdownFenceDefinition</code></h3>
-<div class="sourceCode" id="cb37"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> MarkdownFenceDefinition {</span>
-<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>  language<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span>         <span class="co">// /^[a-z0-9][a-z0-9._-]*$/</span></span>
-<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>  label<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>  platforms<span class="op">?:</span>  <span class="bu">Array</span><span class="op">&lt;</span><span class="st">&quot;webview&quot;</span> <span class="op">|</span> <span class="st">&quot;cli&quot;</span> <span class="op">|</span> <span class="st">&quot;web&quot;</span><span class="op">&gt;;</span></span>
-<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> MarkdownFenceDefinition {</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>  language<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span>         <span class="co">// /^[a-z0-9][a-z0-9._-]*$/</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>  label<span class="op">:</span>       <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>  description<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>  platforms<span class="op">?:</span>  <span class="bu">Array</span><span class="op">&lt;</span><span class="st">&quot;webview&quot;</span> <span class="op">|</span> <span class="st">&quot;cli&quot;</span> <span class="op">|</span> <span class="st">&quot;web&quot;</span><span class="op">&gt;;</span></span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h2 id="identity-helpers">Identity helpers</h2>
 <p>The SDK ships these zero-cost factories purely for IDE inference:</p>
-<div class="sourceCode" id="cb38"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> {</span>
-<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  defineTool<span class="op">,</span> defineResource<span class="op">,</span> defineUiElement<span class="op">,</span></span>
-<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>  definePolicyProposal<span class="op">,</span> defineArchetypeProvider<span class="op">,</span> defineMarkdownFence<span class="op">,</span></span>
-<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  definePlugin<span class="op">,</span></span>
-<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>} <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span></code></pre></div>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> {</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  defineTool<span class="op">,</span> defineResource<span class="op">,</span> defineUiElement<span class="op">,</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>  definePolicyProposal<span class="op">,</span> defineArchetypeProvider<span class="op">,</span> defineMarkdownFence<span class="op">,</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>  definePlugin<span class="op">,</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>} <span class="im">from</span> <span class="st">&quot;@dreamgraph/sdk&quot;</span><span class="op">;</span></span></code></pre></div>
 <p>Each <code>define*</code> simply returns its argument with the
 matching type.</p>
 <p>\newpage</p>
 <h1 id="events-normative">Events (normative)</h1>
 <h2 id="envelope">Envelope</h2>
-<div class="sourceCode" id="cb39"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> EventEnvelope {</span>
-<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>  seq<span class="op">:</span>          <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>  kind<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>  affected_ids<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
-<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>  etag<span class="op">:</span>         <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
-<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>  ts<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span>            <span class="co">// ISO-8601</span></span>
-<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a>  payload<span class="op">?:</span>     <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
-<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> EventEnvelope {</span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>  seq<span class="op">:</span>          <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>  kind<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>  affected_ids<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>  etag<span class="op">:</span>         <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>  ts<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span>            <span class="co">// ISO-8601</span></span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>  payload<span class="op">?:</span>     <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h2 id="stable-kinds">Stable kinds</h2>
 <p>Imported from <code>@dreamgraph/sdk</code>:</p>
 <ul>
@@ -2709,71 +3026,71 @@ Subscription requires <code>events:read:experimental</code> AND
 </ul>
 <h2 id="selected-payload-schemas">Selected payload schemas</h2>
 <h3 id="scheduleexecuted"><code>schedule.executed</code></h3>
-<div class="sourceCode" id="cb40"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SchedulePayload {</span>
-<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>  execution_id<span class="op">:</span>   <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>  success<span class="op">:</span>        <span class="dt">boolean</span><span class="op">;</span></span>
-<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>  status<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>  error<span class="op">:</span>          <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
-<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="scheduletimed_out"><code>schedule.timed_out</code></h3>
-<div class="sourceCode" id="cb41"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ScheduleTimeoutPayload {</span>
-<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>  error<span class="op">:</span>          <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="schedulepaused"><code>schedule.paused</code></h3>
 <div class="sourceCode" id="cb42"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SchedulePausedPayload {</span>
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SchedulePayload {</span>
 <span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span>         <span class="st">&quot;error_streak&quot;</span><span class="op">;</span></span>
-<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a>  error_count<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a>  execution_id<span class="op">:</span>   <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a>  success<span class="op">:</span>        <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb42-8"><a href="#cb42-8" aria-hidden="true" tabindex="-1"></a>  status<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb42-9"><a href="#cb42-9" aria-hidden="true" tabindex="-1"></a>  error<span class="op">:</span>          <span class="dt">string</span> <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
+<span id="cb42-10"><a href="#cb42-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="scheduletimed_out"><code>schedule.timed_out</code></h3>
+<div class="sourceCode" id="cb43"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ScheduleTimeoutPayload {</span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a>  error<span class="op">:</span>          <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="schedulepaused"><code>schedule.paused</code></h3>
+<div class="sourceCode" id="cb44"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> SchedulePausedPayload {</span>
+<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>  schedule_id<span class="op">:</span>    <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>  schedule_name<span class="op">:</span>  <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a>  action<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span>         <span class="st">&quot;error_streak&quot;</span><span class="op">;</span></span>
+<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a>  error_count<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb44-7"><a href="#cb44-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h3
 id="nightmarecyclecompleted"><code>nightmare.cycle.completed</code></h3>
-<div class="sourceCode" id="cb43"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> NightmarePayload {</span>
-<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>  cycle_number<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a>  strategy<span class="op">:</span>        <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a>  threats_found<span class="op">:</span>   <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a>  attack_surfaces<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a>  summary<span class="op">:</span>         { critical<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> high<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> medium<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> low<span class="op">:</span> <span class="dt">number</span> }<span class="op">;</span></span>
-<span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>     <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb43-8"><a href="#cb43-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="archetypeexported"><code>archetype.exported</code></h3>
-<div class="sourceCode" id="cb44"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeExportedPayload {</span>
-<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>  archetypes_exported<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>  file_path<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a>  instance_id<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="archetypeimported"><code>archetype.imported</code></h3>
 <div class="sourceCode" id="cb45"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeImportedPayload {</span>
-<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  archetypes_imported<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>  archetypes_skipped<span class="op">:</span>  <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>  tensions_created<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a>  source_instance<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb45-7"><a href="#cb45-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> NightmarePayload {</span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  cycle_number<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>  strategy<span class="op">:</span>        <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>  threats_found<span class="op">:</span>   <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a>  attack_surfaces<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a>  summary<span class="op">:</span>         { critical<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> high<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> medium<span class="op">:</span> <span class="dt">number</span><span class="op">;</span> low<span class="op">:</span> <span class="dt">number</span> }<span class="op">;</span></span>
+<span id="cb45-7"><a href="#cb45-7" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>     <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb45-8"><a href="#cb45-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="archetypeexported"><code>archetype.exported</code></h3>
+<div class="sourceCode" id="cb46"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeExportedPayload {</span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a>  archetypes_exported<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a>  file_path<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a>  instance_id<span class="op">:</span>         <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="archetypeimported"><code>archetype.imported</code></h3>
+<div class="sourceCode" id="cb47"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchetypeImportedPayload {</span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a>  archetypes_imported<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a>  archetypes_skipped<span class="op">:</span>  <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a>  tensions_created<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a>  source_instance<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span>           <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h3
 id="narrativechapterappended"><code>narrative.chapter.appended</code></h3>
-<div class="sourceCode" id="cb46"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> NarrativeChapterPayload {</span>
-<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a>  chapter_number<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span>          <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a>  cycle_range<span class="op">:</span>    [<span class="dt">number</span><span class="op">,</span> <span class="dt">number</span>]<span class="op">;</span></span>
-<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a>  generated_at<span class="op">:</span>   <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb48"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> NarrativeChapterPayload {</span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a>  chapter_number<span class="op">:</span> <span class="dt">number</span><span class="op">;</span></span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span>          <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a>  cycle_range<span class="op">:</span>    [<span class="dt">number</span><span class="op">,</span> <span class="dt">number</span>]<span class="op">;</span></span>
+<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a>  generated_at<span class="op">:</span>   <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb48-6"><a href="#cb48-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h2 id="plugin-defined-kinds">Plugin-defined kinds</h2>
 <p>Plugins MAY emit any kind not in the host taxonomy. The SDK does not
 enforce naming, but the convention
@@ -2942,95 +3259,210 @@ registration).</li>
 auto-discovery from outside the instance directory.</p>
 <p>\newpage</p>
 <h1 id="telemetry-events-normative">Telemetry events (normative)</h1>
-<p>The host emits a uniform <code>plugin.*</code> stream on the
-cognitive event bus. Every event carries a common base envelope plus
-per-kind extras.</p>
-<h2 id="common-base">Common base</h2>
-<div class="sourceCode" id="cb50"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginTelemetryBase {</span>
-<span id="cb50-2"><a href="#cb50-2" aria-hidden="true" tabindex="-1"></a>  plugin_id<span class="op">:</span>      <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb50-3"><a href="#cb50-3" aria-hidden="true" tabindex="-1"></a>  plugin_version<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb50-4"><a href="#cb50-4" aria-hidden="true" tabindex="-1"></a>  ts<span class="op">:</span>             <span class="dt">string</span><span class="op">;</span>            <span class="co">// ISO-8601</span></span>
-<span id="cb50-5"><a href="#cb50-5" aria-hidden="true" tabindex="-1"></a>  correlation_id<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span>           <span class="co">// matches handler.started/completed</span></span>
-<span id="cb50-6"><a href="#cb50-6" aria-hidden="true" tabindex="-1"></a>  seam<span class="op">?:</span>          <span class="st">&quot;tools&quot;</span> <span class="op">|</span> <span class="st">&quot;resources&quot;</span> <span class="op">|</span> <span class="st">&quot;events&quot;</span> <span class="op">|</span> <span class="st">&quot;ui&quot;</span></span>
-<span id="cb50-7"><a href="#cb50-7" aria-hidden="true" tabindex="-1"></a>                 <span class="op">|</span> <span class="st">&quot;policy&quot;</span> <span class="op">|</span> <span class="st">&quot;archetypes&quot;</span> <span class="op">|</span> <span class="st">&quot;markdown_fences&quot;</span> <span class="op">|</span> <span class="st">&quot;host&quot;</span><span class="op">;</span></span>
-<span id="cb50-8"><a href="#cb50-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h2 id="per-kind">Per kind</h2>
-<h3 id="pluginloaded"><code>plugin.loaded</code></h3>
-<p>Emitted after manifest acceptance and successful
-<code>activate(ctx)</code>.</p>
-<div class="sourceCode" id="cb51"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginLoadedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
-<span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a>  runtime<span class="op">:</span>           <span class="st">&quot;in-process&quot;</span><span class="op">;</span>   <span class="co">// &quot;worker&quot; reserved for M8</span></span>
-<span id="cb51-3"><a href="#cb51-3" aria-hidden="true" tabindex="-1"></a>  declared_effects<span class="op">:</span>  PluginEffect[]<span class="op">;</span></span>
-<span id="cb51-4"><a href="#cb51-4" aria-hidden="true" tabindex="-1"></a>  declared_capabilities<span class="op">:</span> PluginCapability[]<span class="op">;</span></span>
-<span id="cb51-5"><a href="#cb51-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="pluginunloaded"><code>plugin.unloaded</code></h3>
-<p>Emitted on graceful disable / shutdown.</p>
+<p><a href="00-index.md">&lt;- Index</a> · Source: <a
+href="../../../packages/sdk/src/telemetry.ts">packages/sdk/src/telemetry.ts</a></p>
+<p>The host emits a stable <code>plugin.*</code> stream. Every payload
+includes <code>plugin_id</code>, <code>plugin_version</code>, and
+ISO-8601 <code>occurred_at</code>.</p>
+<h2 id="event-kinds">Event kinds</h2>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>plugin.loaded</code></td>
+<td>Successful activation, runtime, trust state, and capabilities.</td>
+</tr>
+<tr>
+<td><code>plugin.unloaded</code></td>
+<td>Shutdown, disable, reload, or quarantine cleanup.</td>
+</tr>
+<tr>
+<td><code>plugin.errored</code></td>
+<td>Host boundary or handler failure.</td>
+</tr>
+<tr>
+<td><code>plugin.handler.started</code></td>
+<td>Timed handler invocation start.</td>
+</tr>
+<tr>
+<td><code>plugin.handler.completed</code></td>
+<td>Timed handler invocation completion with <code>ok</code>.</td>
+</tr>
+<tr>
+<td><code>plugin.output.accepted</code></td>
+<td>Host accepted a mediated effect.</td>
+</tr>
+<tr>
+<td><code>plugin.output.rejected</code></td>
+<td>Host refused a mediated effect or registration.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="handler-seams">Handler seams</h2>
+<p><code>plugin.handler.started</code> and
+<code>plugin.handler.completed</code> use:</p>
 <div class="sourceCode" id="cb52"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginUnloadedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
-<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span> <span class="st">&quot;disable&quot;</span> <span class="op">|</span> <span class="st">&quot;shutdown&quot;</span> <span class="op">|</span> <span class="st">&quot;reload&quot;</span><span class="op">;</span></span>
-<span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="pluginerrored"><code>plugin.errored</code></h3>
-<p>Emitted on manifest rejection, unhandled throw, watchdog stall, or
-any quarantine path.</p>
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> PluginHandlerSeam <span class="op">=</span></span>
+<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;tool&quot;</span></span>
+<span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;resource&quot;</span></span>
+<span id="cb52-4"><a href="#cb52-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;event&quot;</span></span>
+<span id="cb52-5"><a href="#cb52-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;schedule_action&quot;</span></span>
+<span id="cb52-6"><a href="#cb52-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;architect_tab&quot;</span></span>
+<span id="cb52-7"><a href="#cb52-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;architect_plan_state&quot;</span><span class="op">;</span></span></code></pre></div>
+<p>Both carry <code>correlation_id</code>, <code>seam</code>, and
+<code>target</code>. Completion also carries <code>duration_ms</code>
+and <code>ok</code>.</p>
+<h2 id="accepted-output-seams">Accepted output seams</h2>
 <div class="sourceCode" id="cb53"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginErroredPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
-<span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span>  PluginRejectReason<span class="op">;</span>       <span class="co">// see reference §4</span></span>
-<span id="cb53-3"><a href="#cb53-3" aria-hidden="true" tabindex="-1"></a>  message<span class="op">:</span> <span class="dt">string</span><span class="op">;</span>                   <span class="co">// human-readable</span></span>
-<span id="cb53-4"><a href="#cb53-4" aria-hidden="true" tabindex="-1"></a>  stack<span class="op">?:</span>  <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb53-5"><a href="#cb53-5" aria-hidden="true" tabindex="-1"></a>  measured_lag_ms<span class="op">?:</span> <span class="dt">number</span><span class="op">;</span>          <span class="co">// present iff reason === &quot;event_loop_stall&quot;</span></span>
-<span id="cb53-6"><a href="#cb53-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="pluginhandlerstarted"><code>plugin.handler.started</code></h3>
-<p>Emitted just before a tool handler / resource handler / event
-subscriber runs.</p>
-<div class="sourceCode" id="cb54"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginHandlerStartedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
-<span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a>  correlation_id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb54-3"><a href="#cb54-3" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_handler&quot;</span><span class="op">;</span></span>
-<span id="cb54-4"><a href="#cb54-4" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span>            <span class="co">// tool name / uri / event kind</span></span>
-<span id="cb54-5"><a href="#cb54-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3
-id="pluginhandlercompleted"><code>plugin.handler.completed</code></h3>
-<p>Emitted on handler success.</p>
-<div class="sourceCode" id="cb55"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginHandlerCompletedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
-<span id="cb55-2"><a href="#cb55-2" aria-hidden="true" tabindex="-1"></a>  correlation_id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb55-3"><a href="#cb55-3" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_handler&quot;</span><span class="op">;</span></span>
-<span id="cb55-4"><a href="#cb55-4" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb55-5"><a href="#cb55-5" aria-hidden="true" tabindex="-1"></a>  duration_ms<span class="op">:</span>    <span class="dt">number</span><span class="op">;</span></span>
-<span id="cb55-6"><a href="#cb55-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="pluginoutputaccepted"><code>plugin.output.accepted</code></h3>
-<p>Emitted when the host successfully forwarded / wrote / dispatched the
-plugin's output.</p>
-<div class="sourceCode" id="cb56"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginOutputAcceptedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
-<span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_emit&quot;</span></span>
-<span id="cb56-3"><a href="#cb56-3" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;ui_register&quot;</span> <span class="op">|</span> <span class="st">&quot;policy_propose&quot;</span></span>
-<span id="cb56-4"><a href="#cb56-4" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;archetype_register&quot;</span> <span class="op">|</span> <span class="st">&quot;markdown_fence_register&quot;</span><span class="op">;</span></span>
-<span id="cb56-5"><a href="#cb56-5" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb56-6"><a href="#cb56-6" aria-hidden="true" tabindex="-1"></a>  effect<span class="op">:</span>         PluginEffect<span class="op">;</span></span>
-<span id="cb56-7"><a href="#cb56-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<h3 id="pluginoutputrejected"><code>plugin.output.rejected</code></h3>
-<p>Emitted when the host refused output (capability missing, effect
-undeclared, forbidden, schema invalid, namespace violation, quota
-exceeded, etc.).</p>
-<div class="sourceCode" id="cb57"><pre
-class="sourceCode ts"><code class="sourceCode typescript"><span id="cb57-1"><a href="#cb57-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginOutputRejectedPayload <span class="kw">extends</span> PluginTelemetryBase {</span>
-<span id="cb57-2"><a href="#cb57-2" aria-hidden="true" tabindex="-1"></a>  surface<span class="op">:</span>        <span class="st">&quot;tool&quot;</span> <span class="op">|</span> <span class="st">&quot;resource&quot;</span> <span class="op">|</span> <span class="st">&quot;event_emit&quot;</span></span>
-<span id="cb57-3"><a href="#cb57-3" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;ui_register&quot;</span> <span class="op">|</span> <span class="st">&quot;policy_propose&quot;</span></span>
-<span id="cb57-4"><a href="#cb57-4" aria-hidden="true" tabindex="-1"></a>                <span class="op">|</span> <span class="st">&quot;archetype_register&quot;</span> <span class="op">|</span> <span class="st">&quot;markdown_fence_register&quot;</span><span class="op">;</span></span>
-<span id="cb57-5"><a href="#cb57-5" aria-hidden="true" tabindex="-1"></a>  surface_id<span class="op">:</span>     <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb57-6"><a href="#cb57-6" aria-hidden="true" tabindex="-1"></a>  reason<span class="op">:</span>         PluginRejectReason<span class="op">;</span></span>
-<span id="cb57-7"><a href="#cb57-7" aria-hidden="true" tabindex="-1"></a>  message<span class="op">:</span>        <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb57-8"><a href="#cb57-8" aria-hidden="true" tabindex="-1"></a>  attempted_effect<span class="op">?:</span> PluginEffect<span class="op">;</span></span>
-<span id="cb57-9"><a href="#cb57-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> PluginAcceptedOutputSeam <span class="op">=</span></span>
+<span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;tool&quot;</span></span>
+<span id="cb53-3"><a href="#cb53-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;resource&quot;</span></span>
+<span id="cb53-4"><a href="#cb53-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;event&quot;</span></span>
+<span id="cb53-5"><a href="#cb53-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;schedule_action&quot;</span></span>
+<span id="cb53-6"><a href="#cb53-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;webhook&quot;</span></span>
+<span id="cb53-7"><a href="#cb53-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;ui&quot;</span></span>
+<span id="cb53-8"><a href="#cb53-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;archetype&quot;</span></span>
+<span id="cb53-9"><a href="#cb53-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;policy&quot;</span></span>
+<span id="cb53-10"><a href="#cb53-10" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;markdown_fence&quot;</span></span>
+<span id="cb53-11"><a href="#cb53-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;architect_tab&quot;</span></span>
+<span id="cb53-12"><a href="#cb53-12" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&quot;architect_plan_state&quot;</span><span class="op">;</span></span></code></pre></div>
+<p>Accepted output carries <code>correlation_id</code>,
+<code>effect</code>, <code>seam</code>, and optional
+<code>target</code>.</p>
+<h2 id="rejected-output-seams">Rejected output seams</h2>
+<p>Rejected output supports the accepted output seams plus
+<code>host</code>. It carries <code>reason: PluginRejectReason</code>,
+optional <code>correlation_id</code>, optional <code>target</code>, and
+optional human-readable <code>detail</code>.</p>
+<p>Architect tab registration, plan-state access, snapshot loading, and
+action dispatch therefore use the normal host-owned telemetry stream.
+They do not create a browser-only audit channel.</p>
 <h2 id="stability">Stability</h2>
-<p><code>plugin.loaded</code>, <code>plugin.unloaded</code>,
-<code>plugin.errored</code>, <code>plugin.handler.*</code>,
-<code>plugin.output.accepted</code>, and
-<code>plugin.output.rejected</code> are part of the
-<strong>stable</strong> event surface for v1. Their payload shapes will
-only grow additively within a major SDK version.</p>
+<p>The seven event kinds above are stable SDK contracts. Payloads may
+grow additively within a major SDK version.</p>
+<p>\newpage</p>
+<h1 id="architect-tabs-normative">Architect tabs (normative)</h1>
+<p><a href="00-index.md">&lt;- Index</a> · Sources: <a
+href="../../../packages/sdk/src/seams/architect.ts">packages/sdk/src/seams/architect.ts</a>,
+<a
+href="../../../packages/host/src/context.ts">packages/host/src/context.ts</a></p>
+<p>Architect tabs are trusted host-side plugin contributions projected
+into the daemon-served standalone Architect browser surface. Browser
+clients MUST receive declarative descriptors and JSON snapshots only.
+They MUST NOT load plugin modules or receive raw state-store paths.</p>
+<h2 id="manifest-declaration">Manifest declaration</h2>
+<div class="sourceCode" id="cb54"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginManifestArchitectTab {</span>
+<span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> <span class="co">// MUST start with &lt;plugin-id&gt;.</span></span>
+<span id="cb54-3"><a href="#cb54-3" aria-hidden="true" tabindex="-1"></a>  renderer<span class="op">:</span> <span class="st">&quot;checklist&quot;</span><span class="op">;</span></span>
+<span id="cb54-4"><a href="#cb54-4" aria-hidden="true" tabindex="-1"></a>  planConnectivity<span class="op">:</span> <span class="st">&quot;required&quot;</span> <span class="op">|</span> <span class="st">&quot;optional&quot;</span> <span class="op">|</span> <span class="st">&quot;none&quot;</span><span class="op">;</span></span>
+<span id="cb54-5"><a href="#cb54-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>A manifest with any <code>architectTabs</code> entry MUST declare
+<code>architect:register_tab</code>, <code>architect:read_plan</code>,
+<code>render_architect_tab</code>, and
+<code>read_architect_plan_projection</code>. Runtime registration MUST
+match a manifest declaration.</p>
+<h2 id="context-api">Context API</h2>
+<div class="sourceCode" id="cb55"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginArchitectSurface {</span>
+<span id="cb55-2"><a href="#cb55-2" aria-hidden="true" tabindex="-1"></a>  tabs<span class="op">:</span> { <span class="fu">register</span>(definition<span class="op">:</span> ArchitectTabTypeDefinition)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span> }<span class="op">;</span></span>
+<span id="cb55-3"><a href="#cb55-3" aria-hidden="true" tabindex="-1"></a>  planState<span class="op">:</span> {</span>
+<span id="cb55-4"><a href="#cb55-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">read</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> context<span class="op">:</span> ArchitectPlanContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchitectStoredState<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;;</span></span>
+<span id="cb55-5"><a href="#cb55-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">write</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> value<span class="op">:</span> T<span class="op">,</span> context<span class="op">:</span> ArchitectPlanWriteContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchitectStoredState<span class="op">&lt;</span>T<span class="op">&gt;&gt;;</span></span>
+<span id="cb55-6"><a href="#cb55-6" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb55-7"><a href="#cb55-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><code>planState</code> is daemon-owned and namespaced by instance,
+plugin id, plan id, tab type id, and key. Writes MUST include the
+expected revision or <code>null</code> for initial creation. Stale
+revisions are rejected.</p>
+<h2 id="tab-definition">Tab definition</h2>
+<div class="sourceCode" id="cb56"><pre
+class="sourceCode ts"><code class="sourceCode typescript"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchitectTabTypeDefinition<span class="op">&lt;</span>TState <span class="op">=</span> <span class="dt">unknown</span><span class="op">,</span> TAction <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
+<span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb56-3"><a href="#cb56-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb56-4"><a href="#cb56-4" aria-hidden="true" tabindex="-1"></a>  icon<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb56-5"><a href="#cb56-5" aria-hidden="true" tabindex="-1"></a>  renderer<span class="op">:</span> <span class="st">&quot;checklist&quot;</span><span class="op">;</span></span>
+<span id="cb56-6"><a href="#cb56-6" aria-hidden="true" tabindex="-1"></a>  planConnectivity<span class="op">:</span> <span class="st">&quot;required&quot;</span> <span class="op">|</span> <span class="st">&quot;optional&quot;</span> <span class="op">|</span> <span class="st">&quot;none&quot;</span><span class="op">;</span></span>
+<span id="cb56-7"><a href="#cb56-7" aria-hidden="true" tabindex="-1"></a>  stateSchema<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb56-8"><a href="#cb56-8" aria-hidden="true" tabindex="-1"></a>  actions<span class="op">:</span> <span class="kw">readonly</span> { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> inputSchema<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;</span> }[]<span class="op">;</span></span>
+<span id="cb56-9"><a href="#cb56-9" aria-hidden="true" tabindex="-1"></a>  sidebarSummary<span class="op">?:</span> { kind<span class="op">:</span> <span class="st">&quot;checklist-progress&quot;</span> }<span class="op">;</span></span>
+<span id="cb56-10"><a href="#cb56-10" aria-hidden="true" tabindex="-1"></a>  badges<span class="op">?:</span> <span class="kw">readonly</span> { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> kind<span class="op">:</span> <span class="st">&quot;count&quot;</span> <span class="op">|</span> <span class="st">&quot;status&quot;</span> }[]<span class="op">;</span></span>
+<span id="cb56-11"><a href="#cb56-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">loadState</span>(context<span class="op">:</span> ArchitectPlanContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>TState<span class="op">&gt;</span> <span class="op">|</span> TState<span class="op">;</span></span>
+<span id="cb56-12"><a href="#cb56-12" aria-hidden="true" tabindex="-1"></a>  handleAction<span class="op">?</span>(action<span class="op">:</span> TAction<span class="op">,</span> context<span class="op">:</span> ArchitectPlanActionContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>TState<span class="op">&gt;</span> <span class="op">|</span> TState<span class="op">;</span></span>
+<span id="cb56-13"><a href="#cb56-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="capabilities-and-effects">Capabilities and effects</h2>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>architect:register_tab</code></td>
+<td>Register a manifest-declared Architect tab type.</td>
+</tr>
+<tr>
+<td><code>architect:read_plan</code></td>
+<td>Read explicit plan-bound state and projection context.</td>
+</tr>
+<tr>
+<td><code>architect:write_plan_state</code></td>
+<td>Persist daemon-owned namespaced plan state.</td>
+</tr>
+<tr>
+<td><code>architect:register_sidebar_summary</code></td>
+<td>Project a sidebar summary from the tab snapshot.</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Effect</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>render_architect_tab</code></td>
+<td>Project a host-rendered Architect tab.</td>
+</tr>
+<tr>
+<td><code>read_architect_plan_projection</code></td>
+<td>Load explicit plan-bound snapshot state.</td>
+</tr>
+<tr>
+<td><code>write_architect_plan_state</code></td>
+<td>Persist namespaced plan state.</td>
+</tr>
+<tr>
+<td><code>render_architect_sidebar_summary</code></td>
+<td>Project sidebar summary and badge data.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="lifecycle-and-telemetry">Lifecycle and telemetry</h2>
+<p>Unload, disable, and reload remove active descriptors and handlers
+while retaining persisted plan state. Registration and invocation use
+the normal <code>plugin.output.accepted</code>,
+<code>plugin.output.rejected</code>,
+<code>plugin.handler.started</code>, and
+<code>plugin.handler.completed</code> telemetry contracts with
+<code>architect_tab</code> or <code>architect_plan_state</code>
+seams.</p>
+<h2 id="browser-contract">Browser contract</h2>
+<p>Versioned routes live under
+<code>/api/architect/v1/plugin-tabs</code>. Actions are structured
+daemon commands. The daemon validates plugin availability, explicit plan
+scope, action schema, and revision before returning a new snapshot.</p>
+<p><code>ctx.ui.register()</code> is metadata-only and is not an
+executable browser UI escape hatch.</p>
 </body>
 </html>

@@ -15,6 +15,7 @@ import {
   resolveMasterDir,
 } from "../../instance/registry.js";
 import type { DreamGraphInstance } from "../../instance/types.js";
+import { FORBIDDEN_PERSISTENCE_SENTINELS } from "../../semantic-invariants.js";
 import type { ParsedArgs } from "../dg.js";
 import {
   readServerMeta,
@@ -221,7 +222,7 @@ interface DataStats {
   uiElements: number;
 }
 
-async function gatherDataStats(dataDir: string): Promise<DataStats> {
+export async function gatherDataStats(dataDir: string): Promise<DataStats> {
   const stats: DataStats = {
     graphNodes: 0,
     graphEdges: 0,
@@ -241,49 +242,72 @@ async function gatherDataStats(dataDir: string): Promise<DataStats> {
       return null;
     }
   };
+  const readArray = async (file: string): Promise<unknown[]> => {
+    const value = await read(file);
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") {
+      for (const nested of Object.values(value as Record<string, unknown>)) {
+        if (Array.isArray(nested)) return nested;
+      }
+    }
+    return [];
+  };
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === "object" ? value as Record<string, unknown> : null;
+  const graphNodeIds = new Set<string>();
+  const addNodeIds = (records: unknown[]): void => {
+    for (const value of records) {
+      const id = asRecord(value)?.id;
+      if (typeof id === "string" && id.length > 0) graphNodeIds.add(id);
+    }
+  };
+
+  // Match Explorer snapshot semantics: the visible graph includes fact entities,
+  // provenance-qualified UI elements, speculative nodes, and active tensions.
+  const features = await readArray("features.json");
+  const workflows = await readArray("workflows.json");
+  const dataModels = await readArray("data_model.json");
+  const capabilities = await readArray("capabilities.json");
+  const seedRecords = [...features, ...workflows, ...dataModels, ...capabilities];
+  addNodeIds(seedRecords);
+
+  const datastores = (await readArray("datastores.json")).filter((value) => {
+    const record = asRecord(value);
+    return record && record._schema === undefined && record._note === undefined;
+  });
+  addNodeIds(datastores);
 
   const graph = (await read("dream_graph.json")) as {
     nodes?: unknown[];
     edges?: unknown[];
   } | null;
-  if (graph) {
-    stats.graphNodes = graph.nodes?.length ?? 0;
-    stats.graphEdges = graph.edges?.length ?? 0;
-  }
+  addNodeIds(graph?.nodes ?? []);
 
   const candidates = (await read("candidate_edges.json")) as
     | { results?: unknown[] }
     | unknown[]
     | null;
-  if (candidates) {
-    if (Array.isArray(candidates)) {
-      stats.candidateEdges = candidates.length;
-    } else if (Array.isArray((candidates as { results?: unknown[] }).results)) {
-      stats.candidateEdges = (candidates as { results: unknown[] }).results.length;
-    }
-  }
+  const candidateResults = Array.isArray(candidates)
+    ? candidates
+    : candidates?.results ?? [];
+  stats.candidateEdges = candidateResults.length;
 
   const validated = (await read("validated_edges.json")) as
     | { edges?: unknown[] }
     | unknown[]
     | null;
-  if (validated) {
-    if (Array.isArray(validated)) {
-      stats.validatedEdges = validated.length;
-    } else if (Array.isArray((validated as { edges?: unknown[] }).edges)) {
-      stats.validatedEdges = (validated as { edges: unknown[] }).edges.length;
-    }
-  }
+  const validatedEdges = Array.isArray(validated)
+    ? validated
+    : validated?.edges ?? [];
+  stats.validatedEdges = validatedEdges.length;
 
   const tensions = (await read("tension_log.json")) as {
     signals?: unknown[];
     tensions?: unknown[];
   } | null;
-  if (tensions?.signals) {
-    stats.tensions = tensions.signals.length;
-  } else if (tensions?.tensions) {
-    stats.tensions = tensions.tensions.length;
-  }
+  const tensionSignals = tensions?.signals ?? tensions?.tensions ?? [];
+  stats.tensions = tensionSignals.length;
+  addNodeIds(tensionSignals);
 
   const adr = (await read("adr_log.json")) as {
     decisions?: unknown[];
@@ -293,8 +317,94 @@ async function gatherDataStats(dataDir: string): Promise<DataStats> {
   const ui = (await read("ui_registry.json")) as {
     elements?: unknown[];
   } | null;
-  if (ui?.elements) stats.uiElements = ui.elements.length;
+  const uiElements = ui?.elements ?? [];
+  stats.uiElements = uiElements.length;
+  const indexableUiElements = uiElements.filter((value) => {
+    const record = asRecord(value);
+    return record
+      && typeof record.id === "string"
+      && typeof record.name === "string"
+      && typeof record.source_repo === "string"
+      && record.source_repo.trim().length > 0;
+  });
+  addNodeIds(indexableUiElements);
 
+  let graphEdges = 0;
+  const countEdge = (from: unknown, to: unknown): void => {
+    if (typeof from === "string" && typeof to === "string"
+      && graphNodeIds.has(from) && graphNodeIds.has(to)) {
+      graphEdges++;
+    }
+  };
+  const countLinks = (value: unknown): void => {
+    const record = asRecord(value);
+    if (!record || typeof record.id !== "string" || !Array.isArray(record.links)) return;
+    for (const link of record.links) countEdge(record.id, asRecord(link)?.target);
+  };
+  for (const value of seedRecords) countLinks(value);
+  for (const value of indexableUiElements) {
+    const record = asRecord(value);
+    if (!record || typeof record.id !== "string") continue;
+    for (const field of ["used_by", "children", "flows"]) {
+      if (!Array.isArray(record[field])) continue;
+      for (const target of record[field]) countEdge(record.id, target);
+    }
+  }
+  for (const value of tensionSignals) {
+    const record = asRecord(value);
+    if (!record || typeof record.id !== "string" || !Array.isArray(record.entities)) continue;
+    for (const entity of record.entities) countEdge(record.id, entity);
+  }
+
+  const stores = datastores.map(asRecord).filter((value): value is Record<string, unknown> => value !== null);
+  const storeById = new Map(stores.flatMap((store) => typeof store.id === "string" ? [[store.id, store]] : []));
+  const resolveStore = (storage: unknown): Record<string, unknown> | undefined => {
+    if (typeof storage !== "string" || storage.trim().length === 0) return undefined;
+    const value = storage.trim();
+    if (FORBIDDEN_PERSISTENCE_SENTINELS.includes(value.toLowerCase())) return undefined;
+    const exact = storeById.get(value);
+    if (exact) return exact;
+    const needle = value.toLowerCase();
+    return stores.find((store) => {
+      const haystack = `${String(store.id ?? "")} ${String(store.name ?? "")} ${String(store.kind ?? "")}`.toLowerCase();
+      const kind = typeof store.kind === "string" ? store.kind : "";
+      return haystack.includes(needle) || (kind.length > 0 && needle.includes(kind));
+    });
+  };
+  for (const value of dataModels) {
+    const record = asRecord(value);
+    if (!record || typeof record.id !== "string") continue;
+    const links = Array.isArray(record.links) ? record.links : [];
+    const alreadyLinked = links.some((link) => {
+      const linkRecord = asRecord(link);
+      return linkRecord?.relationship === "stored_in"
+        || (typeof linkRecord?.target === "string" && storeById.has(linkRecord.target));
+    });
+    if (alreadyLinked) continue;
+    countEdge(record.id, resolveStore(record.storage)?.id);
+  }
+
+  for (const value of validatedEdges) {
+    const record = asRecord(value);
+    countEdge(record?.from, record?.to);
+  }
+  for (const value of graph?.edges ?? []) {
+    const record = asRecord(value);
+    countEdge(record?.from, record?.to);
+  }
+  const dreamEdgeById = new Map((graph?.edges ?? []).flatMap((value) => {
+    const record = asRecord(value);
+    return typeof record?.id === "string" ? [[record.id, record]] : [];
+  }));
+  for (const value of candidateResults) {
+    const record = asRecord(value);
+    if (record?.status !== "latent" || record.dream_type !== "edge") continue;
+    const dreamEdge = typeof record.dream_id === "string" ? dreamEdgeById.get(record.dream_id) : undefined;
+    countEdge(dreamEdge?.from, dreamEdge?.to);
+  }
+
+  stats.graphNodes = graphNodeIds.size;
+  stats.graphEdges = graphEdges;
   return stats;
 }
 

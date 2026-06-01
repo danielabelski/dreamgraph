@@ -79,6 +79,22 @@ codes. The set is closed and exported as `PluginRejectReason` from the SDK.
 
 `provider_capability_missing`.
 
+### `architect`
+
+| Reason                                    | Meaning                                                        |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| `architect_tab_capability_missing`        | `architect:register_tab` not declared.                         |
+| `architect_plan_state_capability_missing` | Required Architect plan-state capability not declared.         |
+| `architect_tab_id_unprefixed`             | Tab id does not start with `<plugin-id>.`.                     |
+| `architect_tab_collision`                 | Another active contribution owns the tab id.                   |
+| `architect_tab_undeclared`                | Runtime tab registration does not match `manifest.architectTabs`. |
+| `architect_action_unknown`                | Requested action id is not registered for the tab.             |
+| `architect_action_schema_invalid`         | Action payload fails the registered JSON schema.               |
+| `architect_plan_required`                 | A plan-bound operation omitted its explicit plan id.           |
+| `architect_plan_not_found`                | The requested plan does not exist.                             |
+| `architect_revision_stale`                | State write revision does not match current daemon state.      |
+| `architect_tab_unavailable`               | Tab descriptor or handler is no longer active.                 |
+
 ## Host execution boundary
 
 | Reason                            | Meaning                                                                |

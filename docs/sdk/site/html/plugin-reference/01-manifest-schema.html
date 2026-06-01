@@ -131,9 +131,10 @@ href="../../../packages/sdk/src/manifest.ts">packages/sdk/src/manifest.ts</a></p
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>  policies<span class="op">:</span>            { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>  archetypeProviders<span class="op">:</span>  { id<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>            <span class="co">// default []</span></span>
 <span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>  markdownFences<span class="op">:</span>      { language<span class="op">:</span> <span class="dt">string</span> }[]<span class="op">;</span>      <span class="co">// default []</span></span>
-<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span>              PluginPolicy<span class="op">;</span>                <span class="co">// default { phasePermissions: [], writableFiles: [] }</span></span>
-<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>  config<span class="op">?:</span>             { schema<span class="op">?:</span> <span class="dt">string</span> }<span class="op">;</span></span>
-<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>  architectTabs<span class="op">:</span>       PluginManifestArchitectTab[]<span class="op">;</span> <span class="co">// default []</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>  policy<span class="op">:</span>              PluginPolicy<span class="op">;</span>                <span class="co">// default { phasePermissions: [], writableFiles: [] }</span></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>  config<span class="op">?:</span>             { schema<span class="op">?:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <p>The schema is <strong>strict</strong>: unknown top-level fields are
 rejected with <code>manifest_invalid</code>.</p>
 <h2 id="field-level-constraints">Field-level constraints</h2>
@@ -223,6 +224,22 @@ rejected with <code>manifest_invalid</code>.</p>
 <td><code>markdown_fence_language_invalid</code></td>
 </tr>
 <tr>
+<td><code>architectTabs[].id</code></td>
+<td>lowercase <code>[a-z0-9._-]+</code>, MUST start with
+<code>&lt;plugin-id&gt;.</code></td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>architectTabs[].renderer</code></td>
+<td>currently <code>checklist</code> only</td>
+<td><code>manifest_invalid</code></td>
+</tr>
+<tr>
+<td><code>architectTabs[].planConnectivity</code></td>
+<td>`required</td>
+<td>optional</td>
+</tr>
+<tr>
 <td><code>policy.phasePermissions</code></td>
 <td>each ∈ `analysis</td>
 <td>execution</td>
@@ -242,6 +259,8 @@ rejected with <code>manifest_invalid</code>.</p>
 <h2 id="example">Example</h2>
 <p>See <a
 href="../../../examples/hello-events/plugin.json">examples/hello-events/plugin.json</a>
-for a manifest exercising every M6 seam.</p>
+for a manifest exercising every M6 seam and <a
+href="../../../examples/action-checklist/plugin.json">examples/action-checklist/plugin.json</a>
+for a standalone Architect tab manifest.</p>
 </body>
 </html>

@@ -138,8 +138,9 @@ async function startHTTP(port: number): Promise<void> {
   setDashboardContext({ getSessionCount: () => sessions.size, port });
 
   const httpServer = http.createServer(async (req, res) => {
-    // --- CORS (allow any origin for local-dev / CLI usage) ----------
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    try {
+      // --- CORS (allow any origin for local-dev / CLI usage) ----------
+      res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader(
       "Access-Control-Allow-Methods",
       "GET, POST, DELETE, OPTIONS",
@@ -256,7 +257,7 @@ async function startHTTP(port: number): Promise<void> {
     // ---- /architect + /api/architect/* — Standalone Architect Phase 1 ----
     if (
       url.pathname === "/architect" ||
-      url.pathname === "/architect/" ||
+      url.pathname.startsWith("/architect/") ||
       url.pathname === "/api/architect" ||
       url.pathname === "/api/architect/" ||
       url.pathname.startsWith("/api/architect/")
@@ -284,8 +285,13 @@ async function startHTTP(port: number): Promise<void> {
       if (handled) return;
     }
 
-    res.writeHead(404, { "Content-Type": "text/plain" });
-    res.end("Not found");
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+    } catch (error) {
+      logger.error(`HTTP request failed (${req.method ?? "UNKNOWN"} ${req.url ?? "/"}): ${(error as Error).message}`);
+      if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
+      if (!res.writableEnded) res.end(JSON.stringify({ error: "internal_error" }));
+    }
   });
 
   httpServer.on("upgrade", async (req, socket: Socket, head) => {

@@ -21,6 +21,7 @@ import {
   formatArchitectPluginInspectPayload,
   formatArchitectPluginListPayload,
   formatArchitectStatusPayload,
+  buildArchitectProviderReadiness,
   handleArchitectRoute,
 } from "../src/architect/routes.js";
 import * as lifecycle from "../src/instance/lifecycle.js";
@@ -161,6 +162,37 @@ describe("standalone Architect route hardening", () => {
       expect(html).not.toContain(">Architect Chat<");
       expect(html).toContain("height: 100vh;");
       expect(html).toContain("overflow: hidden;");
+      expect(html).toContain("Connect repositories");
+      expect(html).toContain("Add related repo");
+      expect(html).toContain("Save repositories");
+      expect(html).toContain("Build first project map");
+      expect(html).toContain("How should Architect answer?");
+      expect(html).toContain("Advanced runtime controls");
+      expect(html).toContain("Test setup");
+      expect(html).toContain('id="architect-provider-dismiss"');
+      expect(html).toContain('id="architect-provider-suppress"');
+      expect(html).toContain("Do not show this setup box again");
+      expect(html).toContain('id="architect-provider-show"');
+      expect(html).toContain("grid-template-rows: auto auto auto auto minmax(0, 1fr);");
+      expect(html).toContain("grid-row: -2 / -1;");
+      expect(html).toContain("grid-template-rows: minmax(0, 1fr) minmax(0, auto) auto;");
+      expect(html).toContain("max-height: min(58vh, 520px);");
+      expect(script).toContain("function appendArchitectRepoRow");
+      expect(script).toContain("function isArchitectProviderSetupSuppressed");
+      expect(script).toContain("function setArchitectProviderSetupVisible");
+      expect(script).toContain("if (readiness.ready) setArchitectProviderSetupVisible(false, true);");
+      expect(script).toContain("architect.provider.setup.suppressed.v1");
+      expect(script).toContain("function testArchitectProviderReadiness");
+      expect(script).toContain("function renderArchitectRecipes");
+      expect(script).toContain("function recordArchitectOnboardingEvent");
+      expect(script).toContain("second_session_return");
+      expect(html).toContain("Start from a recipe");
+      expect(html).toContain('href="/architect-guide"');
+      expect(html).toContain("Artifact: ");
+      expect(html).toContain("Verify: ");
+      expect(script).toContain("Prototype or small app");
+      expect(script).toContain("Multi-repo system");
+      expect(script).toContain("/api/architect/v1/repo-setup");
     });
   });
 
@@ -224,6 +256,84 @@ describe("standalone Architect route hardening", () => {
         await expect(stat(join(projectRoot, ".dreamgraph"))).rejects.toThrow();
       });
     } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("requires explicit approval before acquiring the pinned Doom shareware bundle", async () => {
+    const previousDoom = process.env.DREAMGRAPH_ENABLE_DOOM;
+    process.env.DREAMGRAPH_ENABLE_DOOM = "true";
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-doom-spike-"));
+    const projectRoot = join(tempRoot, "project");
+    const runtimeDir = join(tempRoot, "instance", "runtime");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-doom-spike-test",
+      projectRoot,
+      runtimeDir,
+    } as never);
+
+    try {
+      await mkdir(projectRoot, { recursive: true });
+      await withArchitectServer(async (baseUrl) => {
+        const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+        const routes = contract.routes as Record<string, string>;
+        expect(routes.doom_spike_harness).toBe("/architect/doom-spike");
+        expect(routes.doom_spike_bundle_status).toBe("GET /api/architect/v1/doom/spike-bundle/status");
+        expect(routes.doom_spike_bundle_acquire).toBe("POST /api/architect/v1/doom/spike-bundle/acquire");
+        expect(routes.doom_spike_bundle).toBe("GET /api/architect/v1/doom/spike-bundle");
+
+        const harness = await fetch(`${baseUrl}/architect/doom-spike`);
+        expect(harness.status).toBe(200);
+        const harnessHtml = await harness.text();
+        expect(harnessHtml).toContain("Approve Doom Shareware Download");
+        expect(harnessHtml).toContain("/api/architect/v1/assets/js-dos/js-dos.js");
+        expect(harnessHtml).toContain("/api/architect/v1/doom/spike-bundle?sha256=40d74b90f3527480d2256c75ef443777bd5bebde95133cfe3ba01b2390516712");
+        expect(harnessHtml).toContain("pathPrefix: '/api/architect/v1/assets/js-dos/emulators/'");
+        expect(harnessHtml).toContain("props.setPaused(true)");
+        expect(harnessHtml).toContain("await active.stop()");
+        expect(harnessHtml).toContain("setStatus(error.message || String(error));");
+        expect(harnessHtml).toContain("runtimePromise = null;");
+        expect(harnessHtml).not.toContain("https://v8.js-dos.com/latest");
+
+        const jsDosAsset = await fetch(`${baseUrl}/api/architect/v1/assets/js-dos/js-dos.js`);
+        expect(jsDosAsset.status).toBe(200);
+        expect(jsDosAsset.headers.get("content-type")).toContain("application/javascript");
+        const emulatorsAsset = await fetch(`${baseUrl}/api/architect/v1/assets/js-dos/emulators/emulators.js`);
+        expect(emulatorsAsset.status).toBe(200);
+        expect(emulatorsAsset.headers.get("content-type")).toContain("application/javascript");
+        const wasmAsset = await fetch(`${baseUrl}/api/architect/v1/assets/js-dos/emulators/wdosbox.wasm`);
+        expect(wasmAsset.status).toBe(200);
+        expect(wasmAsset.headers.get("content-type")).toContain("application/wasm");
+        const traversal = await fetch(`${baseUrl}/api/architect/v1/assets/js-dos/%2e%2e/package.json`);
+        expect(traversal.status).toBe(404);
+
+        const status = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/doom/spike-bundle/status`));
+        expect(status.bundle).toMatchObject({
+          acquired: false,
+          approval_required: true,
+          source_kind: "js_dos_hosted_doom_shareware_bundle",
+          source_url: "https://v8.js-dos.com/bundles/doom.jsdos",
+          local_bundle_url: null,
+        });
+
+        const localRead = await fetch(`${baseUrl}/api/architect/v1/doom/spike-bundle`);
+        expect(localRead.status).toBe(404);
+        await expect(localRead.json()).resolves.toMatchObject({ error: "bundle_not_acquired" });
+
+        const acquire = await fetch(`${baseUrl}/api/architect/v1/doom/spike-bundle/acquire`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved: false }),
+        });
+        expect(acquire.status).toBe(400);
+        await expect(acquire.json()).resolves.toMatchObject({ error: "approval_required" });
+        await expect(stat(join(projectRoot, ".dreamgraph"))).rejects.toThrow();
+        await expect(stat(join(runtimeDir, "cache", "architect-doom", "doom-shareware.jsdos"))).rejects.toThrow();
+      });
+    } finally {
+      if (previousDoom === undefined) delete process.env.DREAMGRAPH_ENABLE_DOOM;
+      else process.env.DREAMGRAPH_ENABLE_DOOM = previousDoom;
       scopeSpy.mockRestore();
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -333,6 +443,9 @@ describe("standalone Architect route hardening", () => {
       const interop = payload.vscode_interop as Record<string, unknown>;
 
       expect(routes.config).toBe("POST /api/architect/v1/config");
+      expect(routes.provider_readiness).toBe("POST /api/architect/v1/provider-readiness");
+      expect(routes.repo_setup).toBe("GET|POST /api/architect/v1/repo-setup");
+      expect(routes.onboarding_events).toBe("GET|POST /api/architect/v1/onboarding-events");
       expect(routes.selection).toBe("POST /api/architect/v1/selection");
       expect(routes.future_review).toBe("/api/architect/v1/plans/{planId}/future-review");
       expect(routes.schedules).toBe("/api/architect/v1/schedules");
@@ -523,6 +636,31 @@ describe("standalone Architect route hardening", () => {
       expect(String(otherSelectedCandidate.id)).toContain("architect_rewrite_foundation_plan");
       expect(otherSelectedCandidate.label).not.toBe(selectedCandidate.label);
     });
+  });
+
+  it("mirrors task-first Architect recipes into the beginner guide", async () => {
+    const guide = await readFile(join(process.cwd(), "guide", "architect-for-dummies.md"), "utf8");
+    expect(guide).toContain("## Recipe Library");
+    expect(guide).toContain("Explain this app before I change it");
+    expect(guide).toContain("Create a coordinated implementation plan");
+    expect(guide).toContain("## Slash Commands");
+    expect(guide).toContain("## Code Editor Tab");
+    expect(guide).toContain("## Terminal Tab");
+    expect(guide).toContain("DreamGraph MCP-authoritative");
+  });
+
+  it("validates provider wizard routes without weakening MCP authority", () => {
+    const previousKey = process.env.DREAMGRAPH_LLM_API_KEY;
+    try {
+      delete process.env.DREAMGRAPH_LLM_API_KEY;
+      expect(buildArchitectProviderReadiness({ adapter: "codex-cli", provider: "openai", model: "gpt-5" })).toMatchObject({ ready: true, provider: "none", authority: "dreamgraph_mcp", kind: "cli_subscription" });
+      expect(buildArchitectProviderReadiness({ adapter: "deterministic_fallback" })).toMatchObject({ ready: true, provider: "none", authority: "dreamgraph_mcp", kind: "deterministic" });
+      expect(buildArchitectProviderReadiness({ adapter: "native_api_tool_loop", provider: "openai", model: "gpt-5" })).toMatchObject({ ready: false, detail: "Set DREAMGRAPH_LLM_API_KEY for openai." });
+      expect(buildArchitectProviderReadiness({ adapter: "native_api_tool_loop", provider: "ollama", model: "qwen3:8b" })).toMatchObject({ ready: true, kind: "local" });
+    } finally {
+      if (previousKey === undefined) delete process.env.DREAMGRAPH_LLM_API_KEY;
+      else process.env.DREAMGRAPH_LLM_API_KEY = previousKey;
+    }
   });
 
   it("exposes one active session runtime across config and chat payloads", async () => {
@@ -929,15 +1067,19 @@ describe("standalone Architect route hardening", () => {
       await writeFile(join(plansDir, "completed-slice-projection.implementation-log.md"), [
         "# Completed Slice Projection Implementation Log",
         "",
-        "### 2026-05-29T12:00:00.000Z - slice: Slice 1 - Foundation - status: completed",
+        "### 2026-05-29T12:00:00.000Z - slice: 1 - status: completed",
         "",
         "- Verification: complete",
         "",
-        "### 2026-05-29T12:10:00.000Z - slice: Slice 2 - Layout - status: completed",
+        "### 2026-05-29T12:10:00.000Z - slice: 2 - status: completed",
         "",
         "- Resume note: continue with Slice 2 - Layout",
         "",
-        "### 2026-05-29T12:20:00.000Z - slice: Slice 3 - Tests - status: completed",
+        "### 2026-05-29T12:20:00.000Z - slice: 3 - status: completed",
+        "",
+        "- Verification: complete",
+        "",
+        "### 2026-05-29T12:30:00.000Z - slice: plan-completion - status: completed",
         "",
         "- Verification: complete",
         "",
@@ -955,9 +1097,10 @@ describe("standalone Architect route hardening", () => {
         expect(operational.plan_lifecycle).toBe("completed");
         expect(operational.execution_state).toBe("complete");
         expect(operational.next_slice).toBeNull();
-        expect(String(activeSlice?.title ?? activeSlice?.id ?? "")).toContain("Slice 3");
+        expect(activeSlice).toBeNull();
         expect(String(lastCompleted?.title ?? lastCompleted?.id ?? "")).toContain("Slice 3");
-        expect(String(operational.current_slice_title ?? "")).toContain("Slice 3");
+        expect(operational.current_slice_id).toBeNull();
+        expect(operational.current_slice_title).toBeNull();
         expect(String(operational.resume_hint ?? "")).toContain("completed after Slice 3");
         expect(String(operational.resume_hint ?? "")).not.toContain("continue with Slice 2");
 
@@ -980,13 +1123,13 @@ describe("standalone Architect route hardening", () => {
       identity: { uuid: "instance-1", name: "Architect", status: "active", mode: "standalone", policy: "local" },
       project: { root: "C:/repo" },
       daemon: { running: true, pid: 1234, port: 8765, uptime_ms: 65000, crashed: false },
-      cognitive: { graph_nodes: 10, graph_edges: 20, validated_edges: 5, dream_cycles: 2, tool_calls: 7 },
+      cognitive: { graph_nodes: 10, graph_edges: 20, candidate_edges: 30, validated_edges: 5, tensions: 4, adr_decisions: 3, ui_elements: 6, dream_cycles: 2, tool_calls: 7 },
     }, "fallback-instance");
 
     expect(rendered).toContain("DreamGraph status");
     expect(rendered).toContain("Instance: Architect (instance-1)");
     expect(rendered).toContain("Daemon: running, pid 1234, port 8765, uptime 65s");
-    expect(rendered).toContain("Cognitive: 10 nodes, 20 edges, 5 validated edges");
+    expect(rendered).toContain("Cognitive: 10 nodes, 20 edges, 30 candidate edges, 5 validated edges, 4 tensions, 3 ADR decisions, 6 UI elements");
     expect(rendered).not.toContain("dg status");
   });
 
@@ -1219,6 +1362,16 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("const tokens = splitArchitectWords(text.slice(1));");
       expect(html).toContain("function tryHandleSlashCommand");
       expect(html).toContain("class=\"prompt-surface\"");
+      expect(html).toContain("class=\"prompt-surface-header\"");
+      expect(html).toContain("class=\"scope-pill architect-welcome-reopen\"");
+      expect(html).toContain("id=\"architect-welcome\"");
+      expect(html).toContain("What do you want to do with this project?");
+      expect(html).toContain("First artifact: ");
+      expect(html).toContain("function renderArchitectWelcome");
+      expect(html).toContain("function launchArchitectMission");
+      expect(html).toContain("function ensureDaemonPlanForMission");
+      expect(html).toContain("Run the governed ' + check.action.target + ' action");
+      expect(html).toContain("id=\"architect-welcome-reopen\"");
       expect(html).toContain("id=\"chat-scope-pill\"");
       expect(html).toContain("id=\"chat-attachment-button\"");
       expect(html).toContain("id=\"chat-attachment-input\"");
@@ -1255,6 +1408,14 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("New Terminal");
       expect(html).toContain("function renderTerminalArchitectTabPanel");
       expect(html).toContain("/api/architect/v1/terminals");
+      expect(html).toContain("function suspendArchitectDoomTab() {}");
+      expect(html).toContain("function resumeArchitectDoomTab() {}");
+      expect(html).not.toContain("function createDoomArchitectTab");
+      expect(html).not.toContain("function renderDoomArchitectTabPanel");
+      expect(html).not.toContain("New Doom Session");
+      expect(html).not.toContain("Doom Shareware");
+      expect(html).not.toContain(".doom-first-run-card");
+      expect(html).not.toContain("/api/architect/v1/assets/js-dos/");
       expect(html).toContain("Terminal output is local convenience output, not daemon payload authority.");
       expect(html).toContain("terminal-console");
       expect(html).toContain("const activePanel = architectCenterPanelContainer.querySelector('[data-architect-tab-panel]:not([hidden])');");
@@ -1309,5 +1470,45 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("meta.className = 'plan-meta'");
       expect(html).toContain("title.className = 'plan-title'");
     });
+  });
+
+  it("keeps Doom routes and assets absent unless explicitly configured", async () => {
+    const previous = process.env.DREAMGRAPH_ENABLE_DOOM;
+    delete process.env.DREAMGRAPH_ENABLE_DOOM;
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+        const routes = contract.routes as Record<string, string>;
+        expect(routes.doom_spike_harness).toBeUndefined();
+        expect(routes.doom_spike_bundle_status).toBeUndefined();
+        expect(routes.doom_spike_bundle_acquire).toBeUndefined();
+        expect(routes.doom_spike_bundle).toBeUndefined();
+        expect((await fetch(`${baseUrl}/architect/doom-spike`)).status).toBe(404);
+        expect((await fetch(`${baseUrl}/api/architect/v1/assets/js-dos/js-dos.js`)).status).toBe(404);
+        expect((await fetch(`${baseUrl}/api/architect/v1/doom/spike-bundle/status`)).status).toBe(404);
+      });
+    } finally {
+      if (previous === undefined) delete process.env.DREAMGRAPH_ENABLE_DOOM;
+      else process.env.DREAMGRAPH_ENABLE_DOOM = previous;
+    }
+  });
+
+  it("enables Doom tab registration only when explicitly configured", async () => {
+    const previous = process.env.DREAMGRAPH_ENABLE_DOOM;
+    process.env.DREAMGRAPH_ENABLE_DOOM = "true";
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/architect`);
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("function createDoomArchitectTab");
+        expect(html).toContain("function renderDoomArchitectTabPanel");
+        expect(html).toContain("registerArchitectTabType({ type: 'doom', title: 'New Doom Session', create: createDoomArchitectTab });");
+        expect(html).toContain("pathPrefix: '/api/architect/v1/assets/js-dos/emulators/'");
+      });
+    } finally {
+      if (previous === undefined) delete process.env.DREAMGRAPH_ENABLE_DOOM;
+      else process.env.DREAMGRAPH_ENABLE_DOOM = previous;
+    }
   });
 });

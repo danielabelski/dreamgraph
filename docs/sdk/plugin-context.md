@@ -1,25 +1,25 @@
 # Plugin Context
 
-`PluginContext` is part of the shipped DreamGraph v9.0.0 plugin baseline. It is an authoritative runtime surface used by loaded plugins for capabilities such as logging, resource access, tool interaction, lifecycle-aware behavior, and other host-provided integrations. Earlier roadmap-era wording that described it as provisional or pending future host loading no longer applies after the M0–M6 baseline recorded in ADR-139.
+`PluginContext` is the shipped trusted in-process runtime surface handed to loaded plugins. It is an API boundary, not a sandbox.
 
-## Current declaration context
+## Allow surface
 
-SDK helper contexts currently contain only:
+The host exposes namespaced identity, logging, events, tools, resources, semantic UI metadata, discipline proposals, archetype providers, markdown fences, declarative Architect tabs, daemon-owned Architect plan state, and an unload-aware `AbortSignal`.
 
-- `pluginId`
-- optional `AbortSignal`
+Architect plugins use:
 
-This keeps examples typeable without implying runtime capabilities that the host does not enforce yet.
+```ts
+ctx.architect.tabs.register(definition);
+await ctx.architect.planState.read(key, context);
+await ctx.architect.planState.write(key, value, { ...context, revision });
+```
 
-## Future host context constraints
+Architect state is namespaced by instance, plugin id, plan id, tab type id, and key. Plan-bound operations require an explicit `planId`; project scope does not silently bind to a selected or first plan. Browser clients receive validated snapshots through `/api/architect/v1/plugin-tabs`, never raw store paths or plugin modules.
 
-When runtime loading is implemented, the host-owned context must preserve these rules:
+## Deny list
 
-- Instance scoped access only.
-- No access above the instance data directory.
-- Internal graph files are read-only unless a core API explicitly mediates access.
-- Shared JSON writes use existing file lock and atomic write discipline.
-- Event handlers run through host-owned deferred queues, not inline on the synchronous bus.
-- Network/process/secrets authority remains host mediated and deny-by-default.
+`PluginContext` deliberately does not expose raw filesystem paths, internal graph writers, tension or graph mutation, arbitrary network primitives, process helpers, browser DOM access, plugin browser JavaScript, iframes, or browser-local authoritative state.
 
-This document is intentionally not a runtime API promise for M1.
+Trusted plugin code runs in the daemon process and can reach Node globals if it deliberately bypasses `ctx`. Doing so is a trust violation and grounds for quarantine, not a sandbox escape. Supported workflows must stay on host-mediated seams so capability checks, effect checks, telemetry, lifecycle cleanup, and persistence rules remain enforceable.
+
+See the [PluginContext API reference](plugin-reference/05-context-api.md) and [Architect tabs guide](plugin-developer-guide/13-architect-tabs.md).

@@ -49,13 +49,13 @@ export interface PluginErroredPayload extends PluginTelemetryBase {
 
 export interface PluginHandlerStartedPayload extends PluginTelemetryBase {
   correlation_id: string;
-  seam: "tool" | "resource" | "event" | "schedule_action";
+  seam: "tool" | "resource" | "event" | "schedule_action" | "architect_tab" | "architect_plan_state";
   target: string;
 }
 
 export interface PluginHandlerCompletedPayload extends PluginTelemetryBase {
   correlation_id: string;
-  seam: "tool" | "resource" | "event" | "schedule_action";
+  seam: "tool" | "resource" | "event" | "schedule_action" | "architect_tab" | "architect_plan_state";
   target: string;
   duration_ms: number;
   ok: boolean;
@@ -64,14 +64,14 @@ export interface PluginHandlerCompletedPayload extends PluginTelemetryBase {
 export interface PluginOutputAcceptedPayload extends PluginTelemetryBase {
   correlation_id: string;
   effect: string;
-  seam: "tool" | "resource" | "event" | "schedule_action" | "webhook" | "ui" | "archetype" | "policy" | "markdown_fence";
+  seam: "tool" | "resource" | "event" | "schedule_action" | "webhook" | "ui" | "archetype" | "policy" | "markdown_fence" | "architect_tab" | "architect_plan_state";
   target?: string;
 }
 
 export interface PluginOutputRejectedPayload extends PluginTelemetryBase {
   correlation_id?: string;
   reason: PluginRejectReason;
-  seam: "tool" | "resource" | "event" | "schedule_action" | "webhook" | "ui" | "archetype" | "policy" | "markdown_fence" | "host";
+  seam: "tool" | "resource" | "event" | "schedule_action" | "webhook" | "ui" | "archetype" | "policy" | "markdown_fence" | "architect_tab" | "architect_plan_state" | "host";
   target?: string;
   detail?: string;
 }

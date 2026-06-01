@@ -1,121 +1,62 @@
 # Telemetry events (normative)
 
-[← Index](00-index.md) · Source: [packages/host/src/telemetry-emitter.ts](../../../packages/host/src/telemetry-emitter.ts)
+[<- Index](00-index.md) · Source: [packages/sdk/src/telemetry.ts](../../../packages/sdk/src/telemetry.ts)
 
-The host emits a uniform `plugin.*` stream on the cognitive event bus. Every
-event carries a common base envelope plus per-kind extras.
+The host emits a stable `plugin.*` stream. Every payload includes `plugin_id`, `plugin_version`, and ISO-8601 `occurred_at`.
 
-## Common base
+## Event kinds
 
-```ts
-interface PluginTelemetryBase {
-  plugin_id:      string;
-  plugin_version: string;
-  ts:             string;            // ISO-8601
-  correlation_id?: string;           // matches handler.started/completed
-  seam?:          "tools" | "resources" | "events" | "ui"
-                 | "policy" | "archetypes" | "markdown_fences" | "host";
-}
-```
+| Kind | Purpose |
+| --- | --- |
+| `plugin.loaded` | Successful activation, runtime, trust state, and capabilities. |
+| `plugin.unloaded` | Shutdown, disable, reload, or quarantine cleanup. |
+| `plugin.errored` | Host boundary or handler failure. |
+| `plugin.handler.started` | Timed handler invocation start. |
+| `plugin.handler.completed` | Timed handler invocation completion with `ok`. |
+| `plugin.output.accepted` | Host accepted a mediated effect. |
+| `plugin.output.rejected` | Host refused a mediated effect or registration. |
 
-## Per kind
+## Handler seams
 
-### `plugin.loaded`
-
-Emitted after manifest acceptance and successful `activate(ctx)`.
+`plugin.handler.started` and `plugin.handler.completed` use:
 
 ```ts
-interface PluginLoadedPayload extends PluginTelemetryBase {
-  runtime:           "in-process";   // "worker" reserved for M8
-  declared_effects:  PluginEffect[];
-  declared_capabilities: PluginCapability[];
-}
+type PluginHandlerSeam =
+  | "tool"
+  | "resource"
+  | "event"
+  | "schedule_action"
+  | "architect_tab"
+  | "architect_plan_state";
 ```
 
-### `plugin.unloaded`
+Both carry `correlation_id`, `seam`, and `target`. Completion also carries `duration_ms` and `ok`.
 
-Emitted on graceful disable / shutdown.
+## Accepted output seams
 
 ```ts
-interface PluginUnloadedPayload extends PluginTelemetryBase {
-  reason: "disable" | "shutdown" | "reload";
-}
+type PluginAcceptedOutputSeam =
+  | "tool"
+  | "resource"
+  | "event"
+  | "schedule_action"
+  | "webhook"
+  | "ui"
+  | "archetype"
+  | "policy"
+  | "markdown_fence"
+  | "architect_tab"
+  | "architect_plan_state";
 ```
 
-### `plugin.errored`
+Accepted output carries `correlation_id`, `effect`, `seam`, and optional `target`.
 
-Emitted on manifest rejection, unhandled throw, watchdog stall, or any
-quarantine path.
+## Rejected output seams
 
-```ts
-interface PluginErroredPayload extends PluginTelemetryBase {
-  reason:  PluginRejectReason;       // see reference §4
-  message: string;                   // human-readable
-  stack?:  string;
-  measured_lag_ms?: number;          // present iff reason === "event_loop_stall"
-}
-```
+Rejected output supports the accepted output seams plus `host`. It carries `reason: PluginRejectReason`, optional `correlation_id`, optional `target`, and optional human-readable `detail`.
 
-### `plugin.handler.started`
-
-Emitted just before a tool handler / resource handler / event subscriber runs.
-
-```ts
-interface PluginHandlerStartedPayload extends PluginTelemetryBase {
-  correlation_id: string;
-  surface:        "tool" | "resource" | "event_handler";
-  surface_id:     string;            // tool name / uri / event kind
-}
-```
-
-### `plugin.handler.completed`
-
-Emitted on handler success.
-
-```ts
-interface PluginHandlerCompletedPayload extends PluginTelemetryBase {
-  correlation_id: string;
-  surface:        "tool" | "resource" | "event_handler";
-  surface_id:     string;
-  duration_ms:    number;
-}
-```
-
-### `plugin.output.accepted`
-
-Emitted when the host successfully forwarded / wrote / dispatched the plugin's
-output.
-
-```ts
-interface PluginOutputAcceptedPayload extends PluginTelemetryBase {
-  surface:        "tool" | "resource" | "event_emit"
-                | "ui_register" | "policy_propose"
-                | "archetype_register" | "markdown_fence_register";
-  surface_id:     string;
-  effect:         PluginEffect;
-}
-```
-
-### `plugin.output.rejected`
-
-Emitted when the host refused output (capability missing, effect undeclared,
-forbidden, schema invalid, namespace violation, quota exceeded, etc.).
-
-```ts
-interface PluginOutputRejectedPayload extends PluginTelemetryBase {
-  surface:        "tool" | "resource" | "event_emit"
-                | "ui_register" | "policy_propose"
-                | "archetype_register" | "markdown_fence_register";
-  surface_id:     string;
-  reason:         PluginRejectReason;
-  message:        string;
-  attempted_effect?: PluginEffect;
-}
-```
+Architect tab registration, plan-state access, snapshot loading, and action dispatch therefore use the normal host-owned telemetry stream. They do not create a browser-only audit channel.
 
 ## Stability
 
-`plugin.loaded`, `plugin.unloaded`, `plugin.errored`, `plugin.handler.*`,
-`plugin.output.accepted`, and `plugin.output.rejected` are part of the **stable**
-event surface for v1. Their payload shapes will only grow additively within a
-major SDK version.
+The seven event kinds above are stable SDK contracts. Payloads may grow additively within a major SDK version.

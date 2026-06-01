@@ -69,6 +69,10 @@ Locked for v1 — see [reference / capabilities](../plugin-reference/02-capabili
 | `archetypes:provide`           | register a federation archetype provider            |
 | `providers:register`           | (reserved, post-1.0) provider adapter seam          |
 | `markdown:register_fence`      | register a webview markdown fence language          |
+| `architect:register_tab`       | register a manifest-declared standalone Architect tab |
+| `architect:read_plan`          | read explicit plan-bound Architect state            |
+| `architect:write_plan_state`   | persist daemon-owned namespaced Architect state     |
+| `architect:register_sidebar_summary` | project Architect sidebar summary and badges   |
 
 A capability not present in the manifest's `capabilities` array means the
 matching seam call returns `*_capability_missing` and is dropped.
@@ -93,6 +97,10 @@ matching seam call returns `*_capability_missing` and is dropped.
 | `provide_archetypes`         | feed federation archetypes                                           |
 | `render_markdown_fence`      | declare a webview markdown fence                                     |
 | `register_provider_adapter`  | (reserved) provider adapter                                          |
+| `render_architect_tab`       | project a host-rendered standalone Architect tab                     |
+| `read_architect_plan_projection` | load an explicit plan-bound Architect snapshot                  |
+| `write_architect_plan_state` | persist daemon-owned namespaced Architect state                      |
+| `render_architect_sidebar_summary` | project sidebar summary and badge data                         |
 
 ## 4.5 Naming rules — both ids and tool names
 
@@ -104,6 +112,7 @@ matching seam call returns `*_capability_missing` and is dropped.
 | UI element `id`     | starts with `<plugin-id>.`                       | `ui_id_unprefixed`           |
 | Policy proposal id  | lowercase `[a-z0-9._-]+`                          | `manifest_invalid`           |
 | Markdown fence lang | lowercase `[a-z0-9._-]+`, no collision           | `markdown_fence_language_invalid` / `_collision` |
+| Architect tab `id`  | starts with `<plugin-id>.`; runtime declaration matches manifest | `architect_tab_id_unprefixed` / `architect_tab_undeclared` |
 
 **Per ADR-128**, tool names must carry primary semantics: a model should be able
 to infer the dominant action and target from the name alone, without reading the

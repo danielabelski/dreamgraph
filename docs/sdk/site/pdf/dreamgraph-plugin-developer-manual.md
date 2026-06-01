@@ -1,6 +1,6 @@
 ﻿---
 title: DreamGraph Plugin Developer Manual
-subtitle: Guide and Reference Manual --- v10.5.0 Renata
+subtitle: Guide and Reference Manual --- v12.1.0 Living DreamGraph
 ---
 
 # Part I --- Plugin Developer Guide
@@ -11,7 +11,7 @@ subtitle: Guide and Reference Manual --- v10.5.0 Renata
 # DreamGraph Plugin Developer Guide
 
 **Audience:** Engineers writing third-party plugins against `@dreamgraph/sdk`.
-**Engine baseline:** v10.5.0 "Renata" (M0–M6 implemented; M5 webhooks shipped; M4 schedule actions deferred).
+**Engine baseline:** v12.1.0 "Living DreamGraph" (M0-M6 implemented; M5 webhooks shipped; M4 schedule actions deferred; Adaptive Future audit metadata available; standalone architect projections include pulse, playback, tension clusters, desires, and living-plan state).
 **Companion:** see the [Plugin Reference Manual](../plugin-reference/00-index.md) for strict, normative tables.
 
 This guide is task-oriented. It walks you from "what is a plugin" through a working
@@ -32,6 +32,7 @@ and the practices DreamGraph expects.
 10. [Installation and lifecycle](10-lifecycle-and-installation.md) — discovery, trust, restart, hot-disable.
 11. [Telemetry, debugging, testing](11-telemetry-debugging-testing.md) — `plugin.*` events and the test harness.
 12. [Best practices and pitfalls](12-best-practices.md) — naming, naming, naming. And quotas.
+13. [Architect tabs](13-architect-tabs.md) — declarative standalone Architect tabs, explicit plan scope, persistence, and actions.
 
 > **Building this guide locally as HTML/PDF:** run `scripts/build-plugin-docs.ps1`.
 > Outputs land under `docs/sdk/site/html/` and `docs/sdk/site/pdf/`.
@@ -402,6 +403,10 @@ Locked for v1 — see [reference / capabilities](../plugin-reference/02-capabili
 | `archetypes:provide`           | register a federation archetype provider            |
 | `providers:register`           | (reserved, post-1.0) provider adapter seam          |
 | `markdown:register_fence`      | register a webview markdown fence language          |
+| `architect:register_tab`       | register a manifest-declared standalone Architect tab |
+| `architect:read_plan`          | read explicit plan-bound Architect state            |
+| `architect:write_plan_state`   | persist daemon-owned namespaced Architect state     |
+| `architect:register_sidebar_summary` | project Architect sidebar summary and badges   |
 
 A capability not present in the manifest's `capabilities` array means the
 matching seam call returns `*_capability_missing` and is dropped.
@@ -426,6 +431,10 @@ matching seam call returns `*_capability_missing` and is dropped.
 | `provide_archetypes`         | feed federation archetypes                                           |
 | `render_markdown_fence`      | declare a webview markdown fence                                     |
 | `register_provider_adapter`  | (reserved) provider adapter                                          |
+| `render_architect_tab`       | project a host-rendered standalone Architect tab                     |
+| `read_architect_plan_projection` | load an explicit plan-bound Architect snapshot                  |
+| `write_architect_plan_state` | persist daemon-owned namespaced Architect state                      |
+| `render_architect_sidebar_summary` | project sidebar summary and badge data                         |
 
 ## 4.5 Naming rules — both ids and tool names
 
@@ -437,6 +446,7 @@ matching seam call returns `*_capability_missing` and is dropped.
 | UI element `id`     | starts with `<plugin-id>.`                       | `ui_id_unprefixed`           |
 | Policy proposal id  | lowercase `[a-z0-9._-]+`                          | `manifest_invalid`           |
 | Markdown fence lang | lowercase `[a-z0-9._-]+`, no collision           | `markdown_fence_language_invalid` / `_collision` |
+| Architect tab `id`  | starts with `<plugin-id>.`; runtime declaration matches manifest | `architect_tab_id_unprefixed` / `architect_tab_undeclared` |
 
 **Per ADR-128**, tool names must carry primary semantics: a model should be able
 to infer the dominant action and target from the name alone, without reading the
@@ -475,6 +485,7 @@ interface PluginContext {
   readonly policies:       { propose };
   readonly archetypes:     { registerProvider };
   readonly markdownFences: { register };
+  readonly architect:      { tabs: { register }; planState: { read; write } };
   readonly signal: AbortSignal;          // aborted on disable / timeout
 }
 ```
@@ -485,7 +496,13 @@ contributions automatically when the plugin is disabled or the instance shuts
 down. Use the returned functions only when you want a contribution to disappear
 *before* deactivation (rare).
 
-## 5.2 The deny list
+## 5.2 Architect tabs and plan state
+
+`ctx.architect.tabs.register()` contributes a manifest-declared standalone Architect tab rendered by the host. `ctx.architect.planState.read()` and `.write()` access daemon-owned namespaced state with explicit plan ids and revision tokens. Browser clients receive validated descriptors and snapshots only. See [Architect tabs](13-architect-tabs.md).
+
+`ctx.ui.register()` remains a separate metadata-only semantic UI registry seam; it does not execute browser code.
+
+## 5.3 The deny list
 
 `ctx` deliberately does **not** expose:
 
@@ -506,7 +523,7 @@ daemon's process and *can* reach Node globals if they want to. Doing so is a
 trust violation and grounds for quarantine, not a sandbox escape. See §9 for
 the full trust narrative.
 
-## 5.3 The `signal`
+## 5.4 The `signal`
 
 `ctx.signal` is an `AbortSignal` the host aborts when:
 
@@ -519,7 +536,7 @@ Pass it to long-running work that supports cancellation (`fetch(url, { signal })
 your own loops). You are not required to use it, but ignoring it means your
 plugin can keep running for a few extra seconds during shutdown.
 
-## 5.4 Logging
+## 5.5 Logging
 
 `ctx.logger` is namespaced under `plugin:<id>`. Lines appear in the daemon's log
 stream and are mirrored to the event bus as standard log events. Do **not** use
@@ -1144,6 +1161,75 @@ Before publishing a plugin:
 
 \newpage
 
+# 13. Architect tabs
+
+[<- Best practices](12-best-practices.md) · [Reference: Architect tabs](../plugin-reference/10-architect-tabs.md)
+
+Trusted plugins can contribute first-class tabs to the daemon-served standalone Architect surface through `ctx.architect`. The browser boundary is declarative: plugin handlers run in the host process, while browser clients receive validated descriptors and JSON snapshots rendered by host-supported renderer kinds.
+
+The initial renderer is `checklist`. Arbitrary browser JavaScript, HTML, remote scripts, inline scripts, iframes, and direct DOM callbacks are not supported.
+
+## 13.1 Manifest declaration
+
+Declare every tab statically in `plugin.json`:
+
+```json
+{
+  "capabilities": [
+    "architect:register_tab",
+    "architect:read_plan",
+    "architect:write_plan_state",
+    "architect:register_sidebar_summary"
+  ],
+  "expectedEffects": [
+    "render_architect_tab",
+    "read_architect_plan_projection",
+    "write_architect_plan_state",
+    "render_architect_sidebar_summary"
+  ],
+  "architectTabs": [
+    {
+      "id": "examples.action-checklist.checklist",
+      "renderer": "checklist",
+      "planConnectivity": "required"
+    }
+  ]
+}
+```
+
+Tab ids MUST start with `<plugin-id>.`. Runtime registration MUST match the manifest declaration.
+
+## 13.2 Registering a tab
+
+Use `defineArchitectTab()` from `@dreamgraph/sdk`, then register the result with `ctx.architect.tabs.register()`. The returned callback unregisters the contribution early; normal disable, unload, and reload paths remove active contributions automatically.
+
+Plan state is daemon-owned and namespaced by instance, plugin id, plan id, tab type id, and key. Read and write it through `ctx.architect.planState`. Writes use revision tokens so stale browser actions fail instead of overwriting newer state.
+
+```js
+const stored = await ctx.architect.planState.read("checklist", context);
+const next = await ctx.architect.planState.write("checklist", value, {
+  ...context,
+  revision: stored?.revision ?? null,
+});
+```
+
+Plan-bound operations require an explicit `planId`. A project-scope view does not silently bind to a selected or first plan.
+
+## 13.3 Browser routes
+
+Standalone Architect clients use versioned daemon routes under `/api/architect/v1/plugin-tabs` to list descriptors, fetch plan snapshots, and dispatch structured actions. Sidebar summaries and badges are projections from the same daemon snapshot. Store paths and plugin modules are never exposed to the browser.
+
+## 13.4 Walkthrough
+
+See [`examples/action-checklist`](../../../examples/action-checklist/) for a complete reference plugin. It seeds Slice A-E checklist state on first load, toggles items through schema-validated actions, projects checklist progress and badges, persists state across reload, and unloads cleanly.
+
+`ctx.ui.register()` remains a separate semantic metadata seam. It does not execute plugin browser code and does not register standalone Architect tabs.
+
+[<- Best practices](12-best-practices.md) · [Reference: Architect tabs](../plugin-reference/10-architect-tabs.md)
+
+
+\newpage
+
 # Part II --- Plugin Reference Manual
 
 
@@ -1152,7 +1238,7 @@ Before publishing a plugin:
 # DreamGraph Plugin Reference Manual
 
 **Audience:** Plugin authors and host implementors needing strict, normative tables.
-**Engine baseline:** v10.5.0 "Renata".
+**Engine baseline:** v12.1.0 "Living DreamGraph".
 **Companion:** see the [Plugin Developer Guide](../plugin-developer-guide/00-index.md) for task-oriented walkthroughs.
 
 This reference is the source of truth. Where the guide and the reference disagree,
@@ -1170,6 +1256,7 @@ source wins (and a doc bug should be filed).
 7. [CLI](07-cli.md) — `dg plugin` subcommands.
 8. [Host configuration](08-host-config.md) — env vars and `instance.json`.
 9. [Telemetry events](09-telemetry-events.md) — the `plugin.*` stream.
+10. [Architect tabs](10-architect-tabs.md) — declarative tab contract, plan state, routes, lifecycle, and telemetry.
 
 ## Conventions
 
@@ -1206,6 +1293,7 @@ interface PluginManifest {
   policies:            { id: string }[];            // default []
   archetypeProviders:  { id: string }[];            // default []
   markdownFences:      { language: string }[];      // default []
+  architectTabs:       PluginManifestArchitectTab[]; // default []
   policy:              PluginPolicy;                // default { phasePermissions: [], writableFiles: [] }
   config?:             { schema?: string };
 }
@@ -1233,6 +1321,9 @@ The schema is **strict**: unknown top-level fields are rejected with
 | `policies[].id`                    | lowercase `[a-z0-9._-]+`                                              | `manifest_invalid`                     |
 | `archetypeProviders[].id`          | lowercase `[a-z0-9._-]+`                                              | `manifest_invalid`                     |
 | `markdownFences[].language`        | lowercase `[a-z0-9._-]+`                                              | `markdown_fence_language_invalid`      |
+| `architectTabs[].id`               | lowercase `[a-z0-9._-]+`, MUST start with `<plugin-id>.`               | `manifest_invalid`                     |
+| `architectTabs[].renderer`         | currently `checklist` only                                             | `manifest_invalid`                     |
+| `architectTabs[].planConnectivity` | `required | optional | none`                                           | `manifest_invalid`                     |
 | `policy.phasePermissions`          | each ∈ `analysis | execution | reflection`                            | `manifest_invalid`                     |
 | `policy.writableFiles`             | array of strings                                                      | `manifest_invalid`                     |
 
@@ -1248,7 +1339,8 @@ const manifest = parsePluginManifest(JSON.parse(plugin_json_text));
 ## Example
 
 See [examples/hello-events/plugin.json](../../../examples/hello-events/plugin.json)
-for a manifest exercising every M6 seam.
+for a manifest exercising every M6 seam and [examples/action-checklist/plugin.json](../../../examples/action-checklist/plugin.json)
+for a standalone Architect tab manifest.
 
 
 \newpage
@@ -1276,6 +1368,10 @@ each seam call site.
 | `schedule:register_action`    | (reserved, M4) `defineScheduleAction(...)`                         | always denied today                                                                                    | reserved |
 | `webhooks:emit`               | (reserved, post-MVP) `ctx.webhooks.dispatch(...)`                  | always denied today (use core webhook subscriptions instead)                                           | reserved |
 | `providers:register`          | (reserved, post-1.0) provider adapter seam                         | always denied today                                                                                    | reserved |
+| `architect:register_tab`      | `ctx.architect.tabs.register(definition)`                          | missing capability -> `architect_tab_capability_missing`; undeclared tab -> `architect_tab_undeclared` | live |
+| `architect:read_plan`         | `ctx.architect.planState.read(key, context)`                       | missing explicit plan -> `architect_plan_required`; missing plan -> `architect_plan_not_found`          | live |
+| `architect:write_plan_state`  | `ctx.architect.planState.write(key, value, context)`               | missing capability -> `architect_plan_state_capability_missing`; stale revision -> `architect_revision_stale` | live |
+| `architect:register_sidebar_summary` | project sidebar summary and badges from a tab snapshot       | undeclared effect -> `effect_undeclared`                                                                | live |
 
 A capability not present in `manifest.capabilities` MUST cause the matching seam
 call to be refused with `<seam>_capability_missing`. The host MUST NOT silently
@@ -1314,6 +1410,10 @@ The host enforces both at every host-mediated effect call:
 | `provide_archetypes`         | Feed federation archetypes.                                               | `archetypes:provide`        |
 | `render_markdown_fence`      | Declare a webview markdown fence.                                         | `markdown:register_fence`   |
 | `register_provider_adapter`  | (reserved, post-1.0) provider adapter.                                    | `providers:register`        |
+| `render_architect_tab`       | Project a host-rendered standalone Architect tab.                         | `architect:register_tab`    |
+| `read_architect_plan_projection` | Load explicit plan-bound Architect state.                           | `architect:read_plan`       |
+| `write_architect_plan_state` | Persist daemon-owned namespaced Architect state.                          | `architect:write_plan_state` |
+| `render_architect_sidebar_summary` | Project sidebar summary and badge data.                             | `architect:register_sidebar_summary` |
 
 ## Always-forbidden effects
 
@@ -1335,6 +1435,9 @@ defensive intent.
 | `ctx.policies.propose`                            | `propose_policy`                     |
 | `ctx.archetypes.registerProvider`                 | `provide_archetypes`                 |
 | `ctx.markdownFences.register`                     | `render_markdown_fence`              |
+| `ctx.architect.tabs.register`                     | `render_architect_tab`               |
+| `ctx.architect.planState.read`                    | `read_architect_plan_projection`     |
+| `ctx.architect.planState.write`                   | `write_architect_plan_state`         |
 
 
 \newpage
@@ -1420,6 +1523,22 @@ codes. The set is closed and exported as `PluginRejectReason` from the SDK.
 
 `provider_capability_missing`.
 
+### `architect`
+
+| Reason                                    | Meaning                                                        |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| `architect_tab_capability_missing`        | `architect:register_tab` not declared.                         |
+| `architect_plan_state_capability_missing` | Required Architect plan-state capability not declared.         |
+| `architect_tab_id_unprefixed`             | Tab id does not start with `<plugin-id>.`.                     |
+| `architect_tab_collision`                 | Another active contribution owns the tab id.                   |
+| `architect_tab_undeclared`                | Runtime tab registration does not match `manifest.architectTabs`. |
+| `architect_action_unknown`                | Requested action id is not registered for the tab.             |
+| `architect_action_schema_invalid`         | Action payload fails the registered JSON schema.               |
+| `architect_plan_required`                 | A plan-bound operation omitted its explicit plan id.           |
+| `architect_plan_not_found`                | The requested plan does not exist.                             |
+| `architect_revision_stale`                | State write revision does not match current daemon state.      |
+| `architect_tab_unavailable`               | Tab descriptor or handler is no longer active.                 |
+
 ## Host execution boundary
 
 | Reason                            | Meaning                                                                |
@@ -1462,6 +1581,7 @@ interface PluginContext {
   readonly policies:       PluginPoliciesSurface;
   readonly archetypes:     PluginArchetypesSurface;
   readonly markdownFences: PluginMarkdownFencesSurface;
+  readonly architect:      PluginArchitectSurface;
   readonly signal:         AbortSignal;
 }
 ```
@@ -1493,7 +1613,16 @@ interface PluginUiSurface             { register(d: UiElementDefinition):       
 interface PluginPoliciesSurface       { propose (p: PolicyProposal):              () => void; }
 interface PluginArchetypesSurface     { registerProvider(d: ArchetypeProviderDefinition): () => void; }
 interface PluginMarkdownFencesSurface { register(d: MarkdownFenceDefinition):     () => void; }
+interface PluginArchitectSurface {
+  tabs: { register(d: ArchitectTabTypeDefinition): () => void };
+  planState: {
+    read<T>(key: string, context: ArchitectPlanContext): Promise<ArchitectStoredState<T> | null>;
+    write<T>(key: string, value: T, context: ArchitectPlanWriteContext): Promise<ArchitectStoredState<T>>;
+  };
+}
 ```
+
+The complete Architect tab definition, lifecycle, route, capability, and effect contract is in [Architect tabs](10-architect-tabs.md).
 
 ## Seam definition shapes
 
@@ -1882,123 +2011,143 @@ instance directory.
 
 # Telemetry events (normative)
 
+[<- Index](00-index.md) · Source: [packages/sdk/src/telemetry.ts](../../../packages/sdk/src/telemetry.ts)
 
+The host emits a stable `plugin.*` stream. Every payload includes `plugin_id`, `plugin_version`, and ISO-8601 `occurred_at`.
 
-The host emits a uniform `plugin.*` stream on the cognitive event bus. Every
-event carries a common base envelope plus per-kind extras.
+## Event kinds
 
-## Common base
+| Kind | Purpose |
+| --- | --- |
+| `plugin.loaded` | Successful activation, runtime, trust state, and capabilities. |
+| `plugin.unloaded` | Shutdown, disable, reload, or quarantine cleanup. |
+| `plugin.errored` | Host boundary or handler failure. |
+| `plugin.handler.started` | Timed handler invocation start. |
+| `plugin.handler.completed` | Timed handler invocation completion with `ok`. |
+| `plugin.output.accepted` | Host accepted a mediated effect. |
+| `plugin.output.rejected` | Host refused a mediated effect or registration. |
 
-```ts
-interface PluginTelemetryBase {
-  plugin_id:      string;
-  plugin_version: string;
-  ts:             string;            // ISO-8601
-  correlation_id?: string;           // matches handler.started/completed
-  seam?:          "tools" | "resources" | "events" | "ui"
-                 | "policy" | "archetypes" | "markdown_fences" | "host";
-}
-```
+## Handler seams
 
-## Per kind
-
-### `plugin.loaded`
-
-Emitted after manifest acceptance and successful `activate(ctx)`.
+`plugin.handler.started` and `plugin.handler.completed` use:
 
 ```ts
-interface PluginLoadedPayload extends PluginTelemetryBase {
-  runtime:           "in-process";   // "worker" reserved for M8
-  declared_effects:  PluginEffect[];
-  declared_capabilities: PluginCapability[];
-}
+type PluginHandlerSeam =
+  | "tool"
+  | "resource"
+  | "event"
+  | "schedule_action"
+  | "architect_tab"
+  | "architect_plan_state";
 ```
 
-### `plugin.unloaded`
+Both carry `correlation_id`, `seam`, and `target`. Completion also carries `duration_ms` and `ok`.
 
-Emitted on graceful disable / shutdown.
+## Accepted output seams
 
 ```ts
-interface PluginUnloadedPayload extends PluginTelemetryBase {
-  reason: "disable" | "shutdown" | "reload";
-}
+type PluginAcceptedOutputSeam =
+  | "tool"
+  | "resource"
+  | "event"
+  | "schedule_action"
+  | "webhook"
+  | "ui"
+  | "archetype"
+  | "policy"
+  | "markdown_fence"
+  | "architect_tab"
+  | "architect_plan_state";
 ```
 
-### `plugin.errored`
+Accepted output carries `correlation_id`, `effect`, `seam`, and optional `target`.
 
-Emitted on manifest rejection, unhandled throw, watchdog stall, or any
-quarantine path.
+## Rejected output seams
 
-```ts
-interface PluginErroredPayload extends PluginTelemetryBase {
-  reason:  PluginRejectReason;       // see reference §4
-  message: string;                   // human-readable
-  stack?:  string;
-  measured_lag_ms?: number;          // present iff reason === "event_loop_stall"
-}
-```
+Rejected output supports the accepted output seams plus `host`. It carries `reason: PluginRejectReason`, optional `correlation_id`, optional `target`, and optional human-readable `detail`.
 
-### `plugin.handler.started`
-
-Emitted just before a tool handler / resource handler / event subscriber runs.
-
-```ts
-interface PluginHandlerStartedPayload extends PluginTelemetryBase {
-  correlation_id: string;
-  surface:        "tool" | "resource" | "event_handler";
-  surface_id:     string;            // tool name / uri / event kind
-}
-```
-
-### `plugin.handler.completed`
-
-Emitted on handler success.
-
-```ts
-interface PluginHandlerCompletedPayload extends PluginTelemetryBase {
-  correlation_id: string;
-  surface:        "tool" | "resource" | "event_handler";
-  surface_id:     string;
-  duration_ms:    number;
-}
-```
-
-### `plugin.output.accepted`
-
-Emitted when the host successfully forwarded / wrote / dispatched the plugin's
-output.
-
-```ts
-interface PluginOutputAcceptedPayload extends PluginTelemetryBase {
-  surface:        "tool" | "resource" | "event_emit"
-                | "ui_register" | "policy_propose"
-                | "archetype_register" | "markdown_fence_register";
-  surface_id:     string;
-  effect:         PluginEffect;
-}
-```
-
-### `plugin.output.rejected`
-
-Emitted when the host refused output (capability missing, effect undeclared,
-forbidden, schema invalid, namespace violation, quota exceeded, etc.).
-
-```ts
-interface PluginOutputRejectedPayload extends PluginTelemetryBase {
-  surface:        "tool" | "resource" | "event_emit"
-                | "ui_register" | "policy_propose"
-                | "archetype_register" | "markdown_fence_register";
-  surface_id:     string;
-  reason:         PluginRejectReason;
-  message:        string;
-  attempted_effect?: PluginEffect;
-}
-```
+Architect tab registration, plan-state access, snapshot loading, and action dispatch therefore use the normal host-owned telemetry stream. They do not create a browser-only audit channel.
 
 ## Stability
 
-`plugin.loaded`, `plugin.unloaded`, `plugin.errored`, `plugin.handler.*`,
-`plugin.output.accepted`, and `plugin.output.rejected` are part of the **stable**
-event surface for v1. Their payload shapes will only grow additively within a
-major SDK version.
+The seven event kinds above are stable SDK contracts. Payloads may grow additively within a major SDK version.
+
+
+\newpage
+
+# Architect tabs (normative)
+
+[<- Index](00-index.md) · Sources: [packages/sdk/src/seams/architect.ts](../../../packages/sdk/src/seams/architect.ts), [packages/host/src/context.ts](../../../packages/host/src/context.ts)
+
+Architect tabs are trusted host-side plugin contributions projected into the daemon-served standalone Architect browser surface. Browser clients MUST receive declarative descriptors and JSON snapshots only. They MUST NOT load plugin modules or receive raw state-store paths.
+
+## Manifest declaration
+
+```ts
+interface PluginManifestArchitectTab {
+  id: string; // MUST start with <plugin-id>.
+  renderer: "checklist";
+  planConnectivity: "required" | "optional" | "none";
+}
+```
+
+A manifest with any `architectTabs` entry MUST declare `architect:register_tab`, `architect:read_plan`, `render_architect_tab`, and `read_architect_plan_projection`. Runtime registration MUST match a manifest declaration.
+
+## Context API
+
+```ts
+interface PluginArchitectSurface {
+  tabs: { register(definition: ArchitectTabTypeDefinition): () => void };
+  planState: {
+    read<T>(key: string, context: ArchitectPlanContext): Promise<ArchitectStoredState<T> | null>;
+    write<T>(key: string, value: T, context: ArchitectPlanWriteContext): Promise<ArchitectStoredState<T>>;
+  };
+}
+```
+
+`planState` is daemon-owned and namespaced by instance, plugin id, plan id, tab type id, and key. Writes MUST include the expected revision or `null` for initial creation. Stale revisions are rejected.
+
+## Tab definition
+
+```ts
+interface ArchitectTabTypeDefinition<TState = unknown, TAction = unknown> {
+  id: string;
+  title: string;
+  icon?: string;
+  renderer: "checklist";
+  planConnectivity: "required" | "optional" | "none";
+  stateSchema: Record<string, unknown>;
+  actions: readonly { id: string; inputSchema: Record<string, unknown> }[];
+  sidebarSummary?: { kind: "checklist-progress" };
+  badges?: readonly { id: string; kind: "count" | "status" }[];
+  loadState(context: ArchitectPlanContext): Promise<TState> | TState;
+  handleAction?(action: TAction, context: ArchitectPlanActionContext): Promise<TState> | TState;
+}
+```
+
+## Capabilities and effects
+
+| Capability | Purpose |
+| --- | --- |
+| `architect:register_tab` | Register a manifest-declared Architect tab type. |
+| `architect:read_plan` | Read explicit plan-bound state and projection context. |
+| `architect:write_plan_state` | Persist daemon-owned namespaced plan state. |
+| `architect:register_sidebar_summary` | Project a sidebar summary from the tab snapshot. |
+
+| Effect | Purpose |
+| --- | --- |
+| `render_architect_tab` | Project a host-rendered Architect tab. |
+| `read_architect_plan_projection` | Load explicit plan-bound snapshot state. |
+| `write_architect_plan_state` | Persist namespaced plan state. |
+| `render_architect_sidebar_summary` | Project sidebar summary and badge data. |
+
+## Lifecycle and telemetry
+
+Unload, disable, and reload remove active descriptors and handlers while retaining persisted plan state. Registration and invocation use the normal `plugin.output.accepted`, `plugin.output.rejected`, `plugin.handler.started`, and `plugin.handler.completed` telemetry contracts with `architect_tab` or `architect_plan_state` seams.
+
+## Browser contract
+
+Versioned routes live under `/api/architect/v1/plugin-tabs`. Actions are structured daemon commands. The daemon validates plugin availability, explicit plan scope, action schema, and revision before returning a new snapshot.
+
+`ctx.ui.register()` is metadata-only and is not an executable browser UI escape hatch.
 

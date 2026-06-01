@@ -22,6 +22,7 @@ and the practices DreamGraph expects.
 10. [Installation and lifecycle](10-lifecycle-and-installation.md) — discovery, trust, restart, hot-disable.
 11. [Telemetry, debugging, testing](11-telemetry-debugging-testing.md) — `plugin.*` events and the test harness.
 12. [Best practices and pitfalls](12-best-practices.md) — naming, naming, naming. And quotas.
+13. [Architect tabs](13-architect-tabs.md) — declarative standalone Architect tabs, explicit plan scope, persistence, and actions.
 
 > **Building this guide locally as HTML/PDF:** run `scripts/build-plugin-docs.ps1`.
 > Outputs land under `docs/sdk/site/html/` and `docs/sdk/site/pdf/`.

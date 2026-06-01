@@ -140,6 +140,35 @@ collision → <code>markdown_fence_language_collision</code></td>
 <td>always denied today</td>
 <td>reserved</td>
 </tr>
+<tr>
+<td><code>architect:register_tab</code></td>
+<td><code>ctx.architect.tabs.register(definition)</code></td>
+<td>missing capability -&gt;
+<code>architect_tab_capability_missing</code>; undeclared tab -&gt;
+<code>architect_tab_undeclared</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>architect:read_plan</code></td>
+<td><code>ctx.architect.planState.read(key, context)</code></td>
+<td>missing explicit plan -&gt; <code>architect_plan_required</code>;
+missing plan -&gt; <code>architect_plan_not_found</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>architect:write_plan_state</code></td>
+<td><code>ctx.architect.planState.write(key, value, context)</code></td>
+<td>missing capability -&gt;
+<code>architect_plan_state_capability_missing</code>; stale revision
+-&gt; <code>architect_revision_stale</code></td>
+<td>live</td>
+</tr>
+<tr>
+<td><code>architect:register_sidebar_summary</code></td>
+<td>project sidebar summary and badges from a tab snapshot</td>
+<td>undeclared effect -&gt; <code>effect_undeclared</code></td>
+<td>live</td>
+</tr>
 </tbody>
 </table>
 <p>A capability not present in <code>manifest.capabilities</code> MUST

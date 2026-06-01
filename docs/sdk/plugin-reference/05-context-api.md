@@ -16,6 +16,7 @@ interface PluginContext {
   readonly policies:       PluginPoliciesSurface;
   readonly archetypes:     PluginArchetypesSurface;
   readonly markdownFences: PluginMarkdownFencesSurface;
+  readonly architect:      PluginArchitectSurface;
   readonly signal:         AbortSignal;
 }
 ```
@@ -47,7 +48,16 @@ interface PluginUiSurface             { register(d: UiElementDefinition):       
 interface PluginPoliciesSurface       { propose (p: PolicyProposal):              () => void; }
 interface PluginArchetypesSurface     { registerProvider(d: ArchetypeProviderDefinition): () => void; }
 interface PluginMarkdownFencesSurface { register(d: MarkdownFenceDefinition):     () => void; }
+interface PluginArchitectSurface {
+  tabs: { register(d: ArchitectTabTypeDefinition): () => void };
+  planState: {
+    read<T>(key: string, context: ArchitectPlanContext): Promise<ArchitectStoredState<T> | null>;
+    write<T>(key: string, value: T, context: ArchitectPlanWriteContext): Promise<ArchitectStoredState<T>>;
+  };
+}
 ```
+
+The complete Architect tab definition, lifecycle, route, capability, and effect contract is in [Architect tabs](10-architect-tabs.md).
 
 ## Seam definition shapes
 

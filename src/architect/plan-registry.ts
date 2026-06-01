@@ -456,7 +456,7 @@ export function buildLivingPlanState(input: {
     .filter((branch) => !completedBranchIds.has(slugifySliceSegment(branch.id)));
   const currentHypothesis = parseFirstMatch(input.markdown, /^Current review stance:\s*(.+)$/m);
   const latestCheckpoint = input.checkpoints.at(-1) ?? null;
-  const currentSlice = input.operationalState.active_slice ?? input.operationalState.next_slice;
+  const currentSlice = input.operationalState.active_slice ?? input.operationalState.next_slice ?? input.operationalState.last_completed_slice;
   const pulse = `${input.operationalState.plan_lifecycle}/${input.operationalState.execution_state}; slice=${currentSlice?.title ?? "none"}; questions=${openQuestions.length}; branches=${branches.length}`;
 
   return {
@@ -780,7 +780,12 @@ function sliceRef(slice: ArchitectPlanSlice | null | undefined, fallback?: Archi
 function findSliceById(slices: ArchitectPlanSlice[], sliceId: string | null | undefined): ArchitectPlanSlice | null {
   if (!sliceId) return null;
   const normalized = slugifySliceSegment(sliceId);
-  return slices.find((slice) => slice.id === sliceId || slugifySliceSegment(slice.id) === normalized) ?? null;
+  const ordinal = normalized.match(/^(?:slice-)?([a-z0-9]+)$/i)?.[1] ?? null;
+  return (
+    slices.find((slice) => slice.id === sliceId || slugifySliceSegment(slice.id) === normalized) ??
+    (ordinal == null ? null : slices.find((slice) => slice.id === `slice-${ordinal}` || slice.id.startsWith(`slice-${ordinal}-`))) ??
+    null
+  );
 }
 
 function sliceOrdinal(slice: ArchitectPlanSlice): number | null {
@@ -910,13 +915,13 @@ function buildOperationalState(
     : findNextSliceFromResume(slices, rawResumeHint, latestCompletedSlice?.id ?? latestCompletedCheckpoint?.slice_id ?? null);
   const latestImplementationComplete = latestImplementationCheckpoint ? isCompletedCheckpoint(latestImplementationCheckpoint) : false;
   const activeSlice = allImplementationSlicesComplete
-    ? latestCompletedSlice ?? latestImplementationSlice ?? activePhaseSlice
+    ? null
     : latestImplementationComplete
       ? nextSlice ?? latestImplementationSlice ?? activePhaseSlice
       : latestImplementationSlice ?? nextSlice ?? activePhaseSlice;
   const lifecycle = derivePlanLifecycle(planStatus, slices, implementationCheckpoints, completedSliceIds, nextSlice);
   const executionState = lifecycle === "completed" ? "complete" : deriveExecutionState(latestImplementationCheckpoint);
-  const activeSliceRef = sliceRef(activeSlice, latestImplementationCheckpoint);
+  const activeSliceRef = lifecycle === "completed" ? null : sliceRef(activeSlice, latestImplementationCheckpoint);
   const lastCompletedSliceRef = sliceRef(latestCompletedSlice, latestCompletedCheckpoint);
   const nextSliceRef = sliceRef(nextSlice);
   const completedResumeHint =
@@ -925,8 +930,8 @@ function buildOperationalState(
       : null;
   const resumeHint = completedResumeHint ?? rawResumeHint;
   const derivedActivePhase = deriveImplicitActivePhase(activePhase, planTitle, activeSliceRef ?? nextSliceRef ?? lastCompletedSliceRef);
-  const currentSliceId = activeSliceRef?.id ?? lastCompletedSliceRef?.id ?? null;
-  const currentSliceTitle = activeSliceRef?.title ?? lastCompletedSliceRef?.title ?? null;
+  const currentSliceId = activeSliceRef?.id ?? null;
+  const currentSliceTitle = activeSliceRef?.title ?? null;
   const verifiedCheckpointCount = checkpoints.filter((checkpoint) => normalizeCheckpointStatus(checkpoint.status) === "verified").length;
   const completedCheckpointCount = checkpoints.filter(isCompletedCheckpoint).length;
 

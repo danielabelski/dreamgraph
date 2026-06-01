@@ -1,0 +1,231 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>10-architect-tabs</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#architect-tabs-normative"
+id="toc-architect-tabs-normative">Architect tabs (normative)</a>
+<ul>
+<li><a href="#manifest-declaration"
+id="toc-manifest-declaration">Manifest declaration</a></li>
+<li><a href="#context-api" id="toc-context-api">Context API</a></li>
+<li><a href="#tab-definition" id="toc-tab-definition">Tab
+definition</a></li>
+<li><a href="#capabilities-and-effects"
+id="toc-capabilities-and-effects">Capabilities and effects</a></li>
+<li><a href="#lifecycle-and-telemetry"
+id="toc-lifecycle-and-telemetry">Lifecycle and telemetry</a></li>
+<li><a href="#browser-contract" id="toc-browser-contract">Browser
+contract</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="architect-tabs-normative">Architect tabs (normative)</h1>
+<p><a href="00-index.html">&lt;- Index</a> · Sources: <a
+href="../../../packages/sdk/src/seams/architect.ts">packages/sdk/src/seams/architect.ts</a>,
+<a
+href="../../../packages/host/src/context.ts">packages/host/src/context.ts</a></p>
+<p>Architect tabs are trusted host-side plugin contributions projected
+into the daemon-served standalone Architect browser surface. Browser
+clients MUST receive declarative descriptors and JSON snapshots only.
+They MUST NOT load plugin modules or receive raw state-store paths.</p>
+<h2 id="manifest-declaration">Manifest declaration</h2>
+<div class="sourceCode" id="cb1"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginManifestArchitectTab {</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> <span class="co">// MUST start with &lt;plugin-id&gt;.</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  renderer<span class="op">:</span> <span class="st">&quot;checklist&quot;</span><span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  planConnectivity<span class="op">:</span> <span class="st">&quot;required&quot;</span> <span class="op">|</span> <span class="st">&quot;optional&quot;</span> <span class="op">|</span> <span class="st">&quot;none&quot;</span><span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>A manifest with any <code>architectTabs</code> entry MUST declare
+<code>architect:register_tab</code>, <code>architect:read_plan</code>,
+<code>render_architect_tab</code>, and
+<code>read_architect_plan_projection</code>. Runtime registration MUST
+match a manifest declaration.</p>
+<h2 id="context-api">Context API</h2>
+<div class="sourceCode" id="cb2"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> PluginArchitectSurface {</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  tabs<span class="op">:</span> { <span class="fu">register</span>(definition<span class="op">:</span> ArchitectTabTypeDefinition)<span class="op">:</span> () <span class="kw">=&gt;</span> <span class="dt">void</span> }<span class="op">;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  planState<span class="op">:</span> {</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">read</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> context<span class="op">:</span> ArchitectPlanContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchitectStoredState<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">write</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> value<span class="op">:</span> T<span class="op">,</span> context<span class="op">:</span> ArchitectPlanWriteContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ArchitectStoredState<span class="op">&lt;</span>T<span class="op">&gt;&gt;;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><code>planState</code> is daemon-owned and namespaced by instance,
+plugin id, plan id, tab type id, and key. Writes MUST include the
+expected revision or <code>null</code> for initial creation. Stale
+revisions are rejected.</p>
+<h2 id="tab-definition">Tab definition</h2>
+<div class="sourceCode" id="cb3"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ArchitectTabTypeDefinition<span class="op">&lt;</span>TState <span class="op">=</span> <span class="dt">unknown</span><span class="op">,</span> TAction <span class="op">=</span> <span class="dt">unknown</span><span class="op">&gt;</span> {</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  icon<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  renderer<span class="op">:</span> <span class="st">&quot;checklist&quot;</span><span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  planConnectivity<span class="op">:</span> <span class="st">&quot;required&quot;</span> <span class="op">|</span> <span class="st">&quot;optional&quot;</span> <span class="op">|</span> <span class="st">&quot;none&quot;</span><span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  stateSchema<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  actions<span class="op">:</span> <span class="kw">readonly</span> { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> inputSchema<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;</span> }[]<span class="op">;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>  sidebarSummary<span class="op">?:</span> { kind<span class="op">:</span> <span class="st">&quot;checklist-progress&quot;</span> }<span class="op">;</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  badges<span class="op">?:</span> <span class="kw">readonly</span> { id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> kind<span class="op">:</span> <span class="st">&quot;count&quot;</span> <span class="op">|</span> <span class="st">&quot;status&quot;</span> }[]<span class="op">;</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">loadState</span>(context<span class="op">:</span> ArchitectPlanContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>TState<span class="op">&gt;</span> <span class="op">|</span> TState<span class="op">;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  handleAction<span class="op">?</span>(action<span class="op">:</span> TAction<span class="op">,</span> context<span class="op">:</span> ArchitectPlanActionContext)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>TState<span class="op">&gt;</span> <span class="op">|</span> TState<span class="op">;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h2 id="capabilities-and-effects">Capabilities and effects</h2>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>architect:register_tab</code></td>
+<td>Register a manifest-declared Architect tab type.</td>
+</tr>
+<tr>
+<td><code>architect:read_plan</code></td>
+<td>Read explicit plan-bound state and projection context.</td>
+</tr>
+<tr>
+<td><code>architect:write_plan_state</code></td>
+<td>Persist daemon-owned namespaced plan state.</td>
+</tr>
+<tr>
+<td><code>architect:register_sidebar_summary</code></td>
+<td>Project a sidebar summary from the tab snapshot.</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Effect</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>render_architect_tab</code></td>
+<td>Project a host-rendered Architect tab.</td>
+</tr>
+<tr>
+<td><code>read_architect_plan_projection</code></td>
+<td>Load explicit plan-bound snapshot state.</td>
+</tr>
+<tr>
+<td><code>write_architect_plan_state</code></td>
+<td>Persist namespaced plan state.</td>
+</tr>
+<tr>
+<td><code>render_architect_sidebar_summary</code></td>
+<td>Project sidebar summary and badge data.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="lifecycle-and-telemetry">Lifecycle and telemetry</h2>
+<p>Unload, disable, and reload remove active descriptors and handlers
+while retaining persisted plan state. Registration and invocation use
+the normal <code>plugin.output.accepted</code>,
+<code>plugin.output.rejected</code>,
+<code>plugin.handler.started</code>, and
+<code>plugin.handler.completed</code> telemetry contracts with
+<code>architect_tab</code> or <code>architect_plan_state</code>
+seams.</p>
+<h2 id="browser-contract">Browser contract</h2>
+<p>Versioned routes live under
+<code>/api/architect/v1/plugin-tabs</code>. Actions are structured
+daemon commands. The daemon validates plugin availability, explicit plan
+scope, action schema, and revision before returning a new snapshot.</p>
+<p><code>ctx.ui.register()</code> is metadata-only and is not an
+executable browser UI escape hatch.</p>
+</body>
+</html>

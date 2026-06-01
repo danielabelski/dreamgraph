@@ -9,3 +9,4 @@ export * from "./seams/ui.js";
 export * from "./seams/policies.js";
 export * from "./seams/archetypes.js";
 export * from "./seams/markdown-fences.js";
+export * from "./seams/architect.js";

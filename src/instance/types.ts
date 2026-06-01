@@ -187,6 +187,8 @@ export interface InstanceMcpConfig {
   };
   data_dir: string;
   repos: Record<string, string>;
+  /** Optional guided-setup labels used by Architect onboarding. */
+  repository_roles?: Record<string, "primary" | "frontend" | "backend" | "shared" | "docs" | "infra" | "other">;
 }
 
 /* ------------------------------------------------------------------ */

@@ -65,6 +65,19 @@ export const PluginRejectReasons = [
   // providers:register (post-MVP)
   "provider_capability_missing",
 
+  // architect tabs
+  "architect_tab_capability_missing",
+  "architect_plan_state_capability_missing",
+  "architect_tab_id_unprefixed",
+  "architect_tab_collision",
+  "architect_tab_undeclared",
+  "architect_action_unknown",
+  "architect_action_schema_invalid",
+  "architect_plan_required",
+  "architect_plan_not_found",
+  "architect_revision_stale",
+  "architect_tab_unavailable",
+
   // host execution boundary
   "in_process_execution_disabled",
   "plugin_quarantined",
@@ -93,6 +106,7 @@ export type PluginRejectSeam =
   | "archetypes"
   | "markdown_fences"
   | "providers"
+  | "architect"
   | "host";
 
 const REASON_TO_SEAM: Record<PluginRejectReason, PluginRejectSeam> = {
@@ -127,6 +141,17 @@ const REASON_TO_SEAM: Record<PluginRejectReason, PluginRejectSeam> = {
   markdown_fence_language_collision: "markdown_fences",
   markdown_fence_language_invalid: "markdown_fences",
   provider_capability_missing: "providers",
+  architect_tab_capability_missing: "architect",
+  architect_plan_state_capability_missing: "architect",
+  architect_tab_id_unprefixed: "architect",
+  architect_tab_collision: "architect",
+  architect_tab_undeclared: "architect",
+  architect_action_unknown: "architect",
+  architect_action_schema_invalid: "architect",
+  architect_plan_required: "architect",
+  architect_plan_not_found: "architect",
+  architect_revision_stale: "architect",
+  architect_tab_unavailable: "architect",
   in_process_execution_disabled: "host",
   plugin_quarantined: "host",
   event_loop_stall: "host",

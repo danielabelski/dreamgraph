@@ -21,6 +21,10 @@ export const PluginCapabilitySchema = z.enum([
   "archetypes:provide",
   "providers:register",
   "markdown:register_fence",
+  "architect:register_tab",
+  "architect:read_plan",
+  "architect:write_plan_state",
+  "architect:register_sidebar_summary",
 ]);
 
 export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
@@ -42,6 +46,10 @@ export const PluginEffectSchema = z.enum([
   "provide_archetypes",
   "render_markdown_fence",
   "register_provider_adapter",
+  "render_architect_tab",
+  "read_architect_plan_projection",
+  "write_architect_plan_state",
+  "render_architect_sidebar_summary",
 ]);
 
 export type PluginEffect = z.infer<typeof PluginEffectSchema>;
@@ -85,6 +93,18 @@ export const PluginManifestUiElementSchema = z
       .string()
       .min(3)
       .regex(/^[a-z0-9][a-z0-9._-]*$/, "UI element ids must be lowercase, dot/dash/underscore separated"),
+  })
+  .strict();
+
+/** Declarative standalone Architect tab declaration. */
+export const PluginManifestArchitectTabSchema = z
+  .object({
+    id: z
+      .string()
+      .min(3)
+      .regex(/^[a-z0-9][a-z0-9._-]*$/, "Architect tab ids must be lowercase, dot/dash/underscore separated"),
+    renderer: z.enum(["checklist"]),
+    planConnectivity: z.enum(["required", "optional", "none"]),
   })
   .strict();
 
@@ -151,6 +171,7 @@ export const PluginManifestSchema = z
     policies: z.array(PluginManifestPolicyProposalSchema).default([]),
     archetypeProviders: z.array(PluginManifestArchetypeProviderSchema).default([]),
     markdownFences: z.array(PluginManifestMarkdownFenceSchema).default([]),
+    architectTabs: z.array(PluginManifestArchitectTabSchema).default([]),
     policy: PluginPolicySchema.default({ phasePermissions: [], writableFiles: [] }),
     config: z
       .object({
@@ -168,6 +189,25 @@ export const PluginManifestSchema = z
           message: `Effect ${effect} cannot be both expected and forbidden`,
           path: ["expectedEffects"],
         });
+      }
+    }
+    if (manifest.architectTabs.length > 0) {
+      const requiredCapabilities = ["architect:register_tab", "architect:read_plan"] as const;
+      const requiredEffects = ["render_architect_tab", "read_architect_plan_projection"] as const;
+      for (const capability of requiredCapabilities) {
+        if (!manifest.capabilities.includes(capability)) {
+          context.addIssue({ code: z.ZodIssueCode.custom, message: `Architect tabs require capability ${capability}`, path: ["capabilities"] });
+        }
+      }
+      for (const effect of requiredEffects) {
+        if (!manifest.expectedEffects.includes(effect)) {
+          context.addIssue({ code: z.ZodIssueCode.custom, message: `Architect tabs require effect ${effect}`, path: ["expectedEffects"] });
+        }
+      }
+      for (const [index, tab] of manifest.architectTabs.entries()) {
+        if (!tab.id.startsWith(`${manifest.id}.`)) {
+          context.addIssue({ code: z.ZodIssueCode.custom, message: `Architect tab '${tab.id}' must start with '${manifest.id}.'`, path: ["architectTabs", index, "id"] });
+        }
       }
     }
   });
