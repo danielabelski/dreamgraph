@@ -2449,6 +2449,12 @@ function getArchitectAdapterConfig(): { adapter: ArchitectAdapterType; source: "
   return adapter ? { adapter, source: "architect" } : { adapter: "native_api_tool_loop", source: "default" };
 }
 
+function normalizeArchitectModelForAdapter(adapter: ArchitectAdapterType, model: string): string {
+  const normalized = model.trim();
+  if ((adapter === "codex-cli" || adapter === "copilot-cli") && normalized === "qwen3:8b") return "auto";
+  return normalized;
+}
+
 function buildArchitectLlmRequestConfig(body: Record<string, unknown>): ArchitectLlmConfig {
   const base = getArchitectLlmConfig();
   const provider = architectProviderField(body, "provider") ?? architectProviderField(body, "architect_provider") ?? base.provider;
@@ -3437,7 +3443,7 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
   const adapter = architectAdapterField(body, "adapter") ?? getArchitectAdapterConfig().adapter;
   const requestedProvider = architectProviderField(body, "provider") ?? current.provider;
   const provider = adapter === "native_api_tool_loop" ? requestedProvider : "none";
-  const model = optionalTextField(body, "model") ?? current.model;
+  const model = normalizeArchitectModelForAdapter(adapter, optionalTextField(body, "model") ?? current.model);
   const autonomyMode =
     architectAutonomyModeField(body, "autonomy_mode") ?? architectAutonomyModeField(body, "mode") ?? getArchitectAutonomyMode().mode;
 
@@ -3765,6 +3771,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   }
 
   const architectConfig = buildArchitectLlmRequestConfig(body);
+  architectConfig.model = normalizeArchitectModelForAdapter(adapter, architectConfig.model);
   const provider = createLlmProviderForConfig(architectConfig);
   let providerAvailable = false;
   let fallbackReason: string | null = null;
@@ -8353,6 +8360,8 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       const adapter = architectAdapterSelectEl.value || 'native_api_tool_loop';
       const cliAdapter = adapter === 'codex-cli' || adapter === 'copilot-cli';
       const deterministic = adapter === 'deterministic_fallback';
+      const adapterModels = architectModelOptionsByProvider[adapter] || [];
+      const normalizedPreferredModel = cliAdapter && preferredModel && adapterModels.indexOf(preferredModel) < 0 ? 'auto' : preferredModel;
       if (cliAdapter || deterministic) {
         if (architectProviderSelectEl.value && architectProviderSelectEl.value !== 'none') {
           lastNativeArchitectProvider = architectProviderSelectEl.value;
@@ -8362,7 +8371,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         architectProviderSelectEl.value = lastNativeArchitectProvider;
       }
       architectProviderSelectEl.disabled = cliAdapter || deterministic;
-      renderArchitectModelOptions(modelProviderKeyForControls(), preferredModel);
+      renderArchitectModelOptions(modelProviderKeyForControls(), normalizedPreferredModel);
       architectModelInputEl.disabled = deterministic;
       syncAttachmentCapabilities(computeAttachmentCapabilities(adapter, deterministicProviderForAdapter(adapter), architectModelInputEl.value.trim()));
     }
@@ -9784,6 +9793,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       const persistedPayload = await persistArchitectControls();
       const requestRuntime = updateActiveArchitectRuntime(persistedPayload);
       appendChatMessage('user', outboundMessage);
+      appendChatMessage('assistant', 'I am starting on that now. I will check the governed project context first, use DreamGraph tools where needed, and report the result when the pass is complete.');
       autonomyPassCount += 1;
       updateAutonomyPassView('running', 0);
       setChatProcessing(true);

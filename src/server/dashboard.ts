@@ -2396,8 +2396,26 @@ async function renderDocs(): Promise<string> {
   return renderDocFile(files[0], files);
 }
 
+async function readArchitectGuide(): Promise<string> {
+  const activeProjectRoot = getActiveScope()?.projectRoot;
+  const candidates = [
+    resolve(PACKAGE_ROOT, "guide", "architect-for-dummies.md"),
+    resolve(process.cwd(), "guide", "architect-for-dummies.md"),
+    activeProjectRoot ? resolve(activeProjectRoot, "guide", "architect-for-dummies.md") : undefined,
+  ].filter((candidate, index, all): candidate is string => Boolean(candidate) && all.indexOf(candidate) === index);
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      return await readFile(candidate, "utf-8");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("architect_guide_not_found");
+}
+
 async function renderArchitectGuide(): Promise<string> {
-  const content = await readFile(resolve(PACKAGE_ROOT, "guide", "architect-for-dummies.md"), "utf-8");
+  const content = await readArchitectGuide();
   const body = `<style>${MD_CSS}</style><article class="docs-content"><p><a href="/">Back to Dashboard</a> | <a href="/architect">Open Architect</a></p>${markdownToHtml(content)}</article>`;
   return await shell("Architect Beginner Guide", body, "docs");
 }

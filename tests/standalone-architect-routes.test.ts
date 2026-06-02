@@ -663,6 +663,29 @@ describe("standalone Architect route hardening", () => {
     }
   });
 
+  it("replaces a stale local model when codex-cli is selected", async () => {
+    const previousAdapter = process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
+    const previousProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const configured = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adapter: "codex-cli", provider: "none", model: "qwen3:8b" }),
+        }));
+        const runtime = configured.runtime as Record<string, unknown>;
+        expect(runtime.adapter).toBe("codex-cli");
+        expect(runtime.provider).toBe("none");
+        expect(runtime.model).toBe("auto");
+      });
+    } finally {
+      if (previousAdapter == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER; else process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER = previousAdapter;
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousProvider;
+      if (previousModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousModel;
+    }
+  });
+
   it("exposes one active session runtime across config and chat payloads", async () => {
     const previousAdapter = process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
     const previousProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
