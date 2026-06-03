@@ -107,6 +107,23 @@ export interface StatsResult {
   confidence_mean: number;
 }
 
+export type CognitiveTrustState =
+  | "accepted_fact"
+  | "validated_insight"
+  | "advisory_candidate"
+  | "latent_speculative_link"
+  | "rejected_link"
+  | "expired_artifact"
+  | "human_reviewed_decision";
+
+export interface CognitiveTrustDescriptor {
+  state: CognitiveTrustState;
+  label: string;
+  authority: "source" | "daemon_validation" | "daemon_advisory" | "daemon_rejection" | "daemon_lifecycle" | "human_review";
+  reviewable: boolean;
+  implies_authority: boolean;
+}
+
 export interface TensionEntity {
   id: string;
   type: string;
@@ -120,11 +137,12 @@ export interface TensionEntity {
   attempted: boolean;
   resolved: boolean;
   ttl: number;
+  trust?: CognitiveTrustDescriptor;
 }
 
 export interface TensionView {
   active: TensionEntity[];
-  resolved: { tension_id: string; resolved_at: string; original: TensionEntity }[];
+  resolved: { tension_id: string; resolved_at: string; original: TensionEntity; trust?: CognitiveTrustDescriptor }[];
   total_active: number;
   total_resolved: number;
 }

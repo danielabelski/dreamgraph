@@ -50,7 +50,9 @@ import { buildArchitectDesireLedger } from "./desire-ledger.js";
 import { buildOnboardingReadinessProjection } from "./onboarding-readiness.js";
 import { ArchitectRepoSetupError, buildArchitectRepoSetupProjection, persistArchitectRepoSetup } from "./repo-setup.js";
 import { readOnboardingTelemetryEvents, recordOnboardingTelemetryEvent } from "./onboarding-telemetry.js";
+import { buildCalibrationEvaluation } from "../cognitive/calibration-evaluation.js";
 import { buildDreamPlayback } from "../cognitive/playback.js";
+import { buildCognitiveLifecycleProjection } from "../cognitive/lifecycle-visibility.js";
 import { buildTensionClusters } from "../cognitive/tension-clustering.js";
 import {
   ArchitectContributionError,
@@ -3376,6 +3378,38 @@ async function handleArchitectDreamPlaybackRequest(res: ServerResponse): Promise
     engine.loadTensions(),
   ]);
   json(res, 200, { ok: true, contract: "architect", version: "v1", playback: buildDreamPlayback({ history, dreamGraph, candidates, validated, tensions }) });
+}
+
+async function handleArchitectLifecycleRequest(res: ServerResponse): Promise<void> {
+  const [history, tensions] = await Promise.all([
+    engine.loadDreamHistory(),
+    engine.loadTensions(),
+  ]);
+  json(res, 200, {
+    ok: true,
+    contract: "architect",
+    version: "v1",
+    lifecycle: buildCognitiveLifecycleProjection({
+      resolvedTensions: tensions.resolved_tensions,
+      dreamHistory: history.sessions,
+    }),
+  });
+}
+
+async function handleArchitectCalibrationEvaluationRequest(res: ServerResponse): Promise<void> {
+  const [history, dreamGraph, candidates, validated, tensions] = await Promise.all([
+    engine.loadDreamHistory(),
+    engine.loadDreamGraph(),
+    engine.loadCandidateEdges(),
+    engine.loadValidatedEdges(),
+    engine.loadTensions(),
+  ]);
+  json(res, 200, {
+    ok: true,
+    contract: "architect",
+    version: "v1",
+    evaluation: buildCalibrationEvaluation({ history, dreamGraph, candidates, validated, tensions }),
+  });
 }
 
 async function handleArchitectRepoSetupRead(res: ServerResponse): Promise<void> {
@@ -10894,6 +10928,8 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
       pulse: "GET /api/architect/v1/pulse",
       desires: "GET /api/architect/v1/desires",
       dream_playback: "GET /api/architect/v1/dreams/recent/playback",
+      lifecycle: "GET /api/architect/v1/lifecycle",
+      calibration_evaluation: "GET /api/architect/v1/calibration/evaluation",
       tension_clusters: "GET /api/architect/v1/tensions/clusters",
       plans: "/api/architect/v1/plans",
       plan_detail: "/api/architect/v1/plans/{planId}",
@@ -11115,6 +11151,16 @@ export async function handleArchitectRoute(
 
     if (req.method === "GET" && pathname === "/api/architect/v1/dreams/recent/playback") {
       await handleArchitectDreamPlaybackRequest(res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/lifecycle") {
+      await handleArchitectLifecycleRequest(res);
+      return true;
+    }
+
+    if (req.method === "GET" && pathname === "/api/architect/v1/calibration/evaluation") {
+      await handleArchitectCalibrationEvaluationRequest(res);
       return true;
     }
 

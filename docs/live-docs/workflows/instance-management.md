@@ -1,32 +1,32 @@
 # Instance Management Process
 
-> This process manages the lifecycle of instances within the DreamGraph server, including creation, registration, and deregistration. It ensures that instances are correctly handled throughout their lifecycle.
+> This process manages the lifecycle of instances within the DreamGraph application, including creation, loading, and registration of instances. It ensures that instances are properly configured and isolated.
 
-**Trigger:** User creates or modifies an instance  
-**Source files:** src/instance/index.ts, src/instance/lifecycle.ts  
+**Trigger:** Instance command  
+**Source files:** src/instance/index.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Create Instance"]
-    S2["Register Instance"]
+    S1["Create New Instance"]
+    S2["Load Existing Instance"]
     S1 --> S2
-    S3["Deregister Instance"]
+    S3["Register Instance"]
     S2 --> S3
 ```
 
 ## Steps
 
-### 1. Create Instance
+### 1. Create New Instance
 
-Initialize a new instance with specified parameters.
+Initialize a new instance with default settings.
 
-### 2. Register Instance
+### 2. Load Existing Instance
 
-Add the new instance to the master registry.
+Load an instance from persistent storage.
 
-### 3. Deregister Instance
+### 3. Register Instance
 
-Remove an instance from the registry when it is no longer needed.
+Add the instance to the application registry for management.
 

@@ -1,6 +1,6 @@
 # Build and Deploy Process
 
-> Compiles the TypeScript code into JavaScript and prepares the application for deployment. This process ensures that the latest changes are reflected in the deployed version.
+> This process automates the building and deployment of the application. It compiles the TypeScript code and prepares the application for production use.
 
 **Trigger:** Build command execution  
 **Source files:** package.json, tsconfig.json  
@@ -10,23 +10,29 @@
 ```mermaid
 flowchart TD
     S1["Compile TypeScript"]
-    S2["Prepare Deployment"]
+    S2["Install Dependencies"]
     S1 --> S2
-    S3["Deploy Application"]
+    S3["Package Application"]
     S2 --> S3
+    S4["Deploy Application"]
+    S3 --> S4
 ```
 
 ## Steps
 
 ### 1. Compile TypeScript
 
-Uses the TypeScript compiler to convert .ts files into .js files.
+Use the TypeScript compiler to transpile the code into JavaScript.
 
-### 2. Prepare Deployment
+### 2. Install Dependencies
 
-Organizes the compiled files and prepares them for deployment.
+Install any necessary dependencies for the application.
 
-### 3. Deploy Application
+### 3. Package Application
 
-Deploys the application to the specified environment.
+Package the application files for deployment.
+
+### 4. Deploy Application
+
+Deploy the packaged application to the specified environment.
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CognitiveState } from "../cognitive/types.js";
+import { addTrustStateCount, emptyTrustStateDistribution, type TrustStateDistribution } from "../cognitive/trust-state.js";
 import type { ArchitectOperationalPlanState } from "./plan-registry.js";
 
 export type CognitiveWeatherKind = "blocked" | "strained" | "uncertain" | "recovering" | "curious" | "calm";
@@ -41,6 +42,7 @@ export interface ArchitectPulseSnapshot {
     top_tension_urgency: number | null;
     expiring_next_cycle: number;
     validation: { validated: number; latent: number; rejected: number };
+    trust_states: TrustStateDistribution;
   };
   weather: {
     kind: CognitiveWeatherKind;
@@ -163,6 +165,16 @@ export function deriveCognitiveWeather(input: {
   };
 }
 
+function summarizePulseTrustStates(cognitive: CognitiveState): TrustStateDistribution {
+  const distribution = emptyTrustStateDistribution();
+  addTrustStateCount(distribution, "validated_insight", cognitive.validated_stats.validated);
+  addTrustStateCount(distribution, "latent_speculative_link", cognitive.validated_stats.latent + cognitive.dream_graph_stats.latent_edges + cognitive.dream_graph_stats.latent_nodes);
+  addTrustStateCount(distribution, "rejected_link", cognitive.validated_stats.rejected);
+  const pipeline = cognitive.tension_stats.resolution_pipeline;
+  addTrustStateCount(distribution, "advisory_candidate", (pipeline?.pending_candidates ?? 0) + (pipeline?.awaiting_validation ?? 0));
+  return distribution;
+}
+
 export function buildArchitectPulseSnapshot(input: {
   cognitive: CognitiveState;
   runtime: ArchitectPulseRuntimeInput;
@@ -194,6 +206,7 @@ export function buildArchitectPulseSnapshot(input: {
         latent: input.cognitive.validated_stats.latent,
         rejected: input.cognitive.validated_stats.rejected,
       },
+      trust_states: summarizePulseTrustStates(input.cognitive),
     },
     weather: deriveCognitiveWeather(input),
     authority_boundary: {
@@ -214,5 +227,5 @@ export function formatArchitectPulseLine(pulse: ArchitectPulseSnapshot): string 
   const plan = pulse.plan.id
     ? `${pulse.plan.id} ${pulse.plan.lifecycle ?? "unknown"}/${pulse.plan.execution ?? "unknown"}`
     : "none";
-  return `Architect pulse: weather=${pulse.weather.kind}; cognitive=${pulse.cognitive.state}/${readiness}; tensions=${pulse.cognitive.unresolved_tensions} unresolved; plan=${plan}; authority=dreamgraph_mcp governed tools only.`;
+  return `Architect pulse: weather=${pulse.weather.kind}; cognitive=${pulse.cognitive.state}/${readiness}; tensions=${pulse.cognitive.unresolved_tensions} unresolved; trust=validated:${pulse.cognitive.trust_states.validated_insight}/latent:${pulse.cognitive.trust_states.latent_speculative_link}/rejected:${pulse.cognitive.trust_states.rejected_link}; plan=${plan}; authority=dreamgraph_mcp governed tools only.`;
 }

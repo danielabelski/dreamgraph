@@ -1,9 +1,10 @@
 # Remediation Plan Viewer
 
-> Render generated remediation plans with ordered steps, risk notes, and verification guidance for a selected tension or issue.
+> Legacy parallel remediation/task summary entry retained only for historical traceability after canonicalization to ui_task_report_summary.
 
-**ID:** `remediation_plan_viewer`  
-**Category:** composite  
+**ID:** `remediation-plan-viewer`  
+**Category:** feedback  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,27 +12,16 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| plan | `object` | ✅ | Structured remediation plan including steps, risks, and verification criteria. |
+| plans | `array<object>` | ❌ | Legacy remediation plans. |
 
 ### Outputs
 
-| Name | Type | Trigger | Description |
-|------|------|---------|-------------|
-| step_selected | `string` | on_click | Emits selected remediation step identifier. |
-| verification_requested | `string` | on_click | Requests verification guidance for a plan item. |
+*No outputs defined.*
 
 ## Interactions
 
-- **expand_step** — Reveal full details for a remediation step.
-- **review_risks** — Inspect accepted risks and guard rails.
-- **trigger_verification** — Open or request verification instructions for the selected step.
+- **legacy_reference** — Retained only as a historical reference to the older remediation plan viewer naming.
 
-## Platform Implementations
+**Used by features:** feature_ui_registry
 
-| Platform | Component | Source File | Notes |
-|----------|-----------|-------------|-------|
-| react | `RemediationPlanViewer` | - | Registered semantically for future extension/dashboard integration. |
-
-**Used by features:** dashboard_view
-
-**Tags:** remediation, planning, tensions
+**Tags:** legacy, deprecated, remediation, ui-alias

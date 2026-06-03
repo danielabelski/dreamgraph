@@ -1,11 +1,17 @@
 # .
 
-> . — 1 source file(s): vitest.config.ts
+> . — 1 source file(s) in ./
 
 **Repository:** dreamgraph  
 **Domain:** core  
 **Status:** active  
 **Source files:** vitest.config.ts  
 
-**Tags:** core, ts
+## Relationships
+
+| Target | Type | Relationship | Strength | Description |
+|--------|------|--------------|----------|-------------|
+| dreamgraph_src_types | feature | depends_on | moderate | auto-backlink |
+
+**Tags:** typescript
 

@@ -1,9 +1,10 @@
 # Tool Activity Log
 
-> Show the sequence of tools DreamGraph invoked for a request, including purpose and outcome, to improve trust and debuggability.
+> Legacy parallel task/tool reporting entry retained only for historical traceability after canonicalization to ui_task_report_summary.
 
-**ID:** `tool_activity_log`  
-**Category:** data_display  
+**ID:** `tool-activity-log`  
+**Category:** feedback  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,23 +12,16 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| toolCalls | `array<object>` | ✅ | Ordered tool invocation records with arguments, rationale, and results |
+| tool_events | `array<object>` | ❌ | Legacy tool activity records. |
 
 ### Outputs
 
-| Name | Type | Trigger | Description |
-|------|------|---------|-------------|
-| toolCallSelected | `object` | on_click | Selected tool call record for deeper inspection |
+*No outputs defined.*
 
 ## Interactions
 
-- **inspect_tool_call** — Open a specific tool invocation and its result
-- **review_failures** — Spot failed or blocked tool calls in the request flow
+- **legacy_reference** — Retained only as a historical reference to the older tool activity log naming.
 
-## Platform Implementations
+**Used by features:** feature_ui_registry
 
-| Platform | Component | Source File | Notes |
-|----------|-----------|-------------|-------|
-| react | `VS Code Webview Tool Activity Panel` | extensions/vscode/src/chat-panel.ts | Can be embedded alongside or below the main chat transcript. |
-
-**Tags:** vscode, tools, auditability, transparency
+**Tags:** legacy, deprecated, tooling, ui-alias

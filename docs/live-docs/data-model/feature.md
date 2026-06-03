@@ -1,6 +1,6 @@
 # Feature
 
-> Represents a feature within the DreamGraph system, including its metadata, status, and associated links. Features are key components that define the capabilities of the system.
+> Defines a feature within the DreamGraph system, including its properties and relationships to other entities. Features are core components that provide specific functionalities.
 
 **Table:** `feature`  
 **Storage:** json  
@@ -11,7 +11,4 @@
 |-------|------|-------------|
 | id | string | Unique identifier for the feature. |
 | name | string | Human-readable name of the feature. |
-| description | string | Detailed description of the feature. |
-| status | string | Current status of the feature (e.g., active, inactive). |
-| category | string | Category to which the feature belongs. |
 

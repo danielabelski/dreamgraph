@@ -1,32 +1,26 @@
 # Data Loading Process
 
-> This process loads necessary data from JSON files into the application's memory, preparing it for processing and interaction. It ensures that all required data structures are populated before user interactions begin.
+> This process loads necessary data files and configurations into the system at startup. It ensures that all required data is available for the application to function correctly.
 
 **Trigger:** Server startup  
-**Source files:** src/instance/index.ts, src/utils/cache.ts  
+**Source files:** src/api/routes.ts, src/instance/index.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Read Features Data"]
-    S2["Read Workflows Data"]
+    S1["Load JSON Data"]
+    S2["Validate Loaded Data"]
     S1 --> S2
-    S3["Read Data Model"]
-    S2 --> S3
 ```
 
 ## Steps
 
-### 1. Read Features Data
+### 1. Load JSON Data
 
-Load features data from features.json file.
+Load configuration and data files from the specified directory.
 
-### 2. Read Workflows Data
+### 2. Validate Loaded Data
 
-Load workflows data from workflows.json file.
-
-### 3. Read Data Model
-
-Load data model definitions from data_model.json file.
+Ensure that the loaded data conforms to expected schemas and structures.
 

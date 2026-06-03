@@ -1,9 +1,10 @@
 # DreamGraph Dashboard View
 
-> Embed the DreamGraph daemon's live /status web UI inside a VS Code sidebar panel via iframe, giving developers real-time cognitive state visibility without leaving the editor. Acts as the primary human-facing window into the system's dream cycles, tensions, and knowledge graph health.
+> Embed the canonical DreamGraph dashboard inside a VS Code sidebar view so operators can monitor dashboard surfaces without leaving the editor, using an abstract embedded-shell contract rather than implementation-specific iframe styling.
 
 **ID:** `dashboard_view`  
 **Category:** composite  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,28 +12,53 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| daemonHost | `string` | ❌ | Daemon host from VS Code config (dreamgraph.daemonHost), defaults to 127.0.0.1 |
-| daemonPort | `number` | ❌ | Daemon port from VS Code config (dreamgraph.daemonPort), defaults to 8010 |
+| daemon_url | `string` | ✅ | Resolved daemon /status URL derived from runtime-discovered host and port or VS Code settings fallback. |
+| view_visibility | `boolean` | ❌ | Whether the webview view is currently visible, used to trigger refresh behavior. |
 
 ### Outputs
 
 | Name | Type | Trigger | Description |
 |------|------|---------|-------------|
-| refresh | `void` | on_visibility_change | Force-reloads the iframe with the current daemon URL |
-| open | `void` | on_command | Focuses the dashboard panel in the sidebar via dreamgraph.dashboardView.focus command |
+| refresh | `void` | on_visibility_change | Reloads the embedded dashboard iframe with the current daemon URL. |
+| focus_view | `void` | on_command | Focuses the dashboard view in the VS Code sidebar. |
 
 ## Interactions
 
-- **view_cognitive_state** — User observes live dream cycle status, tensions, and graph health from the embedded daemon UI
-- **retry_connection** — User clicks Retry button in the offline fallback view to reload the iframe
-- **auto_refresh** — Panel automatically refreshes when it becomes visible after being hidden
+- **monitor_dashboard** — View the live DreamGraph dashboard inside the VS Code sidebar.
+- **retry_connection** — Use the offline fallback retry button to attempt to reload the embedded dashboard when the daemon is unreachable.
+- **auto_refresh_on_visibility** — Refresh the iframe whenever the view becomes visible again.
+
+## Visual Semantics
+
+- **Role:** shell
+- **Emphasis:** secondary
+- **Density:** comfortable
+- **Chrome:** embedded
+
+### State Styling
+
+- **loading** — Keep the host calm and transitional while embedded content initializes.
+- **connected** — Prioritize the embedded dashboard content over surrounding host chrome.
+- **offline_fallback** — Promote warning feedback while preserving a clear recovery action path.
+
+## Layout Semantics
+
+- **Pattern:** shell
+- **Alignment:** leading
+- **Sizing behavior:** fill_parent
+- **Responsive behavior:** scroll
+
+### Layout Hierarchy
+
+- **embedded_dashboard** — primary
+- **offline_recovery** — auxiliary
 
 ## Platform Implementations
 
 | Platform | Component | Source File | Notes |
 |----------|-----------|-------------|-------|
-| vscode | `WebviewViewProvider (DashboardViewProvider)` | extensions/vscode/src/dashboard-view.ts | Embeds daemon /status URL in iframe. Refreshes on visibility change. CSP-locked to daemon origin. Nonce-based script/style injection. |
+| vscode | `WebviewViewProvider` | extensions/vscode/src/dashboard-view.ts | Embeds daemon /status in an iframe with CSP limited to daemon origin, refreshes on visibility changes, and shows an offline fallback on load failure or timeout. |
 
-**Used by features:** feature_vscode_extension, feature_self_model
+**Used by features:** feature_vscode_extension, feature_self_model, feature_dashboard_server, feature_ui_registry
 
-**Tags:** vscode, dashboard, sidebar, webview, iframe, daemon, cognitive-state
+**Tags:** vscode, dashboard, sidebar, webview, canonical, visual-meta-v3

@@ -163,7 +163,10 @@ describe("Architect pulse weather", () => {
 
     expect(pulse.pulse_hash).toMatch(/^[a-f0-9]{16}$/);
     expect(pulse.plan.lifecycle).toBe("implementing");
+    expect(pulse.cognitive.trust_states.validated_insight).toBe(10);
+    expect(pulse.cognitive.trust_states.rejected_link).toBe(1);
     expect(formatArchitectPulseLine(pulse)).toContain("Architect pulse: weather=calm");
+    expect(formatArchitectPulseLine(pulse)).toContain("trust=validated:10/latent:0/rejected:1");
     expect(formatArchitectPulseLine(pulse)).toContain("plan=living-dreamgraph implementing/idle");
   });
 });

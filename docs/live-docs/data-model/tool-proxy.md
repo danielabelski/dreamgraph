@@ -1,14 +1,15 @@
 # Tool Proxy
 
-> Acts as an intermediary for tool requests and responses within the DreamGraph system. Tool proxies are essential for managing external tool interactions.
+> Acts as an intermediary for tool requests and responses within the DreamGraph system. It facilitates communication between different components and external tools.
 
 **Table:** `tool_proxy`  
-**Storage:** json  
+**Storage:** memory  
 
 ## Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | id | string | Unique identifier for the tool proxy. |
-| toolId | string | ID of the tool being proxied. |
+| tool_id | string | Identifier for the tool being proxied. |
+| status | string | Current status of the tool proxy. |
 

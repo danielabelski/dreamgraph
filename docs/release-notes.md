@@ -1,5 +1,13 @@
 # DreamGraph Release Notes
 
+## v12.2.0 - Trust Calibration and Reviewable Cognition
+
+DreamGraph v12.2.0 adds trust-state labeling, evidence ledgers, tension precision categories, cognitive lifecycle transition visibility, and calibration evaluation for Architect and cognitive projections. The release keeps dream output advisory until backed by source, ADRs, workflow/test/runtime evidence, governed daemon validation, or explicit human review.
+
+New operator-facing contracts distinguish accepted facts, validated insights, advisory candidates, latent/speculative links, rejected links, expired artifacts, and human-reviewed decisions. Rejected, retired, expired, and superseded artifacts remain inspectable as historical context instead of disappearing from the project story.
+
+See [`../RELEASE_NOTES_v12.2.0.md`](../RELEASE_NOTES_v12.2.0.md) for the full distribution notes.
+
 ## v12.1.0 - Living DreamGraph
 
 DreamGraph v12.1.0 adds daemon-governed Architect Pulse, read-only dream playback, tension clustering, desire-ledger projections, and living-plan state for the standalone browser architect.

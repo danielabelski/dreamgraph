@@ -1,6 +1,6 @@
 # API Surface
 
-> Defines the API endpoints available for interacting with the DreamGraph system. This includes routes for managing instances and orchestrating workflows.
+> Describes the available API endpoints and their specifications for the DreamGraph server. This data is crucial for client applications interacting with the server.
 
 **Table:** `api_surface`  
 **Storage:** json  
@@ -9,7 +9,6 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| method | string | HTTP method for the endpoint (e.g., GET, POST). |
-| path | string | Path for the API endpoint. |
-| description | string | Description of what the endpoint does. |
+| endpoint | string | The URL path for the API endpoint. |
+| method | string | HTTP method used for the API endpoint (GET, POST, etc.). |
 

@@ -1,32 +1,26 @@
 # Error Handling Flow
 
-> This flow manages errors that occur during the operation of the DreamGraph server. It ensures that errors are logged and appropriate responses are sent to users, maintaining application stability.
+> This workflow manages errors that occur within the application, ensuring that they are logged and communicated to the user appropriately.
 
-**Trigger:** An error occurs during processing  
-**Source files:** src/utils/errors.ts, src/utils/logger.ts  
+**Trigger:** Error occurrence  
+**Source files:** src/utils/logger.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
     S1["Log Error"]
-    S2["Generate Error Response"]
+    S2["Notify User"]
     S1 --> S2
-    S3["Send Error Response"]
-    S2 --> S3
 ```
 
 ## Steps
 
 ### 1. Log Error
 
-Capture the error details and log them for analysis.
+Log the error details for debugging purposes.
 
-### 2. Generate Error Response
+### 2. Notify User
 
-Create a user-friendly error message to return.
-
-### 3. Send Error Response
-
-Return the error message to the user.
+Provide feedback to the user regarding the error.
 

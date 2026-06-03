@@ -28,6 +28,7 @@ import type {
 } from "../graph/snapshot.js";
 import { graphEventBus } from "../graph/events.js";
 import { loadGraphRaw, type GraphRawSnapshot } from "../graph/store.js";
+import { describeCognitiveTrustState, trustStateFromResolvedTension, type CognitiveTrustDescriptor } from "../cognitive/trust-state.js";
 import type {
   CapabilityEntity,
   DataModelEntity,
@@ -330,9 +331,12 @@ export async function listEdges(
 /*  Tensions                                                           */
 /* ------------------------------------------------------------------ */
 
+export type TrustedTensionSignal = TensionSignal & { trust: CognitiveTrustDescriptor };
+export type TrustedResolvedTension = ResolvedTension & { trust: CognitiveTrustDescriptor };
+
 export interface TensionView {
-  active: TensionSignal[];
-  resolved: ResolvedTension[];
+  active: TrustedTensionSignal[];
+  resolved: TrustedResolvedTension[];
   total_active: number;
   total_resolved: number;
 }
@@ -341,8 +345,14 @@ export async function getTensionView(
   status: "active" | "resolved" | "all",
 ): Promise<TensionView> {
   const raw = await loadGraphRaw();
-  const active = status === "resolved" ? [] : (raw.tensions.signals ?? []);
-  const resolved = status === "active" ? [] : (raw.tensions.resolved_tensions ?? []);
+  const active = status === "resolved" ? [] : (raw.tensions.signals ?? []).map((tension) => ({
+    ...tension,
+    trust: describeCognitiveTrustState("advisory_candidate"),
+  }));
+  const resolved = status === "active" ? [] : (raw.tensions.resolved_tensions ?? []).map((tension) => ({
+    ...tension,
+    trust: describeCognitiveTrustState(trustStateFromResolvedTension()),
+  }));
   return {
     active,
     resolved,

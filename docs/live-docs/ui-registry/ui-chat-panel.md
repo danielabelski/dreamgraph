@@ -1,9 +1,10 @@
-# Chat Panel
+# UI Chat Panel
 
-> Provide an interactive conversational surface where a user collaborates with DreamGraph, sends prompts, and receives architecture-aware responses.
+> Legacy parallel chat surface entry retained only for historical traceability after canonicalization to vscode_chat_panel.
 
-**ID:** `ui_chat_panel`  
+**ID:** `ui-chat-panel`  
 **Category:** composite  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,29 +12,16 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| messages | `array<object>` | ✅ | Conversation history for the active chat session. |
-| context_payload | `object` | ❌ | Injected DreamGraph context, graph preamble, or retrieved subgraph data. |
-| connection_status | `string` | ✅ | Daemon/MCP connection health indicator. |
+| messages | `array<object>` | ❌ | Legacy chat messages. |
 
 ### Outputs
 
-| Name | Type | Trigger | Description |
-|------|------|---------|-------------|
-| message_submitted | `string` | on_submit | User submits a prompt to the assistant. |
-| context_requested | `object` | on_click | UI requests additional graph context or entity details. |
+*No outputs defined.*
 
 ## Interactions
 
-- **send_message** — Submit a new user message.
-- **view_context** — Inspect architectural context associated with a reply.
-- **retry** — Retry failed daemon or model calls.
+- **legacy_reference** — Retained only as a historical reference to the older chat panel naming.
 
-## Platform Implementations
+**Used by features:** feature_ui_registry
 
-| Platform | Component | Source File | Notes |
-|----------|-----------|-------------|-------|
-| react | `ChatPanel` | extensions/vscode/src/chat-panel.ts | VS Code webview chat interface. |
-
-**Used by features:** feature_vscode_extension, feature_graph_rag_retrieval
-
-**Tags:** chat, assistant, conversation, context
+**Tags:** legacy, deprecated, chat, ui-alias

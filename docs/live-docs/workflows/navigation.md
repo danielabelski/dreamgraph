@@ -1,32 +1,32 @@
 # Navigation Flow
 
-> This flow handles user navigation within the DreamGraph interface, allowing users to move between different views and functionalities. It ensures a seamless user experience while interacting with the application.
+> This workflow handles the navigation within the DreamGraph application, allowing users to move between different views and components seamlessly.
 
-**Trigger:** User navigates through the interface  
-**Source files:** src/server/dashboard.ts  
+**Trigger:** User navigates through the application  
+**Source files:** explorer/src/App.tsx  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Capture Navigation Request"]
-    S2["Determine Target View"]
+    S1["Detect Navigation Event"]
+    S2["Update Application State"]
     S1 --> S2
-    S3["Render Target View"]
+    S3["Render New View"]
     S2 --> S3
 ```
 
 ## Steps
 
-### 1. Capture Navigation Request
+### 1. Detect Navigation Event
 
-Detect when a user attempts to navigate to a different section.
+Listen for user navigation events within the application.
 
-### 2. Determine Target View
+### 2. Update Application State
 
-Identify the target view based on the user's request.
+Update the application state based on the user's navigation choice.
 
-### 3. Render Target View
+### 3. Render New View
 
-Display the requested view to the user.
+Render the appropriate view based on the updated application state.
 

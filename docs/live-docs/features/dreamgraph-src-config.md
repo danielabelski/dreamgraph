@@ -1,9 +1,9 @@
 # Config
 
-> Config — 1 source file(s): src/config/config.ts
+> Config — 1 source file(s) in src/config/
 
 **Repository:** dreamgraph  
-**Domain:** infrastructure  
+**Domain:** core  
 **Status:** active  
 **Source files:** src/config/config.ts  
 
@@ -11,7 +11,9 @@
 
 | Target | Type | Relationship | Strength | Description |
 |--------|------|--------------|----------|-------------|
-| dreamgraph_src_utils | feature | related_to | moderate | Shared domain 'infrastructure' with 1 keyword overlap(s) |
+| settings_persistence_flow | feature | related_to | moderate | auto-backlink |
+| config | feature | related_to | moderate | auto-backlink |
+| configuration | feature | related_to | moderate | auto-backlink |
 
-**Tags:** infrastructure, ts
+**Tags:** typescript
 

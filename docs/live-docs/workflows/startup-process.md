@@ -1,32 +1,38 @@
 # Startup Process
 
-> This process initializes the DreamGraph server, setting up necessary configurations and starting the server in the specified transport mode. It handles command-line arguments to determine the transport type and port.
+> This process initializes the DreamGraph MCP Server, setting up the necessary configurations and starting the server. It can operate in either stdio or HTTP transport modes based on user input.
 
-**Trigger:** Server launch  
+**Trigger:** Server launch via CLI command  
 **Source files:** src/index.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Parse Command-Line Arguments"]
+    S1["Parse CLI Arguments"]
     S2["Initialize Server"]
     S1 --> S2
-    S3["Start Server"]
+    S3["Start Data Directory Watcher"]
     S2 --> S3
+    S4["Launch Server"]
+    S3 --> S4
 ```
 
 ## Steps
 
-### 1. Parse Command-Line Arguments
+### 1. Parse CLI Arguments
 
-Extracts transport mode and port from the command-line arguments.
+Extract transport mode and port from command line arguments.
 
 ### 2. Initialize Server
 
-Sets up the server based on the parsed transport mode.
+Create and configure the server instance based on the parsed arguments.
 
-### 3. Start Server
+### 3. Start Data Directory Watcher
 
-Begins listening for incoming requests on the specified port.
+Begin monitoring the data directory for changes.
+
+### 4. Launch Server
+
+Start the server to listen for incoming requests.
 

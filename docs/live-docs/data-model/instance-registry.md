@@ -1,6 +1,6 @@
 # Instance Registry
 
-> Maintains a registry of all instances of the DreamGraph application, allowing for management and retrieval of instance information. This is crucial for ensuring that instances are tracked and managed effectively.
+> Maintains a registry of all active instances of DreamGraph. It tracks their configurations, statuses, and lifecycle events.
 
 **Table:** `instance_registry`  
 **Storage:** json  
@@ -9,6 +9,6 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| id | string | Unique identifier for the registry entry. |
-| instance_id | string | Identifier of the associated instance. |
+| instance_id | string | Unique identifier for the instance. |
+| status | string | Current status of the instance. |
 

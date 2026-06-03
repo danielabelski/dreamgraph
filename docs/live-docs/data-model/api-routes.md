@@ -1,14 +1,7 @@
 # API Routes
 
-> Defines the REST API endpoints available for the application. Facilitates communication between the server and clients, including VS Code extensions.
+> Defines the REST API endpoints for the DreamGraph server, allowing external clients to interact with the server. It includes methods for instance management, graph context enrichment, and validation.
 
 **Table:** `api_routes`  
 **Storage:** memory  
-
-## Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| method | string | HTTP method for the route (GET, POST, etc.). |
-| path | string | Endpoint path for the API. |
 

@@ -1,32 +1,32 @@
 # Data Loading Process
 
-> Loads necessary data files into the system for processing and analysis. This includes features, workflows, and data models.
+> This process handles the loading of various data files necessary for the application to function correctly. It ensures that all required data is available before the application begins processing requests.
 
 **Trigger:** Server initialization  
-**Source files:** scripts/enrich-graph.mjs, src/instance/index.ts  
+**Source files:** src/api/routes.ts, src/instance/index.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Read Features"]
-    S2["Read Workflows"]
+    S1["Load JSON Data"]
+    S2["Validate Data Structure"]
     S1 --> S2
-    S3["Read Data Model"]
+    S3["Initialize Data Context"]
     S2 --> S3
 ```
 
 ## Steps
 
-### 1. Read Features
+### 1. Load JSON Data
 
-Loads feature data from the features.json file.
+Read and parse the required JSON data files into memory.
 
-### 2. Read Workflows
+### 2. Validate Data Structure
 
-Loads workflow data from the workflows.json file.
+Ensure the loaded data conforms to expected schemas.
 
-### 3. Read Data Model
+### 3. Initialize Data Context
 
-Loads data model information from the data_model.json file.
+Set up the context for data usage throughout the application.
 

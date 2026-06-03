@@ -1,32 +1,32 @@
 # Navigation Flow
 
-> Facilitates navigation within the application, allowing users to move between different views and functionalities.
+> This flow handles the navigation within the application, allowing users to move between different views and functionalities seamlessly.
 
-**Trigger:** User navigation command  
-**Source files:** src/server/dashboard.ts  
+**Trigger:** User action to navigate  
+**Source files:** explorer/src/App.tsx  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Receive Navigation Command"]
-    S2["Process Navigation Command"]
+    S1["Detect Navigation Action"]
+    S2["Update Application State"]
     S1 --> S2
-    S3["Render Target View"]
+    S3["Render New View"]
     S2 --> S3
 ```
 
 ## Steps
 
-### 1. Receive Navigation Command
+### 1. Detect Navigation Action
 
-Listens for user commands related to navigation.
+Listen for user actions that indicate a desire to navigate.
 
-### 2. Process Navigation Command
+### 2. Update Application State
 
-Processes the command to determine the target view.
+Change the application state to reflect the new view.
 
-### 3. Render Target View
+### 3. Render New View
 
-Displays the requested view to the user.
+Display the new view to the user.
 

@@ -1,9 +1,10 @@
-# Cognitive Dashboard Panel
+# Dashboard Panel
 
-> Present DreamGraph system health, unresolved tensions, recent dream promotions, and graph coverage gaps in a single operational dashboard within VS Code.
+> Legacy parallel dashboard shell entry retained only for historical traceability after canonicalization to ui_dashboard_shell.
 
-**ID:** `dashboard_panel`  
-**Category:** composite  
+**ID:** `dashboard-panel`  
+**Category:** layout  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,30 +12,16 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| health_summary | `object` | ✅ | Aggregated health status including connectivity, tension counts, and recent activity. |
-| tensions | `array<object>` | ❌ | List of unresolved or high-urgency tensions. |
-| recent_promotions | `array<object>` | ❌ | Recently validated dream edges or cognitive promotions. |
-| coverage_gaps | `array<object>` | ❌ | Missing or stale knowledge areas such as empty registries or weak overview coverage. |
+| sections | `array<object>` | ❌ | Legacy dashboard section list. |
 
 ### Outputs
 
-| Name | Type | Trigger | Description |
-|------|------|---------|-------------|
-| refresh_requested | `void` | on_click | Requests dashboard data refresh. |
-| tension_selected | `string` | on_click | Emits selected tension identifier for inspection. |
-| promotion_selected | `string` | on_click | Emits selected promotion identifier for drill-down. |
+*No outputs defined.*
 
 ## Interactions
 
-- **refresh** — Reload dashboard data from DreamGraph services.
-- **inspect_tension** — Open details for a selected unresolved tension.
-- **inspect_promotion** — Open details for a recent dream promotion.
-- **filter** — Filter visible issues by severity or subsystem.
+- **legacy_reference** — Retained only as a historical reference to the older dashboard shell naming.
 
-## Platform Implementations
+**Used by features:** feature_ui_registry
 
-| Platform | Component | Source File | Notes |
-|----------|-----------|-------------|-------|
-| react | `DashboardView` | extensions/vscode/src/dashboard-view.ts | Primary dashboard surface in the VS Code extension. |
-
-**Tags:** vscode, dashboard, cognitive-health, tensions
+**Tags:** legacy, deprecated, dashboard, ui-alias

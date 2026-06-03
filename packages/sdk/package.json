@@ -1,6 +1,6 @@
 {
   "name": "@dreamgraph/sdk",
-  "version": "12.1.0",
+  "version": "12.2.0",
   "description": "DreamGraph plugin authoring SDK",
   "type": "module",
   "main": "dist/index.js",

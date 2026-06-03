@@ -1,9 +1,10 @@
 # Tension List
 
-> Display unresolved tensions with urgency and evidence summaries so users can prioritize investigation or remediation.
+> Legacy parallel graph-signal feedback entry retained only for historical traceability after canonicalization to ui_graph_signal_summary.
 
-**ID:** `tension_list`  
-**Category:** data_display  
+**ID:** `tension-list`  
+**Category:** feedback  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,27 +12,16 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| tensions | `array<object>` | ✅ | Tension items including title, urgency, status, and supporting evidence. |
+| tensions | `array<object>` | ❌ | Legacy tension items. |
 
 ### Outputs
 
-| Name | Type | Trigger | Description |
-|------|------|---------|-------------|
-| tension_selected | `string` | on_click | Emits selected tension identifier. |
-| filter_changed | `object` | on_change | Emits updated filtering criteria. |
+*No outputs defined.*
 
 ## Interactions
 
-- **sort** — Sort tensions by urgency, age, or subsystem.
-- **filter** — Filter tensions by status, severity, or evidence type.
-- **select** — Open a specific tension for deeper inspection.
+- **legacy_reference** — Retained only as a historical reference to the older tension list naming.
 
-## Platform Implementations
+**Used by features:** feature_ui_registry
 
-| Platform | Component | Source File | Notes |
-|----------|-----------|-------------|-------|
-| react | `TensionList` | - | Semantic registration for dashboard and future dedicated views. |
-
-**Used by features:** dashboard_view
-
-**Tags:** tensions, triage, vscode
+**Tags:** legacy, deprecated, tension, ui-alias

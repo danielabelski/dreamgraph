@@ -1,3 +1,5 @@
+import { buildCandidateEvidenceLedger, buildValidatedEdgeEvidenceLedger, type EvidenceLedger } from "./evidence-ledger.js";
+import { describeCognitiveTrustState, trustStateFromDreamStatus, type CognitiveTrustDescriptor } from "./trust-state.js";
 import type {
   CandidateEdgesFile,
   DreamGraphFile,
@@ -32,7 +34,8 @@ export interface DreamPlayback {
   strategy: string | null;
   frames: DreamPlaybackFrame[];
   rejected_by_reason: Record<DreamPlaybackRejectionReason, number>;
-  promoted_edges: Array<{ id: string; from: string; to: string; relation: string; confidence: number }>;
+  hypothesis_trust: Array<{ id: string; status: string; trust: CognitiveTrustDescriptor; evidence_ledger: EvidenceLedger }>;
+  promoted_edges: Array<{ id: string; from: string; to: string; relation: string; confidence: number; trust: CognitiveTrustDescriptor; evidence_ledger: EvidenceLedger }>;
   tension_ids: string[];
   before_understanding: string;
   after_understanding: string;
@@ -83,6 +86,7 @@ export function buildDreamPlayback(input: {
       strategy: null,
       frames: [],
       rejected_by_reason: emptyRejections(),
+      hypothesis_trust: [],
       promoted_edges: [],
       tension_ids: [],
       before_understanding: "No recorded dream cycle is available.",
@@ -95,9 +99,29 @@ export function buildDreamPlayback(input: {
   const rejectedByReason = emptyRejections();
   for (const result of rejected) rejectedByReason[rejectionReason(result)] += 1;
 
+  const hypothesisTrust = candidates.map((result) => {
+    const trust = describeCognitiveTrustState(trustStateFromDreamStatus(result.status));
+    return {
+      id: result.dream_id,
+      status: result.status,
+      trust,
+      evidence_ledger: buildCandidateEvidenceLedger({ result, trust }),
+    };
+  });
   const promotedEdges = input.validated.edges
     .filter((edge) => edge.normalization_cycle === session.cycle_number)
-    .map(({ id, from, to, relation, confidence }) => ({ id, from, to, relation, confidence }));
+    .map((edge) => {
+      const trust = describeCognitiveTrustState("validated_insight");
+      return {
+        id: edge.id,
+        from: edge.from,
+        to: edge.to,
+        relation: edge.relation,
+        confidence: edge.confidence,
+        trust,
+        evidence_ledger: buildValidatedEdgeEvidenceLedger({ edge, trust }),
+      };
+    });
   const tensionIds = input.tensions.signals
     .filter((tension) => tension.first_seen === session.timestamp || tension.last_seen === session.timestamp)
     .map((tension) => tension.id)
@@ -119,6 +143,7 @@ export function buildDreamPlayback(input: {
       { stage: "tensions_story_delta", label: "Tensions and story delta", summary: `${session.tension_signals_created} tensions created; ${session.tension_signals_resolved} resolved; ${session.tensions_expired} expired.`, count: session.tension_signals_created + session.tension_signals_resolved + session.tensions_expired },
     ],
     rejected_by_reason: rejectedByReason,
+    hypothesis_trust: hypothesisTrust,
     promoted_edges: promotedEdges,
     tension_ids: tensionIds,
     before_understanding: `Before cycle ${session.cycle_number}, the graph contained ${Math.max(0, input.dreamGraph.edges.length - session.generated_edges)} projected dream edges.`,

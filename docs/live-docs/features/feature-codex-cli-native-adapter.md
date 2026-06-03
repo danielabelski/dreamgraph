@@ -1,0 +1,11 @@
+# Codex CLI Native Architect Adapter
+
+> Native Architect provider adapter for Codex CLI. It handles Codex help-surface parsing, read-only argv policy, isolated CODEX_HOME config.toml generation, DreamGraph authoritative MCP allowlisting, transcript normalization, explicit login recovery detection, tool-call classification, provider-port projection, live MCP tool traces, final trace reconciliation, and Codex JSON event projection. Codex login-status preflight is advisory for generic nonzero/policy-noise output and only emits CODEX_NOT_LOGGED_IN when the transcript contains an explicit authentication failure signal; the real exec path remains responsible for classifying later auth failures. If exec reports MCP runtime failures and the audit bridge records no DreamGraph calls, the run fails closed with MCP_PROBE_FAILED instead of accepting ungrounded provider-inline output without a tool trace. The transcript parser treats whitespace-separated Codex JSON stdout events as a stream, uses item.completed / agent_message text as final assistant output, and routes non-JSON process output to diagnostics.
+
+**Repository:** dreamgraph  
+**Domain:** core  
+**Status:** active  
+**Source files:** extensions/vscode/src/architect-core/adapters/codex-cli/types.ts, extensions/vscode/src/architect-core/adapters/codex-cli/help-probe.ts, extensions/vscode/src/architect-core/adapters/codex-cli/argv.ts, extensions/vscode/src/architect-core/adapters/codex-cli/mcp-config.ts, extensions/vscode/src/architect-core/adapters/codex-cli/allowlist.ts, extensions/vscode/src/architect-core/adapters/codex-cli/transcript.ts, extensions/vscode/src/architect-core/adapters/codex-cli/transcript-classifier.ts, extensions/vscode/src/architect-core/adapters/codex-cli/orchestrator.ts, extensions/vscode/src/architect-core/adapters/codex-cli/provider-port.ts, extensions/vscode/src/architect-core/adapters/codex-cli/index.ts, extensions/vscode/src/test/codex-cli-adapter.test.ts, extensions/vscode/src/test/codex-cli-orchestrator.test.ts, extensions/vscode/src/test/codex-cli-provider-port.test.ts, docs/architecture.md, docs/release-notes.md  
+
+**Tags:** architect, codex-cli, native-adapter, dreamgraph-authority, mcp, event-parser, fail-closed
+

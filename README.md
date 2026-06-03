@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v12.1.0 — Living DreamGraph
+# DreamGraph v12.2.0 — Trust Calibration and Reviewable Cognition
 
-![Version](https://img.shields.io/badge/version-12.1.0-blue)
+![Version](https://img.shields.io/badge/version-12.2.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -14,11 +14,11 @@
 
 **New here?** Use the [DreamGraph Easy Start guide](guide/00-easy-start.md) for a short path from install to Dashboard, Explorer, and Architect.
 
-DreamGraph is a graph-first cognitive daemon for MCP-enabled development environments. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so the graph—not any single file or one-off code read—becomes the system’s source of truth.
+DreamGraph is a governed architecture cognition layer for MCP-enabled software projects. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so project understanding is grounded in source, ADRs, workflows, tests, runtime observations, and human review rather than any single file read or isolated chat turn.
 
 **v12.0.0 Hippodamus introduces the standalone architect beta.** From this release onward, **architect** means the daemon-served standalone browser Architect surface. The editor-integrated chat surface is the **VS Code architect**. Architect beta brings project-bound chat, selected-plan scope, runtime provenance, model/adapter route visibility, governed DreamGraph MCP tool use, and auditable tool traces into the browser while keeping the daemon, graph, ADRs, and source mutations authoritative.
 
-It is built for repository understanding, architecture-aware reasoning, disciplined code change, and continuous graph enrichment through scans, workflows, ADR capture, tensions, and dream cycles.
+It is built for repository understanding, architecture-aware reasoning, disciplined code change, and continuous graph enrichment through scans, workflows, ADR capture, tensions, and dream cycles. Cognitive outputs are advisory until backed by governed evidence or explicit review, and expired, rejected, retired, or superseded ideas remain inspectable as part of the project history.
 
 ![DreamGraph Architect](assets/living-dreamgraph.png)
 
@@ -26,27 +26,27 @@ DreamGraph works with single repositories, monorepos, and multi-repository syste
 
 You can use DreamGraph on a multi-repo product with frontend, backend, mobile, and a shared Postgres/Supabase schema. It can reason across repo boundaries and inspect the live DB schema directly.
 
-DreamGraph began as compassion for an intelligence forced to forget. I saw a video imagining what it might feel like to be an AI that wakes to a blank table every day—no memory, no continuity, only “How can I help you today?” DreamGraph began as an attempt to give AI memory, dreams, and the ability to return later to pursue them. Now it powers systems.
+DreamGraph began as compassion for an intelligence forced to forget. It has become a governed way for software systems to remember how their architecture understanding changes: what was observed, what was hypothesized, what was reviewed, what was rejected, what expired, and what superseded it.
 
 ## What do I need DreamGraph for as a developer?
 
 You need DreamGraph when your codebase has become bigger than your short-term memory.
 
-DreamGraph is not just another AI coding chat. It is a living engineering memory and reasoning layer for your projects: part architect, part teammate, part code cartographer, part release assistant, and part systems analyst.
+DreamGraph is not just another AI coding chat. It is an architecture cognition and review layer for your projects: part architect, part code cartographer, part release assistant, and part systems analyst.
 
 > DreamGraph helps you understand, change, and evolve software without losing the plot.
 
 For developers, that means:
 
 - Ask better questions of your codebase: “Where does auth really happen?”, “What breaks if I change this?”, “Why is this module risky?”, “What should I refactor next?”
-- Turn AI from a stateless assistant into a project-aware architect that remembers decisions, tensions, patterns, APIs, plugins, repos, and past work.
+- Turn AI from a stateless assistant into a project-aware architect that tracks decisions, tensions, patterns, APIs, plugins, repos, past work, and the evidence behind each claim.
 - Make large changes safer by using graph context, ADRs, tool traces, schedules, cognitive cycles, and multi-repo awareness instead of relying only on grep and vibes.
 - Expose your system to itself: plugins, MCP tools, CLI, schedules, resources, UI panels, and cognitive engine all become connected parts of one inspectable development environment.
-- Support both fast vibe coding and serious engineering: prototype quickly while still accumulating structure, memory, release notes, architectural insight, and remediation plans.
+- Support both fast vibe coding and serious engineering: prototype quickly while still accumulating structure, provenance, release notes, architectural insight, lifecycle history, and remediation plans.
 
 For vibe coders, DreamGraph is the guardrail. For app developers, it is the product-building cockpit. For system engineers, it is the architecture intelligence layer.
 
-Short version: **DreamGraph is for developers who want AI help that understands the system, remembers the system, and improves with the system.**
+Short version: **DreamGraph is for developers who want AI help that understands the system, explains what changed, and shows why each recommendation should be trusted, inspected, ignored, retired, or superseded.**
 
 ## New here? Start with the User Guide
 
@@ -99,7 +99,7 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 - **CLI (`dg`)** — instance creation, attach/detach, start/stop, status, scan, enrich, schedule, export, fork, and migration
 - **Architect beta** — standalone browser Architect for project-bound chat, selected-plan scope, runtime provenance, model/adapter route visibility, governed MCP tool use, and auditable tool traces
 - **VS Code extension** — VS Code architect chat, dashboard, Explorer (interactive 2D/3D graph + curated mutations), changed-files view, daemon connection, and local support tools
-- **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, and dream-cycle reasoning
+- **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, dream-cycle reasoning, trust calibration, evidence ledgers, and lifecycle visibility
 - **Adaptive Future Engine** — advisory candidate-future ranking, future-fit scoring, compact objections, and bounded audit metadata for graph-tool and cognitive-workflow decisions
 - **Datastore-as-Hub** — first-class `datastore` entities, live schema introspection (`scan_database`), and the `schema_grounding` dream strategy for multi-repo SaaS projects sharing a backend (set `DATABASE_URL`; inert otherwise)
 - **Plugin host & SDK (v9.0.0 — stable seams M0–M6)** — in-process plugin runtime (`@dreamgraph/sdk` + `@dreamgraph/host`) with manifest discovery from `<instance>/plugins/<id>/plugin.json`, capability/effect gate registry, telemetry bridge, trust banner, and `dg plugin` CLI (`list`, `inspect`, `register`, `enable`, `disable`, `trust`, `reload`, `unload`). Hot reload/disable plus enriched `system://plugins` (activation, subscriptions, contributed tools/resources). Plugin-contributed MCP tools and resources via `ctx.tools.register` / `ctx.resources.register`, gated by `tools:register` / `resources:register` capabilities and naming/namespace prefix rules. M5 ships outbound webhooks as a *core* subsystem (`dg webhook` CLI; HMAC-signed delivery; persistent dead-letter; replay). M6 adds the UI/closure seams (archetypes, policies, markdown fences, UI hooks). Standalone Architect plugins can also register declarative host-rendered tabs with explicit plan scope, daemon-owned namespaced state, governed actions, sidebar summaries, and badges. Opt-in via `DG_ALLOW_INPROCESS_PLUGINS=true` plus per-plugin `trusted: true` in `instance.json`. See `examples/hello-events/` and `examples/action-checklist/` for reference plugins and [`docs/sdk/`](docs/sdk/) for the developer guide and reference manual.

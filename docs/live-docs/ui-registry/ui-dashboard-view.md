@@ -1,9 +1,10 @@
-# Dashboard View
+# UI Dashboard View
 
-> Present DreamGraph system status, knowledge graph counts, and cognitive insights in a consolidated monitoring surface for operators.
+> Legacy parallel dashboard embedding entry retained only for historical traceability after canonicalization to dashboard_view.
 
-**ID:** `ui_dashboard_view`  
+**ID:** `ui-dashboard-view`  
 **Category:** composite  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,29 +12,16 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| system_overview | `object` | ✅ | System overview summary including repository and graph counts. |
-| cognitive_status | `object` | ✅ | Current cognitive engine state and dream graph statistics. |
-| dream_insights | `object` | ❌ | Recent edges, tensions, clusters, and strongest hypotheses. |
+| view_state | `object` | ❌ | Legacy dashboard view state. |
 
 ### Outputs
 
-| Name | Type | Trigger | Description |
-|------|------|---------|-------------|
-| refresh_requested | `void` | on_click | User requests a fresh status fetch. |
-| entity_selected | `string` | on_click | User selects an entity or insight to inspect deeper. |
+*No outputs defined.*
 
 ## Interactions
 
-- **refresh** — Reload dashboard data from MCP resources and tools.
-- **inspect_entity** — Open deeper details for a selected feature, workflow, tension, or insight.
+- **legacy_reference** — Retained only as a historical reference to the older dashboard view naming.
 
-## Platform Implementations
+**Used by features:** feature_ui_registry
 
-| Platform | Component | Source File | Notes |
-|----------|-----------|-------------|-------|
-| react | `Dashboard` | src/server/dashboard.ts | Server-hosted dashboard surface. |
-| react | `DashboardView` | extensions/vscode/src/dashboard-view.ts | VS Code extension dashboard rendering. |
-
-**Used by features:** feature_dashboard_server, feature_vscode_extension
-
-**Tags:** dashboard, monitoring, status, cognitive
+**Tags:** legacy, deprecated, dashboard, ui-alias

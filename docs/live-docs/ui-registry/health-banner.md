@@ -1,9 +1,10 @@
 # Health Banner
 
-> Provide a compact, always-visible summary of DreamGraph health inside the extension, such as daemon connectivity, unresolved tensions, and recent tool failures.
+> Legacy parallel status feedback entry retained only for historical traceability after canonicalization to ui_status_bar.
 
-**ID:** `health_banner`  
+**ID:** `health-banner`  
 **Category:** feedback  
+**Status:** active  
 
 ## Data Contract
 
@@ -11,23 +12,16 @@
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| healthState | `object` | ✅ | Current summarized health state from extension monitoring or daemon status |
+| health_state | `string` | ❌ | Legacy health state value. |
 
 ### Outputs
 
-| Name | Type | Trigger | Description |
-|------|------|---------|-------------|
-| healthDetailsRequested | `boolean` | on_click | Signal that the user wants to inspect health details |
+*No outputs defined.*
 
 ## Interactions
 
-- **view_health_details** — Open richer health details or dashboard surfaces
-- **retry_connection** — Attempt to reconnect to the daemon when unavailable
+- **legacy_reference** — Retained only as a historical reference to the older health banner naming.
 
-## Platform Implementations
+**Used by features:** feature_ui_registry
 
-| Platform | Component | Source File | Notes |
-|----------|-----------|-------------|-------|
-| react | `VS Code Status/Health Surface` | extensions/vscode/src/health-monitor.ts | Can be rendered as banner, badge, or inline panel element. |
-
-**Tags:** vscode, health, status, feedback
+**Tags:** legacy, deprecated, status, ui-alias

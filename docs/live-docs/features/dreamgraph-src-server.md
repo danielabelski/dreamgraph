@@ -1,9 +1,9 @@
 # Server
 
-> Server — 2 source file(s): src/server/dashboard.ts, src/server/server.ts
+> Server — 2 source file(s) in src/server/
 
 **Repository:** dreamgraph  
-**Domain:** api  
+**Domain:** core  
 **Status:** active  
 **Source files:** src/server/dashboard.ts, src/server/server.ts  
 
@@ -11,7 +11,7 @@
 
 | Target | Type | Relationship | Strength | Description |
 |--------|------|--------------|----------|-------------|
-| dreamgraph_src_api | feature | related_to | moderate | Shared domain 'api' with 1 keyword overlap(s) |
+| dashboard_server | feature | depends_on | moderate | auto-backlink |
 
-**Tags:** api, ts
+**Tags:** typescript
 

@@ -1,38 +1,32 @@
 # User Interaction Flow
 
-> This flow handles user interactions with the DreamGraph server, processing requests and returning appropriate responses. It manages the communication between the server and the client, ensuring smooth operation.
+> This workflow manages user interactions with the DreamGraph application, including handling API requests and responses. It ensures that user commands are processed correctly.
 
-**Trigger:** User sends a request via CLI or HTTP  
-**Source files:** src/api/routes.ts, src/server/dashboard.ts  
+**Trigger:** User API request  
+**Source files:** src/api/routes.ts, explorer/src/api.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Receive User Request"]
+    S1["Receive API Request"]
     S2["Process Request"]
     S1 --> S2
-    S3["Generate Response"]
+    S3["Send Response"]
     S2 --> S3
-    S4["Send Response"]
-    S3 --> S4
 ```
 
 ## Steps
 
-### 1. Receive User Request
+### 1. Receive API Request
 
-Capture the incoming request from the user.
+Listen for incoming API requests from users.
 
 ### 2. Process Request
 
-Determine the type of request and route it to the appropriate handler.
+Handle the request based on the specified endpoint and parameters.
 
-### 3. Generate Response
+### 3. Send Response
 
-Create a response based on the processed request.
-
-### 4. Send Response
-
-Return the generated response to the user.
+Return the appropriate response to the user.
 

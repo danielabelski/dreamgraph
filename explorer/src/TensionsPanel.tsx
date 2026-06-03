@@ -113,6 +113,7 @@ function TensionRow(props: {
     <div className={`muts-row${open ? " open" : ""}`}>
       <button className="muts-row-head" onClick={onToggle}>
         <span className="muts-badge muts-badge-tension">tension</span>
+        <span className="muts-badge">{tension.trust?.label ?? "Advisory candidate"}</span>
         <span className="muts-row-title">{tension.description || tension.id}</span>
         <span className="muts-row-meta">
           urgency {tension.urgency.toFixed(2)} · ×{tension.occurrences}
@@ -123,6 +124,7 @@ function TensionRow(props: {
           <div className="muts-meta">
             <code>{tension.id}</code>
             <span>· first {tension.first_seen.slice(0, 10)}</span>
+            <span>· trust {tension.trust?.state ?? "advisory_candidate"}</span>
           </div>
           <div className="muts-field">
             <span className="muts-field-label">Entities ({tension.entities.length})</span>

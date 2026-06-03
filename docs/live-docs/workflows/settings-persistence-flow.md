@@ -1,26 +1,32 @@
 # Settings Persistence Flow
 
-> Manages the saving and loading of user settings and configurations, ensuring that user preferences are retained across sessions.
+> This flow manages the saving and loading of user settings and configurations. It ensures that user preferences are retained across sessions.
 
-**Trigger:** User settings change  
+**Trigger:** User updates settings  
 **Source files:** src/config/config.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Save Settings"]
-    S2["Load Settings"]
+    S1["Capture Settings Changes"]
+    S2["Save Settings"]
     S1 --> S2
+    S3["Load Settings on Startup"]
+    S2 --> S3
 ```
 
 ## Steps
 
-### 1. Save Settings
+### 1. Capture Settings Changes
 
-Saves the current user settings to a configuration file.
+Detect changes made to user settings.
 
-### 2. Load Settings
+### 2. Save Settings
 
-Loads user settings from the configuration file at startup.
+Persist the updated settings to a configuration file.
+
+### 3. Load Settings on Startup
+
+Read the saved settings during application startup.
 

@@ -1,32 +1,26 @@
 # Settings Persistence Process
 
-> This process manages the saving and loading of user settings and configurations. It ensures that user preferences are retained across sessions and can be modified as needed.
+> This workflow manages the saving and loading of user settings within the application. It ensures that user preferences are stored and retrieved correctly.
 
-**Trigger:** User modifies settings  
-**Source files:** src/config/config.ts  
+**Trigger:** User updates settings  
+**Source files:** src/discipline/session.ts  
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    S1["Load Existing Settings"]
-    S2["Modify Settings"]
+    S1["Save User Settings"]
+    S2["Load User Settings"]
     S1 --> S2
-    S3["Save Settings"]
-    S2 --> S3
 ```
 
 ## Steps
 
-### 1. Load Existing Settings
+### 1. Save User Settings
 
-Read user settings from the configuration file.
+Persist user settings to the local storage or configuration files.
 
-### 2. Modify Settings
+### 2. Load User Settings
 
-Allow the user to change settings through the interface.
-
-### 3. Save Settings
-
-Write the modified settings back to the configuration file.
+Retrieve user settings from the local storage or configuration files.
 

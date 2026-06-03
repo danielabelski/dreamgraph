@@ -1,17 +1,17 @@
 # Cognitive Status
 
-*Generated at: 2026-04-12T20:11:22.687Z*
+*Generated at: 2026-06-03T17:16:00.438Z*
 
 ## Dream Graph
 
-- **Last dream cycle:** 2026-04-12T20:10:34.454Z
-- **Total cycles:** 282
-- **Dream nodes:** 0
-- **Dream edges:** 100
+- **Last dream cycle:** 2026-06-01T08:19:23.468Z
+- **Total cycles:** 1902
+- **Dream nodes:** 50
+- **Dream edges:** 243
 
 ## Tension Log
 
-- **Active tensions:** 4
-- **Total resolved:** 365
-- **Last updated:** 2026-04-12T20:10:34.440Z
+- **Active tensions:** 61
+- **Total resolved:** 5220
+- **Last updated:** 2026-06-01T08:19:44.458Z
 

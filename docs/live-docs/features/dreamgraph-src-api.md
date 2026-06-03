@@ -1,9 +1,9 @@
 # Api
 
-> Api — 1 source file(s): src/api/routes.ts
+> Api — 1 source file(s) in src/api/
 
 **Repository:** dreamgraph  
-**Domain:** api  
+**Domain:** core  
 **Status:** active  
 **Source files:** src/api/routes.ts  
 
@@ -11,7 +11,8 @@
 
 | Target | Type | Relationship | Strength | Description |
 |--------|------|--------------|----------|-------------|
-| dreamgraph_src_server | feature | related_to | moderate | Shared domain 'api' with 1 keyword overlap(s) |
+| api_surface | feature | related_to | moderate | auto-backlink |
+| api_routes | feature | related_to | moderate | auto-backlink |
 
-**Tags:** api, ts
+**Tags:** typescript
 
