@@ -58,6 +58,7 @@ import type {
 import { countEvidence, computeConfidence, DEFAULT_PROMOTION, type PromotionConfig } from "./types.js";
 import { isLlmAvailable, getLlmProvider, getNormalizerLlmConfig } from "./llm.js";
 import type { LlmMessage } from "./llm.js";
+import { resolveNormalizationStrictness } from "../instance/policies.js";
 
 // ---------------------------------------------------------------------------
 // Event-loop yielding (ADR-052)
@@ -73,6 +74,8 @@ import type { LlmMessage } from "./llm.js";
 // FactLookup needs serialization helpers (Maps/Sets → arrays) before that
 // is viable. Tracked as a future iteration of ADR-052.
 const NORMALIZER_YIELD_BATCH = 100;
+const TENSION_CANDIDATE_LIMIT_PER_CYCLE = 5;
+const RECURRENT_REJECTION_TENSION_MIN_REINFORCEMENT = 3;
 
 const yieldToEventLoop = (): Promise<void> =>
   new Promise<void>((resolve) => setImmediate(resolve));
@@ -871,6 +874,22 @@ export interface TensionCandidate {
   reason: string;
 }
 
+export interface NormalizationReceipt {
+  profile: string;
+  requested_strict: boolean | null;
+  inherited_strict: boolean;
+  override_applied: boolean;
+  effective_strict: boolean;
+  threshold_source: "explicit" | "policy";
+  base_promotion_config: PromotionConfig;
+  applied_promotion_config: PromotionConfig;
+  bootstrap: {
+    active: boolean;
+    state: "cold_start" | "graduated";
+    relaxed_fields: Array<keyof PromotionConfig>;
+  };
+}
+
 export interface NormalizationResult {
   cycle: number;
   processed: number;
@@ -883,6 +902,50 @@ export interface NormalizationResult {
   promotedNodes: number;
   /** Rejected edges that are tension-worthy (grounded endpoints, non-trivial rejection) */
   tensionCandidates: TensionCandidate[];
+  receipt: NormalizationReceipt;
+}
+
+function isTensionWorthyRejection(
+  edge: DreamEdge,
+  result: ValidationResult,
+  lookup: FactLookup,
+): boolean {
+  if (result.status !== "rejected") return false;
+  if (!(lookup.entityIds.has(edge.from) || lookup.entityIds.has(edge.to))) return false;
+  if (result.reason_code === "contradicted") return true;
+  return (edge.reinforcement_count ?? 0) >= RECURRENT_REJECTION_TENSION_MIN_REINFORCEMENT;
+}
+
+export async function recordWeakConnectionTensions(
+  tensionCandidates: TensionCandidate[],
+  source: "dream_cycle" | "scheduler",
+): Promise<number> {
+  const selectedCandidates = [...tensionCandidates]
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, TENSION_CANDIDATE_LIMIT_PER_CYCLE);
+  logger.info(
+    `${source === "scheduler" ? "[scheduler] " : ""}Tension pipeline: ${tensionCandidates.length} candidates, selecting top ${selectedCandidates.length}`
+  );
+
+  let tensionsCreated = 0;
+  for (const tc of selectedCandidates) {
+    const urgency = Math.max(0.3, Math.min(0.7, tc.confidence * 2 + 0.2));
+    await engine.recordTension({
+      type: "weak_connection",
+      entities: [tc.from, tc.to],
+      description: `Dream "${tc.dreamId}" rejected: ${tc.reason}`,
+      urgency,
+    });
+    tensionsCreated++;
+  }
+
+  if (tensionsCreated > 0) {
+    logger.info(
+      `${source === "scheduler" ? "[scheduler] " : ""}Tension pipeline: ${tensionsCreated} tensions recorded`
+    );
+  }
+
+  return tensionsCreated;
 }
 
 /**
@@ -900,9 +963,12 @@ export interface NormalizationResult {
  */
 export async function normalize(
   threshold?: number,
-  strict: boolean = false
+  strict?: boolean
 ): Promise<NormalizationResult> {
   engine.assertState("normalizing", "normalize");
+
+  const strictness = await resolveNormalizationStrictness(strict);
+  const effectiveStrict = strictness.effective_strict;
 
   // Resolve promotion config from engine (policy tuning + live overrides)
   const strictPromo = await engine.getEffectivePromotionConfig();
@@ -933,13 +999,30 @@ export async function normalize(
       }
     : strictPromo;
   const effectiveThreshold = threshold ?? promo.promotion_confidence;
+  const relaxedFields = (Object.keys(promo) as Array<keyof PromotionConfig>).filter(
+    (key) => promo[key] !== strictPromo[key]
+  );
 
   const cycle = engine.nextNormalizationCycle();
+  const receipt: NormalizationReceipt = {
+    profile: strictness.profile,
+    requested_strict: strict ?? null,
+    inherited_strict: strictness.inherited_strict,
+    override_applied: strictness.override_applied,
+    effective_strict: effectiveStrict,
+    threshold_source: threshold === undefined ? "policy" : "explicit",
+    base_promotion_config: { ...strictPromo },
+    applied_promotion_config: { ...promo },
+    bootstrap: {
+      active: isColdStart,
+      state: isColdStart ? "cold_start" : "graduated",
+      relaxed_fields: relaxedFields,
+    },
+  };
   logger.info(
-    `Normalization cycle #${cycle} starting (threshold: ${effectiveThreshold}, strict: ${strict}, ` +
-      `bootstrap: ${isColdStart ? "cold_start (relaxed gate)" : "graduated"}, ` +
-      `profile tuning: confidence=${strictPromo.promotion_confidence}, evidence_count=${strictPromo.promotion_evidence_count})`
+    `Normalization cycle #${cycle} starting (threshold: ${effectiveThreshold})`
   );
+  logger.info(`Normalization receipt: ${JSON.stringify(receipt)}`);
 
   // Load fact graph and dream graph
   const [lookup, dreamGraph, existingCandidates] = await Promise.all([
@@ -1008,7 +1091,7 @@ export async function normalize(
   }
 
   // PASS 2b: apply strict-mode downgrade AFTER LLM has had its say
-  if (strict) {
+  if (effectiveStrict) {
     for (const { result } of edgeAssessments) {
       if (result.status === "latent") {
         result.status = "rejected";
@@ -1070,7 +1153,7 @@ export async function normalize(
       result.status = "latent";
       result.reason_code = "insufficient_evidence";
     }
-    if (strict && result.status === "latent") {
+    if (effectiveStrict && result.status === "latent") {
       result.status = "rejected";
       result.reason_code = "low_signal";
     }
@@ -1157,20 +1240,12 @@ export async function normalize(
     rejected: newResults.filter((r) => r.status === "rejected").length,
   };
 
-  // Collect tension-worthy rejections:
-  // 1. Rejected edges where at least one endpoint is grounded in the fact graph
-  // 2. NOT invalid_endpoints (both endpoints missing = noise, not tension)
-  // 3. NOT contradicted (contradictions are clear rejections, not ambiguous)
-  // These represent edges the system "struggled with" — tension signals that
-  // should direct future dreaming.
+  // Collect tension-worthy rejections behind a separate admission gate.
+  // Rejection alone is not enough: weak low-signal misses should decay away,
+  // while recurring or contradictory grounded misses should surface as work.
   const tensionCandidates: TensionCandidate[] = [];
   for (const { edge, result } of edgeAssessments) {
-    if (
-      result.status === "rejected" &&
-      result.reason_code !== "contradicted" &&
-      // At least one endpoint must be grounded (otherwise it's pure noise)
-      (lookup.entityIds.has(edge.from) || lookup.entityIds.has(edge.to))
-    ) {
+    if (isTensionWorthyRejection(edge, result, lookup)) {
       tensionCandidates.push({
         dreamId: edge.id,
         from: edge.from,
@@ -1219,5 +1294,6 @@ export async function normalize(
     promotedEdges,
     promotedNodes: promotedNodeCount,
     tensionCandidates,
+    receipt,
   };
 }

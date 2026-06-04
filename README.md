@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v12.2.0 — Trust Calibration and Reviewable Cognition
+# DreamGraph v12.3.0 — Strict Policy Inheritance and Release Discipline
 
-![Version](https://img.shields.io/badge/version-12.2.0-blue)
+![Version](https://img.shields.io/badge/version-12.3.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -13,6 +13,8 @@
 **Website:** [dreamgraph.nofs.ai](https://dreamgraph.nofs.ai/) — overview, guide, downloads, and screenshots in a friendlier format than this README.
 
 **New here?** Use the [DreamGraph Easy Start guide](guide/00-easy-start.md) for a short path from install to Dashboard, Explorer, and Architect.
+
+**v12.3.0** fixes strict-policy inheritance drift in cognitive normalization, makes effective-policy receipts truthful about the applied runtime gates, prevents weak rejected dreams from automatically becoming durable tension inventory, and keeps release closure bound to the full governed `release_workflow`.
 
 DreamGraph is a governed architecture cognition layer for MCP-enabled software projects. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so project understanding is grounded in source, ADRs, workflows, tests, runtime observations, and human review rather than any single file read or isolated chat turn.
 

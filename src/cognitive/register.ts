@@ -48,7 +48,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dataPath } from "../utils/paths.js";
 import { engine } from "./engine.js";
 import { dream } from "./dreamer.js";
-import { normalize } from "./normalizer.js";
+import { normalize, recordWeakConnectionTensions } from "./normalizer.js";
 import { analyzeCausality } from "./causal.js";
 import { analyzeTemporalPatterns } from "./temporal.js";
 import { exportArchetypes, importArchetypes, getArchetypes } from "./federation.js";
@@ -750,33 +750,10 @@ export function registerCognitiveTools(server: McpServer): void {
             promoted = normalization.promotedEdges.length;
             blockedByGate = normalization.blockedByGate;
 
-            // Create tension signals from the normalizer's tension candidates.
-            // These are rejected edges where at least one endpoint is grounded
-            // in the fact graph — the system "struggled" with these connections.
-            // Tension urgency is scaled to 0.3–0.7 range so tensions are
-            // meaningful but not overwhelming.
-            // Sort by confidence descending and take top 5 per cycle to prevent
-            // tension floods. Recurring rejections will naturally reappear and
-            // merge via occurrences++, building urgency organically.
-            const sortedCandidates = [...normalization.tensionCandidates]
-              .sort((a, b) => b.confidence - a.confidence)
-              .slice(0, 5);
-            logger.info(`Tension pipeline: ${normalization.tensionCandidates?.length ?? 'UNDEFINED'} candidates, selecting top ${sortedCandidates.length}, ${normalization.promotedEdges?.length ?? 0} promoted`);
-            for (const tc of sortedCandidates) {
-              const urgency = Math.max(0.3, Math.min(0.7,
-                tc.confidence * 2 + 0.2  // scale low confidences into useful range
-              ));
-              await engine.recordTension({
-                type: "weak_connection",
-                entities: [tc.from, tc.to],
-                description: `Dream "${tc.dreamId}" rejected: ${tc.reason}`,
-                urgency,
-              });
-              tensionsCreated++;
-            }
-            if (tensionsCreated > 0) {
-              logger.info(`Tension pipeline: ${tensionsCreated} tensions recorded`);
-            }
+            tensionsCreated = await recordWeakConnectionTensions(
+              normalization.tensionCandidates,
+              "dream_cycle"
+            );
 
             // RESOLVE tensions when promoted edges address them
             // Require BOTH endpoints of the promoted edge to appear in the
@@ -969,7 +946,7 @@ export function registerCognitiveTools(server: McpServer): void {
     },
     async ({ threshold, strict }) => {
       logger.info(
-        `normalize_dreams tool called: threshold=${threshold ?? "(policy default)"}, strict=${strict ?? false}`
+        `normalize_dreams tool called: threshold=${threshold ?? "(policy default)"}, strict=${strict ?? "inherit-active-policy"}`
       );
 
       const result = await safeExecute<NormalizeDreamsOutput>(
@@ -984,7 +961,7 @@ export function registerCognitiveTools(server: McpServer): void {
           await engine.applyCognitiveTuning();
           engine.enterNormalizing();
 
-          const normResult = await normalize(threshold, strict ?? false);
+          const normResult = await normalize(threshold, strict);
 
           // NORMALIZING → AWAKE
           engine.wake();

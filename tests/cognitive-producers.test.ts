@@ -8,16 +8,111 @@
  *      subscribers — the bus is purely a notification channel.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setDataDirOverride } from "../src/utils/paths.js";
+import { invalidateCache, setDataDirResolver } from "../src/utils/cache.js";
 import { graphEventBus, type GraphEvent } from "../src/graph/events.js";
 import { engine } from "../src/cognitive/engine.js";
-import type { ValidationResult, ValidatedEdge, DreamHistoryEntry } from "../src/cognitive/types.js";
+import { normalize } from "../src/cognitive/normalizer.js";
+import * as policies from "../src/instance/policies.js";
+import type {
+  ValidationResult,
+  ValidatedEdge,
+  DreamHistoryEntry,
+  DreamEdge,
+  DreamGraphFile,
+  PromotionConfig,
+} from "../src/cognitive/types.js";
 
 let tempDir: string;
+
+const STRICT_PROMOTION: PromotionConfig = {
+  promotion_confidence: 0.62,
+  promotion_plausibility: 0.45,
+  promotion_evidence: 0.4,
+  promotion_evidence_count: 2,
+  retention_plausibility: 0.35,
+  max_contradiction: 0.3,
+};
+
+async function writeJson(name: string, value: unknown): Promise<void> {
+  await writeFile(join(tempDir, name), JSON.stringify(value, null, 2), "utf-8");
+}
+
+function normalizationEdge(overrides: Partial<DreamEdge>): DreamEdge {
+  return {
+    id: "dream-edge",
+    from: "feature_alpha",
+    to: "feature_beta",
+    type: "feature",
+    relation: "relates_to",
+    reason: "regression fixture",
+    confidence: 0.7,
+    origin: "rem",
+    created_at: new Date().toISOString(),
+    dream_cycle: 1,
+    strategy: "gap_detection",
+    ttl: 5,
+    decay_rate: 0.05,
+    reinforcement_count: 2,
+    last_reinforced_cycle: 1,
+    status: "candidate",
+    activation_score: 0,
+    plausibility: 0,
+    evidence_score: 0,
+    contradiction_score: 0,
+    ...overrides,
+  };
+}
+
+async function seedNormalizationFactGraph(): Promise<void> {
+  await writeJson("features.json", [
+    {
+      id: "feature_alpha",
+      name: "Alpha",
+      description: "",
+      domain: "alpha",
+      source_repo: "dreamgraph",
+      keywords: ["alpha"],
+      links: [],
+    },
+    {
+      id: "feature_beta",
+      name: "Beta",
+      description: "",
+      domain: "beta",
+      source_repo: "dreamgraph",
+      keywords: ["beta"],
+      links: [],
+    },
+  ]);
+  await writeJson("workflows.json", []);
+  await writeJson("data_model.json", []);
+}
+
+async function seedDreamGraph(edges: DreamEdge[]): Promise<void> {
+  const graph: DreamGraphFile = {
+    metadata: {
+      description: "",
+      schema_version: "1.0.0",
+      last_dream_cycle: null,
+      total_cycles: 1,
+      last_normalization: null,
+      total_normalization_cycles: 0,
+      created_at: new Date().toISOString(),
+      bootstrap_state: "cold_start",
+      bootstrap_started_at: null,
+      bootstrap_exited_at: null,
+      bootstrap_exit_reason: null,
+    },
+    nodes: [],
+    edges,
+  };
+  await writeJson("dream_graph.json", graph);
+}
 
 async function captureWhile<T>(fn: () => Promise<T>): Promise<{ result: T; events: GraphEvent[] }> {
   const events: GraphEvent[] = [];
@@ -33,13 +128,24 @@ async function captureWhile<T>(fn: () => Promise<T>): Promise<{ result: T; event
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "dg-producers-"));
   setDataDirOverride(tempDir);
+  setDataDirResolver(() => tempDir);
+  invalidateCache();
   graphEventBus._resetForTest();
+  vi.restoreAllMocks();
   // Ensure engine starts AWAKE for each test.
   // Engine is a singleton — best-effort reset via state inspection.
   // (No public reset; tests below stay tolerant of leftover state.)
+  if (engine.getState() !== "awake") {
+    await engine.interrupt();
+  }
 });
 
 afterEach(async () => {
+  if (engine.getState() !== "awake") {
+    await engine.interrupt();
+  }
+  setDataDirResolver(() => tempDir);
+  invalidateCache();
   await rm(tempDir, { recursive: true, force: true });
 });
 
@@ -241,5 +347,96 @@ describe("scheduler lifecycle kinds — bus emissions", () => {
     ]);
     expect(events[0].affected_ids).toEqual(["sched-test"]);
     expect(events[0].payload).toMatchObject({ execution_id: "exec_123" });
+  });
+});
+
+describe("envoy review fix regressions", () => {
+  it("inherits strict normalization from the active policy and reports the applied receipt", async () => {
+    vi.spyOn(policies, "resolveNormalizationStrictness").mockResolvedValue({
+      profile: "strict",
+      inherited_strict: true,
+      override_applied: false,
+      effective_strict: true,
+    });
+    vi.spyOn(engine, "getEffectivePromotionConfig").mockResolvedValue(STRICT_PROMOTION);
+
+    await seedNormalizationFactGraph();
+    await seedDreamGraph([normalizationEdge({})]);
+
+    engine.enterRem();
+    engine.enterNormalizing();
+    const result = await normalize();
+    engine.wake();
+
+    expect(result.receipt.profile).toBe("strict");
+    expect(result.receipt.requested_strict).toBeNull();
+    expect(result.receipt.inherited_strict).toBe(true);
+    expect(result.receipt.effective_strict).toBe(true);
+    expect(result.receipt.bootstrap.active).toBe(true);
+    expect(result.receipt.base_promotion_config.promotion_evidence_count).toBe(2);
+    expect(result.receipt.applied_promotion_config.promotion_evidence_count).toBe(1);
+    expect(result.receipt.bootstrap.relaxed_fields).toContain("promotion_evidence_count");
+    expect(result.latent).toBe(0);
+    expect(result.rejected).toBe(1);
+  });
+
+  it("does not create tensions for weak low-signal rejections by default", async () => {
+    vi.spyOn(policies, "resolveNormalizationStrictness").mockResolvedValue({
+      profile: "balanced",
+      inherited_strict: false,
+      override_applied: false,
+      effective_strict: false,
+    });
+    vi.spyOn(engine, "getEffectivePromotionConfig").mockResolvedValue(STRICT_PROMOTION);
+
+    await seedNormalizationFactGraph();
+    await seedDreamGraph([
+      normalizationEdge({
+        to: "missing_feature",
+        confidence: 0.2,
+        reinforcement_count: 0,
+        last_reinforced_cycle: 0,
+      }),
+    ]);
+
+    engine.enterRem();
+    engine.enterNormalizing();
+    const result = await normalize();
+    engine.wake();
+
+    expect(result.rejected).toBe(1);
+    expect(result.tensionCandidates).toHaveLength(0);
+  });
+
+  it("still surfaces recurrent rejected links as tension candidates", async () => {
+    vi.spyOn(policies, "resolveNormalizationStrictness").mockResolvedValue({
+      profile: "balanced",
+      inherited_strict: false,
+      override_applied: false,
+      effective_strict: false,
+    });
+    vi.spyOn(engine, "getEffectivePromotionConfig").mockResolvedValue(STRICT_PROMOTION);
+
+    await seedNormalizationFactGraph();
+    await seedDreamGraph([
+      normalizationEdge({
+        to: "missing_feature",
+        confidence: 0.2,
+        reinforcement_count: 3,
+        last_reinforced_cycle: 3,
+      }),
+    ]);
+
+    engine.enterRem();
+    engine.enterNormalizing();
+    const result = await normalize();
+    engine.wake();
+
+    expect(result.rejected).toBe(1);
+    expect(result.tensionCandidates).toHaveLength(1);
+    expect(result.tensionCandidates[0]).toMatchObject({
+      from: "feature_alpha",
+      to: "missing_feature",
+    });
   });
 });

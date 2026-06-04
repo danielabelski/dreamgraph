@@ -128,6 +128,13 @@ const VALID_PROFILES: readonly PolicyProfile[] = [
   "creative",
 ];
 
+export interface EffectiveNormalizationStrictness {
+  profile: PolicyProfile;
+  inherited_strict: boolean;
+  override_applied: boolean;
+  effective_strict: boolean;
+}
+
 const REQUIRED_DEF_FIELDS: readonly (keyof PolicyProfileDef)[] = [
   "description",
   "require_tool_evidence",
@@ -397,6 +404,23 @@ export async function getActiveProfileName(): Promise<PolicyProfile> {
     cachedPolicies = await loadPolicies();
   }
   return cachedPolicies.profile;
+}
+
+/**
+ * Resolve normalization strictness from the active policy profile, with an
+ * optional explicit caller override for manual experiments.
+ */
+export async function resolveNormalizationStrictness(
+  strict?: boolean,
+): Promise<EffectiveNormalizationStrictness> {
+  const profile = await getActiveProfileName();
+  const inheritedStrict = profile === "strict";
+  return {
+    profile,
+    inherited_strict: inheritedStrict,
+    override_applied: strict !== undefined,
+    effective_strict: strict ?? inheritedStrict,
+  };
 }
 
 /**

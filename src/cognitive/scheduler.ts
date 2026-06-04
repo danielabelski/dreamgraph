@@ -27,7 +27,7 @@ import { dataPath } from "../utils/paths.js";
 import { getActiveScope } from "../instance/lifecycle.js";
 import { updateInstanceCounters } from "../instance/index.js";
 import { dream } from "./dreamer.js";
-import { normalize } from "./normalizer.js";
+import { normalize, recordWeakConnectionTensions } from "./normalizer.js";
 import { nightmare } from "./adversarial.js";
 import { runMetacognitiveAnalysis } from "./metacognition.js";
 import { dispatchEvent } from "./event-router.js";
@@ -407,28 +407,10 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
       let tensionsResolved = 0;
 
       if (normResult.tensionCandidates && normResult.tensionCandidates.length > 0) {
-        // Sort by confidence descending and take top 5 per cycle to prevent
-        // tension floods. Lower-confidence rejections will recur in future
-        // cycles if they're real, naturally building urgency over time.
-        const sortedCandidates = [...normResult.tensionCandidates]
-          .sort((a, b) => b.confidence - a.confidence)
-          .slice(0, 10);
-        logger.info(`[scheduler] Tension pipeline: ${normResult.tensionCandidates.length} candidates, selecting top ${sortedCandidates.length}, ${normResult.promotedEdges.length} promoted`);
-        for (const tc of sortedCandidates) {
-          const urgency = Math.max(0.3, Math.min(0.7,
-            tc.confidence * 2 + 0.2
-          ));
-          await engine.recordTension({
-            type: "weak_connection",
-            entities: [tc.from, tc.to],
-            description: `Dream "${tc.dreamId}" rejected: ${tc.reason}`,
-            urgency,
-          });
-          tensionsCreated++;
-        }
-        if (tensionsCreated > 0) {
-          logger.info(`[scheduler] Tension pipeline: ${tensionsCreated} tensions recorded`);
-        }
+        tensionsCreated = await recordWeakConnectionTensions(
+          normResult.tensionCandidates,
+          "scheduler"
+        );
       }
 
       // --- Resolve tensions when promoted edges address them ---

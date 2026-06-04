@@ -66,6 +66,7 @@ export {
   savePolicies,
   getActivePolicy,
   getActiveProfileName,
+  resolveNormalizationStrictness,
   getProfileDef,
   switchProfile,
   reloadPolicies,
@@ -73,7 +74,10 @@ export {
   getActiveCognitiveTuning,
 } from "./policies.js";
 
-export type { PolicyValidationResult } from "./policies.js";
+export type {
+  PolicyValidationResult,
+  EffectiveNormalizationStrictness,
+} from "./policies.js";
 
 // Bootstrap
 export { bootstrapNewInstance, isFreshInstance, discoverAndRecordADRs, scheduleFollowUpDreams } from "./bootstrap.js";

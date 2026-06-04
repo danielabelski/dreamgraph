@@ -1,5 +1,13 @@
 # DreamGraph Release Notes
 
+## v12.3.0 - Strict Policy Inheritance and Release Discipline
+
+DreamGraph v12.3.0 fixes ENVOY-reproduced strict-policy drift so automatic normalization inherits the active instance policy unless a caller explicitly overrides it. Effective-policy receipts now report the runtime gates that were actually applied, including bootstrap-adjusted thresholds, and weak insufficient-evidence rejections no longer become durable tension inventory by default.
+
+This release also keeps closure bound to the authoritative seven-stage `release_workflow`: version alignment, documentation refresh, artifact packaging, release notes, commit/tag/push, GitHub release publication, and website update must each have real completion evidence before `v12.3.0` is treated as released.
+
+See [`../RELEASE_NOTES_v12.3.0.md`](../RELEASE_NOTES_v12.3.0.md) for the full distribution notes.
+
 ## v12.2.0 - Trust Calibration and Reviewable Cognition
 
 DreamGraph v12.2.0 adds trust-state labeling, evidence ledgers, tension precision categories, cognitive lifecycle transition visibility, and calibration evaluation for Architect and cognitive projections. The release keeps dream output advisory until backed by source, ADRs, workflow/test/runtime evidence, governed daemon validation, or explicit human review.
