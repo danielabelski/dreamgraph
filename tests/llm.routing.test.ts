@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getModelCapabilities,
   initLlmProvider,
   llmRouteFailureReason,
   selectLlmRoute,
@@ -13,6 +14,30 @@ function mockProvider(name: string, available: boolean): LlmProvider {
     complete: vi.fn(async () => ({ text: "", model: name })),
   };
 }
+
+describe("getModelCapabilities", () => {
+  it("declares GPT-5.5 as Responses API without temperature support", () => {
+    expect(getModelCapabilities("openai", "gpt-5.5")).toEqual({
+      model: "gpt-5.5",
+      api: "responses",
+      supportsTemperature: false,
+      supportsReasoningEffort: true,
+      supportsStructuredOutputs: true,
+      supportsJsonSchema: true,
+    });
+  });
+
+  it("keeps GPT-5.4 on Chat Completions with temperature support", () => {
+    expect(getModelCapabilities("openai", "gpt-5.4")).toEqual({
+      model: "gpt-5.4",
+      api: "chat-completions",
+      supportsTemperature: true,
+      supportsReasoningEffort: false,
+      supportsStructuredOutputs: true,
+      supportsJsonSchema: true,
+    });
+  });
+});
 
 async function withEnv(overrides: Record<string, string | undefined>, fn: () => Promise<void>): Promise<void> {
   const originals: Record<string, string | undefined> = {};

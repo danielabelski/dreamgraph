@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import type { ArchitectLlmConfig, LlmMessage, LlmProvider } from "../cognitive/llm.js";
+import { getModelCapabilities } from "../cognitive/llm.js";
 import { mcpCallTool, mcpListTools, type McpCallResult } from "../cli/utils/mcp-call.js";
 import { logger } from "../utils/logger.js";
 
@@ -330,11 +331,12 @@ async function callOpenAiCompatibleWithTools(
   messages: NeutralMessage[],
   tools: ArchitectToolDefinition[],
 ): Promise<ToolLoopResponse> {
-  const useNewTokenParam = /^(o[1-9]|gpt-[4-9]\.[1-9]|gpt-5)/.test(config.model);
+  const capabilities = getModelCapabilities(config.provider, config.model);
+  const useNewTokenParam = /^(o[1-9]|gpt-[4-9]\.[1-9]|gpt-5)/i.test(config.model);
   const body: Record<string, unknown> = {
     model: config.model,
     messages: toOpenAiMessages(messages),
-    temperature: config.temperature,
+    ...(capabilities.supportsTemperature ? { temperature: config.temperature } : {}),
     ...(useNewTokenParam
       ? { max_completion_tokens: config.maxTokens }
       : { max_tokens: config.maxTokens }),

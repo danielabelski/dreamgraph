@@ -66,11 +66,33 @@ export interface LlmMessage {
   content: string;
 }
 
-export interface LlmResponse {
+export interface TokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+export interface LlmResult {
   text: string;
+  finishReason?: string;
+  usage?: TokenUsage;
+}
+
+export interface LlmResponse extends LlmResult {
   model: string;
   tokensUsed?: number;
   stopReason?: string;
+}
+
+export type LlmModelApi = "chat-completions" | "responses" | "anthropic-messages" | "ollama-chat" | "mcp-sampling" | "none";
+
+export interface ModelCapabilities {
+  model: string;
+  api: LlmModelApi;
+  supportsTemperature: boolean;
+  supportsReasoningEffort: boolean;
+  supportsStructuredOutputs: boolean;
+  supportsJsonSchema: boolean;
 }
 
 /**
@@ -256,6 +278,85 @@ class OllamaProvider implements LlmProvider {
  */
 const _jsonSchemaUnsupported = new Set<string>();
 
+const OPENAI_MODEL_CAPABILITIES: Array<{ pattern: RegExp; capabilities: Omit<ModelCapabilities, "model"> }> = [
+  {
+    pattern: /^gpt-5\.5(?:\b|[-_])/i,
+    capabilities: {
+      api: "responses",
+      supportsTemperature: false,
+      supportsReasoningEffort: true,
+      supportsStructuredOutputs: true,
+      supportsJsonSchema: true,
+    },
+  },
+  {
+    pattern: /^gpt-[4-9]\.[1-9]/i,
+    capabilities: {
+      api: "chat-completions",
+      supportsTemperature: true,
+      supportsReasoningEffort: false,
+      supportsStructuredOutputs: true,
+      supportsJsonSchema: true,
+    },
+  },
+  {
+    pattern: /^(o[1-9]|gpt-5(?:\b|[-_]))/i,
+    capabilities: {
+      api: "chat-completions",
+      supportsTemperature: false,
+      supportsReasoningEffort: true,
+      supportsStructuredOutputs: true,
+      supportsJsonSchema: true,
+    },
+  },
+];
+
+export function getModelCapabilities(provider: LlmProviderType | string, model: string): ModelCapabilities {
+  const normalizedProvider = provider.toLowerCase();
+  const normalizedModel = model.trim();
+  if (normalizedProvider === "openai") {
+    const match = OPENAI_MODEL_CAPABILITIES.find((entry) => entry.pattern.test(normalizedModel));
+    return {
+      model: normalizedModel,
+      ...(match?.capabilities ?? {
+        api: "chat-completions" as const,
+        supportsTemperature: true,
+        supportsReasoningEffort: false,
+        supportsStructuredOutputs: true,
+        supportsJsonSchema: true,
+      }),
+    };
+  }
+  if (normalizedProvider === "anthropic") {
+    return {
+      model: normalizedModel,
+      api: "anthropic-messages",
+      supportsTemperature: true,
+      supportsReasoningEffort: false,
+      supportsStructuredOutputs: false,
+      supportsJsonSchema: false,
+    };
+  }
+  if (normalizedProvider === "ollama" || normalizedProvider === "lmstudio") {
+    return {
+      model: normalizedModel,
+      api: normalizedProvider === "ollama" ? "ollama-chat" : "chat-completions",
+      supportsTemperature: true,
+      supportsReasoningEffort: false,
+      supportsStructuredOutputs: false,
+      supportsJsonSchema: false,
+    };
+  }
+  return {
+    model: normalizedModel,
+    api: normalizedProvider === "sampling" ? "mcp-sampling" : "none",
+    supportsTemperature: false,
+    supportsReasoningEffort: false,
+    supportsStructuredOutputs: false,
+    supportsJsonSchema: false,
+  };
+}
+
 /** Heuristic: error body indicates the strict json_schema form is unsupported. */
 function _isJsonSchemaUnsupportedError(status: number, body: string): boolean {
   if (status < 400 || status >= 500) return false;
@@ -303,10 +404,11 @@ class OpenAiCompatibleProvider implements LlmProvider {
     const temp = options?.temperature ?? this.defaultTemperature;
     const maxTokens = options?.maxTokens ?? this.defaultMaxTokens;
     const model = options?.model ?? this.model;
+    const capabilities = getModelCapabilities(this.name, model);
 
     // Newer OpenAI models (o1/o3/o4-mini, gpt-4.1, gpt-5.4-nano, etc.) require
     // "max_completion_tokens" instead of the legacy "max_tokens" parameter.
-    const useNewTokenParam = /^(o[1-9]|gpt-[4-9]\.[1-9]|gpt-5)/.test(model);
+    const useNewTokenParam = /^(o[1-9]|gpt-[4-9]\.[1-9]|gpt-5)/i.test(model);
 
     const downgradeKey = `${this.name}:${model}`;
     const knownUnsupported = _jsonSchemaUnsupported.has(downgradeKey);
@@ -315,7 +417,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
       const body: Record<string, unknown> = {
         model,
         messages: messages.map(m => ({ role: m.role, content: m.content })),
-        temperature: temp,
+        ...(capabilities.supportsTemperature ? { temperature: temp } : {}),
         ...(useNewTokenParam
           ? { max_completion_tokens: maxTokens }
           : { max_tokens: maxTokens }),
@@ -385,11 +487,16 @@ class OpenAiCompatibleProvider implements LlmProvider {
     };
 
     const choice = data.choices?.[0];
+    const usage: TokenUsage | undefined = data.usage?.completion_tokens === undefined
+      ? undefined
+      : { outputTokens: data.usage.completion_tokens };
     return {
       text: choice?.message?.content ?? "",
       model: data.model ?? this.model,
-      tokensUsed: data.usage?.completion_tokens,
+      tokensUsed: usage?.outputTokens,
       stopReason: choice?.finish_reason,
+      finishReason: choice?.finish_reason,
+      usage,
     };
   }
 }

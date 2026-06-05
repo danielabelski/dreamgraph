@@ -9,11 +9,12 @@ import * as vscode from "vscode";
 import {
   buildOpenAIResponsesRequest,
   extractOpenAIResponsesRawItems,
-  extractOpenAIResponsesText,
   extractOpenAIResponsesToolCalls,
+  normalizeOpenAIResponsesResult,
   toOpenAIResponsesContent,
   translateRawToOpenAIResponses,
   usesOpenAIResponsesApi,
+  type OpenAIResponsesData,
 } from "./openai-responses-adapter";
 import {
   applySharedRequestCompaction,
@@ -791,17 +792,6 @@ export class ArchitectLlm implements vscode.Disposable {
     return projection ? projection.legacyContent : content;
   }
 
-    private _extractOpenAIResponsesText(data: {
-    output_text?: string;
-    output?: Array<Record<string, unknown>>;
-  }): string {
-    return extractOpenAIResponsesText(data);
-  }
-
-    private _extractOpenAIResponsesToolCalls(data: { output?: Array<Record<string, unknown>> }): ToolUseRequest[] {
-    return extractOpenAIResponsesToolCalls(data);
-  }
-
   private async _callOpenAIResponses(
     config: ArchitectConfig,
     messages: ArchitectMessage[],
@@ -821,16 +811,13 @@ export class ArchitectLlm implements vscode.Disposable {
 
     if (!res.ok) throw new Error(`OpenAI Responses API error (${res.status}): ${await res.text()}`);
 
-    const data = (await res.json()) as {
-      output_text?: string;
-      output?: Array<Record<string, unknown>>;
-      usage?: { input_tokens?: number; output_tokens?: number };
-    };
+    const data = (await res.json()) as OpenAIResponsesData;
+    const result = normalizeOpenAIResponsesResult(data);
 
     return {
-      content: this._maybeProjectStructuredContent(config, this._extractOpenAIResponsesText(data)),
-      promptTokens: data.usage?.input_tokens ?? 0,
-      completionTokens: data.usage?.output_tokens ?? 0,
+      content: this._maybeProjectStructuredContent(config, result.text),
+      promptTokens: result.usage?.input_tokens ?? 0,
+      completionTokens: result.usage?.output_tokens ?? 0,
       durationMs: Date.now() - start,
     };
   }
@@ -856,28 +843,19 @@ export class ArchitectLlm implements vscode.Disposable {
 
     if (!res.ok) throw new Error(`OpenAI Responses API error (${res.status}): ${await res.text()}`);
 
-    const data = (await res.json()) as {
-      output_text?: string;
-      output?: Array<Record<string, unknown>>;
-      usage?: { input_tokens?: number; output_tokens?: number };
-      status?: string;
-      incomplete_details?: { reason?: string };
-    };
-    const toolCalls = this._extractOpenAIResponsesToolCalls(data);
+    const data = (await res.json()) as OpenAIResponsesData;
+    const result = normalizeOpenAIResponsesResult(data);
+    const toolCalls = extractOpenAIResponsesToolCalls(data);
 
     return {
-      content: this._maybeProjectStructuredContent(config, this._extractOpenAIResponsesText(data)),
-      promptTokens: data.usage?.input_tokens ?? 0,
-      completionTokens: data.usage?.output_tokens ?? 0,
+      content: this._maybeProjectStructuredContent(config, result.text),
+      promptTokens: result.usage?.input_tokens ?? 0,
+      completionTokens: result.usage?.output_tokens ?? 0,
       durationMs: Date.now() - start,
       toolCalls,
       // Verbatim output[] items (incl. reasoning) for stateless replay.
       providerRawAssistant: extractOpenAIResponsesRawItems(data),
-      stopReason: toolCalls.length > 0
-        ? "tool_use"
-        : data.incomplete_details?.reason === "max_output_tokens"
-          ? "max_tokens"
-          : data.status ?? "end_turn",
+      stopReason: result.finishReason ?? "end_turn",
     };
   }
 

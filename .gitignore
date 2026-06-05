@@ -34,6 +34,9 @@ Thumbs.db
 # VS Code extension build artifacts
 *.vsix
 
+# Buildinfo files
+*.tsbuildinfo
+
 plans/
 plans/DREAMGRAPH EVENTS AND HOOKS.txt
 plans/DG - THE DREAMGRAPH CLI.txt

@@ -4,6 +4,7 @@ import {
   buildOpenAIResponsesRequest,
   extractOpenAIResponsesText,
   extractOpenAIResponsesToolCalls,
+  normalizeOpenAIResponsesResult,
   translateRawToOpenAIResponses,
   usesOpenAIResponsesApi,
 } from '../openai-responses-adapter';
@@ -164,6 +165,40 @@ test('keeps streamed sub-blocks within a single message tightly joined', () => {
   });
 
   assert.equal(text, 'Step 1: reading file.');
+});
+
+test('normalizes Responses output to the provider boundary contract', () => {
+  const result = normalizeOpenAIResponsesResult({
+    output: [
+      {
+        type: 'message',
+        content: [{ type: 'output_text', text: 'Done.' }],
+      },
+    ],
+    status: 'completed',
+    usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+  });
+
+  assert.deepEqual(result, {
+    text: 'Done.',
+    finishReason: 'completed',
+    usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+  });
+});
+
+test('normalizes Responses tool calls as tool_use finish reason', () => {
+  const result = normalizeOpenAIResponsesResult({
+    output: [
+      { type: 'function_call', call_id: 'call_valid', name: 'read_source_code', arguments: '{"filePath":"src/a.ts"}' },
+    ],
+    status: 'completed',
+  });
+
+  assert.deepEqual(result, {
+    text: '',
+    finishReason: 'tool_use',
+    usage: undefined,
+  });
 });
 
 test('extracts function calls and hardens malformed or unknown items', () => {

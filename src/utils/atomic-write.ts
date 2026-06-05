@@ -14,6 +14,42 @@
 import { open, rename, unlink } from "node:fs/promises";
 import { logger } from "./logger.js";
 
+const RENAME_RETRY_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const RENAME_RETRY_DELAYS_MS = [25, 75, 150, 300, 600];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableRenameError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  return typeof code === "string" && RENAME_RETRY_CODES.has(code);
+}
+
+async function renameWithRetry(tmp: string, filePath: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(tmp, filePath);
+      if (attempt > 0) {
+        logger.warn(`atomicWriteFile: rename succeeded after ${attempt + 1} attempts for ${filePath}`);
+      }
+      return;
+    } catch (err) {
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !isRetryableRenameError(err)) {
+        throw err;
+      }
+      logger.warn(
+        `atomicWriteFile: retrying rename for ${filePath} after ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      await sleep(delay);
+    }
+  }
+}
+
 /**
  * Write `data` to `filePath` atomically via a temp file + fsync + rename.
  *
@@ -45,7 +81,7 @@ export async function atomicWriteFile(
     await fd.datasync();           // flush to physical disk
     await fd.close();
     fd = undefined;                // mark closed so catch doesn't double-close
-    await rename(tmp, filePath);
+    await renameWithRetry(tmp, filePath);
   } catch (err) {
     // Best-effort cleanup
     try { if (fd) await fd.close(); } catch { /* ignore */ }

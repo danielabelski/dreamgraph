@@ -30,9 +30,24 @@ export interface OpenAIResponsesOptions {
   structuredOutput?: boolean;
 }
 
+export interface OpenAIResponsesUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+}
+
 export interface OpenAIResponsesData {
   output_text?: string;
   output?: Array<Record<string, unknown>>;
+  usage?: OpenAIResponsesUsage;
+  status?: string;
+  incomplete_details?: { reason?: string };
+}
+
+export interface OpenAIResponsesResult {
+  text: string;
+  finishReason?: string;
+  usage?: OpenAIResponsesUsage;
 }
 
 type ArchitectMessageContent = ArchitectMessage["content"];
@@ -310,6 +325,22 @@ export function extractOpenAIResponsesText(data: OpenAIResponsesData): string {
   }
 
   return out;
+}
+
+export function normalizeOpenAIResponsesResult(data: OpenAIResponsesData): OpenAIResponsesResult {
+  const text = extractOpenAIResponsesText(data);
+  const toolCalls = extractOpenAIResponsesToolCalls(data);
+  const finishReason = toolCalls.length > 0
+    ? "tool_use"
+    : data.incomplete_details?.reason === "max_output_tokens"
+      ? "max_tokens"
+      : data.status;
+
+  return {
+    text,
+    finishReason,
+    usage: data.usage,
+  };
 }
 
 export function extractOpenAIResponsesToolCalls(data: OpenAIResponsesData): ToolUseRequest[] {
