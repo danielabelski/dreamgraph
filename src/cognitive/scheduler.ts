@@ -27,7 +27,11 @@ import { dataPath } from "../utils/paths.js";
 import { getActiveScope } from "../instance/lifecycle.js";
 import { updateInstanceCounters } from "../instance/index.js";
 import { dream } from "./dreamer.js";
-import { normalize, recordWeakConnectionTensions } from "./normalizer.js";
+import {
+  normalize,
+  recordWeakConnectionTensions,
+  resolveTensionsFromPromotedEdges,
+} from "./normalizer.js";
 import { nightmare } from "./adversarial.js";
 import { runMetacognitiveAnalysis } from "./metacognition.js";
 import { dispatchEvent } from "./event-router.js";
@@ -406,38 +410,16 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
       let tensionsCreated = 0;
       let tensionsResolved = 0;
 
-      if (normResult.tensionCandidates && normResult.tensionCandidates.length > 0) {
-        tensionsCreated = await recordWeakConnectionTensions(
-          normResult.tensionCandidates,
-          "scheduler"
-        );
-      }
+      tensionsCreated = await recordWeakConnectionTensions(
+        normResult.tensionCandidates,
+        "scheduler"
+      );
 
       // --- Resolve tensions when promoted edges address them ---
-      if (normResult.promotedEdges.length > 0) {
-        const unresolvedTensions = await engine.getUnresolvedTensions();
-        for (const promoted of normResult.promotedEdges) {
-          for (const tension of unresolvedTensions) {
-            if (tension.resolved) continue;
-            // Require BOTH endpoints of the promoted edge to appear in the tension
-            const fromMatch = tension.entities.includes(promoted.from);
-            const toMatch = tension.entities.includes(promoted.to);
-            if (fromMatch && toMatch) {
-              await engine.resolveTension(
-                tension.id,
-                "system",
-                "confirmed_fixed",
-                "Addressed by promoted edge " + promoted.from + " -> " + promoted.to
-              );
-              tension.resolved = true;
-              tensionsResolved++;
-              logger.info(
-                "[scheduler] Tension resolved: '" + tension.id + "' addressed by promoted edge " + promoted.from + " -> " + promoted.to
-              );
-            }
-          }
-        }
-      }
+      tensionsResolved = await resolveTensionsFromPromotedEdges(
+        normResult.promotedEdges,
+        "scheduler"
+      );
 
       engine.wake();
 

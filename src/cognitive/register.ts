@@ -48,7 +48,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dataPath } from "../utils/paths.js";
 import { engine } from "./engine.js";
 import { dream } from "./dreamer.js";
-import { normalize, recordWeakConnectionTensions } from "./normalizer.js";
+import {
+  normalize,
+  recordWeakConnectionTensions,
+  resolveTensionsFromPromotedEdges,
+} from "./normalizer.js";
 import { analyzeCausality } from "./causal.js";
 import { analyzeTemporalPatterns } from "./temporal.js";
 import { exportArchetypes, importArchetypes, getArchetypes } from "./federation.js";
@@ -755,33 +759,10 @@ export function registerCognitiveTools(server: McpServer): void {
               "dream_cycle"
             );
 
-            // RESOLVE tensions when promoted edges address them
-            // Require BOTH endpoints of the promoted edge to appear in the
-            // tension's entity list — prevents a single match from resolving
-            // unrelated tensions.
-            if (normalization.promotedEdges.length > 0) {
-              const unresolvedTensions = await engine.getUnresolvedTensions();
-              for (const promoted of normalization.promotedEdges) {
-                for (const tension of unresolvedTensions) {
-                  if (tension.resolved) continue;
-                  const fromMatch = tension.entities.includes(promoted.from);
-                  const toMatch = tension.entities.includes(promoted.to);
-                  if (fromMatch && toMatch) {
-                    await engine.resolveTension(
-                      tension.id,
-                      "system",
-                      "confirmed_fixed",
-                      "Addressed by promoted edge " + promoted.from + " -> " + promoted.to
-                    );
-                    tension.resolved = true;
-                    tensionsResolved++;
-                    logger.info(
-                      "Tension resolved: '" + tension.id + "' addressed by promoted edge " + promoted.from + " -> " + promoted.to
-                    );
-                  }
-                }
-              }
-            }
+            tensionsResolved = await resolveTensionsFromPromotedEdges(
+              normalization.promotedEdges,
+              "dream_cycle"
+            );
 
             // NORMALIZING → AWAKE
             engine.wake();

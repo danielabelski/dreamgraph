@@ -916,15 +916,22 @@ function isTensionWorthyRejection(
   return (edge.reinforcement_count ?? 0) >= RECURRENT_REJECTION_TENSION_MIN_REINFORCEMENT;
 }
 
+const tensionSourcePrefix = (source: "dream_cycle" | "scheduler"): string =>
+  source === "scheduler" ? "[scheduler] " : "";
+
 export async function recordWeakConnectionTensions(
   tensionCandidates: TensionCandidate[],
   source: "dream_cycle" | "scheduler",
 ): Promise<number> {
+  if (tensionCandidates.length === 0) {
+    return 0;
+  }
+
   const selectedCandidates = [...tensionCandidates]
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, TENSION_CANDIDATE_LIMIT_PER_CYCLE);
   logger.info(
-    `${source === "scheduler" ? "[scheduler] " : ""}Tension pipeline: ${tensionCandidates.length} candidates, selecting top ${selectedCandidates.length}`
+    `${tensionSourcePrefix(source)}Tension pipeline: ${tensionCandidates.length} candidates, selecting top ${selectedCandidates.length}`
   );
 
   let tensionsCreated = 0;
@@ -941,11 +948,46 @@ export async function recordWeakConnectionTensions(
 
   if (tensionsCreated > 0) {
     logger.info(
-      `${source === "scheduler" ? "[scheduler] " : ""}Tension pipeline: ${tensionsCreated} tensions recorded`
+      `${tensionSourcePrefix(source)}Tension pipeline: ${tensionsCreated} tensions recorded`
     );
   }
 
   return tensionsCreated;
+}
+
+export async function resolveTensionsFromPromotedEdges(
+  promotedEdges: ValidatedEdge[],
+  source: "dream_cycle" | "scheduler",
+): Promise<number> {
+  if (promotedEdges.length === 0) {
+    return 0;
+  }
+
+  const unresolvedTensions = await engine.getUnresolvedTensions();
+  let tensionsResolved = 0;
+
+  for (const promoted of promotedEdges) {
+    for (const tension of unresolvedTensions) {
+      if (tension.resolved) continue;
+      const fromMatch = tension.entities.includes(promoted.from);
+      const toMatch = tension.entities.includes(promoted.to);
+      if (fromMatch && toMatch) {
+        await engine.resolveTension(
+          tension.id,
+          "system",
+          "confirmed_fixed",
+          "Addressed by promoted edge " + promoted.from + " -> " + promoted.to
+        );
+        tension.resolved = true;
+        tensionsResolved++;
+        logger.info(
+          `${tensionSourcePrefix(source)}Tension resolved: '${tension.id}' addressed by promoted edge ${promoted.from} -> ${promoted.to}`
+        );
+      }
+    }
+  }
+
+  return tensionsResolved;
 }
 
 /**

@@ -391,10 +391,29 @@ function extractMarkdownListItems(body: string): string[] {
     .filter((item): item is string => Boolean(item));
 }
 
+const RESOLVED_REVIEW_ITEM_STATUSES = new Set(["addressed", "resolved", "solved", "closed", "complete", "completed", "done", "fixed", "mitigated"]);
+
+function normalizeReviewItemStatusMarker(value: string): string {
+  return value.trim().toLowerCase().replace(/^\((.+)\)$/, "$1").replace(/[.:;]+$/, "");
+}
+
+function isResolvedReviewItem(item: string): boolean {
+  const normalized = item.trim();
+  if (/^\[[xX]\]\s+/.test(normalized)) return true;
+  const leadingStatus = normalized.match(/^\(?([A-Za-z]+)\)?\s*(?::|-)\s+/)?.[1];
+  if (leadingStatus != null && RESOLVED_REVIEW_ITEM_STATUSES.has(normalizeReviewItemStatusMarker(leadingStatus))) return true;
+  const trailingStatus = normalized.match(/(?:\s+|^)\(?([A-Za-z]+)\)?[.:;]*\s*$/)?.[1];
+  return trailingStatus != null && RESOLVED_REVIEW_ITEM_STATUSES.has(normalizeReviewItemStatusMarker(trailingStatus));
+}
+
 function findSectionItems(markdown: string, headings: ArchitectHeading[], titlePattern: RegExp): string[] {
   const headingIndex = headings.findIndex((heading) => titlePattern.test(heading.title));
   if (headingIndex < 0) return [];
   return extractMarkdownListItems(sectionBody(markdown, headings, headingIndex));
+}
+
+function findActiveReviewSectionItems(markdown: string, headings: ArchitectHeading[], titlePattern: RegExp): string[] {
+  return findSectionItems(markdown, headings, titlePattern).filter((item) => !isResolvedReviewItem(item));
 }
 
 function parseLabeledBranchValue(body: string, label: string): string | null {
@@ -424,8 +443,8 @@ export function buildLivingPlanState(input: {
 }): LivingPlanState {
   const openQuestions = findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?Open Questions$/i);
   const nervousPoints = uniqueStrings([
-    ...findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?(?:Nervous Points|Risks?|Risk Register)$/i),
-    ...findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?Design Guardrails$/i),
+    ...findActiveReviewSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?(?:Nervous Points|Risks?|Risk Register)$/i),
+    ...findActiveReviewSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?Design Guardrails$/i),
   ]);
   const planAsks = findSectionItems(input.markdown, input.headings, /^(?:\d+\.\s*)?Plan Asks$/i);
   const candidateHeadings = input.headings.filter((heading) =>

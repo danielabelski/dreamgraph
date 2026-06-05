@@ -1008,6 +1008,54 @@ describe("standalone Architect route hardening", () => {
     });
   });
 
+  it("omits resolved nervous points from the living plan projection", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-resolved-nervous-points-"));
+    const dataDir = join(tempRoot, "data");
+    const plansDir = join(tempRoot, "plans");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-resolved-nervous-points-test",
+      projectRoot: tempRoot,
+      dataDir,
+    } as never);
+
+    try {
+      await mkdir(plansDir, { recursive: true });
+      await writeFile(join(plansDir, "resolved-nervous-points.md"), [
+        "# Resolved Nervous Points",
+        "",
+        "Status: Draft",
+        "",
+        "## Nervous Points",
+        "",
+        "- Active migration risk still needs review",
+        "- [x] Legacy sidebar race was addressed",
+        "- Addressed: stale route count was fixed",
+        "- Solved - old plan selection issue",
+        "",
+        "## Design Guardrails",
+        "",
+        "- Resolved: daemon authority gap",
+        "- Guard command mutations behind governed tools",
+        "",
+      ].join("\n"), "utf-8");
+
+      await withArchitectServer(async (baseUrl) => {
+        const payload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans/resolved-nervous-points`));
+        const plan = payload.plan as { living_state?: Record<string, unknown> };
+        const living = plan.living_state ?? {};
+        const nervousPoints = living.nervous_points as string[];
+
+        expect(nervousPoints).toEqual([
+          "Active migration risk still needs review",
+          "Guard command mutations behind governed tools",
+        ]);
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("treats implemented slice checkpoints as complete and advances to the next slice", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-slice-projection-"));
     const dataDir = join(tempRoot, "data");
