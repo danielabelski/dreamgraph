@@ -4853,6 +4853,9 @@ function renderArchitectShell(): string {
       user-select: none;
     }
     .section-title {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
       margin: 0 0 6px;
       padding-right: 30px;
       font-size: 0.68rem;
@@ -4868,6 +4871,12 @@ function renderArchitectShell(): string {
     .section-title a:focus-visible {
       color: var(--ink);
       outline: none;
+    }
+    .section-title .version {
+      font-size: 0.78em;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      opacity: 0.72;
     }
     .plan-toolbar {
       display: grid;
@@ -5632,6 +5641,15 @@ function renderArchitectShell(): string {
       font-weight: 800;
       text-transform: uppercase;
     }
+    .tool-trace-row pre {
+      margin: 4px 0 0;
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.68rem;
+      line-height: 1.35;
+    }
     .chat-message.user {
       border-color: rgba(104, 216, 182, 0.42);
       background: rgba(104, 216, 182, 0.1);
@@ -6209,7 +6227,7 @@ function renderArchitectShell(): string {
   <main>
     <section class="panel rail" data-architect-sidebar="left">
       <button class="architect-sidebar-collapse" data-architect-collapse="left" type="button" aria-label="Collapse plans sidebar" title="Collapse plans sidebar"><</button>
-      <h2 class="section-title"><a href="/" title="DreamGraph landing page">DreamGraph</a></h2>
+      <h2 class="section-title"><a href="/" title="DreamGraph landing page">DreamGraph</a><span class="version">v${config.server.version}</span></h2>
       <div class="plan-toolbar" aria-label="Plan actions">
         <button id="create-plan-button" class="mini-button" type="button">New Plan</button>
         <button id="archive-plan-button" class="mini-button danger" type="button" disabled>Archive</button>
@@ -8043,25 +8061,46 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       return lines;
     }
 
+    function decodeVisibleEscapes(value) {
+      return String(value || '')
+        .replace(/\\r\\n/g, String.fromCharCode(10))
+        .replace(/\\n/g, String.fromCharCode(10))
+        .replace(/\\r/g, String.fromCharCode(10))
+        .replace(/\\t/g, String.fromCharCode(9));
+    }
+
+    function looksLikeCutJson(value) {
+      const text = String(value || '').trim();
+      if (!text) return false;
+      const startsStructured = text.startsWith('{') || text.startsWith('[') || text.indexOf('{') >= 0;
+      const hasTruncationMarker = new RegExp('\\.\\.\\.$|\\[output truncated\\]|truncated', 'i').test(text);
+      const openObjectCount = (text.match(new RegExp(String.fromCharCode(123), 'g')) || []).length;
+      const closeObjectCount = (text.match(new RegExp(String.fromCharCode(125), 'g')) || []).length;
+      const openArrayCount = (text.match(new RegExp(String.fromCharCode(91), 'g')) || []).length;
+      const closeArrayCount = (text.match(new RegExp(String.fromCharCode(93), 'g')) || []).length;
+      return startsStructured && (hasTruncationMarker || openObjectCount > closeObjectCount || openArrayCount > closeArrayCount);
+    }
+
     function formatToolResultPreview(tool, preview) {
       if (!preview) return '';
       const value = unwrapToolResultPreview(preview);
       if (value && typeof value === 'object') {
         return summarizeJsonObject(value) || 'structured result received';
       }
-      const text = collapseWhitespace(value == null ? preview : value);
+      const text = collapseWhitespace(value == null ? decodeVisibleEscapes(preview) : value);
       return text.length > 180 ? text.slice(0, 180) + '...' : text;
     }
 
-    function compactToolPreview(preview) {
+    function toolPreviewDetails(preview) {
       if (!preview) return '';
       const value = unwrapToolResultPreview(preview);
       if (value && typeof value === 'object') {
-        const lines = describeStructuredToolResult(value);
-        return lines.length > 0 ? lines.join(String.fromCharCode(10)) : 'Structured result received';
+        return JSON.stringify(value, null, 2);
       }
-      const text = collapseWhitespace(value == null ? preview : value);
-      return text.length > 900 ? text.slice(0, 900) + '...' : text;
+      const raw = decodeVisibleEscapes(value == null ? preview : value);
+      const marker = value == null && looksLikeCutJson(raw) ? 'Preview truncated before parsing' + String.fromCharCode(10) : '';
+      const text = raw.trim();
+      return marker + (text.length > 1800 ? text.slice(0, 1800).trim() + '...' : text);
     }
 
     function summarizeProvenance(provenance) {
@@ -8227,7 +8266,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         summary.textContent = 'Details';
         details.appendChild(summary);
         const pre = document.createElement('pre');
-        pre.textContent = compactToolPreview(item.result_preview || item.args_summary);
+        pre.textContent = item.result_preview ? toolPreviewDetails(item.result_preview) : toolPreviewDetails(item.args_summary);
         details.appendChild(pre);
         row.appendChild(details);
       }
@@ -8788,6 +8827,17 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       return Array.isArray(payload.adrs) ? payload.adrs : [];
     }
 
+    function formatAdrSlashResults(matches) {
+      const items = Array.isArray(matches) ? matches : [];
+      return items.map(function(adr) {
+        const id = String((adr && adr.id) || 'ADR');
+        const title = String((adr && adr.title) || 'Untitled ADR');
+        const status = adr && adr.status ? ' [' + adr.status + ']' : '';
+        const summary = String((adr && (adr.decision_summary || adr.problem_summary)) || '').trim();
+        return id + status + ' - ' + title + (summary ? '\\n  ' + summary : '');
+      }).join('\\n\\n');
+    }
+
     async function handleAdrSlashCommand(args) {
       if (!args.length) {
         const bound = (((activePlanSnapshot || {}).registry || {}).adr_bindings || []).slice();
@@ -8800,7 +8850,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         const matches = (await fetchAdrIndex()).filter(function(adr) {
           return [adr.id, adr.title, adr.status, adr.decision_summary, adr.problem_summary].filter(Boolean).join(' ').toLowerCase().indexOf(query) >= 0;
         });
-        appendChatMessage('assistant', matches.length ? JSON.stringify(matches, null, 2) : 'No ADR matched "' + query + '".');
+        appendChatMessage('assistant', matches.length ? formatAdrSlashResults(matches) : 'No ADR matched "' + query + '".');
         return true;
       }
       if (String(args[0] || '').toLowerCase() === 'proposed') {
@@ -8808,7 +8858,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
           const status = String((adr && adr.status) || '').toLowerCase();
           return status === 'proposed' || status === 'unaccepted';
         });
-        appendChatMessage('assistant', matches.length ? JSON.stringify(matches, null, 2) : 'No proposed or unaccepted ADRs found.');
+        appendChatMessage('assistant', matches.length ? formatAdrSlashResults(matches) : 'No proposed or unaccepted ADRs found.');
         return true;
       }
       if (String(args[0] || '').toLowerCase() === 'edit') {
@@ -8830,6 +8880,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
     async function tryHandleSlashCommand(message) {
       const slash = parseArchitectSlashCommand(message);
       if (!slash) return false;
+      appendChatMessage('user', String(message || '').trim());
       if (slash.malformed) {
         appendChatMessage('assistant', 'That slash command is incomplete. Use /help to see available commands.');
         chatStatusEl.textContent = 'Slash command validation failed.';

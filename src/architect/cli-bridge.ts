@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { LlmMessage } from "../cognitive/llm.js";
 import { mcpListTools } from "../cli/utils/mcp-call.js";
 import { getArchitectProjectRoot } from "./plan-registry.js";
-import type { ArchitectToolTraceEntry } from "./native-tool-loop.js";
+import { createArchitectToolResultPreview, type ArchitectToolTraceEntry } from "./native-tool-loop.js";
 
 export type ArchitectCliAdapter = "codex-cli" | "copilot-cli";
 
@@ -851,27 +851,9 @@ function auditToToolTrace(record: AuditRecord, iteration: number, traceId: strin
     args_summary: compact(record.inputJson ?? "{}"),
     status,
     duration_ms: typeof record.durationMs === "number" ? Math.max(0, Math.trunc(record.durationMs)) : 0,
-    result_preview: compact(previewAuditResult(record.resultJson ?? "")),
+    result_preview: createArchitectToolResultPreview(record.resultJson ?? ""),
     trace_id: traceId,
   };
-}
-
-function previewAuditResult(resultJson: string): string {
-  if (!resultJson.trim()) return "";
-  try {
-    const parsed = JSON.parse(resultJson) as unknown;
-    if (isRecord(parsed) && Array.isArray(parsed.content)) {
-      const text = parsed.content
-        .filter((item): item is { type: string; text: string } => isRecord(item) && item.type === "text" && typeof item.text === "string")
-        .map((item) => item.text)
-        .join("\n")
-        .trim();
-      return text || resultJson;
-    }
-  } catch {
-    // Fall back to the raw bridge payload below.
-  }
-  return resultJson;
 }
 
 function appendLimited(current: string, next: string): string {

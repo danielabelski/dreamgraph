@@ -230,7 +230,7 @@ export async function runArchitectNativeToolLoop(input: {
         args_summary: argsSummary,
         status,
         duration_ms: Date.now() - startedAt,
-        result_preview: compactPreview(resultText),
+        result_preview: createArchitectToolResultPreview(resultText),
         trace_id: traceId,
       };
       trace.push(entry);
@@ -543,6 +543,94 @@ function stringifyMcpResult(result: McpCallResult): string {
   return content
     .map((item) => item.type === "text" ? item.text : JSON.stringify(item))
     .join("\n");
+}
+
+export function createArchitectToolResultPreview(value: string, maxLength = 500): string {
+  const normalized = normalizeMcpResultPreview(value);
+  const serialized = typeof normalized === "string" ? normalized : JSON.stringify(normalized);
+  if (serialized.length <= maxLength) return serialized;
+  return JSON.stringify({
+    truncated: true,
+    originalChars: serialized.length,
+    preview: summarizePreviewValue(normalized),
+  });
+}
+
+function normalizeMcpResultPreview(value: string): unknown {
+  const text = String(value ?? "").trim();
+  const parsed = parseJson(text);
+  if (parsed !== null) {
+    return normalizeParsedMcpResult(parsed, text);
+  }
+  return text;
+}
+
+function normalizeParsedMcpResult(value: unknown, fallbackText: string): unknown {
+  if (isRecord(value) && Array.isArray(value.content)) {
+    const text = value.content
+      .filter((item): item is { type: string; text: string } => isRecord(item) && item.type === "text" && typeof item.text === "string")
+      .map((item) => item.text)
+      .join("\n")
+      .trim();
+    if (text) {
+      const nested = parseJson(text);
+      return nested === null ? text : nested;
+    }
+    return value;
+  }
+  return value ?? fallbackText;
+}
+
+function summarizePreviewValue(value: unknown): unknown {
+  if (typeof value === "string") return compactPlainPreview(value, 420);
+  if (Array.isArray(value)) {
+    return {
+      type: "array",
+      length: value.length,
+      items: value.slice(0, 5).map((item) => summarizePreviewValue(item)),
+    };
+  }
+  if (!isRecord(value)) return value;
+
+  const data = isRecord(value.data) ? value.data : value;
+  const preview: Record<string, unknown> = {};
+  for (const key of ["success", "error", "message", "current_state", "provider", "model", "route", "total", "matchCount", "exitCode", "timedOut", "durationMs"]) {
+    const source = key in value ? value : data;
+    const candidate = source[key];
+    if (candidate == null) continue;
+    if (typeof candidate === "string") preview[key] = compactPlainPreview(candidate, 180);
+    else if (typeof candidate !== "object") preview[key] = candidate;
+  }
+  for (const [key, candidate] of Object.entries(data).slice(0, 12)) {
+    if (preview[key] !== undefined) continue;
+    if (Array.isArray(candidate)) {
+      preview[key] = {
+        length: candidate.length,
+        items: candidate.slice(0, 5).map((item) => summarizePreviewValue(item)),
+      };
+    } else if (isRecord(candidate)) {
+      preview[key] = { fields: Object.keys(candidate).slice(0, 8) };
+    } else if (typeof candidate === "string") {
+      preview[key] = compactPlainPreview(candidate, 180);
+    } else if (candidate != null) {
+      preview[key] = candidate;
+    }
+  }
+  return preview;
+}
+
+function compactPlainPreview(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > maxLength ? `${compact.slice(0, Math.max(0, maxLength - 3)).trim()}...` : compact;
+}
+
+function parseJson(value: string): unknown | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function blocksToText(blocks: NeutralContentBlock[]): string {

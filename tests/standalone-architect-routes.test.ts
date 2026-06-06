@@ -14,6 +14,7 @@ import {
   resolveArchitectCliBridgeExecutablePath,
   resolveArchitectCliBridgeToolNames,
 } from "../src/architect/cli-bridge.js";
+import { createArchitectToolResultPreview } from "../src/architect/native-tool-loop.js";
 import {
   formatArchitectPlanListPayload,
   formatArchitectPlanNextPayload,
@@ -68,6 +69,25 @@ describe("standalone Architect route hardening", () => {
       "query_resource",
       "run_command",
     ]);
+  });
+
+  it("parses nested MCP text JSON before producing tool trace previews", () => {
+    const preview = createArchitectToolResultPreview(JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ success: true, data: { matchCount: 2, entries: [{ id: "one" }] } }) }],
+    }), 500);
+
+    expect(JSON.parse(preview)).toMatchObject({ success: true, data: { matchCount: 2 } });
+  });
+
+  it("keeps truncated producer previews as valid JSON envelopes", () => {
+    const preview = createArchitectToolResultPreview(JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ success: true, data: { entries: Array.from({ length: 80 }, (_, index) => ({ id: `entry-${index}`, body: "x".repeat(80) })) } }) }],
+    }), 260);
+    const parsed = JSON.parse(preview) as Record<string, unknown>;
+
+    expect(parsed).toMatchObject({ truncated: true });
+    expect(typeof parsed.originalChars).toBe("number");
+    expect(parsed.preview).toBeTruthy();
   });
 
   it("serializes Codex MCP config with TOML-safe dynamic keys", () => {
@@ -143,7 +163,7 @@ describe("standalone Architect route hardening", () => {
       expect(script).toContain("function isArchitectWhitespace");
       expect(script).toContain("function splitArchitectWords");
       expect(script).toContain("function describeStructuredToolResult");
-      expect(script).toContain("lines.join(String.fromCharCode(10))");
+      expect(script).toContain("function toolPreviewDetails");
       expect(script).not.toContain("replace(/s+/g");
       expect(script).not.toContain("JSON.stringify(parsed.value, null, 2)");
       expect(html).toContain("Project scope loading...");
@@ -1521,6 +1541,12 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("architect.tool_result");
       expect(html).toContain("semanticToolArgSummary");
       expect(html).toContain("tool-trace-panel");
+      expect(html).toContain(".tool-trace-row pre");
+      expect(html).toContain("function toolPreviewDetails");
+      expect(html).toContain("JSON.stringify(value, null, 2)");
+      expect(html).toContain("Preview truncated before parsing");
+      expect(html).toContain("function decodeVisibleEscapes");
+      expect(html).toContain("String.fromCharCode(10)");
       expect(html).not.toContain("appendEventLine('[tool-trace]");
       expect(html).toContain("Lifecycle");
       expect(html).toContain("Next slice");
