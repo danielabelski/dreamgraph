@@ -167,7 +167,7 @@ export function App() {
       }}
     >
       <div className="topbar" style={{ gridColumn: "1 / 6" }}>
-        <span className="brand">DreamGraph Explorer</span>
+        <a className="brand" href="/" title="DreamGraph landing page">DreamGraph Explorer</a>
         <span className="meta">Phase 4 · curated mutations</span>
         <SearchBar onPick={setSelected} />
         <div className="mode-toggle">

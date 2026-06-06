@@ -116,6 +116,12 @@ export function setDashboardContext(ctx: DashboardContext): void {
 
 const BRAND = "DreamGraph";
 const VERSION = config.server.version;
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0d1117"/>
+  <circle cx="32" cy="32" r="18" fill="none" stroke="#58a6ff" stroke-width="5"/>
+  <circle cx="32" cy="32" r="6" fill="#3fb950"/>
+  <path d="M32 14v12M32 38v12M14 32h12M38 32h12" stroke="#bc8cff" stroke-width="4" stroke-linecap="round"/>
+</svg>`;
 
 async function shell(title: string, body: string, activeTab: string): Promise<string> {
   const scope = getActiveScope();
@@ -128,6 +134,7 @@ async function shell(title: string, body: string, activeTab: string): Promise<st
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${esc(title)} — ${BRAND} v${VERSION}</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <style>${CSS}</style>
 </head>
 <body data-dg-active-tab="${escAttr(activeTab)}" data-dg-instance="${escAttr(instanceId)}">
@@ -138,22 +145,6 @@ async function shell(title: string, body: string, activeTab: string): Promise<st
         var storageKey = ${JSON.stringify(storageKey)};
         if (activeTab) {
           localStorage.setItem(storageKey, activeTab);
-        }
-        if ((window.location.pathname === '/' || window.location.pathname === '') && !window.location.search) {
-          var rememberedTab = localStorage.getItem(storageKey);
-          var validTabs = ['status', 'schedules', 'config', 'docs', 'health'];
-          if (rememberedTab && validTabs.indexOf(rememberedTab) !== -1) {
-            var docsPageKey = storageKey + ':docs-page';
-            if (rememberedTab === 'docs') {
-              var rememberedDocsPage = localStorage.getItem(docsPageKey);
-              if (rememberedDocsPage) {
-                window.location.replace(rememberedDocsPage);
-                return;
-              }
-            }
-            window.location.replace('/' + rememberedTab);
-            return;
-          }
         }
       } catch (_) {
         // Ignore storage access failures and continue rendering normally.
@@ -2489,6 +2480,14 @@ export async function handleDashboardRoute(
     return true;
   }
 
+  if (req.method === "GET" && pathname === "/favicon.svg") {
+    res.writeHead(200, {
+      "Content-Type": "image/svg+xml",
+      "Cache-Control": "public, max-age=86400",
+    });
+    res.end(FAVICON_SVG);
+    return true;
+  }
   if (req.method === "GET" && (pathname === "/" || pathname === "")) {
     html(res, 200, await renderIndex());
     return true;

@@ -11,7 +11,7 @@
 import { readFile, mkdir } from "node:fs/promises";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type {
   CognitiveTuning,
   PoliciesFile,
@@ -449,6 +449,28 @@ export async function switchProfile(profile: PolicyProfile): Promise<void> {
 
   cachedPolicies.profile = profile;
   await savePolicies(cachedPolicies);
+
+  const scope = getActiveScope();
+  if (scope) {
+    const instancePath = resolve(scope.instanceRoot, "instance.json");
+    const rawInstance = await readFile(instancePath, "utf-8");
+    const instance = JSON.parse(rawInstance.charCodeAt(0) === 0xfeff ? rawInstance.slice(1) : rawInstance) as { policy_profile?: PolicyProfile };
+    instance.policy_profile = profile;
+    await atomicWriteFile(instancePath, JSON.stringify(instance, null, 2));
+
+    const mcpPath = scope.configPath("mcp.json");
+    if (existsSync(mcpPath)) {
+      const rawMcp = await readFile(mcpPath, "utf-8");
+      const mcp = JSON.parse(rawMcp.charCodeAt(0) === 0xfeff ? rawMcp.slice(1) : rawMcp) as {
+        discipline?: { policy_profile?: PolicyProfile };
+      };
+      if (mcp.discipline) {
+        mcp.discipline.policy_profile = profile;
+        await atomicWriteFile(mcpPath, JSON.stringify(mcp, null, 2));
+      }
+    }
+  }
+
   logger.info(`Policies: switched active profile to "${profile}"`);
 }
 

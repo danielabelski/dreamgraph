@@ -43,7 +43,8 @@ html, body, #root {
   font-size: 12px;
   letter-spacing: 0.04em;
 }
-.topbar .brand { font-weight: 600; color: var(--fg); }
+.topbar .brand { font-weight: 600; color: var(--fg); text-decoration: none; }
+.topbar .brand:hover, .topbar .brand:focus-visible { color: var(--accent); outline: none; }
 .topbar .meta { color: var(--fg-dim); }
 .topbar .meta strong { color: var(--fg); font-weight: 500; }
 

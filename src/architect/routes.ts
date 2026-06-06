@@ -896,6 +896,7 @@ function renderArchitectDoomSpikeHarness(): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DreamGraph Architect js-dos Spike</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="stylesheet" href="/api/architect/v1/assets/js-dos/js-dos.css" />
   <style>
     html, body { height: 100%; margin: 0; background: #111827; color: #e5e7eb; font: 14px system-ui, sans-serif; }
@@ -4720,6 +4721,7 @@ function renderArchitectShell(): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DreamGraph Architect</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="stylesheet" href="/api/architect/v1/assets/xterm/xterm.css" />
   <style>
     :root {
@@ -4857,6 +4859,15 @@ function renderArchitectShell(): string {
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--muted);
+    }
+    .section-title a {
+      color: inherit;
+      text-decoration: none;
+    }
+    .section-title a:hover,
+    .section-title a:focus-visible {
+      color: var(--ink);
+      outline: none;
     }
     .plan-toolbar {
       display: grid;
@@ -6198,7 +6209,7 @@ function renderArchitectShell(): string {
   <main>
     <section class="panel rail" data-architect-sidebar="left">
       <button class="architect-sidebar-collapse" data-architect-collapse="left" type="button" aria-label="Collapse plans sidebar" title="Collapse plans sidebar"><</button>
-      <h2 class="section-title">Plans</h2>
+      <h2 class="section-title"><a href="/" title="DreamGraph landing page">DreamGraph</a></h2>
       <div class="plan-toolbar" aria-label="Plan actions">
         <button id="create-plan-button" class="mini-button" type="button">New Plan</button>
         <button id="archive-plan-button" class="mini-button danger" type="button" disabled>Archive</button>
