@@ -15,12 +15,13 @@ export interface ReasonFieldProps {
 /**
  * Reason input for curated mutations.
  *
- * - Fires a POST /explorer/api/reason-suggest on mount (and when intent
- *   or subject id changes), pre-fills the textarea, and highlights it
- *   so the user can keep / edit / clear it without extra clicks.
+ * - Fires a POST /explorer/api/reason-suggest on mount (and when intent,
+ *   subject id, or decision context changes), pre-fills the textarea, and
+ *   highlights it so the user can keep / edit / clear it without extra clicks.
  * - Falls back to the provided `fallback` template if the LLM is
  *   unavailable or returns nothing.
- * - Once the user types, we stop overwriting from the suggester.
+ * - Once the user types, we stop overwriting from the suggester until a new
+ *   suggestion target is selected.
  */
 export function ReasonField(props: ReasonFieldProps) {
   const { intent, subject, context, fallback, value, onChange, disabled } = props;
@@ -29,11 +30,13 @@ export function ReasonField(props: ReasonFieldProps) {
   const [highlight, setHighlight] = useState(false);
   const userEditedRef = useRef(false);
 
-  // Stable signature so we only re-suggest when it actually changes.
+  // Stable signature so we only re-suggest when the reason target actually changes.
   const subjectKey =
     typeof subject["id"] === "string"
       ? `${intent}:${subject["id"]}`
       : `${intent}:${JSON.stringify(Object.keys(subject).sort())}`;
+  const contextKey = JSON.stringify(context ?? {});
+  const suggestionKey = `${subjectKey}:${contextKey}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -60,7 +63,7 @@ export function ReasonField(props: ReasonFieldProps) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subjectKey]);
+  }, [suggestionKey]);
 
   const charCount = value.length;
   const tooShort = value.trim().length === 0;
