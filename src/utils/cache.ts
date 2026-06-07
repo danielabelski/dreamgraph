@@ -22,7 +22,7 @@ const MIN_CHECK_MS = 5_000;
 
 /**
  * Pluggable data directory resolver.
- * In legacy mode this returns config.dataDir.
+ * In fallback mode this returns config.dataDir.
  * In instance mode, lifecycle.ts overrides it at startup.
  */
 let dataDirResolver: () => string = () => config.dataDir;

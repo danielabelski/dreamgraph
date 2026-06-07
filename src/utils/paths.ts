@@ -1,8 +1,8 @@
 /**
  * DreamGraph v7.0 "El Alarife" — Data path resolver.
  *
- * Provides a lazy-evaluated data directory that works in both legacy
- * (flat data/) and UUID-scoped instance modes.
+ * Provides a lazy-evaluated data directory that works in both fallback
+ * and UUID-scoped instance modes.
  *
  * Module-scope code should use `dataPath("file.json")` instead of
  * `resolve(config.dataDir, "file.json")` — the path is resolved at
@@ -15,7 +15,7 @@ import { config } from "../config/config.js";
 
 /**
  * Override set by the instance lifecycle at startup.
- * null = legacy mode (use config.dataDir).
+ * null = fallback mode (use config.dataDir).
  */
 let dataDirOverride: string | null = null;
 
@@ -29,8 +29,8 @@ export function setDataDirOverride(dir: string): void {
 
 /**
  * Get the effective data directory.
- * Instance mode → UUID-scoped dir.
- * Legacy mode → config.dataDir.
+ * Instance mode → UUID-scoped dir under the DreamGraph master directory.
+ * Fallback mode → config.dataDir.
  */
 export function getDataDir(): string {
   return dataDirOverride ?? config.dataDir;

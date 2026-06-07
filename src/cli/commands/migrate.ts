@@ -25,7 +25,7 @@ Usage:
   dg migrate [options]
 
 Options:
-  --source <path>         Source data directory (default: ./data)
+  --source <path>         Source legacy data directory to import (required)
   --name <name>           Name for the new instance (default: "migrated-<timestamp>")
   --project <path>        Attach to a project directory
   --policy <profile>      Policy profile: strict, balanced, creative (default: strict)
@@ -33,13 +33,17 @@ Options:
   --master-dir <path>     Override master directory
 
 This copies all JSON files from the source directory into a new UUID-scoped
-instance.  The original data/ directory is NOT modified.
+instance. The original source directory is NOT modified.
 `);
     return;
   }
 
-  const sourceDataDir =
-    typeof flags.source === "string" ? resolve(flags.source) : resolve("data");
+  if (typeof flags.source !== "string" || flags.source.trim().length === 0) {
+    console.error("Missing required --source <path> for legacy data import.");
+    process.exit(1);
+  }
+
+  const sourceDataDir = resolve(flags.source);
 
   const name =
     typeof flags.name === "string"
@@ -90,7 +94,7 @@ instance.  The original data/ directory is NOT modified.
   Project:     ${instance.project_root ?? "(none)"}
   Instance:    ${scope.instanceRoot}
 
-Original data directory was NOT modified.
+Original source directory was NOT modified.
 
 To activate this instance:
   export DREAMGRAPH_INSTANCE_UUID=${instance.uuid}

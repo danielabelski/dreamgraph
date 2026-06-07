@@ -2,18 +2,20 @@
  * DreamGraph v7.0 "El Alarife" — Instance Lifecycle Manager.
  *
  * Creates, loads, and manages DreamGraph instance directories.
- * Provides the bridge between legacy flat data/ mode and UUID-scoped mode.
+ * Provides the bridge between the fallback data resolver and UUID-scoped mode.
  *
  * Resolution priority (decided at startup):
  *   1. DREAMGRAPH_INSTANCE_UUID env var → load that specific instance
- *   2. DREAMGRAPH_DATA_DIR env var → legacy flat mode (no UUID isolation)
- *   3. Default → legacy mode with ./data
+ *   2. Otherwise → fallback mode without UUID isolation
  *
- * Legacy mode:
- *   When no UUID is set, DreamGraph operates in v5.x-compatible mode:
- *   config.dataDir resolves as before, no InstanceScope is created,
- *   and mutex keys remain unprefixed.  This preserves backward compat
- *   for existing deployments.
+ * Instance mode is the normal v5+ runtime: persistent state lives under the
+ * global DreamGraph master directory at <master>/<uuid>/data. Repository roots
+ * are attached as projects and must not rely on a project-local data/ folder.
+ *
+ * Fallback mode:
+ *   When no UUID is set, no InstanceScope is created and mutex keys remain
+ *   unprefixed. config.dataDir points at DREAMGRAPH_DATA_DIR when explicitly
+ *   provided, otherwise at the global master fallback data directory.
  */
 
 import { mkdir, readFile, copyFile, readdir } from "node:fs/promises";
@@ -76,8 +78,8 @@ export function isInstanceMode(): boolean {
 
 /**
  * Get the effective data directory.
- * UUID mode → instance's data dir.
- * Legacy mode → config.dataDir (flat).
+ * UUID mode → instance's data dir under the DreamGraph master directory.
+ * Fallback mode → config.dataDir.
  */
 export function getEffectiveDataDir(): string {
   return activeScope?.dataDir ?? config.dataDir;
@@ -275,6 +277,7 @@ export async function createInstance(
       policy_profile: opts.policyProfile ?? "strict",
       requires_ground_truth: true,
     },
+    // Instance-relative path: <master>/<uuid>/data, never a project-local data/ folder.
     data_dir: "./data",
     repos: opts.repos ?? {},
   };
@@ -493,15 +496,15 @@ export async function loadInstance(
  *
  * Resolution:
  *   1. DREAMGRAPH_INSTANCE_UUID → load specific instance
- *   2. Otherwise → legacy mode (flat data/)
+ *   2. Otherwise → fallback mode without UUID isolation
  */
 export async function resolveInstanceAtStartup(): Promise<InstanceScope | null> {
   const uuid = process.env.DREAMGRAPH_INSTANCE_UUID;
 
   if (!uuid) {
-    logger.info("No DREAMGRAPH_INSTANCE_UUID set — running in legacy mode");
+    logger.info("No DREAMGRAPH_INSTANCE_UUID set — running in fallback mode without UUID isolation");
     activeScope = null;
-    // Data dir resolver stays as default (config.dataDir)
+    // Data dir resolver stays as default (config.dataDir).
     return null;
   }
 
@@ -594,7 +597,7 @@ export async function resolveInstanceAtStartup(): Promise<InstanceScope | null> 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`Failed to load instance ${uuid}: ${msg}`);
-    logger.info("Falling back to legacy mode");
+    logger.info("Falling back to unscoped data resolver");
     activeScope = null;
     return null;
   }
