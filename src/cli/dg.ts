@@ -44,7 +44,7 @@ import { cmdArchitect } from "./commands/architect.js";
 
 function printUsage(): void {
   console.log(`
-DreamGraph CLI — Instance Management (v12.3.1 Living DreamGraph)
+DreamGraph CLI — Instance Management (v12.4.0 Living DreamGraph)
 
 Usage:
   dg <command> [options]
@@ -82,7 +82,7 @@ Run 'dg <command> --help' for command-specific options.
 }
 
 function printVersion(): void {
-  console.log("DreamGraph CLI v12.3.1 (Living DreamGraph)");
+  console.log("DreamGraph CLI v12.4.0 (Living DreamGraph)");
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v12.3.1 — Strict Policy Inheritance and Release Discipline
+# DreamGraph v12.4.0 - Hippodamus
 
-![Version](https://img.shields.io/badge/version-12.3.1-blue)
+![Version](https://img.shields.io/badge/version-12.4.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -14,7 +14,7 @@
 
 **New here?** Use the [DreamGraph Easy Start guide](guide/00-easy-start.md) for a short path from install to Dashboard, Explorer, and Architect.
 
-**v12.3.1** fixes strict-policy inheritance drift in cognitive normalization, makes effective-policy receipts truthful about the applied runtime gates, prevents weak rejected dreams from automatically becoming durable tension inventory, and keeps release closure bound to the full governed `release_workflow`.
+**v12.4.0 - Hippodamus** aligns the daemon, MCP server, dashboard, CLI, packages, guide, README, documentation, and release artifacts on the current v12 release line while preserving the Hippodamus title for the full major version.
 
 DreamGraph is a governed architecture cognition layer for MCP-enabled software projects. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so project understanding is grounded in source, ADRs, workflows, tests, runtime observations, and human review rather than any single file read or isolated chat turn.
 
