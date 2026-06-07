@@ -36,6 +36,7 @@ import { cmdStop } from "./commands/stop.js";
 import { cmdRestart } from "./commands/restart.js";
 import { cmdScan } from "./commands/scan.js";
 import { cmdSchedule } from "./commands/schedule.js";
+import { cmdArchitect } from "./commands/architect.js";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -60,6 +61,7 @@ Commands:
   curate <query>              Improve graph signal quality on a running instance
   enrich <query>              Expand graph coverage on a running instance
   schedule <query> [--add|…]  Manage dream schedules on a running instance
+  architect [query] <subcmd>  Inspect daemon-owned Architect plans/runtime (status/plans/chat/tui)
   start <query> [--http]      Start a daemon server process
   stop <query> [--force]      Stop a running daemon process
   restart <query>             Restart a daemon process
@@ -217,6 +219,10 @@ async function main(): Promise<void> {
 
       case "schedule":
         await cmdSchedule(positional.slice(1), flags);
+        break;
+
+      case "architect":
+        await cmdArchitect(positional.slice(1), flags);
         break;
 
       case "start":

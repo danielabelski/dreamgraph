@@ -1,6 +1,6 @@
 # LLM Setup Guide
 
-This guide provides the correct DreamGraph LLM setup for both the daemon-side cognitive engine and the VS Code architect.
+This guide provides the correct DreamGraph LLM setup for the daemon-side cognitive engine, standalone browser Architect, and VS Code architect.
 
 ## 1. Daemon-side engine configuration
 
@@ -122,9 +122,21 @@ Configure via:
 
 Important:
 
-- daemon-side `engine.env` controls DreamGraph's internal cognitive engine
+- daemon-side `engine.env` controls DreamGraph's internal cognitive engine and standalone browser Architect rollout switches
 - VS Code architect settings control the editor chat agent
 - they are related but separate configuration surfaces
+
+### Standalone Architect token economy
+
+Standalone browser Architect uses per-instance `engine.env` switches for token economy rollout safety and benchmarking:
+
+```bash
+DREAMGRAPH_ARCHITECT_PREAMBLE_COMPILER=true
+DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY=true
+DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET=16384
+```
+
+`DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY=false` requests full-context mode for that instance. Leave `DREAMGRAPH_ARCHITECT_PREAMBLE_COMPILER=true` when you only want to benchmark economy on/off; set it to `false` to disable preamble compilation entirely.
 
 ## 3. OpenAI GPT-5.5 / Responses API notes
 

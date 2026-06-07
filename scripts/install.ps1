@@ -306,9 +306,9 @@ if (Test-Path $DistTarget) {
 Copy-Item -Recurse -Force $SourceDist $DistTarget
 Write-Ok "dist/ copied"
 
-# Workspace packages (@dreamgraph/sdk, @dreamgraph/host) cannot be resolved
-# from the registry; pack them into the bin vendor dir and rewrite the deps
-# to file: references so `npm install --omit=dev` can complete offline.
+# Workspace packages cannot be resolved from the registry; pack them into
+# the bin vendor dir and rewrite the deps to file: references so
+# `npm install --omit=dev` can complete offline.
 $VendorDir = Join-Path $BinDir "vendor"
 if (Test-Path $VendorDir) {
     Remove-Item -Recurse -Force $VendorDir
@@ -316,7 +316,7 @@ if (Test-Path $VendorDir) {
 New-Item -ItemType Directory -Path $VendorDir -Force | Out-Null
 
 $workspaceTarballs = [ordered]@{}
-$workspacePackages = @("@dreamgraph/sdk", "@dreamgraph/host")
+$workspacePackages = @("@dreamgraph/sdk", "@dreamgraph/host", "@dreamgraph/token-economy")
 foreach ($wsName in $workspacePackages) {
     Write-Host "  Packing $wsName..." -ForegroundColor Cyan
     $packResult = Invoke-LoggedCommand -FilePath "npm" -Arguments @(

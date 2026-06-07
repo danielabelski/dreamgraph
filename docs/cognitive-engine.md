@@ -278,6 +278,9 @@ LLM settings are configured via environment variables or per-instance `config/en
 | `DREAMGRAPH_LLM_NORMALIZER_MODEL` | *(base model)* | Override model for Normalizer component |
 | `DREAMGRAPH_LLM_NORMALIZER_TEMPERATURE` | `0.1` if unset | Override temperature for Normalizer |
 | `DREAMGRAPH_LLM_NORMALIZER_MAX_TOKENS` | *(base tokens)* | Override max tokens for Normalizer |
+| `DREAMGRAPH_ARCHITECT_PREAMBLE_COMPILER` | `true` | Enables the standalone Architect task preamble compiler |
+| `DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY` | `true` | Enables compact Architect token economy mode; set `false` to request full-context mode for troubleshooting or benchmarks |
+| `DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET` | `16384` | Soft prompt target, in tokens, for standalone Architect token economy decisions |
 
 ### Per-Instance Configuration
 
@@ -305,9 +308,12 @@ DREAMGRAPH_LLM_DREAMER_MAX_TOKENS=10240
 DREAMGRAPH_LLM_NORMALIZER_MODEL=gpt-5.4-nano
 DREAMGRAPH_LLM_NORMALIZER_TEMPERATURE=0.1
 DREAMGRAPH_LLM_NORMALIZER_MAX_TOKENS=4096
+DREAMGRAPH_ARCHITECT_PREAMBLE_COMPILER=true
+DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY=true
+DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET=16384
 ```
 
-The `engine.env` file uses simple `KEY=VALUE` syntax (supports comments with `#`, quoted values). Values are loaded at startup **before** config parsing, so they override global env vars with "per-instance wins" semantics. This allows different instances to use different models, providers, or API keys.
+The `engine.env` file uses simple `KEY=VALUE` syntax (supports comments with `#`, quoted values). Values are loaded at startup **before** config parsing, so they override global env vars with "per-instance wins" semantics. This allows different instances to use different models, providers, API keys, or standalone Architect token economy settings.
 
 ### Integration with the Dreamer
 

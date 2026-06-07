@@ -4,6 +4,8 @@
 
 DreamGraph v12.3.1 fixes ENVOY-reproduced strict-policy drift so automatic normalization inherits the active instance policy unless a caller explicitly overrides it. Effective-policy receipts now report the runtime gates that were actually applied, including bootstrap-adjusted thresholds, and weak insufficient-evidence rejections no longer become durable tension inventory by default.
 
+This release also documents the `dg architect` terminal-native Architect CLI: status, plans, plan lifecycle, runtime config, chat, task controls, ADR/graph/scheduler/Adaptive Future inspection, JSON automation, and dependency-free log-mode TUI projection over daemon-owned contracts. Ink is recorded as the selected future rich TUI renderer, but no unused renderer dependency is shipped in this pass.
+
 This release also keeps closure bound to the authoritative seven-stage `release_workflow`: version alignment, documentation refresh, artifact packaging, release notes, commit/tag/push, GitHub release publication, and website update must each have real completion evidence before `v12.3.1` is treated as released.
 
 See [`../RELEASE_NOTES_v12.3.1.md`](../RELEASE_NOTES_v12.3.1.md) for the full distribution notes.

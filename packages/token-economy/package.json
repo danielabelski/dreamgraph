@@ -1,0 +1,37 @@
+{
+  "name": "@dreamgraph/token-economy",
+  "version": "12.3.1",
+  "description": "Shared DreamGraph Architect token economy contracts",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./budget-coordinator": {
+      "types": "./dist/budget-coordinator.d.ts",
+      "import": "./dist/budget-coordinator.js",
+      "require": "./dist/budget-coordinator.js"
+    },
+    "./budget-coordinator-reader": {
+      "types": "./dist/budget-coordinator-reader.d.ts",
+      "import": "./dist/budget-coordinator-reader.js",
+      "require": "./dist/budget-coordinator-reader.js"
+    },
+    "./tool-result-compression": {
+      "types": "./dist/tool-result-compression.d.ts",
+      "import": "./dist/tool-result-compression.js",
+      "require": "./dist/tool-result-compression.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  }
+}

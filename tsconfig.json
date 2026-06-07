@@ -5,10 +5,22 @@
     "rootDir": "./src",
     "composite": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"],
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ],
   "references": [
-    { "path": "./packages/sdk" },
-    { "path": "./packages/host" }
+    {
+      "path": "./packages/token-economy"
+    },
+    {
+      "path": "./packages/sdk"
+    },
+    {
+      "path": "./packages/host"
+    }
   ]
 }
