@@ -23,6 +23,7 @@
     "dg": "dist/cli/dg.js"
   },
   "scripts": {
+    "benchmark:token-economy": "node scripts/benchmark-token-economy.mjs",
     "build": "tsc -b && npm run build:explorer",
     "build:server": "tsc -b",
     "build:explorer": "npm --prefix explorer install --no-audit --no-fund && npm --prefix explorer run build",
