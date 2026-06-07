@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v12.3.1 — Strict Policy Inheritance and Release Discipline
+# DreamGraph v12.4.0 - Hippodamus
 
-![Version](https://img.shields.io/badge/version-12.3.1-blue)
+![Version](https://img.shields.io/badge/version-12.4.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -14,7 +14,7 @@
 
 **New here?** Use the [DreamGraph Easy Start guide](guide/00-easy-start.md) for a short path from install to Dashboard, Explorer, and Architect.
 
-**v12.3.1** fixes strict-policy inheritance drift in cognitive normalization, makes effective-policy receipts truthful about the applied runtime gates, prevents weak rejected dreams from automatically becoming durable tension inventory, and keeps release closure bound to the full governed `release_workflow`.
+**v12.4.0 - Hippodamus** aligns the daemon, MCP server, dashboard, CLI, packages, guide, README, documentation, and release artifacts on the current v12 release line while preserving the Hippodamus title for the full major version.
 
 DreamGraph is a governed architecture cognition layer for MCP-enabled software projects. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so project understanding is grounded in source, ADRs, workflows, tests, runtime observations, and human review rather than any single file read or isolated chat turn.
 
@@ -100,6 +100,7 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 - **MCP tool surface** — tools for graph queries, enrichment, source inspection, cognition, ADRs, workflows, and remediation
 - **CLI (`dg`)** — instance creation, attach/detach, start/stop, status, scan, enrich, schedule, export, fork, and migration
 - **Architect beta** — standalone browser Architect for project-bound chat, selected-plan scope, runtime provenance, model/adapter route visibility, governed MCP tool use, and auditable tool traces
+- **Architect CLI (`dg architect`)** — terminal-native Architect client for status, plans, plan lifecycle, runtime config, chat, task controls, ADR/graph/scheduler/Adaptive Future inspection, JSON automation, and dependency-free log-mode TUI projection over daemon contracts
 - **VS Code extension** — VS Code architect chat, dashboard, Explorer (interactive 2D/3D graph + curated mutations), changed-files view, daemon connection, and local support tools
 - **Knowledge graph + cognitive engine** — features, workflows, data model, tensions, validated relationships, dream-cycle reasoning, trust calibration, evidence ledgers, and lifecycle visibility
 - **Adaptive Future Engine** — advisory candidate-future ranking, future-fit scoring, compact objections, and bounded audit metadata for graph-tool and cognitive-workflow decisions

@@ -73,6 +73,18 @@ Rules:
 - `DREAMGRAPH_LLM_NORMALIZER_*` overrides only apply to the Normalizer.
 - If no Normalizer temperature is set, it defaults to `0.1`.
 
+### Standalone Architect token economy
+
+The browser Architect reads token economy settings from the same per-instance `engine.env`. Defaults are enabled for safe rollout and easy benchmarking:
+
+```bash
+DREAMGRAPH_ARCHITECT_PREAMBLE_COMPILER=true
+DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY=true
+DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET=16384
+```
+
+Set `DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY=false` to request full-context mode for that instance if compact context causes problems. The Architect prompt box shows the current status next to the attachment button after restart.
+
 ### Saving a config as a template
 
 If you find a setup you like, save it as a template so future instances inherit it:

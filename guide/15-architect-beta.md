@@ -6,6 +6,8 @@ The architect beta is the standalone browser surface for doing repository work t
 
 Use architect when you want the full DreamGraph working surface outside VS Code, or when the repository workflow should be browser-first while still staying attached to the same instance, graph, ADRs, plans, and daemon tools.
 
+Use the Architect CLI when the same work needs to happen from a terminal, script, CI smoke, or remote session. `dg architect` remains a daemon client: it can inspect status, plans, runtime config, chat, traces, ADRs, graph resources, schedules, and Adaptive Future Review, but it does not become a direct filesystem or provider-native authority.
+
 ---
 
 ## Naming in v12
@@ -15,6 +17,7 @@ From v12.0.0 onward:
 | Name | Meaning |
 |------|---------|
 | **architect** | The standalone browser-based Architect beta. |
+| **Architect CLI** | The `dg architect` terminal client over the same daemon-owned Architect contracts. |
 | **VS Code architect** | The Architect chat surface inside the VS Code extension. |
 | **DreamGraph daemon** | The instance runtime that serves MCP tools, HTTP APIs, dashboard data, graph state, and architect sessions. |
 | **Explorer** | The interactive graph browser, available through DreamGraph surfaces. |
@@ -67,6 +70,17 @@ dg status my-project
 ```
 
 `dg status` shows the daemon host, port, instance identity, attached project path, and running version. Open the HTTP URL shown for the instance in your browser. If your installer or local workflow exposes a direct architect link, use that link; it resolves to the same daemon-served surface.
+
+The terminal surface uses the same running daemon:
+
+```bash
+dg architect my-project status
+dg architect my-project plans
+dg architect my-project chat --message "Summarize the active plan" --scope project
+dg architect my-project tui
+```
+
+`dg architect tui` currently opens a dependency-free log-mode terminal shell with compact status and plan projection. Rich pane rendering is ADR-bound to Ink for the future interactive renderer, while the shipped command surface stays scriptable and daemon-authoritative.
 
 ---
 

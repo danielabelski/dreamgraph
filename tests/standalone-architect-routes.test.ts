@@ -26,6 +26,7 @@ import {
   handleArchitectRoute,
 } from "../src/architect/routes.js";
 import * as lifecycle from "../src/instance/lifecycle.js";
+import { initLlmProvider } from "../src/cognitive/llm.js";
 
 async function withArchitectServer<T>(run: (baseUrl: string) => Promise<T>): Promise<T> {
   let server: Server | undefined;
@@ -227,6 +228,14 @@ describe("standalone Architect route hardening", () => {
 
       const payload = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/pulse`));
       const pulse = payload.pulse as Record<string, unknown>;
+      const runtime = payload.runtime as Record<string, unknown>;
+      expect(runtime).toMatchObject({
+        adapter: expect.any(String),
+        provider: expect.any(String),
+        execution_route: expect.any(String),
+        session_id: expect.any(String),
+      });
+      expect(payload.architect_runtime).toMatchObject(runtime);
       expect(typeof pulse.pulse_hash).toBe("string");
       expect(pulse.authority_boundary).toMatchObject({
         repository_authority: "dreamgraph_mcp",
@@ -683,6 +692,76 @@ describe("standalone Architect route hardening", () => {
     }
   });
 
+  it("does not let a failed OpenAI models probe skip native chat execution", async () => {
+    const previousProvider = process.env.DREAMGRAPH_LLM_PROVIDER;
+    const previousArchitectProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousArchitectModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    const previousArchitectUrl = process.env.DREAMGRAPH_LLM_ARCHITECT_URL;
+    const previousApiKey = process.env.DREAMGRAPH_LLM_API_KEY;
+    let providerServer: Server | undefined;
+    const seenPaths: string[] = [];
+    providerServer = createServer(async (req, res) => {
+      const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+      seenPaths.push(path);
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      if (path === "/models") {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: "models endpoint disabled in test" }));
+        return;
+      }
+      if (path === "/responses") {
+        res.end(JSON.stringify({
+          model: "gpt-5.5",
+          output_text: "native route executed",
+          status: "completed",
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "unexpected path" }));
+    });
+
+    await new Promise<void>((resolve) => providerServer!.listen(0, "127.0.0.1", resolve));
+    try {
+      const providerAddress = providerServer.address() as AddressInfo;
+      process.env.DREAMGRAPH_LLM_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = "gpt-5.5";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_URL = `http://127.0.0.1:${providerAddress.port}`;
+      process.env.DREAMGRAPH_LLM_API_KEY = "test-key";
+      initLlmProvider();
+
+      await withArchitectServer(async (baseUrl) => {
+        const chat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "hello through native route",
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.5",
+          }),
+        }));
+        const result = chat.result as Record<string, unknown>;
+        const route = result.route as Record<string, unknown>;
+        expect(result.content).toBe("native route executed");
+        expect(route.provider_available).toBe(true);
+        expect(String(route.fallback_reason)).toContain("architect_mcp_");
+      });
+
+      expect(seenPaths).not.toContain("/models");
+      expect(seenPaths).toContain("/responses");
+    } finally {
+      await new Promise<void>((resolve, reject) => providerServer!.close((error) => error ? reject(error) : resolve()));
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_PROVIDER; else process.env.DREAMGRAPH_LLM_PROVIDER = previousProvider;
+      if (previousArchitectProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousArchitectProvider;
+      if (previousArchitectModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousArchitectModel;
+      if (previousArchitectUrl == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_URL; else process.env.DREAMGRAPH_LLM_ARCHITECT_URL = previousArchitectUrl;
+      if (previousApiKey == null) delete process.env.DREAMGRAPH_LLM_API_KEY; else process.env.DREAMGRAPH_LLM_API_KEY = previousApiKey;
+      initLlmProvider();
+    }
+  });
+
   it("replaces a stale local model when codex-cli is selected", async () => {
     const previousAdapter = process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
     const previousProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
@@ -764,6 +843,109 @@ describe("standalone Architect route hardening", () => {
       if (previousModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousModel;
       if (previousAutonomy == null) delete process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE; else process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE = previousAutonomy;
     }
+  });
+
+  it("persists token economy config changes in engine.env", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-token-economy-"));
+    const engineEnvPath = join(tempRoot, "config", "engine.env");
+    const previousTokenEconomy = process.env.DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY;
+    const previousAdapter = process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
+    const previousProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    const previousAutonomy = process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE;
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-token-economy-test",
+      projectRoot: tempRoot,
+      engineEnvPath,
+    } as never);
+
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const disabled = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adapter: "codex-cli",
+            provider: "none",
+            model: "auto",
+            mode: "autonomous",
+            token_economy: false,
+          }),
+        }));
+        const disabledRuntime = disabled.runtime as Record<string, unknown>;
+        expect(disabledRuntime.token_economy).toMatchObject({ token_economy: false });
+        expect((disabled.result as Record<string, unknown>).persisted).toBe(true);
+        expect(await readFile(engineEnvPath, "utf-8")).toContain("DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY=false");
+
+        const enabled = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adapter: "codex-cli",
+            provider: "none",
+            model: "auto",
+            mode: "autonomous",
+            token_economy: true,
+          }),
+        }));
+        const enabledRuntime = enabled.runtime as Record<string, unknown>;
+        expect(enabledRuntime.token_economy).toMatchObject({ token_economy: true });
+        expect(await readFile(engineEnvPath, "utf-8")).toContain("DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY=true");
+      });
+    } finally {
+      if (previousTokenEconomy == null) delete process.env.DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY; else process.env.DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY = previousTokenEconomy;
+      if (previousAdapter == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER; else process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER = previousAdapter;
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousProvider;
+      if (previousModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousModel;
+      if (previousAutonomy == null) delete process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE; else process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE = previousAutonomy;
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps native tool-loop budget and Responses API routing behind source contracts", async () => {
+    const [nativeLoopSource, llmSource] = await Promise.all([
+      readFile(new URL("../src/architect/native-tool-loop.ts", import.meta.url), "utf-8"),
+      readFile(new URL("../src/cognitive/llm.ts", import.meta.url), "utf-8"),
+    ]);
+    expect(nativeLoopSource).toContain('completeWithNativeTools as completeLlmWithNativeTools');
+    expect(nativeLoopSource).toContain('return completeLlmWithNativeTools(config, messages, tools);');
+    expect(nativeLoopSource).not.toContain('capabilities.api === "responses"');
+    expect(nativeLoopSource).not.toContain('fetch(`${config.baseUrl}/responses`');
+    expect(nativeLoopSource).toContain('context_pressure: ${coordinator.getContextPressureLabel()}');
+    expect(nativeLoopSource).toContain('compressToolResult(resultText, input.budgetCoordinator, call.name)');
+    expect(nativeLoopSource).toContain('recordComponentActual(`tool:${call.name}`, finalTokens)');
+    expect(llmSource).toContain('export async function completeWithNativeTools');
+    expect(llmSource).toContain('capabilities.api === "responses"');
+    expect(llmSource).toContain('fetch(`${config.baseUrl}/responses`');
+    expect(llmSource).toContain('fetch(`${this.baseUrl}/responses`');
+  });
+
+  it("exposes daemon-owned token economy budget status on fallback chat responses", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const chat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "summarize token economy state",
+          adapter: "deterministic_fallback",
+          provider: "none",
+          model: "gpt-5.4",
+          token_economy: true,
+        }),
+      }));
+      const result = chat.result as Record<string, unknown>;
+      const tokenEconomy = result.token_economy as Record<string, unknown>;
+      const budgetStatus = tokenEconomy.budget_status as Record<string, unknown>;
+      expect(tokenEconomy).toMatchObject({ token_economy: true, status: "enabled" });
+      expect(budgetStatus).toMatchObject({
+        model_id: "gpt-5.4",
+        expected_tokens: 16_000,
+        ceiling_tokens: 180_000,
+      });
+      expect(typeof budgetStatus.last_actual_tokens).toBe("number");
+      expect(Array.isArray(budgetStatus.top_component_contributors)).toBe(true);
+    });
   });
 
   it("persists selected standalone plan in engine.env and exposes it for restart restore", async () => {

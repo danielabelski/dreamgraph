@@ -134,6 +134,35 @@ export interface LlmProvider {
   complete(messages: LlmMessage[], options?: LlmCompletionOptions): Promise<LlmResponse>;
 }
 
+export type LlmToolDefinition = {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+export type LlmToolCall = {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+export type LlmToolContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+
+export type LlmToolLoopMessage = {
+  role: "system" | "user" | "assistant";
+  content: string | LlmToolContentBlock[];
+};
+
+export type LlmToolLoopResponse = {
+  text: string;
+  model: string;
+  stopReason: string;
+  toolCalls: LlmToolCall[];
+};
+
 export type LlmRouteLayer = "connected" | "daemon" | "deterministic_fallback";
 
 export type LlmRouteFallbackReason =
@@ -413,6 +442,10 @@ class OpenAiCompatibleProvider implements LlmProvider {
     const downgradeKey = `${this.name}:${model}`;
     const knownUnsupported = _jsonSchemaUnsupported.has(downgradeKey);
 
+    if (capabilities.api === "responses") {
+      return this.completeWithResponses(messages, model, temp, maxTokens, capabilities);
+    }
+
     const buildBody = (useStrictSchema: boolean): Record<string, unknown> => {
       const body: Record<string, unknown> = {
         model,
@@ -499,6 +532,413 @@ class OpenAiCompatibleProvider implements LlmProvider {
       usage,
     };
   }
+
+  private async completeWithResponses(
+    messages: LlmMessage[],
+    model: string,
+    temp: number,
+    maxTokens: number,
+    capabilities: ModelCapabilities,
+  ): Promise<LlmResponse> {
+    const instructions = messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content)
+      .join("\n\n");
+    const input = messages
+      .filter((message) => message.role !== "system")
+      .map((message) => ({ role: message.role === "assistant" ? "assistant" : "user", content: message.content }));
+    const body: Record<string, unknown> = {
+      model,
+      input,
+      max_output_tokens: maxTokens,
+      ...(capabilities.supportsTemperature ? { temperature: temp } : {}),
+    };
+    if (instructions) {
+      body.instructions = instructions;
+    }
+
+    const res = await fetch(`${this.baseUrl}/responses`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "unknown");
+      throw new Error(`OpenAI Responses ${res.status}: ${errText}`);
+    }
+
+    const data = await res.json() as {
+      output_text?: string;
+      model?: string;
+      status?: string;
+      usage?: { output_tokens?: number; completion_tokens?: number };
+      output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
+    };
+    const text = data.output_text ?? (data.output ?? [])
+      .filter((item) => item.type === "message")
+      .flatMap((item) => item.content ?? [])
+      .filter((content) => content.type === "output_text" || content.type === "text")
+      .map((content) => content.text ?? "")
+      .join("");
+    const outputTokens = data.usage?.output_tokens ?? data.usage?.completion_tokens;
+    const usage: TokenUsage | undefined = outputTokens === undefined ? undefined : { outputTokens };
+    return {
+      text,
+      model: data.model ?? model,
+      tokensUsed: usage?.outputTokens,
+      stopReason: data.status,
+      finishReason: data.status,
+      usage,
+    };
+  }
+}
+
+export async function completeWithNativeTools(
+  config: ArchitectLlmConfig,
+  messages: LlmToolLoopMessage[],
+  tools: LlmToolDefinition[],
+): Promise<LlmToolLoopResponse> {
+  if (config.provider === "anthropic") {
+    return callAnthropicWithTools(config, messages, tools);
+  }
+  const capabilities = getModelCapabilities(config.provider, config.model);
+  if (config.provider === "openai" && capabilities.api === "responses") {
+    return callOpenAiResponsesWithTools(config, messages, tools);
+  }
+  return callOpenAiCompatibleWithTools(config, messages, tools);
+}
+
+async function callOpenAiCompatibleWithTools(
+  config: ArchitectLlmConfig,
+  messages: LlmToolLoopMessage[],
+  tools: LlmToolDefinition[],
+): Promise<LlmToolLoopResponse> {
+  const capabilities = getModelCapabilities(config.provider, config.model);
+  const useNewTokenParam = /^(o[1-9]|gpt-[4-9]\.[1-9]|gpt-5)/i.test(config.model);
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages: toOpenAiMessages(messages),
+    ...(capabilities.supportsTemperature ? { temperature: config.temperature } : {}),
+    ...(useNewTokenParam
+      ? { max_completion_tokens: config.maxTokens }
+      : { max_tokens: config.maxTokens }),
+    tools: tools.map(toOpenAiTool),
+    tool_choice: "auto",
+  };
+
+  const res = await fetch(`${config.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(config.timeoutMs),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "unknown");
+    throw new Error(`OpenAI-compatible tool call ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json() as {
+    choices?: Array<{
+      message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> };
+      finish_reason?: string;
+    }>;
+    model?: string;
+  };
+  const choice = data.choices?.[0];
+  const toolCalls = (choice?.message?.tool_calls ?? []).map((toolCall) => ({
+    id: toolCall.id,
+    name: toolCall.function.name,
+    input: parseToolArguments(toolCall.function.arguments),
+  }));
+  return {
+    text: choice?.message?.content ?? "",
+    model: data.model ?? config.model,
+    stopReason: choice?.finish_reason === "tool_calls" ? "tool_use" : (choice?.finish_reason ?? "stop"),
+    toolCalls,
+  };
+}
+
+async function callOpenAiResponsesWithTools(
+  config: ArchitectLlmConfig,
+  messages: LlmToolLoopMessage[],
+  tools: LlmToolDefinition[],
+): Promise<LlmToolLoopResponse> {
+  const capabilities = getModelCapabilities(config.provider, config.model);
+  const systemText = messages
+    .filter((message) => message.role === "system")
+    .map((message) => typeof message.content === "string" ? message.content : blocksToText(message.content))
+    .filter(Boolean)
+    .join("\n\n");
+  const body: Record<string, unknown> = {
+    model: config.model,
+    input: toOpenAiResponsesInput(messages.filter((message) => message.role !== "system")),
+    tools: tools.map(toOpenAiResponsesTool),
+    tool_choice: "auto",
+    max_output_tokens: config.maxTokens,
+    ...(capabilities.supportsTemperature ? { temperature: config.temperature } : {}),
+  };
+  if (systemText) {
+    body.instructions = systemText;
+  }
+
+  const res = await fetch(`${config.baseUrl}/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(config.timeoutMs),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "unknown");
+    throw new Error(`OpenAI Responses tool call ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json() as {
+    id?: string;
+    model?: string;
+    output_text?: string;
+    status?: string;
+    output?: Array<{
+      id?: string;
+      type?: string;
+      status?: string;
+      role?: string;
+      content?: Array<{ type?: string; text?: string }>;
+      name?: string;
+      call_id?: string;
+      arguments?: string;
+    }>;
+  };
+  const output = data.output ?? [];
+  const text = data.output_text ?? output
+    .filter((item) => item.type === "message")
+    .flatMap((item) => item.content ?? [])
+    .filter((content) => content.type === "output_text" || content.type === "text")
+    .map((content) => content.text ?? "")
+    .join("");
+  const toolCalls = output
+    .filter((item) => item.type === "function_call" && item.name && item.call_id)
+    .map((item) => ({
+      id: item.call_id!,
+      name: item.name!,
+      input: parseToolArguments(item.arguments ?? "{}"),
+    }));
+  return {
+    text,
+    model: data.model ?? config.model,
+    stopReason: toolCalls.length > 0 ? "tool_use" : (data.status ?? "stop"),
+    toolCalls,
+  };
+}
+
+async function callAnthropicWithTools(
+  config: ArchitectLlmConfig,
+  messages: LlmToolLoopMessage[],
+  tools: LlmToolDefinition[],
+): Promise<LlmToolLoopResponse> {
+  const systemText = messages
+    .filter((message) => message.role === "system")
+    .map((message) => typeof message.content === "string" ? message.content : blocksToText(message.content))
+    .filter(Boolean)
+    .join("\n\n");
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    max_tokens: config.maxTokens,
+    temperature: config.temperature,
+    messages: messages
+      .filter((message) => message.role !== "system")
+      .map(toAnthropicToolMessage),
+    tools: tools.map(toAnthropicTool),
+  };
+  if (systemText) {
+    body.system = systemText;
+  }
+
+  const res = await fetch(`${config.baseUrl}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": config.apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(config.timeoutMs),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "unknown");
+    throw new Error(`Anthropic tool call ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json() as {
+    content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
+    model?: string;
+    stop_reason?: string;
+  };
+  const blocks = data.content ?? [];
+  return {
+    text: blocks.filter((block) => block.type === "text").map((block) => block.text ?? "").join(""),
+    model: data.model ?? config.model,
+    stopReason: data.stop_reason ?? "stop",
+    toolCalls: blocks
+      .filter((block) => block.type === "tool_use" && block.id && block.name)
+      .map((block) => ({
+        id: block.id!,
+        name: block.name!,
+        input: isRecord(block.input) ? block.input : {},
+      })),
+  };
+}
+
+function toOpenAiResponsesInput(messages: LlmToolLoopMessage[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    if (typeof message.content === "string") {
+      out.push({ role: message.role === "assistant" ? "assistant" : "user", content: message.content });
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type === "text" && block.text) {
+        out.push({ role: message.role === "assistant" ? "assistant" : "user", content: block.text });
+      } else if (block.type === "tool_use") {
+        out.push({ type: "function_call", call_id: block.id, name: block.name, arguments: JSON.stringify(block.input ?? {}) });
+      } else if (block.type === "tool_result") {
+        out.push({ type: "function_call_output", call_id: block.tool_use_id, output: block.content });
+      }
+    }
+  }
+  return out;
+}
+
+function toOpenAiMessages(messages: LlmToolLoopMessage[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    if (typeof message.content === "string") {
+      out.push({ role: message.role, content: message.content });
+      continue;
+    }
+
+    const text = blocksToText(message.content);
+    const toolUses = message.content.filter((block): block is Extract<LlmToolContentBlock, { type: "tool_use" }> => block.type === "tool_use");
+    const toolResults = message.content.filter((block): block is Extract<LlmToolContentBlock, { type: "tool_result" }> => block.type === "tool_result");
+
+    if (message.role === "assistant") {
+      out.push({
+        role: "assistant",
+        content: text || null,
+        ...(toolUses.length > 0
+          ? {
+              tool_calls: toolUses.map((block) => ({
+                id: block.id,
+                type: "function",
+                function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) },
+              })),
+            }
+          : {}),
+      });
+      continue;
+    }
+
+    if (text) {
+      out.push({ role: message.role, content: text });
+    }
+    for (const result of toolResults) {
+      out.push({ role: "tool", tool_call_id: result.tool_use_id, content: result.content });
+    }
+  }
+  return out;
+}
+
+function toAnthropicToolMessage(message: LlmToolLoopMessage): Record<string, unknown> {
+  if (typeof message.content === "string") {
+    return { role: message.role, content: message.content };
+  }
+  return {
+    role: message.role,
+    content: message.content.map((block) => {
+      if (block.type === "text") return { type: "text", text: block.text };
+      if (block.type === "tool_use") return { type: "tool_use", id: block.id, name: block.name, input: block.input ?? {} };
+      return {
+        type: "tool_result",
+        tool_use_id: block.tool_use_id,
+        content: block.content,
+        ...(block.is_error ? { is_error: true } : {}),
+      };
+    }),
+  };
+}
+
+function toOpenAiTool(tool: LlmToolDefinition): Record<string, unknown> {
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description ?? "DreamGraph MCP tool",
+      parameters: normalizeToolInputSchema(tool.inputSchema),
+    },
+  };
+}
+
+function toOpenAiResponsesTool(tool: LlmToolDefinition): Record<string, unknown> {
+  return {
+    type: "function",
+    name: tool.name,
+    description: tool.description ?? "DreamGraph MCP tool",
+    parameters: normalizeToolInputSchema(tool.inputSchema),
+  };
+}
+
+function toAnthropicTool(tool: LlmToolDefinition): Record<string, unknown> {
+  return {
+    name: tool.name,
+    description: tool.description ?? "DreamGraph MCP tool",
+    input_schema: normalizeToolInputSchema(tool.inputSchema),
+  };
+}
+
+function normalizeToolInputSchema(schema: unknown): Record<string, unknown> {
+  if (!isRecord(schema)) {
+    return { type: "object", properties: {}, additionalProperties: true };
+  }
+  return {
+    type: schema.type === "object" ? "object" : "object",
+    properties: isRecord(schema.properties) ? schema.properties : {},
+    required: Array.isArray(schema.required) ? schema.required : [],
+    ...(schema.additionalProperties !== undefined ? { additionalProperties: schema.additionalProperties } : {}),
+  };
+}
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw || "{}");
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return { _raw: raw };
+  }
+}
+
+function blocksToText(blocks: LlmToolContentBlock[]): string {
+  return blocks
+    .filter((block): block is Extract<LlmToolContentBlock, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Test-only: clear the json_schema downgrade cache. */

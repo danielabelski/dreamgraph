@@ -2073,8 +2073,7 @@ async function handleRestartPost(res: ServerResponse): Promise<void> {
 function docsDir(): string {
   const scope = getActiveScope();
   if (scope?.projectRoot) return resolve(scope.projectRoot, "docs");
-  // Legacy / fallback: dataDir is typically <project>/data, so go up one level
-  return resolve(config.dataDir, "..", "docs");
+  return resolve(PACKAGE_ROOT, "docs");
 }
 
 /**

@@ -41,14 +41,28 @@ function readPackageVersion(): string {
 
 const PACKAGE_VERSION = readPackageVersion();
 
+function resolveMasterDirFallback(): string {
+  const envDir = process.env.DREAMGRAPH_MASTER_DIR;
+  if (envDir) return resolve(envDir);
+
+  const home =
+    process.env.HOME ??
+    process.env.USERPROFILE ??
+    process.env.HOMEPATH ??
+    ".";
+  return resolve(home, ".dreamgraph");
+}
+
 /**
- * Resolve the data directory.
- * If DREAMGRAPH_DATA_DIR is an absolute path, use it as-is.
- * If relative (or unset, defaulting to "data"), resolve against project root.
+ * Resolve the legacy/fallback data directory.
+ * Instance mode overrides this with <master>/<uuid>/data during startup.
+ * If DREAMGRAPH_DATA_DIR is set, resolve it like Node's resolve() normally does.
+ * Otherwise, avoid the removed repository-local data/ directory and fall back
+ * to the global DreamGraph master directory.
  */
 function resolveDataDir(): string {
-  const raw = process.env.DREAMGRAPH_DATA_DIR ?? "data";
-  return resolve(PROJECT_ROOT, raw);     // resolve() treats absolute paths as absolute
+  const raw = process.env.DREAMGRAPH_DATA_DIR;
+  return raw ? resolve(PROJECT_ROOT, raw) : resolve(resolveMasterDirFallback(), "data");
 }
 
 function parseRepos(): Record<string, string> {
@@ -138,9 +152,9 @@ export const config = {
   },
 
   /**
-   * Resolved absolute path to the data directory.
-   * In legacy mode (no UUID), this is the primary data dir.
-   * In instance mode, this is overridden by getEffectiveDataDir().
+   * Resolved absolute path to the fallback data directory.
+   * In instance mode, getEffectiveDataDir() overrides this with the active
+   * UUID-scoped instance data dir under the global DreamGraph master directory.
    */
   dataDir: resolveDataDir(),
 

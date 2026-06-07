@@ -20,6 +20,15 @@ import {
 import { runArchitectCliBridge } from "./cli-bridge.js";
 import { runArchitectNativeToolLoop, type ArchitectToolTraceEntry } from "./native-tool-loop.js";
 import { buildAdaptiveFutureAuditTrail } from "../cognitive/adaptive-future-scaffold.js";
+import { compileTaskPreamble } from "../cognitive/graph-rag.js";
+import type { CompiledTaskPreamble } from "../cognitive/types.js";
+import { estimateTokensFromString, type BudgetCoordinator } from "@dreamgraph/token-economy/budget-coordinator";
+import {
+  buildArchitectBudgetStatus,
+  createStandaloneBudgetCoordinator,
+  finalizeStandaloneBudgetTurn,
+  type ArchitectBudgetStatus,
+} from "./token-economy/standalone-store.js";
 import {
   createLlmProviderForConfig,
   getArchitectLlmConfig,
@@ -262,6 +271,7 @@ interface ActiveArchitectSessionRuntime {
   session_source: "architect";
   provenance_authority: "dreamgraph_mcp";
   execution_controls: ArchitectExecutionControlCapabilities;
+  token_economy: ArchitectTokenEconomyConfig;
 }
 
 interface ArchitectExecutionControlCapabilities {
@@ -306,6 +316,27 @@ type ArchitectTerminalSocketMessage =
 
 type ArchitectRuntimeRouteContext = ActiveArchitectSessionRuntime;
 
+interface ArchitectTokenEconomyConfig {
+  preamble_compiler: boolean;
+  token_economy: boolean;
+  soft_target_tokens: number;
+  transport_ceiling_tokens: number;
+  debt_carry_fraction: number;
+  source: "architect" | "default";
+  env_keys: {
+    preamble_compiler: typeof ARCHITECT_PREAMBLE_COMPILER_ENV_KEY;
+    token_economy: typeof ARCHITECT_TOKEN_ECONOMY_ENV_KEY;
+    soft_target_tokens: typeof ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET_ENV_KEY;
+    transport_ceiling_tokens: typeof ARCHITECT_TOKEN_ECONOMY_TRANSPORT_CEILING_ENV_KEY;
+    debt_carry_fraction: typeof ARCHITECT_TOKEN_ECONOMY_DEBT_CARRY_ENV_KEY;
+  };
+}
+
+interface ArchitectChatPromptBundle {
+  systemPrompt: string;
+  tokenEconomy: Record<string, unknown>;
+}
+
 interface ArchitectPlanChatUpdateResult {
   plan_id: string;
   plan_path: string;
@@ -317,6 +348,14 @@ interface ArchitectPlanChatUpdateResult {
   runtime: ActiveArchitectSessionRuntime;
 }
 
+const ARCHITECT_PREAMBLE_COMPILER_ENV_KEY = "DREAMGRAPH_ARCHITECT_PREAMBLE_COMPILER";
+const ARCHITECT_TOKEN_ECONOMY_ENV_KEY = "DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY";
+const ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET_ENV_KEY = "DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET";
+const ARCHITECT_TOKEN_ECONOMY_TRANSPORT_CEILING_ENV_KEY = "DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_TRANSPORT_CEILING";
+const ARCHITECT_TOKEN_ECONOMY_DEBT_CARRY_ENV_KEY = "DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_DEBT_CARRY_FRACTION";
+const ARCHITECT_TOKEN_ECONOMY_DEFAULT_SOFT_TARGET = 16_000;
+const ARCHITECT_TOKEN_ECONOMY_DEFAULT_TRANSPORT_CEILING = 180_000;
+const ARCHITECT_TOKEN_ECONOMY_DEFAULT_DEBT_CARRY = 1;
 const ACTIVE_ARCHITECT_SESSION_ID = `architect-${randomUUID()}`;
 
 let nextEventSeq = 0;
@@ -369,6 +408,61 @@ function architectAutonomyModeField(body: Record<string, unknown>, field: string
 function getArchitectAutonomyMode(): { mode: ArchitectAutonomyMode; source: "architect" | "default" } {
   const mode = architectAutonomyModeFromText(process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE?.trim() ?? null);
   return mode ? { mode, source: "architect" } : { mode: "autonomous", source: "default" };
+}
+
+function architectBooleanFromEnv(value: string | undefined, defaultValue: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return defaultValue;
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function architectPositiveIntFromEnv(value: string | undefined, defaultValue: number): number {
+  const parsed = Number.parseInt(value?.trim() ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
+function architectFractionFromEnv(value: string | undefined, defaultValue: number): number {
+  const parsed = Number.parseFloat(value?.trim() ?? "");
+  if (!Number.isFinite(parsed)) return defaultValue;
+  if (parsed < 0) return 0;
+  if (parsed > 1) return 1;
+  return parsed;
+}
+
+function architectBooleanField(body: Record<string, unknown>, field: string): boolean | null {
+  const value = body[field];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+    if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function getArchitectTokenEconomyConfig(): ArchitectTokenEconomyConfig {
+  const preambleRaw = process.env[ARCHITECT_PREAMBLE_COMPILER_ENV_KEY];
+  const economyRaw = process.env[ARCHITECT_TOKEN_ECONOMY_ENV_KEY];
+  const targetRaw = process.env[ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET_ENV_KEY];
+  const ceilingRaw = process.env[ARCHITECT_TOKEN_ECONOMY_TRANSPORT_CEILING_ENV_KEY];
+  const carryRaw = process.env[ARCHITECT_TOKEN_ECONOMY_DEBT_CARRY_ENV_KEY];
+  return {
+    preamble_compiler: architectBooleanFromEnv(preambleRaw, true),
+    token_economy: architectBooleanFromEnv(economyRaw, true),
+    soft_target_tokens: architectPositiveIntFromEnv(targetRaw, ARCHITECT_TOKEN_ECONOMY_DEFAULT_SOFT_TARGET),
+    transport_ceiling_tokens: architectPositiveIntFromEnv(ceilingRaw, ARCHITECT_TOKEN_ECONOMY_DEFAULT_TRANSPORT_CEILING),
+    debt_carry_fraction: architectFractionFromEnv(carryRaw, ARCHITECT_TOKEN_ECONOMY_DEFAULT_DEBT_CARRY),
+    source: preambleRaw != null || economyRaw != null || targetRaw != null || ceilingRaw != null || carryRaw != null ? "architect" : "default",
+    env_keys: {
+      preamble_compiler: ARCHITECT_PREAMBLE_COMPILER_ENV_KEY,
+      token_economy: ARCHITECT_TOKEN_ECONOMY_ENV_KEY,
+      soft_target_tokens: ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET_ENV_KEY,
+      transport_ceiling_tokens: ARCHITECT_TOKEN_ECONOMY_TRANSPORT_CEILING_ENV_KEY,
+      debt_carry_fraction: ARCHITECT_TOKEN_ECONOMY_DEBT_CARRY_ENV_KEY,
+    },
+  };
 }
 
 function selectedPlanIdFromText(value: string | null): string | null {
@@ -471,7 +565,8 @@ function buildActiveArchitectSessionRuntime(overrides: Partial<Pick<ActiveArchit
     session_source: "architect",
     provenance_authority: "dreamgraph_mcp",
     execution_controls: buildArchitectExecutionControlCapabilities(runtimeAdapter),
-  };
+    token_economy: getArchitectTokenEconomyConfig(),
+  } as ActiveArchitectSessionRuntime;
 }
 
 function buildArchitectRuntimeLabel(runtime: Pick<ActiveArchitectSessionRuntime, "adapter" | "provider" | "model">): string {
@@ -570,6 +665,7 @@ function buildArchitectAttachmentCapabilities(runtime: ActiveArchitectSessionRun
 }
 
 function buildArchitectLlmPayload(runtime: ActiveArchitectSessionRuntime = buildActiveArchitectSessionRuntime()): Record<string, unknown> {
+  const tokenEconomy = getArchitectTokenEconomyConfig();
   return {
     adapter: runtime.adapter,
     adapter_source: runtime.adapter_source,
@@ -589,6 +685,7 @@ function buildArchitectLlmPayload(runtime: ActiveArchitectSessionRuntime = build
       ...buildArchitectAttachmentCapabilities(runtime),
       executionControls: runtime.execution_controls,
     },
+    token_economy: tokenEconomy,
   };
 }
 
@@ -1643,6 +1740,7 @@ function buildMeta(): Record<string, unknown> {
     architect_runtime: runtime,
     onboarding_readiness: buildOnboardingReadinessProjection(runtime),
     architect_llm: buildArchitectLlmPayload(runtime),
+    architect_token_economy: getArchitectTokenEconomyConfig(),
     execution_control: buildArchitectExecutionControlSnapshot(runtime),
     selected_plan_id: selection.planId,
     architect_selection: {
@@ -3343,6 +3441,7 @@ async function handleArchitectPulseRequest(res: ServerResponse): Promise<void> {
     ok: true,
     contract: "architect",
     version: "v1",
+    ...buildMeta(),
     pulse,
   }, { "Cache-Control": "no-store" });
 }
@@ -3481,6 +3580,8 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
   const model = normalizeArchitectModelForAdapter(adapter, optionalTextField(body, "model") ?? current.model);
   const autonomyMode =
     architectAutonomyModeField(body, "autonomy_mode") ?? architectAutonomyModeField(body, "mode") ?? getArchitectAutonomyMode().mode;
+  const requestedTokenEconomy = architectBooleanField(body, "token_economy");
+  const tokenEconomy = requestedTokenEconomy ?? getArchitectTokenEconomyConfig().token_economy;
 
   if (adapter === "native_api_tool_loop" && provider !== "none" && model.length === 0) {
     jsonError(res, 400, "bad_request", "Native API Architect routing requires a model name");
@@ -3492,6 +3593,7 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
     DREAMGRAPH_LLM_ARCHITECT_PROVIDER: provider,
     DREAMGRAPH_LLM_ARCHITECT_MODEL: model,
     DREAMGRAPH_ARCHITECT_AUTONOMY_MODE: autonomyMode,
+    [ARCHITECT_TOKEN_ECONOMY_ENV_KEY]: tokenEconomy ? "true" : "false",
   };
   const scope = getActiveScope();
   if (scope?.engineEnvPath) {
@@ -3511,6 +3613,7 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
     model: runtime.model,
     mode: runtime.autonomy_mode,
     autonomy_mode: runtime.autonomy_mode,
+    token_economy: runtime.token_economy,
     provider_source: architect.providerSource,
     model_source: architect.modelSource,
     runtime,
@@ -3636,7 +3739,87 @@ async function handleArchitectSelectionRequest(req: IncomingMessage, res: Server
   }, { "Cache-Control": "no-store" });
 }
 
-function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, runtime: ArchitectRuntimeRouteContext, chatScope: ArchitectChatScope): string {
+function formatCompiledTaskPreambleForPrompt(compiled: CompiledTaskPreamble | null): string | null {
+  if (!compiled?.preamble_text.trim()) return null;
+  return [
+    "Architect token economy task preamble:",
+    compiled.preamble_text.trim(),
+  ].join("\n");
+}
+
+async function buildArchitectChatPromptBundle(message: string, plan: ArchitectPlanProjection | null, runtime: ArchitectRuntimeRouteContext, chatScope: ArchitectChatScope): Promise<ArchitectChatPromptBundle> {
+  const config = getArchitectTokenEconomyConfig();
+  let compiled: CompiledTaskPreamble | null = null;
+  if (config.preamble_compiler && config.token_economy) {
+    compiled = await compileTaskPreamble({
+      task: message,
+      max_tokens: Math.min(512, Math.max(120, Math.floor(config.soft_target_tokens * 0.02))),
+    }).catch((error) => ({
+      preamble_text: "",
+      evidence_anchors: [],
+      token_count: 0,
+      budget_decision: "omit_not_economical" as const,
+      omitted_context_reasons: [`compiler_failed:${(error as Error).message.slice(0, 160)}`],
+      validation_failures: [],
+      selected_model_layer: "deterministic_fallback" as const,
+      selected_model_provider: null,
+      selected_model: null,
+      fallback_reason: "task_preamble_compiler_failed",
+    }));
+  }
+  const preambleBlock = formatCompiledTaskPreambleForPrompt(compiled);
+  return {
+    systemPrompt: buildArchitectChatSystemPrompt(plan, runtime, chatScope, preambleBlock),
+    tokenEconomy: {
+      ...config,
+      status: config.token_economy ? "enabled" : "full_context",
+      preamble_status: config.preamble_compiler ? (compiled?.budget_decision ?? "not_attempted") : "disabled",
+      preamble_token_count: compiled?.token_count ?? 0,
+      evidence_anchors: compiled?.evidence_anchors ?? [],
+      omitted_context_reasons: compiled?.omitted_context_reasons ?? [],
+      validation_failures: compiled?.validation_failures ?? [],
+      selected_model_layer: compiled?.selected_model_layer ?? null,
+      selected_model_provider: compiled?.selected_model_provider ?? null,
+      selected_model: compiled?.selected_model ?? null,
+      fallback_reason: compiled?.fallback_reason ?? null,
+    },
+  };
+}
+
+function architectBudgetSessionKey(runtime: ArchitectRuntimeRouteContext): string {
+  return runtime.session_id;
+}
+
+function createChatBudgetCoordinator(runtime: ArchitectRuntimeRouteContext, config: ArchitectTokenEconomyConfig): BudgetCoordinator | null {
+  if (!config.token_economy) return null;
+  return createStandaloneBudgetCoordinator(architectBudgetSessionKey(runtime), {
+    expectedTokensPerTurn: config.soft_target_tokens,
+    transportCeilingTokens: config.transport_ceiling_tokens,
+    debtCarryFraction: config.debt_carry_fraction,
+    modelId: runtime.model || "none",
+  });
+}
+
+function finalizeChatBudgetStatus(
+  runtime: ArchitectRuntimeRouteContext,
+  coordinator: BudgetCoordinator | null,
+  promptBundle: ArchitectChatPromptBundle,
+  message: string,
+  assistantContent: string,
+): ArchitectBudgetStatus | null {
+  if (!coordinator) return null;
+  const pressureLabel = coordinator.getContextPressureLabel();
+  const systemTokens = estimateTokensFromString(promptBundle.systemPrompt);
+  const userTokens = estimateTokensFromString(message);
+  const assistantTokens = estimateTokensFromString(assistantContent);
+  coordinator.recordComponentActual("system", systemTokens);
+  coordinator.recordComponentActual("user", userTokens);
+  coordinator.recordComponentActual("assistant", assistantTokens);
+  const snapshot = finalizeStandaloneBudgetTurn(architectBudgetSessionKey(runtime), coordinator);
+  return buildArchitectBudgetStatus(architectBudgetSessionKey(runtime), snapshot, pressureLabel);
+}
+
+function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, runtime: ArchitectRuntimeRouteContext, chatScope: ArchitectChatScope, preambleBlock: string | null = null): string {
   const project = buildProjectScopePayload();
   const planContext = chatScope === "plan"
     ? plan
@@ -3654,6 +3837,7 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
     `- Session id: ${runtime.session_id}`,
     `- Session source: ${runtime.session_source}`,
     `- Provenance authority: ${runtime.provenance_authority}`,
+    `- Token economy: ${getArchitectTokenEconomyConfig().token_economy ? "enabled" : "full_context"}; preamble compiler=${getArchitectTokenEconomyConfig().preamble_compiler ? "enabled" : "disabled"}; soft target=${getArchitectTokenEconomyConfig().soft_target_tokens}`,
   ].join("\n");
   return [
     "You are DreamGraph Architect inside the daemon-served standalone browser surface.",
@@ -3664,6 +3848,7 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
     `Project root: ${String(project.project_root ?? "unbound")}. Plans root: ${String(project.plans_root ?? "unbound")}.`,
     runtimeBlock,
     latestArchitectPulse ? formatArchitectPulseLine(latestArchitectPulse) : null,
+    preambleBlock,
     planContext,
   ].filter(Boolean).join("\n");
 }
@@ -3719,7 +3904,7 @@ function writeSsePayload(res: ServerResponse, eventName: string, payload: unknow
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function writeChatSseResponse(res: ServerResponse, payload: Record<string, unknown>): void {
+function startChatSseResponse(res: ServerResponse, status: Record<string, unknown>): void {
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform, no-store",
@@ -3729,6 +3914,14 @@ function writeChatSseResponse(res: ServerResponse, payload: Record<string, unkno
   writeComment(res, "architect-chat");
   writeSsePayload(res, "architect.chat.status", {
     ok: true,
+    phase: "running",
+    ...status,
+  });
+}
+
+function finishChatSseResponse(res: ServerResponse, payload: Record<string, unknown>): void {
+  writeSsePayload(res, "architect.chat.status", {
+    ok: true,
     phase: "completed",
     generated_at: payload.generated_at,
     project_scope: payload.project_scope,
@@ -3736,6 +3929,15 @@ function writeChatSseResponse(res: ServerResponse, payload: Record<string, unkno
   });
   writeSsePayload(res, "architect.chat.result", payload);
   res.end();
+}
+
+function writeChatSseResponse(res: ServerResponse, payload: Record<string, unknown>): void {
+  startChatSseResponse(res, {
+    generated_at: payload.generated_at,
+    project_scope: payload.project_scope,
+    architect_llm: payload.architect_llm,
+  });
+  finishChatSseResponse(res, payload);
 }
 
 function architectToolTraceKey(entry: ArchitectToolTraceEntry): string {
@@ -3799,6 +4001,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   const continuationToken = textField(body, "continuation_token") ?? textField(body, "continuationToken");
   const mode = architectAutonomyModeField(body, "autonomy_mode") ?? architectAutonomyModeField(body, "mode") ?? getArchitectAutonomyMode().mode;
   const adapter = architectAdapterField(body, "adapter") ?? getArchitectAdapterConfig().adapter;
+  const streamResponse = wantsChatSseResponse(req, body);
   const plan = planId ? await loadArchitectPlanDetail(planId) : null;
   if (planId && !plan) {
     jsonError(res, 404, "not_found", `No Architect plan with id: ${planId}`);
@@ -3816,6 +4019,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   let provenance: unknown = null;
   let toolLoopRoute: unknown = null;
   let planUpdate: ArchitectPlanChatUpdateResult | null = null;
+  let tokenEconomy: unknown = getArchitectTokenEconomyConfig();
   let runtime = buildActiveArchitectSessionRuntime({
     adapter,
     provider: architectConfig.provider,
@@ -3833,17 +4037,40 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     last_action_at: new Date().toISOString(),
     steering_prompts: [],
   };
+  const abortExecution = () => {
+    if (!executionController.signal.aborted) executionController.abort();
+  };
+  req.on("aborted", abortExecution);
+  res.on("close", () => {
+    if (!res.writableEnded) abortExecution();
+  });
+  if (streamResponse) {
+    startChatSseResponse(res, {
+      chat_scope: chatScope,
+      selected_plan_id: selectedPlanId ?? null,
+      plan_id: plan?.id ?? null,
+      continuation_token_present: continuationToken != null,
+      mode,
+      runtime,
+      architect_runtime: runtime,
+    });
+  }
   publishEvent("architect.execution_control", {
     action: "started",
     ...buildArchitectExecutionControlPayload(runtime),
   });
   void publishArchitectPulseIfChanged(false);
 
+  const promptBundle = await buildArchitectChatPromptBundle(message, plan, runtime, chatScope);
+  tokenEconomy = promptBundle.tokenEconomy;
+  const budgetCoordinator = createChatBudgetCoordinator(runtime, getArchitectTokenEconomyConfig());
+  let budgetStatus: ArchitectBudgetStatus | null = null;
+
   if (adapter === "deterministic_fallback") {
     fallbackReason = "operator_selected_deterministic_fallback";
   } else if (adapter === "codex-cli" || adapter === "copilot-cli") {
     const messages: LlmMessage[] = [
-      { role: "system", content: buildArchitectChatSystemPrompt(plan, runtime, chatScope) },
+      { role: "system", content: promptBundle.systemPrompt },
       { role: "user", content: message },
     ];
     try {
@@ -3864,7 +4091,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
             autonomy_mode: mode,
             pass_state: updateActiveArchitectPassState({ status: "running", tools: toolTrace.length }),
           });
-          publishEvent("architect.tool_result", {
+          const toolEvent = {
             chat_scope: chatScope,
             selected_plan_id: selectedPlanId ?? null,
             plan_id: plan?.id ?? null,
@@ -3879,7 +4106,11 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
             result_preview: entry.result_preview,
             runtime,
             architect_runtime: runtime,
-          });
+          };
+          publishEvent("architect.tool_result", toolEvent);
+          if (streamResponse && !res.writableEnded) {
+            writeSsePayload(res, "architect.chat.status", { ok: true, phase: "tool", ...toolEvent });
+          }
         },
       });
       providerAvailable = true;
@@ -3900,62 +4131,63 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   } else if (architectConfig.provider === "none" || architectConfig.model.length === 0) {
     fallbackReason = "architect_llm_not_configured";
   } else {
-    providerAvailable = await provider.isAvailable().catch(() => false);
-    if (!providerAvailable) {
-      fallbackReason = "architect_provider_unavailable";
-    } else {
-      const messages: LlmMessage[] = [
-        { role: "system", content: buildArchitectChatSystemPrompt(plan, runtime, chatScope) },
-        { role: "user", content: message },
-      ];
-      try {
-        const completion = await runArchitectNativeToolLoop({
-          req,
-          config: architectConfig,
-          provider,
-          messages,
-          userMessage: message,
-          onToolTrace: (entry) => {
-            toolTrace = mergeArchitectToolTraceEntries(toolTrace, entry);
-            runtime = buildActiveArchitectSessionRuntime({
-              adapter,
-              provider: architectConfig.provider,
-              model: architectConfig.model,
-              autonomy_mode: mode,
-              pass_state: updateActiveArchitectPassState({ status: "running", tools: toolTrace.length }),
-            });
-            publishEvent("architect.tool_result", {
-              chat_scope: chatScope,
-              selected_plan_id: selectedPlanId ?? null,
-              plan_id: plan?.id ?? null,
-              continuation_token_present: continuationToken != null,
-              mode,
-              iteration: entry.iteration,
-              trace_id: entry.trace_id,
-              tool: entry.tool,
-              args_summary: entry.args_summary,
-              status: entry.status,
-              duration_ms: entry.duration_ms,
-              result_preview: entry.result_preview,
-              runtime,
-              architect_runtime: runtime,
-            });
-          },
-        });
-        assistantText = completion.content.trim();
-        completionModel = completion.model || architectConfig.model;
-        toolTrace = mergeArchitectToolTraceEntries(toolTrace, completion.tool_trace);
-        provenance = completion.provenance;
-        toolLoopRoute = completion.route;
-        fallbackReason = completion.route.fallback_reason;
-        if (!assistantText) {
-          fallbackReason = fallbackReason ?? "empty_llm_response";
-        }
-      } catch (error) {
-        fallbackReason = executionController.signal.aborted
-          ? "architect_execution_cancelled"
-          : `architect_provider_failed: ${(error as Error).message.slice(0, 240)}`;
+    const messages: LlmMessage[] = [
+      { role: "system", content: promptBundle.systemPrompt },
+      { role: "user", content: message },
+    ];
+    try {
+      const completion = await runArchitectNativeToolLoop({
+        req,
+        config: architectConfig,
+        provider,
+        messages,
+        userMessage: message,
+        budgetCoordinator,
+        onToolTrace: (entry) => {
+          toolTrace = mergeArchitectToolTraceEntries(toolTrace, entry);
+          runtime = buildActiveArchitectSessionRuntime({
+            adapter,
+            provider: architectConfig.provider,
+            model: architectConfig.model,
+            autonomy_mode: mode,
+            pass_state: updateActiveArchitectPassState({ status: "running", tools: toolTrace.length }),
+          });
+          const toolEvent = {
+            chat_scope: chatScope,
+            selected_plan_id: selectedPlanId ?? null,
+            plan_id: plan?.id ?? null,
+            continuation_token_present: continuationToken != null,
+            mode,
+            iteration: entry.iteration,
+            trace_id: entry.trace_id,
+            tool: entry.tool,
+            args_summary: entry.args_summary,
+            status: entry.status,
+            duration_ms: entry.duration_ms,
+            result_preview: entry.result_preview,
+            runtime,
+            architect_runtime: runtime,
+          };
+          publishEvent("architect.tool_result", toolEvent);
+          if (streamResponse && !res.writableEnded) {
+            writeSsePayload(res, "architect.chat.status", { ok: true, phase: "tool", ...toolEvent });
+          }
+        },
+      });
+      providerAvailable = true;
+      assistantText = completion.content.trim();
+      completionModel = completion.model || architectConfig.model;
+      toolTrace = mergeArchitectToolTraceEntries(toolTrace, completion.tool_trace);
+      provenance = completion.provenance;
+      toolLoopRoute = completion.route;
+      fallbackReason = completion.route.fallback_reason;
+      if (!assistantText) {
+        fallbackReason = fallbackReason ?? "empty_llm_response";
       }
+    } catch (error) {
+      fallbackReason = executionController.signal.aborted
+        ? "architect_execution_cancelled"
+        : `architect_provider_failed: ${(error as Error).message.slice(0, 240)}`;
     }
   }
 
@@ -3989,9 +4221,16 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     provenance_authority: runtime.provenance_authority,
   };
 
+  const finalAssistantContent = assistantText ?? deterministicArchitectChatReply(message, fallbackReason, plan, runtime, chatScope, planUpdate);
+  budgetStatus = finalizeChatBudgetStatus(runtime, budgetCoordinator, promptBundle, message, finalAssistantContent);
+  if (budgetStatus) {
+    const tokenEconomyRecord = asRecord(tokenEconomy) ?? {};
+    tokenEconomy = { ...tokenEconomyRecord, budget_status: budgetStatus };
+  }
+
   const result = {
     role: "assistant",
-    content: assistantText ?? deterministicArchitectChatReply(message, fallbackReason, plan, runtime, chatScope, planUpdate),
+    content: finalAssistantContent,
     created_at: new Date().toISOString(),
     chat_scope: chatScope,
     selected_plan_id: selectedPlanId ?? null,
@@ -4019,7 +4258,9 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
       provenance_authority: runtime.provenance_authority,
       runtime,
       tool_loop: toolLoopRoute,
+      token_economy: tokenEconomy,
     },
+    token_economy: tokenEconomy,
     provenance: runtimeProvenance,
     tool_trace: toolTrace.map((entry) => ({ ...entry, runtime })),
     plan_update: planUpdate,
@@ -4039,6 +4280,8 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     tool_trace_count: toolTrace.length,
     plan_update: planUpdate,
     provenance: runtimeProvenance,
+    token_economy: tokenEconomy,
+    budget_status: budgetStatus,
   });
   void publishArchitectPulseIfChanged(false);
 
@@ -4051,15 +4294,15 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     ok: true,
     contract: "architect",
     version: "v1",
-    transport: wantsChatSseResponse(req, body) ? "sse" : "json",
+    transport: streamResponse ? "sse" : "json",
     ...meta,
     runtime,
     architect_runtime: runtime,
     result,
   };
 
-  if (wantsChatSseResponse(req, body)) {
-    writeChatSseResponse(res, payload);
+  if (streamResponse) {
+    finishChatSseResponse(res, payload);
     return;
   }
 
@@ -5824,6 +6067,30 @@ function renderArchitectShell(): string {
       list-style: none;
       min-width: 0;
     }
+    .token-economy-pill {
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      width: max-content;
+      min-height: 22px;
+      padding: 2px 7px;
+      border: 1px solid rgba(104, 216, 182, 0.25);
+      border-radius: 999px;
+      background: rgba(104, 216, 182, 0.08);
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.66rem;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .token-economy-pill:disabled {
+      cursor: wait;
+      opacity: 0.72;
+    }
+    .token-economy-pill.full-context {
+      border-color: rgba(255, 198, 109, 0.32);
+      background: rgba(255, 198, 109, 0.1);
+    }
     .chat-attachment-list li {
       display: inline-flex;
       align-items: center;
@@ -6355,6 +6622,7 @@ function renderArchitectShell(): string {
               <div class="chat-attachment-row">
                 <div class="chat-attachment-cluster">
                   <button id="chat-attachment-button" class="mini-icon-button" type="button" aria-label="Add attachment" title="Add attachment">+</button>
+                  <button id="chat-token-economy-status" class="token-economy-pill" type="button" title="Architect token economy status">Token economy</button>
                   <ul id="chat-attachment-list" class="chat-attachment-list" hidden></ul>
                 </div>
                 <div class="chat-send-cluster">
@@ -6537,6 +6805,7 @@ function renderArchitectShell(): string {
     const chatProcessingLightEl = document.getElementById('chat-processing-light');
     const chatStatusEl = document.getElementById('chat-status');
     const chatAttachmentButtonEl = document.getElementById('chat-attachment-button');
+    const chatTokenEconomyStatusEl = document.getElementById('chat-token-economy-status');
     const chatAttachmentInputEl = document.getElementById('chat-attachment-input');
     const chatAttachmentListEl = document.getElementById('chat-attachment-list');
     const architectAdapterSelectEl = document.getElementById('architect-adapter-select');
@@ -6587,6 +6856,7 @@ function renderArchitectShell(): string {
     let activeChatScope = lastPersistedPlanId ? 'plan' : 'project';
     let activePlanSnapshot = null;
     let activeAttachmentCapabilities = { textAttachments: false, imageAttachments: false };
+    let activeTokenEconomy = initialRuntimePayload && (initialRuntimePayload.architect_token_economy || (initialRuntimePayload.architect_llm && initialRuntimePayload.architect_llm.token_economy) || (activeArchitectRuntime && activeArchitectRuntime.token_economy)) || {};
     let pendingChatAttachments = [];
     const architectControlStorageKey = 'architect.chat.controls.v1';
     const architectProviderSetupStorageKey = 'architect.provider.setup.suppressed.v1';
@@ -7958,7 +8228,86 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
     function updateActiveArchitectRuntime(payload) {
       const runtime = runtimeFromPayload(payload);
       activeArchitectRuntime = Object.assign({}, activeArchitectRuntime || {}, runtime || {});
+      const tokenEconomy = payload && (payload.token_economy || payload.architect_token_economy || (payload.architect_llm && payload.architect_llm.token_economy) || (payload.result && (payload.result.token_economy || (payload.result.route && payload.result.route.token_economy))) || (activeArchitectRuntime && activeArchitectRuntime.token_economy));
+      const budgetStatus = payload && (payload.budget_status || (payload.result && (payload.result.budget_status || (payload.result.token_economy && payload.result.token_economy.budget_status) || (payload.result.route && payload.result.route.token_economy && payload.result.route.token_economy.budget_status))));
+      if (tokenEconomy) activeTokenEconomy = tokenEconomy;
+      if (budgetStatus) activeTokenEconomy = Object.assign({}, activeTokenEconomy || {}, { budget_status: budgetStatus });
+      renderTokenEconomyStatus(activeTokenEconomy);
       return activeArchitectRuntime;
+    }
+
+    function formatTokenCount(value) {
+      const n = Number(value || 0);
+      if (!Number.isFinite(n)) return '0';
+      if (Math.abs(n) >= 1000) return String(Math.round(n / 100) / 10) + 'k';
+      return String(Math.round(n));
+    }
+
+    function formatTokenTarget(value) {
+      const n = Number(value || 0);
+      if (!Number.isFinite(n) || n <= 0) return '0';
+      if (n >= 1000) return String(Math.round(n / 1000)) + 'k';
+      return String(Math.round(n));
+    }
+
+    function renderTokenEconomyStatus(config) {
+      if (!chatTokenEconomyStatusEl) return;
+      const economyEnabled = config && config.token_economy !== false;
+      const preambleEnabled = config && config.preamble_compiler !== false;
+      const target = config && config.soft_target_tokens || 16384;
+      const status = config && config.budget_status;
+      chatTokenEconomyStatusEl.textContent = economyEnabled
+        ? '⚡ Token economy: Enabled (' + formatTokenTarget(target) + ')'
+        : '⚡ Token economy: Disabled (Full context)';
+      if (economyEnabled && status) {
+        const actual = formatTokenCount(status.last_actual_tokens);
+        const expected = formatTokenCount(status.expected_tokens || target);
+        const balance = Number(status.balance_tokens || 0);
+        const pressure = status.pressure_label || 'normal';
+        chatTokenEconomyStatusEl.title = 'Architect token economy enabled. Daemon budget balance: actual ' + actual + ' of expected ' + expected + ', ' + (balance > 0 ? 'debt ' + formatTokenCount(balance) : balance < 0 ? 'credit ' + formatTokenCount(-balance) : 'balanced') + ', pressure ' + pressure + '. Click to switch this instance to full-context mode.';
+      } else {
+        chatTokenEconomyStatusEl.title = economyEnabled
+          ? 'Architect token economy enabled. Click to switch this instance to full-context mode. Preamble compiler ' + (preambleEnabled ? 'enabled' : 'disabled') + '. Soft target ' + String(target) + ' tokens.'
+          : 'Architect token economy disabled. Click to enable token economy for this instance.';
+      }
+      chatTokenEconomyStatusEl.classList.toggle('full-context', !economyEnabled);
+      chatTokenEconomyStatusEl.setAttribute('aria-pressed', economyEnabled ? 'true' : 'false');
+    }
+
+    async function toggleTokenEconomyStatus() {
+      if (!chatTokenEconomyStatusEl) return;
+      const currentEnabled = activeTokenEconomy && activeTokenEconomy.token_economy !== false;
+      const nextEnabled = !currentEnabled;
+      const controls = selectedArchitectControls();
+      chatTokenEconomyStatusEl.disabled = true;
+      try {
+        const response = await fetch('/api/architect/v1/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            adapter: controls.adapter,
+            provider: controls.provider,
+            model: controls.model,
+            mode: controls.mode,
+            autonomy_mode: controls.mode,
+            token_economy: nextEnabled,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.message || ('Architect config failed with HTTP ' + response.status));
+        }
+        const runtime = updateActiveArchitectRuntime(payload);
+        renderRuntime(payload);
+        const persisted = payload.result && payload.result.persisted;
+        chatStatusEl.textContent = 'Token economy ' + (nextEnabled ? 'enabled' : 'disabled') + (persisted ? ' | engine.env updated' : ' | in-memory only');
+        appendEventLine('[config] token economy ' + (nextEnabled ? 'enabled' : 'disabled') + ' for ' + architectRuntimeLabel(runtime));
+      } catch (error) {
+        renderTokenEconomyStatus(activeTokenEconomy);
+        chatStatusEl.textContent = 'Token economy toggle failed: ' + String(error instanceof Error ? error.message : error);
+      } finally {
+        chatTokenEconomyStatusEl.disabled = false;
+      }
     }
 
     function architectRuntimeLabel(runtime) {
@@ -8384,6 +8733,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       window.clearTimeout(architectControlPersistTimer);
       architectControlPersistTimer = 0;
       const controls = selectedArchitectControls();
+      const economyEnabled = activeTokenEconomy && activeTokenEconomy.token_economy !== false;
       try {
         const response = await fetch('/api/architect/v1/config', {
           method: 'POST',
@@ -8394,6 +8744,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
             model: controls.model,
             mode: controls.mode,
             autonomy_mode: controls.mode,
+            token_economy: economyEnabled,
           }),
         });
         const payload = await response.json();
@@ -10427,6 +10778,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
     }
 
     renderRuntime(initialRuntimePayload);
+    renderTokenEconomyStatus(activeTokenEconomy);
     hydrateArchitectCenterTabs();
     hydrateArchitectControls(initialRuntimePayload);
     const initialArchitectReadiness = initialRuntimePayload && initialRuntimePayload.onboarding_readiness && initialRuntimePayload.onboarding_readiness.architect_runtime || {};
@@ -10466,6 +10818,11 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         return;
       }
       chatAttachmentInputEl.click();
+    });
+    chatTokenEconomyStatusEl.addEventListener('click', function() {
+      toggleTokenEconomyStatus().catch(function(error) {
+        chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+      });
     });
     function resizeChatInput() {
       chatInputEl.style.height = 'auto';

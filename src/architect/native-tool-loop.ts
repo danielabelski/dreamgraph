@@ -1,6 +1,17 @@
 import type { IncomingMessage } from "node:http";
-import type { ArchitectLlmConfig, LlmMessage, LlmProvider } from "../cognitive/llm.js";
-import { getModelCapabilities } from "../cognitive/llm.js";
+import type { BudgetCoordinator } from "@dreamgraph/token-economy/budget-coordinator";
+import { compressToolResult, estimateTokensFromString } from "@dreamgraph/token-economy";
+import type {
+  ArchitectLlmConfig,
+  LlmMessage,
+  LlmProvider,
+  LlmToolCall,
+  LlmToolContentBlock,
+  LlmToolDefinition,
+  LlmToolLoopMessage,
+  LlmToolLoopResponse,
+} from "../cognitive/llm.js";
+import { completeWithNativeTools as completeLlmWithNativeTools } from "../cognitive/llm.js";
 import { mcpCallTool, mcpListTools, type McpCallResult } from "../cli/utils/mcp-call.js";
 import { logger } from "../utils/logger.js";
 
@@ -12,6 +23,13 @@ export interface ArchitectToolTraceEntry {
   duration_ms: number;
   result_preview: string;
   trace_id?: string;
+  budget?: {
+    context_pressure: string;
+    compression_mode: string;
+    original_chars: number;
+    final_chars: number;
+    final_tokens: number;
+  };
 }
 
 export interface ArchitectToolLoopRoute {
@@ -47,34 +65,11 @@ export interface ArchitectToolLoopResult {
   tool_trace: ArchitectToolTraceEntry[];
 }
 
-type ArchitectToolDefinition = {
-  name: string;
-  description?: string;
-  inputSchema?: unknown;
-};
-
-type ToolCall = {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-};
-
-type NeutralContentBlock =
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
-
-type NeutralMessage = {
-  role: "system" | "user" | "assistant";
-  content: string | NeutralContentBlock[];
-};
-
-type ToolLoopResponse = {
-  text: string;
-  model: string;
-  stopReason: string;
-  toolCalls: ToolCall[];
-};
+type ArchitectToolDefinition = LlmToolDefinition;
+type ToolCall = LlmToolCall;
+type NeutralContentBlock = LlmToolContentBlock;
+type NeutralMessage = LlmToolLoopMessage;
+type ToolLoopResponse = LlmToolLoopResponse;
 
 const MAX_ARCHITECT_TOOLS = 64;
 const MAX_ARCHITECT_TOOL_ITERATIONS = 8;
@@ -108,6 +103,7 @@ export async function runArchitectNativeToolLoop(input: {
   provider: LlmProvider;
   messages: LlmMessage[];
   userMessage: string;
+  budgetCoordinator?: BudgetCoordinator | null;
   onToolTrace?: (entry: ArchitectToolTraceEntry) => void;
 }): Promise<ArchitectToolLoopResult> {
   const mcpPort = architectMcpPort(input.req);
@@ -162,10 +158,10 @@ export async function runArchitectNativeToolLoop(input: {
     };
   }
 
-  const rawMessages: NeutralMessage[] = input.messages.map((message) => ({
+  const rawMessages = withContextPressureSignal(input.messages.map((message) => ({
     role: message.role,
     content: message.content,
-  }));
+  })), input.budgetCoordinator);
   let finalText = "";
   let completionModel = input.config.model;
   let stopReason = "max_tool_iterations";
@@ -224,6 +220,11 @@ export async function runArchitectNativeToolLoop(input: {
         resultText = error instanceof Error ? error.message : String(error);
       }
 
+      const compressed = input.budgetCoordinator
+        ? compressToolResult(resultText, input.budgetCoordinator, call.name)
+        : { content: resultText, originalChars: resultText.length, finalChars: resultText.length, mode: "verbatim" };
+      const finalTokens = estimateTokensFromString(compressed.content);
+      input.budgetCoordinator?.recordComponentActual(`tool:${call.name}`, finalTokens);
       const entry: ArchitectToolTraceEntry = {
         iteration,
         tool: call.name,
@@ -232,13 +233,24 @@ export async function runArchitectNativeToolLoop(input: {
         duration_ms: Date.now() - startedAt,
         result_preview: createArchitectToolResultPreview(resultText),
         trace_id: traceId,
+        ...(input.budgetCoordinator
+          ? {
+              budget: {
+                context_pressure: input.budgetCoordinator.getContextPressureLabel(),
+                compression_mode: compressed.mode,
+                original_chars: compressed.originalChars,
+                final_chars: compressed.finalChars,
+                final_tokens: finalTokens,
+              },
+            }
+          : {}),
       };
       trace.push(entry);
       input.onToolTrace?.(entry);
       toolResultBlocks.push({
         type: "tool_result",
         tool_use_id: call.id,
-        content: resultText,
+        content: compressed.content,
         ...(status === "failed" ? { is_error: true } : {}),
       });
     }
@@ -291,6 +303,18 @@ function supportsNativeToolLoop(provider: string): boolean {
   return provider === "openai" || provider === "lmstudio" || provider === "anthropic";
 }
 
+function withContextPressureSignal(messages: NeutralMessage[], coordinator?: BudgetCoordinator | null): NeutralMessage[] {
+  if (!coordinator) return messages;
+  const signal = `context_pressure: ${coordinator.getContextPressureLabel()}`;
+  const firstSystem = messages.findIndex((message) => message.role === "system" && typeof message.content === "string");
+  if (firstSystem >= 0) {
+    return messages.map((message, index) => index === firstSystem
+      ? { ...message, content: `${message.content}\n\n${signal}` }
+      : message);
+  }
+  return [{ role: "system", content: signal }, ...messages];
+}
+
 function selectArchitectTools(tools: ArchitectToolDefinition[], message: string): ArchitectToolDefinition[] {
   const safe = tools.filter((tool) => PROVIDER_TOOL_NAME_RE.test(tool.name));
   const byName = new Map(safe.map((tool) => [tool.name, tool]));
@@ -320,222 +344,7 @@ async function completeWithNativeTools(
   messages: NeutralMessage[],
   tools: ArchitectToolDefinition[],
 ): Promise<ToolLoopResponse> {
-  if (config.provider === "anthropic") {
-    return callAnthropicWithTools(config, messages, tools);
-  }
-  return callOpenAiCompatibleWithTools(config, messages, tools);
-}
-
-async function callOpenAiCompatibleWithTools(
-  config: ArchitectLlmConfig,
-  messages: NeutralMessage[],
-  tools: ArchitectToolDefinition[],
-): Promise<ToolLoopResponse> {
-  const capabilities = getModelCapabilities(config.provider, config.model);
-  const useNewTokenParam = /^(o[1-9]|gpt-[4-9]\.[1-9]|gpt-5)/i.test(config.model);
-  const body: Record<string, unknown> = {
-    model: config.model,
-    messages: toOpenAiMessages(messages),
-    ...(capabilities.supportsTemperature ? { temperature: config.temperature } : {}),
-    ...(useNewTokenParam
-      ? { max_completion_tokens: config.maxTokens }
-      : { max_tokens: config.maxTokens }),
-    tools: tools.map(toOpenAiTool),
-    tool_choice: "auto",
-  };
-
-  const res = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.timeoutMs),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "unknown");
-    throw new Error(`OpenAI-compatible tool call ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json() as {
-    choices?: Array<{
-      message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> };
-      finish_reason?: string;
-    }>;
-    model?: string;
-  };
-  const choice = data.choices?.[0];
-  const toolCalls = (choice?.message?.tool_calls ?? []).map((toolCall) => ({
-    id: toolCall.id,
-    name: toolCall.function.name,
-    input: parseToolArguments(toolCall.function.arguments),
-  }));
-  return {
-    text: choice?.message?.content ?? "",
-    model: data.model ?? config.model,
-    stopReason: choice?.finish_reason === "tool_calls" ? "tool_use" : (choice?.finish_reason ?? "stop"),
-    toolCalls,
-  };
-}
-
-async function callAnthropicWithTools(
-  config: ArchitectLlmConfig,
-  messages: NeutralMessage[],
-  tools: ArchitectToolDefinition[],
-): Promise<ToolLoopResponse> {
-  const systemText = messages
-    .filter((message) => message.role === "system")
-    .map((message) => typeof message.content === "string" ? message.content : blocksToText(message.content))
-    .filter(Boolean)
-    .join("\n\n");
-
-  const body: Record<string, unknown> = {
-    model: config.model,
-    max_tokens: config.maxTokens,
-    temperature: config.temperature,
-    messages: messages
-      .filter((message) => message.role !== "system")
-      .map(toAnthropicMessage),
-    tools: tools.map(toAnthropicTool),
-  };
-  if (systemText) {
-    body.system = systemText;
-  }
-
-  const res = await fetch(`${config.baseUrl}/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": config.apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.timeoutMs),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "unknown");
-    throw new Error(`Anthropic tool call ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json() as {
-    content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
-    model?: string;
-    stop_reason?: string;
-  };
-  const blocks = data.content ?? [];
-  return {
-    text: blocks.filter((block) => block.type === "text").map((block) => block.text ?? "").join(""),
-    model: data.model ?? config.model,
-    stopReason: data.stop_reason ?? "stop",
-    toolCalls: blocks
-      .filter((block) => block.type === "tool_use" && block.id && block.name)
-      .map((block) => ({
-        id: block.id!,
-        name: block.name!,
-        input: isRecord(block.input) ? block.input : {},
-      })),
-  };
-}
-
-function toOpenAiMessages(messages: NeutralMessage[]): Array<Record<string, unknown>> {
-  const out: Array<Record<string, unknown>> = [];
-  for (const message of messages) {
-    if (typeof message.content === "string") {
-      out.push({ role: message.role, content: message.content });
-      continue;
-    }
-
-    const text = blocksToText(message.content);
-    const toolUses = message.content.filter((block): block is Extract<NeutralContentBlock, { type: "tool_use" }> => block.type === "tool_use");
-    const toolResults = message.content.filter((block): block is Extract<NeutralContentBlock, { type: "tool_result" }> => block.type === "tool_result");
-
-    if (message.role === "assistant") {
-      out.push({
-        role: "assistant",
-        content: text || null,
-        ...(toolUses.length > 0
-          ? {
-              tool_calls: toolUses.map((block) => ({
-                id: block.id,
-                type: "function",
-                function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) },
-              })),
-            }
-          : {}),
-      });
-      continue;
-    }
-
-    if (text) {
-      out.push({ role: message.role, content: text });
-    }
-    for (const result of toolResults) {
-      out.push({ role: "tool", tool_call_id: result.tool_use_id, content: result.content });
-    }
-  }
-  return out;
-}
-
-function toAnthropicMessage(message: NeutralMessage): Record<string, unknown> {
-  if (typeof message.content === "string") {
-    return { role: message.role, content: message.content };
-  }
-  return {
-    role: message.role,
-    content: message.content.map((block) => {
-      if (block.type === "text") return { type: "text", text: block.text };
-      if (block.type === "tool_use") return { type: "tool_use", id: block.id, name: block.name, input: block.input ?? {} };
-      return {
-        type: "tool_result",
-        tool_use_id: block.tool_use_id,
-        content: block.content,
-        ...(block.is_error ? { is_error: true } : {}),
-      };
-    }),
-  };
-}
-
-function toOpenAiTool(tool: ArchitectToolDefinition): Record<string, unknown> {
-  return {
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description ?? "DreamGraph MCP tool",
-      parameters: normalizeInputSchema(tool.inputSchema),
-    },
-  };
-}
-
-function toAnthropicTool(tool: ArchitectToolDefinition): Record<string, unknown> {
-  return {
-    name: tool.name,
-    description: tool.description ?? "DreamGraph MCP tool",
-    input_schema: normalizeInputSchema(tool.inputSchema),
-  };
-}
-
-function normalizeInputSchema(schema: unknown): Record<string, unknown> {
-  if (!isRecord(schema)) {
-    return { type: "object", properties: {}, additionalProperties: true };
-  }
-  return {
-    type: schema.type === "object" ? "object" : "object",
-    properties: isRecord(schema.properties) ? schema.properties : {},
-    required: Array.isArray(schema.required) ? schema.required : [],
-    ...(schema.additionalProperties !== undefined ? { additionalProperties: schema.additionalProperties } : {}),
-  };
-}
-
-function parseToolArguments(raw: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(raw || "{}");
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return { _raw: raw };
-  }
+  return completeLlmWithNativeTools(config, messages, tools);
 }
 
 function stringifyMcpResult(result: McpCallResult): string {
