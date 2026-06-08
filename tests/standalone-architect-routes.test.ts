@@ -1148,6 +1148,72 @@ describe("standalone Architect route hardening", () => {
     }
   });
 
+  it("normalizes chat-authored slice tables into native implementation slice headings", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-plan-slice-table-"));
+    const plansDir = join(tempRoot, "plans");
+    const dataDir = join(tempRoot, "data");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      instanceId: "test",
+      projectRoot: tempRoot,
+      plansRoot: plansDir,
+      dataDir,
+      unsafeMode: false,
+      source: "test",
+    });
+
+    try {
+      await mkdir(plansDir, { recursive: true });
+      await mkdir(dataDir, { recursive: true });
+
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/plans`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Slice Table Plan" }),
+        });
+        expect(createdResponse.status).toBe(201);
+        const created = await createdResponse.json() as Record<string, unknown>;
+        const createdResult = created.result as Record<string, unknown>;
+        const planId = String(createdResult.plan_id);
+
+        await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            planId,
+            adapter: "codex-cli",
+            provider: "none",
+            model: "gpt-5.4",
+            mode: "autonomous",
+            message: [
+              "this plan should include implementation slices",
+              "",
+              "## 3. Planned Slices",
+              "",
+              "| Slice | Change | Provider/adapter specifics | Files | Verification |",
+              "| --- | --- | --- | --- | --- |",
+              "| 1 | Build the parser contract. | Applies to every route. | `src/architect/routes.ts` | Registry reports Slice 1. |",
+              "| 2 | Add regression coverage. | Test-only. | `tests/standalone-architect-routes.test.ts` | Test passes. |",
+            ].join("\n"),
+          }),
+        }));
+
+        const markdown = await readFile(join(plansDir, `${planId}.md`), "utf-8");
+        expect(markdown).toContain("## 3. Implementation Slices");
+        expect(markdown).toContain("### Slice 1 - Build the parser contract");
+        expect(markdown).toContain("### Slice 2 - Add regression coverage");
+        expect(markdown).not.toContain("| Slice | Change |");
+
+        const projected = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans/${planId}`));
+        const plan = projected.plan as { registry?: { summary?: { slice_count?: number } } };
+        expect(plan.registry?.summary?.slice_count).toBe(2);
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects GET chat prompts and supports POST SSE chat responses", async () => {
     await withArchitectServer(async (baseUrl) => {
       const rejected = await fetch(`${baseUrl}/api/architect/v1/chat?message=must-not-travel-in-url`);

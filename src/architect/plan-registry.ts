@@ -690,10 +690,16 @@ function classifySlice(title: string): { category: "phase" | "slice"; sortId: st
   if (phaseMatch) {
     return { category: "phase", sortId: `phase-${phaseMatch[1]}` };
   }
-  const sliceMatch = title.match(/^Slice\s+([A-Za-z0-9]+)[.:]?\s*(.*)$/i);
-  if (sliceMatch) {
-    const ordinal = sliceMatch[1].toLowerCase();
-    const titleSlug = slugifySliceSegment(sliceMatch[2] ?? "");
+  const numericSliceMatch = title.match(/^Slice\s+(\d+)[.:]?\s*(.*)$/i);
+  if (numericSliceMatch) {
+    const ordinal = numericSliceMatch[1].toLowerCase();
+    const titleSlug = slugifySliceSegment(numericSliceMatch[2] ?? "");
+    return { category: "slice", sortId: titleSlug ? `slice-${ordinal}-${titleSlug}` : `slice-${ordinal}` };
+  }
+  const letterSliceMatch = title.match(/^Slice\s+([A-Z])(?:[.:]|\s+[—-])\s*(.*)$/i);
+  if (letterSliceMatch) {
+    const ordinal = letterSliceMatch[1].toLowerCase();
+    const titleSlug = slugifySliceSegment(letterSliceMatch[2] ?? "");
     return { category: "slice", sortId: titleSlug ? `slice-${ordinal}-${titleSlug}` : `slice-${ordinal}` };
   }
   return null;

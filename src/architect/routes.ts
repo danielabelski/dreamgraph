@@ -1556,7 +1556,9 @@ function buildCreatedPlanLog(planId: string, title: string, timestamp: string): 
 }
 
 function isArchitectRuntimeIdentityQuestion(message: string): boolean {
-  return /\b(model|provider|adapter|runtime|route|session)\b/i.test(message);
+  const compact = message.replace(/\s+/g, " ").trim();
+  if (!compact.endsWith("?")) return false;
+  return /\b(what|which|who)\b.*\b(model|provider|adapter|runtime|route|session)\b/i.test(compact);
 }
 
 function shouldApplyPlanChatUpdate(message: string, plan: ArchitectPlanProjection | null): boolean {
@@ -1576,11 +1578,101 @@ function normalizePlanChatUpdateContent(message: string): string {
     .slice(0, 24_000);
 }
 
+function splitMarkdownTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isMarkdownTableDivider(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function normalizeSliceTitle(sliceCell: string, changeCell: string): string {
+  const cleanSlice = sliceCell.replace(/^slice\s+/i, "").trim();
+  const ordinal = cleanSlice || "1";
+  const firstSentence = changeCell
+    .replace(/`([^`]+)`/g, "$1")
+    .split(/[.!?]/)[0]
+    ?.replace(/\s+/g, " ")
+    .trim();
+  const title = firstSentence && firstSentence.length > 0 ? firstSentence.slice(0, 80) : "Implementation Work";
+  return `Slice ${ordinal} - ${title}`;
+}
+
+function normalizeArchitectNativePlanMarkdown(markdown: string): string {
+  const lines = markdown.split("\n");
+  const nextLines: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const headingMatch = lines[index].match(/^(##\s+)(\d+\.\s+)?Planned Slices\s*$/i);
+    if (!headingMatch) {
+      nextLines.push(lines[index]);
+      continue;
+    }
+
+    nextLines.push(`${headingMatch[1]}${headingMatch[2] ?? ""}Implementation Slices`);
+    index += 1;
+    const sectionLines: string[] = [];
+    while (index < lines.length && !/^##\s+/.test(lines[index])) {
+      sectionLines.push(lines[index]);
+      index += 1;
+    }
+    index -= 1;
+
+    const tableHeaderIndex = sectionLines.findIndex((line) => /^\s*\|\s*Slice\s*\|/i.test(line));
+    if (tableHeaderIndex < 0 || tableHeaderIndex + 1 >= sectionLines.length || !isMarkdownTableDivider(sectionLines[tableHeaderIndex + 1])) {
+      nextLines.push(...sectionLines);
+      continue;
+    }
+
+    nextLines.push(...sectionLines.slice(0, tableHeaderIndex));
+    const headers = splitMarkdownTableRow(sectionLines[tableHeaderIndex]).map((cell) => cell.toLowerCase());
+    const sliceIndex = headers.indexOf("slice");
+    const changeIndex = headers.indexOf("change");
+    const providerIndex = headers.findIndex((cell) => cell.includes("provider") || cell.includes("adapter"));
+    const filesIndex = headers.indexOf("files");
+    const verificationIndex = headers.indexOf("verification");
+
+    for (let tableIndex = tableHeaderIndex + 2; tableIndex < sectionLines.length; tableIndex += 1) {
+      const line = sectionLines[tableIndex];
+      if (!/^\s*\|/.test(line)) {
+        if (line.trim()) nextLines.push(line);
+        continue;
+      }
+      const cells = splitMarkdownTableRow(line);
+      const sliceCell = sliceIndex >= 0 ? cells[sliceIndex] ?? "" : "";
+      const changeCell = changeIndex >= 0 ? cells[changeIndex] ?? "" : "";
+      if (!sliceCell || !changeCell) continue;
+
+      nextLines.push("");
+      nextLines.push(`### ${normalizeSliceTitle(sliceCell, changeCell)}`);
+      nextLines.push("");
+      nextLines.push(changeCell);
+      if (providerIndex >= 0 && cells[providerIndex]) {
+        nextLines.push("");
+        nextLines.push(`Provider/adapter specifics: ${cells[providerIndex]}`);
+      }
+      if (filesIndex >= 0 && cells[filesIndex]) {
+        nextLines.push("");
+        nextLines.push(`Files: ${cells[filesIndex]}`);
+      }
+      if (verificationIndex >= 0 && cells[verificationIndex]) {
+        nextLines.push("");
+        nextLines.push(`Verification: ${cells[verificationIndex]}`);
+      }
+    }
+  }
+  return nextLines.join("\n");
+}
+
 function applyPlanChatUpdateToMarkdown(markdown: string, content: string, timestamp: string): { markdown: string; mode: ArchitectPlanChatUpdateResult["update_mode"]; sectionTitle: string } {
   const placeholder = "Describe the goal for this Architect plan.";
   if (markdown.includes(placeholder)) {
     return {
-      markdown: markdown.replace(placeholder, content),
+      markdown: normalizeArchitectNativePlanMarkdown(markdown.replace(placeholder, content)),
       mode: "replace_goal_placeholder",
       sectionTitle: "0. Goal",
     };
@@ -1597,7 +1689,7 @@ function applyPlanChatUpdateToMarkdown(markdown: string, content: string, timest
     content,
     "",
   ].join("\n");
-  return { markdown: nextMarkdown, mode: "append_chat_update", sectionTitle };
+  return { markdown: normalizeArchitectNativePlanMarkdown(nextMarkdown), mode: "append_chat_update", sectionTitle };
 }
 
 async function applyPlanChatUpdate(

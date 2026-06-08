@@ -444,6 +444,6 @@
     "dompurify": "^3.4.0",
     "markdown-it": "^14.1.1",
     "mermaid": "^11.12.0",
-    "@dreamgraph/token-economy": "12.4.0"
+    "@dreamgraph/token-economy": "file:../../packages/token-economy"
   }
 }
