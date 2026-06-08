@@ -4221,7 +4221,10 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     provenance_authority: runtime.provenance_authority,
   };
 
-  const finalAssistantContent = assistantText ?? deterministicArchitectChatReply(message, fallbackReason, plan, runtime, chatScope, planUpdate);
+  const normalizedAssistantText = typeof assistantText === "string" ? assistantText.trim() : "";
+  const finalAssistantContent = normalizedAssistantText.length > 0
+    ? normalizedAssistantText
+    : deterministicArchitectChatReply(message, fallbackReason, plan, runtime, chatScope, planUpdate);
   budgetStatus = finalizeChatBudgetStatus(runtime, budgetCoordinator, promptBundle, message, finalAssistantContent);
   if (budgetStatus) {
     const tokenEconomyRecord = asRecord(tokenEconomy) ?? {};
@@ -6858,7 +6861,12 @@ function renderArchitectShell(): string {
     let activeAttachmentCapabilities = { textAttachments: false, imageAttachments: false };
     let activeTokenEconomy = initialRuntimePayload && (initialRuntimePayload.architect_token_economy || (initialRuntimePayload.architect_llm && initialRuntimePayload.architect_llm.token_economy) || (activeArchitectRuntime && activeArchitectRuntime.token_economy)) || {};
     let pendingChatAttachments = [];
+    let chatPromptHistory = [];
+    let chatPromptHistoryCursor = -1;
+    let chatPromptHistoryDraft = '';
     const architectControlStorageKey = 'architect.chat.controls.v1';
+    const architectPromptHistoryStorageKey = 'architect.chat.prompt_history.v1';
+    const architectPromptHistoryLimit = 100;
     const architectProviderSetupStorageKey = 'architect.provider.setup.suppressed.v1';
     const architectWelcomeStorageKey = 'architect.onboarding.welcome.dismissed.v1';
     const architectOnboardingVisitStorageKey = 'architect.onboarding.visit.v1';
@@ -10804,6 +10812,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
     architectRepoSaveEl.addEventListener('click', function() { saveArchitectRepoSetup().catch(function(error) { architectRepoSetupStatusEl.textContent = String(error instanceof Error ? error.message : error); }); });
     architectRepoMapEl.addEventListener('click', function() { sendChatMessage('Run the governed scan_project action for the configured repository inventory and report the resulting project map status.').catch(function(error) { chatStatusEl.textContent = String(error instanceof Error ? error.message : error); }); });
     chatInputEl.addEventListener('keydown', function(event) {
+      if (handleChatPromptHistoryKey(event)) return;
       if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
       event.preventDefault();
       if (typeof chatFormEl.requestSubmit === 'function') {
@@ -10834,6 +10843,81 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       chatInputEl.style.height = String(nextHeight) + 'px';
       chatInputEl.style.overflowY = chatInputEl.scrollHeight > maxHeight ? 'auto' : 'hidden';
     }
+
+    function loadChatPromptHistory() {
+      try {
+        const parsed = JSON.parse(window.localStorage.getItem(architectPromptHistoryStorageKey) || '[]');
+        chatPromptHistory = Array.isArray(parsed) ? parsed.filter(function(item) { return typeof item === 'string' && item.trim().length > 0; }).slice(-architectPromptHistoryLimit) : [];
+      } catch (_) {
+        chatPromptHistory = [];
+      }
+    }
+
+    function persistChatPromptHistory() {
+      try {
+        window.localStorage.setItem(architectPromptHistoryStorageKey, JSON.stringify(chatPromptHistory.slice(-architectPromptHistoryLimit)));
+      } catch (_) { /* local prompt history is best effort */ }
+    }
+
+    function rememberChatPrompt(message) {
+      const prompt = String(message || '').trim();
+      if (!prompt) return;
+      chatPromptHistory = chatPromptHistory.filter(function(item) { return item !== prompt; });
+      chatPromptHistory.push(prompt);
+      chatPromptHistory = chatPromptHistory.slice(-architectPromptHistoryLimit);
+      chatPromptHistoryCursor = -1;
+      chatPromptHistoryDraft = '';
+      persistChatPromptHistory();
+    }
+
+    function cursorIsOnFirstPromptLine() {
+      const cursor = chatInputEl.selectionStart || 0;
+      return chatInputEl.value.slice(0, cursor).indexOf(String.fromCharCode(10)) < 0;
+    }
+
+    function cursorIsOnLastPromptLine() {
+      const cursor = chatInputEl.selectionEnd || 0;
+      return chatInputEl.value.slice(cursor).indexOf(String.fromCharCode(10)) < 0;
+    }
+
+    function setChatPromptDraft(value) {
+      chatInputEl.value = value;
+      resizeChatInput();
+      const cursor = chatInputEl.value.length;
+      chatInputEl.setSelectionRange(cursor, cursor);
+    }
+
+    function handleChatPromptHistoryKey(event) {
+      if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+      if (event.key === 'ArrowUp') {
+        if (!chatPromptHistory.length || !cursorIsOnFirstPromptLine()) return false;
+        event.preventDefault();
+        if (chatPromptHistoryCursor < 0) {
+          chatPromptHistoryDraft = chatInputEl.value;
+          chatPromptHistoryCursor = chatPromptHistory.length - 1;
+        } else if (chatPromptHistoryCursor > 0) {
+          chatPromptHistoryCursor -= 1;
+        }
+        setChatPromptDraft(chatPromptHistory[chatPromptHistoryCursor] || '');
+        return true;
+      }
+      if (event.key === 'ArrowDown') {
+        if (chatPromptHistoryCursor < 0 || !cursorIsOnLastPromptLine()) return false;
+        event.preventDefault();
+        if (chatPromptHistoryCursor < chatPromptHistory.length - 1) {
+          chatPromptHistoryCursor += 1;
+          setChatPromptDraft(chatPromptHistory[chatPromptHistoryCursor] || '');
+        } else {
+          chatPromptHistoryCursor = -1;
+          setChatPromptDraft(chatPromptHistoryDraft);
+          chatPromptHistoryDraft = '';
+        }
+        return true;
+      }
+      return false;
+    }
+
+    loadChatPromptHistory();
     chatAttachmentInputEl.addEventListener('change', function() {
       stageAttachmentFiles(chatAttachmentInputEl.files).catch(function(error) {
         chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
@@ -10866,7 +10950,11 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
       });
     });
-    chatInputEl.addEventListener('input', resizeChatInput);
+    chatInputEl.addEventListener('input', function() {
+      chatPromptHistoryCursor = -1;
+      chatPromptHistoryDraft = '';
+      resizeChatInput();
+    });
     resizeChatInput();
     chatFormEl.addEventListener('submit', function(event) {
       event.preventDefault();
@@ -10893,6 +10981,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         chatStatusEl.textContent = 'Enter a message or add an attachment first.';
         return;
       }
+      rememberChatPrompt(message);
       chatInputEl.value = '';
       resizeChatInput();
       Promise.resolve()
