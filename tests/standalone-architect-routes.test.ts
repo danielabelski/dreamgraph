@@ -23,6 +23,8 @@ import {
   formatArchitectPluginListPayload,
   formatArchitectStatusPayload,
   buildArchitectProviderReadiness,
+  formatUserVisibleFallbackReason,
+  architectPassStatusFromFallback,
   handleArchitectRoute,
 } from "../src/architect/routes.js";
 import * as lifecycle from "../src/instance/lifecycle.js";
@@ -690,6 +692,14 @@ describe("standalone Architect route hardening", () => {
       if (previousKey === undefined) delete process.env.DREAMGRAPH_LLM_API_KEY;
       else process.env.DREAMGRAPH_LLM_API_KEY = previousKey;
     }
+  });
+
+  it("keeps empty native responses out of user-facing fallback copy", () => {
+    expect(formatUserVisibleFallbackReason("empty_llm_response")).toBe("");
+    expect(formatUserVisibleFallbackReason("empty_cli_bridge_response")).toBe("");
+    expect(architectPassStatusFromFallback("empty_llm_response")).toBe("complete");
+    expect(formatUserVisibleFallbackReason("architect_provider_failed: test")).toBe(" Runtime diagnostic: architect_provider_failed: test.");
+    expect(architectPassStatusFromFallback("architect_provider_failed: test")).toBe("failed");
   });
 
   it("does not let a failed OpenAI models probe skip native chat execution", async () => {

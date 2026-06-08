@@ -3853,6 +3853,15 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
   ].filter(Boolean).join("\n");
 }
 
+function isEmptyCompletionFallback(fallbackReason: string | null): boolean {
+  return fallbackReason === "empty_llm_response" || fallbackReason === "empty_cli_bridge_response";
+}
+
+export function formatUserVisibleFallbackReason(fallbackReason: string | null): string {
+  if (!fallbackReason || isEmptyCompletionFallback(fallbackReason)) return "";
+  return ` Runtime diagnostic: ${fallbackReason}.`;
+}
+
 function deterministicArchitectChatReply(
   message: string,
   fallbackReason: string | null,
@@ -3863,7 +3872,7 @@ function deterministicArchitectChatReply(
 ): string {
   const project = buildProjectScopePayload();
   const planLabel = chatScope === "plan" && plan ? `${plan.title} (${plan.id})` : "project scope";
-  const reason = fallbackReason ? ` LLM fallback reason: ${fallbackReason}.` : "";
+  const reason = formatUserVisibleFallbackReason(fallbackReason);
   if (isArchitectRuntimeIdentityQuestion(message)) {
     return [
       "Current execution runtime:",
@@ -3956,8 +3965,8 @@ function mergeArchitectToolTraceEntries(
   return [...byKey.values()].sort((left, right) => left.iteration - right.iteration);
 }
 
-function architectPassStatusFromFallback(fallbackReason: string | null): ArchitectPassStatus {
-  if (!fallbackReason) return "complete";
+export function architectPassStatusFromFallback(fallbackReason: string | null): ArchitectPassStatus {
+  if (!fallbackReason || isEmptyCompletionFallback(fallbackReason)) return "complete";
   if (fallbackReason.includes("_BRIDGE_TIMEOUT") || fallbackReason.toLowerCase().includes("timed out")) return "timed_out";
   return "failed";
 }
@@ -8532,7 +8541,9 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         if (tool === 'run_command') {
           const exitCode = typeof data.exitCode === 'number' ? data.exitCode : null;
           if (data.timedOut) return 'Timed out after ' + (data.durationMs || item.duration_ms || 0) + 'ms';
-          return exitCode === 0 ? 'Passed' : 'Failed' + (exitCode == null ? '' : ' exit ' + exitCode);
+          if (exitCode !== null) return exitCode === 0 ? 'Passed' : 'Failed exit ' + exitCode;
+          if (value.success === false || item.status === 'failed') return 'Failed';
+          return 'Passed';
         }
         if (tool === 'search_source_code' && typeof data.matchCount === 'number') return String(data.matchCount) + ' matches';
         if (tool === 'list_directory' && Array.isArray(data.entries)) return String(data.entries.length) + ' items';
