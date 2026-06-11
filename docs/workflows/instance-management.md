@@ -5,17 +5,6 @@
 **Trigger:** Instance command  
 **Source files:** src/instance/index.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Create New Instance"]
-    S2["Load Existing Instance"]
-    S1 --> S2
-    S3["Register Instance"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Create New Instance

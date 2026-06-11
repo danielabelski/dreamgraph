@@ -5,15 +5,6 @@
 **Trigger:** User updates settings  
 **Source files:** src/discipline/session.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Save User Settings"]
-    S2["Load User Settings"]
-    S1 --> S2
-```
-
 ## Steps
 
 ### 1. Save User Settings

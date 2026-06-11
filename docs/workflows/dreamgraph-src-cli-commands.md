@@ -5,41 +5,6 @@
 **Trigger:** Source: src/cli/commands/attach.ts  
 **Source files:** src/cli/commands/attach.ts, src/cli/commands/curate.ts, src/cli/commands/enrich.ts, src/cli/commands/export.ts, src/cli/commands/fork.ts, src/cli/commands/init.ts, src/cli/commands/instances.ts, src/cli/commands/lifecycle-ops.ts, src/cli/commands/migrate.ts, src/cli/commands/restart.ts, src/cli/commands/scan.ts, src/cli/commands/schedule.ts, src/cli/commands/start.ts, src/cli/commands/status.ts, src/cli/commands/stop.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["attach"]
-    S2["curate"]
-    S1 --> S2
-    S3["enrich"]
-    S2 --> S3
-    S4["export"]
-    S3 --> S4
-    S5["fork"]
-    S4 --> S5
-    S6["init"]
-    S5 --> S6
-    S7["instances"]
-    S6 --> S7
-    S8["lifecycle-ops"]
-    S7 --> S8
-    S9["migrate"]
-    S8 --> S9
-    S10["restart"]
-    S9 --> S10
-    S11["scan"]
-    S10 --> S11
-    S12["schedule"]
-    S11 --> S12
-    S13["start"]
-    S12 --> S13
-    S14["status"]
-    S13 --> S14
-    S15["stop"]
-    S14 --> S15
-```
-
 ## Steps
 
 ### 1. attach

@@ -105,3 +105,4 @@ Mode guidance:
 ## Product framing
 
 DreamGraph can report at operator, architect, or forensic depth depending on how much of the system’s reasoning surface you want to see.
+<!-- CONTINUATION TEST SLICE 9 -->

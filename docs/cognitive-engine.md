@@ -394,3 +394,4 @@ Instead of every session starting from zero, the system:
 - surfaces risk as tensions
 - improves through repeated cycles
 - keeps reasoning grounded in a durable graph rather than transient prompts
+<!-- CONTINUATION TEST SLICE 10 -->

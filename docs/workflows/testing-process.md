@@ -5,17 +5,6 @@
 **Trigger:** Test command execution  
 **Source files:** tests/**/*.test.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Run Test Suite"]
-    S2["Report Test Results"]
-    S1 --> S2
-    S3["Handle Test Failures"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Run Test Suite

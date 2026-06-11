@@ -5,17 +5,6 @@
 **Trigger:** User updates settings  
 **Source files:** src/config/config.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Capture Settings Changes"]
-    S2["Save Settings"]
-    S1 --> S2
-    S3["Load Settings on Startup"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Capture Settings Changes

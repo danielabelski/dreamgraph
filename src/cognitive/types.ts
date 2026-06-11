@@ -929,12 +929,26 @@ export interface QueryDreamsInput {
   domain?: string;
   min_confidence?: number;
   status?: "validated" | "latent" | "rejected" | "expired" | "candidate" | "raw";
+  /** Maximum returned items per section. Defaults to 25; server hard cap is 100. */
+  limit?: number;
 }
 
 export interface QueryDreamsOutput {
   nodes: DreamNode[];
   edges: DreamEdge[];
   validated: ValidatedEdge[];
+  total_available: {
+    nodes: number;
+    edges: number;
+    validated: number;
+  };
+  returned: {
+    nodes: number;
+    edges: number;
+    validated: number;
+  };
+  limit: number;
+  truncated: boolean;
 }
 
 export interface ClearDreamsInput {

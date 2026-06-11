@@ -5,15 +5,6 @@
 **Trigger:** User modifies plugin settings  
 **Source files:** src/discipline/tools.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Enable/Disable Plugin"]
-    S2["Update Plugin"]
-    S1 --> S2
-```
-
 ## Steps
 
 ### 1. Enable/Disable Plugin

@@ -1121,3 +1121,4 @@ All mutation endpoints share the same precondition contract:
 - **Audit-first** � No mutation is silent. Every promote / reject / resolve is appended to `explorer_audit_log.jsonl` with `{ ts, intent, subject, reason, actor, etag_before, etag_after }`.
 - **Reasoned mutations** � Reason text is mandatory. The LLM `reason-suggest` endpoint produces a draft, but the human signs the final text.
 - **Inspect-first UI** � Tensions and candidates render entity/endpoint chips that jump to the Inspector tab; nothing is destructive without first being inspectable.
+<!-- CONTINUATION TEST SLICE 6 -->

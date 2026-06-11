@@ -102,6 +102,8 @@ export type StreamCallback = (chunk: string) => void;
 export const ANTHROPIC_MODELS = [
   "claude-opus-4-8",
   "claude-opus-4-7",
+  "claude-fable-5",
+  "claude-mythos-5",
   "claude-opus-4-6",
   "claude-sonnet-4-6",
   "claude-haiku-4-5",
@@ -141,6 +143,37 @@ export const CODEX_CLI_MODELS = [
   "gpt-5-mini",
   "auto",
 ];
+
+const ANTHROPIC_EFFORT_MODELS = [
+  "claude-opus-4-8",
+  "claude-opus-4-7",
+  "claude-fable-5",
+  "claude-mythos-5",
+] as const;
+
+export function supportsAnthropicEffortConfig(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return ANTHROPIC_EFFORT_MODELS.some((prefix) => normalized.startsWith(prefix));
+}
+
+export function supportsAnthropicAdaptiveThinking(model: string): boolean {
+  return supportsAnthropicEffortConfig(model);
+}
+
+export function getAnthropicDefaultEffortForModel(model: string): AnthropicEffort {
+  return supportsAnthropicEffortConfig(model) ? "xhigh" : "high";
+}
+
+export function getAnthropicMaxTokensForModel(model: string): number {
+  const normalized = model.trim().toLowerCase();
+  if (normalized.startsWith("claude-fable-5")) {
+    return 128_000;
+  }
+  if (supportsAnthropicEffortConfig(normalized)) {
+    return 65_536;
+  }
+  return 8_192;
+}
 
 
 /* ------------------------------------------------------------------ */
@@ -292,15 +325,15 @@ export class ArchitectLlm implements vscode.Disposable {
       return normalized;
     }
 
-    return model.startsWith("claude-opus-4-8") || model.startsWith("claude-opus-4-7") ? "xhigh" : "high";
+    return getAnthropicDefaultEffortForModel(model);
   }
 
   private _getAnthropicMaxTokens(model: string): number {
-    return model.startsWith("claude-opus-4-8") || model.startsWith("claude-opus-4-7") ? 65536 : 8192;
+    return getAnthropicMaxTokensForModel(model);
   }
 
   private _getAnthropicThinking(model: string): { type: "adaptive"; display?: "summarized" } | undefined {
-    if (!model.startsWith("claude-opus-4-8") && !model.startsWith("claude-opus-4-7")) {
+    if (!supportsAnthropicAdaptiveThinking(model)) {
       return undefined;
     }
 
@@ -341,7 +374,7 @@ export class ArchitectLlm implements vscode.Disposable {
       body.tools = compactedTools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
     }
 
-    if (config.model.startsWith("claude-opus-4-8") || config.model.startsWith("claude-opus-4-7")) {
+    if (supportsAnthropicEffortConfig(config.model)) {
       body.output_config = { effort: this._getAnthropicEffort(config.model) };
       const thinking = this._getAnthropicThinking(config.model);
       if (thinking) {
@@ -1262,7 +1295,7 @@ export class ArchitectLlm implements vscode.Disposable {
   private _defaultModel(provider: ArchitectProvider): string {
     switch (provider) {
       case "anthropic":
-        return ANTHROPIC_MODELS[0];
+        return "claude-opus-4-7";
       case "openai":
         return OPENAI_MODELS[0];
       case "ollama":

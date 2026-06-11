@@ -10,6 +10,8 @@ import type { LlmMessage } from "../cognitive/llm.js";
 import { mcpListTools } from "../cli/utils/mcp-call.js";
 import { getArchitectProjectRoot } from "./plan-registry.js";
 import { createArchitectToolResultPreview, type ArchitectToolTraceEntry } from "./native-tool-loop.js";
+import type { ArchitectContinuationToolManifest } from "./continuation.js";
+import { resolveArchitectNarrativeDensity, type ArchitectVerbosityMode } from "./verbosity.js";
 
 export type ArchitectCliAdapter = "codex-cli" | "copilot-cli";
 
@@ -20,6 +22,9 @@ export interface ArchitectCliBridgeRoute {
   available_tool_count: number;
   advertised_tool_count: number;
   advertised_tools: string[];
+  required_tools: string[];
+  unavailable_required_tools: string[];
+  continuation_tool_manifest: ArchitectContinuationToolManifest | null;
   iterations: number;
   stop_reason: string;
   fallback_reason: string | null;
@@ -61,6 +66,8 @@ export interface RunArchitectCliBridgeInput {
   userMessage: string;
   model: string;
   timeoutMs: number;
+  verbosityMode?: ArchitectVerbosityMode;
+  toolManifest?: ArchitectContinuationToolManifest | null;
   signal?: AbortSignal;
   onToolTrace?: (entry: ArchitectToolTraceEntry) => void;
 }
@@ -95,9 +102,12 @@ const BRIDGE_MCP_CONFIG_ENV_KEYS = Object.freeze([
   "DREAMGRAPH_AUDIT_PATH",
   "DREAMGRAPH_RUN_ID",
   "DREAMGRAPH_WORKSPACE_ROOT",
+  "DREAMGRAPH_ARCHITECT_VERBOSITY_MODE",
+  "DREAMGRAPH_ARCHITECT_STORY_VISIBILITY",
+  "DREAMGRAPH_ARCHITECT_PROMPT_PROFILE",
   "ELECTRON_RUN_AS_NODE",
 ] as const);
-const REQUIRED_DREAMGRAPH_TOOLS = Object.freeze(["query_resource", "read_source_code", "search_source_code", "run_command"] as const);
+const REQUIRED_DREAMGRAPH_TOOLS = Object.freeze(["query_resource", "query_architecture_decisions", "read_source_code", "search_source_code", "run_command"] as const);
 const CLI_BINARY_ENV_KEY_BY_ADAPTER: Record<ArchitectCliAdapter, string> = Object.freeze({
   "codex-cli": "DREAMGRAPH_ARCHITECT_CODEX_CLI_BINARY",
   "copilot-cli": "DREAMGRAPH_ARCHITECT_COPILOT_CLI_BINARY",
@@ -121,6 +131,7 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
 
   const upstreamTools = await mcpListTools(mcpPort);
   const availableToolNames = resolveArchitectCliBridgeToolNames(upstreamTools.map((tool) => tool.name));
+  const continuationManifest = resolveCliContinuationManifest(input.toolManifest, availableToolNames);
   const missingTools = REQUIRED_DREAMGRAPH_TOOLS.filter((name) => !availableToolNames.includes(name));
   if (missingTools.length > 0) {
     throw new Error(`ARCHITECT_CLI_BRIDGE_MCP_TOOL_MISMATCH: missing required DreamGraph MCP tool(s): ${missingTools.join(", ")}`);
@@ -131,7 +142,7 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
   const auditDir = join(scratchDir, "audit");
   const auditPath = join(auditDir, `${runId}.ndjson`);
   const bridgeSpawn = resolveBridgeSpawn();
-  const prompt = serializeCliPrompt(input.messages, input.userMessage, input.adapter);
+  const prompt = serializeCliPrompt(input.messages, input.userMessage, input.adapter, continuationManifest.manifest);
   const model = input.model && input.model !== "auto" ? input.model : undefined;
   const timeoutMs = Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
     ? Math.max(30_000, Math.min(input.timeoutMs, CLI_DEFAULT_TIMEOUT_MS))
@@ -146,9 +157,10 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
       auditDir,
       auditPath,
       workspaceRoot: getArchitectProjectRoot(),
+      verbosityMode: input.verbosityMode,
     });
     const invocation = input.adapter === "codex-cli"
-      ? await prepareCodexInvocation({ scratchDir, prompt, model, bridgeSpawn, envBase, runId, availableToolNames })
+      ? await prepareCodexInvocation({ scratchDir, prompt, model, bridgeSpawn, envBase, runId, availableToolNames, verbosityMode: input.verbosityMode })
       : await prepareCopilotInvocation({ scratchDir, prompt, model, bridgeSpawn, envBase, runId, availableToolNames });
 
     const auditTail = startAuditTraceTail(auditPath, input.onToolTrace);
@@ -190,6 +202,9 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
         available_tool_count: availableToolNames.length,
         advertised_tool_count: availableToolNames.length,
         advertised_tools: availableToolNames,
+        required_tools: continuationManifest.manifest?.required_tools ?? [],
+        unavailable_required_tools: continuationManifest.unavailable_required_tools,
+        continuation_tool_manifest: continuationManifest.manifest,
         iterations: 1,
         stop_reason: processResult.timedOut ? "cli_timed_out" : processResult.exitCode !== 0 ? "cli_failed" : failureReason ? "cli_empty_response" : "cli_completed",
         fallback_reason: failureReason,
@@ -251,8 +266,10 @@ function buildBridgeEnv(input: {
   auditDir: string;
   auditPath: string;
   workspaceRoot: string;
+  verbosityMode?: ArchitectVerbosityMode;
 }): Record<string, string> {
   const env = stringEnv(process.env);
+  const density = resolveArchitectNarrativeDensity(input.verbosityMode);
   return {
     ...env,
     DREAMGRAPH_HOST_MCP_URL: `http://127.0.0.1:${input.mcpPort}/mcp`,
@@ -260,6 +277,9 @@ function buildBridgeEnv(input: {
     DREAMGRAPH_AUDIT_PATH: input.auditPath,
     DREAMGRAPH_RUN_ID: input.runId,
     DREAMGRAPH_WORKSPACE_ROOT: input.workspaceRoot,
+    DREAMGRAPH_ARCHITECT_VERBOSITY_MODE: density.verbosity_mode,
+    DREAMGRAPH_ARCHITECT_STORY_VISIBILITY: density.story_visibility,
+    DREAMGRAPH_ARCHITECT_PROMPT_PROFILE: density.prompt_profile,
     ELECTRON_RUN_AS_NODE: "1",
   };
 }
@@ -404,6 +424,7 @@ async function prepareCodexInvocation(input: {
   envBase: Record<string, string>;
   runId: string;
   availableToolNames: string[];
+  verbosityMode?: ArchitectVerbosityMode;
 }): Promise<{ command: string; args: string[]; cwd: string; env: Record<string, string>; stdin: string; outputPath: string | null }> {
   const command = await resolveArchitectCliExecutable("codex-cli");
   const codexHome = join(input.scratchDir, "codex-home");
@@ -416,6 +437,7 @@ async function prepareCodexInvocation(input: {
     bridgeArgs: input.bridgeSpawn.args,
     env: bridgeMcpConfigEnv(input.envBase),
     tools: input.availableToolNames,
+    modelVerbosity: resolveArchitectNarrativeDensity(input.verbosityMode).provider_text_verbosity,
   }), { mode: 0o600 });
 
   const outputPath = join(artifactsDir, "last-message.txt");
@@ -501,9 +523,11 @@ export function createArchitectCodexConfigToml(input: {
   bridgeArgs: string[];
   env: Record<string, string>;
   tools: string[];
+  modelVerbosity?: "low" | "medium" | "high";
 }): string {
   const lines = [
     "# Generated by DreamGraph for an isolated standalone Architect Codex CLI run.",
+    ...(input.modelVerbosity ? [`model_verbosity = ${tomlString(input.modelVerbosity)}`, ""] : []),
     "[mcp_servers.dreamgraph]",
     `command = ${tomlString(input.bridgeCommand)}`,
     `args = ${tomlArray(input.bridgeArgs)}`,
@@ -547,17 +571,76 @@ function copilotMcpConfigJson(input: {
   }, null, 2)}\n`;
 }
 
-function serializeCliPrompt(messages: LlmMessage[], userMessage: string, adapter: ArchitectCliAdapter): string {
+export function serializeCliPrompt(
+  messages: LlmMessage[],
+  userMessage: string,
+  adapter: ArchitectCliAdapter,
+  toolManifest?: ArchitectContinuationToolManifest | null,
+): string {
+  const contextMessages = messages.filter((message) => message.role !== "user");
   return [
     `You are running inside DreamGraph architect through the real ${adapter} bridge.`,
-    "Use the dreamgraph MCP server as the authoritative source for repository facts and mutations.",
-    "Do not use provider-native shell/read/write routes; use dreamgraph:run_command, read_source_code, patch_file, and related DreamGraph MCP tools.",
+    "Use the dreamgraph MCP server as the authoritative source for repository facts, graph context, ADR guard rails, mutations, and verification.",
+    "Graph-bound execution contract: every repository-specific pass must ground itself with dreamgraph:query_resource and dreamgraph:query_architecture_decisions before acting; use graph_rag_retrieve, query_api_surface, search_data_model, workflows, or data-model resources when they fit the task.",
+    "Mutation contract: source, docs, UI, data-model, or plan changes must be recorded back into DreamGraph evidence using the appropriate governed graph tool, such as enrich_seed_data, modify_api_surface, register_ui_element, solidify_cognitive_insight, or another exposed graph-write tool.",
+    "ADR contract: if the pass introduces a new durable architectural policy, reverses a guard rail, or creates a lasting cross-module decision, record it with record_architecture_decision; otherwise report the ADRs consulted and why no new ADR was needed.",
+    "Do not use provider-native shell/read/write routes; use dreamgraph:run_command, read_source_code, patch_file, query_resource, query_architecture_decisions, and related DreamGraph MCP tools.",
+    "The user request appears only in CURRENT USER REQUEST. Do not reconstruct it from prior sections.",
+    createArchitectCliContinuationManifestSection(toolManifest),
     "",
-    ...messages.map((message) => `## ${message.role.toUpperCase()}\n${message.content}`),
+    ...contextMessages.map((message) => `## ${message.role.toUpperCase()}\n${message.content}`),
     "",
     "## CURRENT USER REQUEST",
     userMessage,
   ].join("\n\n");
+}
+
+export function createArchitectCliContinuationManifestSection(toolManifest?: ArchitectContinuationToolManifest | null): string {
+  if (!toolManifest) {
+    return "Continuation tool manifest: none for this pass.";
+  }
+  const required = toolManifest.required_tools.length > 0 ? toolManifest.required_tools.join(", ") : "none";
+  const preferred = toolManifest.preferred_tools.length > 0 ? toolManifest.preferred_tools.join(", ") : "none";
+  const unavailable = (toolManifest.unavailable_required_tools ?? []).length > 0
+    ? toolManifest.unavailable_required_tools!.join(", ")
+    : "none";
+  return [
+    "Continuation tool manifest for this bounded pass:",
+    `- required_tools: ${required}`,
+    `- preferred_tools: ${preferred}`,
+    `- unavailable_required_tools: ${unavailable}`,
+    "Required and preferred entries name governed dreamgraph MCP tools. If a required tool is unavailable, classify it as unavailable with policy or registry evidence instead of using a provider-native substitute.",
+  ].join("\n");
+}
+
+function resolveCliContinuationManifest(
+  manifest: ArchitectContinuationToolManifest | null | undefined,
+  availableToolNames: readonly string[],
+): { manifest: ArchitectContinuationToolManifest | null; unavailable_required_tools: string[] } {
+  if (!manifest) return { manifest: null, unavailable_required_tools: [] };
+  const available = new Set(availableToolNames);
+  const required = normalizeCliManifestTools(manifest.required_tools);
+  const preferred = normalizeCliManifestTools(manifest.preferred_tools);
+  const unavailable = required.filter((tool) => !available.has(tool));
+  return {
+    manifest: {
+      required_tools: required,
+      preferred_tools: preferred,
+      unavailable_required_tools: unavailable,
+    },
+    unavailable_required_tools: unavailable,
+  };
+}
+
+function normalizeCliManifestTools(names: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name) || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
 }
 
 async function copyCodexHomeAuthArtifacts(runHomeDir: string): Promise<void> {

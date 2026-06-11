@@ -59,6 +59,7 @@ export interface ArchitectLlmConfig extends LlmConfig {
   component: "architect";
   providerSource: "architect" | "general";
   modelSource: LlmConfigSource;
+  textVerbosity?: "low" | "medium" | "high";
 }
 
 export interface LlmMessage {
@@ -110,6 +111,8 @@ export interface LlmCompletionOptions {
   maxTokens?: number;
   /** Override the model for this request (uses provider default if omitted) */
   model?: string;
+  /** Optional OpenAI Responses text verbosity. Ignored by providers without native support. */
+  textVerbosity?: "low" | "medium" | "high";
   /** Basic JSON mode — model must output valid JSON (no schema enforcement) */
   jsonMode?: boolean;
   /**
@@ -443,7 +446,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
     const knownUnsupported = _jsonSchemaUnsupported.has(downgradeKey);
 
     if (capabilities.api === "responses") {
-      return this.completeWithResponses(messages, model, temp, maxTokens, capabilities);
+      return this.completeWithResponses(messages, model, temp, maxTokens, capabilities, options?.textVerbosity);
     }
 
     const buildBody = (useStrictSchema: boolean): Record<string, unknown> => {
@@ -539,6 +542,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
     temp: number,
     maxTokens: number,
     capabilities: ModelCapabilities,
+    textVerbosity?: "low" | "medium" | "high",
   ): Promise<LlmResponse> {
     const instructions = messages
       .filter((message) => message.role === "system")
@@ -551,6 +555,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
       model,
       input,
       max_output_tokens: maxTokens,
+      ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),
       ...(capabilities.supportsTemperature ? { temperature: temp } : {}),
     };
     if (instructions) {
@@ -684,6 +689,7 @@ async function callOpenAiResponsesWithTools(
     tools: tools.map(toOpenAiResponsesTool),
     tool_choice: "auto",
     max_output_tokens: config.maxTokens,
+    ...(config.textVerbosity ? { text: { verbosity: config.textVerbosity } } : {}),
     ...(capabilities.supportsTemperature ? { temperature: config.temperature } : {}),
   };
   if (systemText) {

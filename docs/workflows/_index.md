@@ -129,3 +129,55 @@
 | graph_data_orchestrator | Graph Data Orchestrator | derived from grounded behavioral evidence | 0 |
 | security_auth_error_pipeline | Security Authentication Error Pipeline | derived from grounded behavioral evidence | 0 |
 | event_driven_cognitive_trigger | Event-Driven Cognitive Trigger | derived from grounded behavioral evidence | 0 |
+| architect_plugin_tab_snapshot_action | Architect Plugin Tab Snapshot and Action Dispatch | Standalone Architect lists a plugin tab, loads a plan snapshot, or posts a structured plugin tab action. | 7 |
+| remediation_plan_workflow | Remediation Plan Workflow | derived from grounded behavioral evidence | 0 |
+| cognitive_state_lifecycle | Cognitive State Lifecycle | derived from grounded behavioral evidence | 0 |
+| cognitive_state_machine_progression | Cognitive State Machine Progression | derived from grounded behavioral evidence | 0 |
+| fact_snapshot_generation | FactSnapshot Generation Workflow | derived from grounded behavioral evidence | 0 |
+| cognitive_cycle | Cognitive Cycle | derived from grounded behavioral evidence | 0 |
+| cognitive_rem_cycle | Cognitive REM Cycle | derived from grounded behavioral evidence | 0 |
+| fact_snapshot_integration | Fact Snapshot Integration Hub | derived from grounded behavioral evidence | 0 |
+| release_workflow | Release Workflow | A new DreamGraph version is ready to publish and the release owner starts the release pass. | 7 |
+| rem_cycle_quarantine | REM Cycle Quarantine Process | derived from grounded behavioral evidence | 0 |
+| fact_snapshot_augmentation | Fact Snapshot Augmentation | derived from grounded behavioral evidence | 0 |
+| chat_message_audit_flow | Chat Message Audit Flow | derived from grounded behavioral evidence | 0 |
+| strategy_selection | Cognitive Strategy Selection | derived from grounded behavioral evidence | 0 |
+| entity_verification_flow | Entity Verification Flow | derived from grounded behavioral evidence | 0 |
+| chat_message_attachment_flow | Chat Message Attachment Flow | derived from grounded behavioral evidence | 0 |
+| dream_normalization_lifecycle | Dream Normalization Lifecycle | derived from grounded behavioral evidence | 0 |
+| runtime_metrics_analysis | Runtime Metrics Analysis | derived from grounded behavioral evidence | 0 |
+| crosslink_enrichment_pipeline | Cross-Link Enrichment Pipeline | derived from grounded behavioral evidence | 0 |
+| tool_trace_flow | Tool Trace Flow | derived from grounded behavioral evidence | 0 |
+| validated_archetype_exchange | Validated Archetype Exchange | derived from grounded behavioral evidence | 0 |
+| cognitive_enrichment_lifecycle | Cognitive Enrichment Lifecycle | derived from grounded behavioral evidence | 0 |
+| llm_bootstrap_lifecycle | LLM Bootstrap Lifecycle State | derived from grounded behavioral evidence | 0 |
+| dream_archetype_exchange | Dream Archetype Exchange | derived from grounded behavioral evidence | 0 |
+| mcp_resource_lifecycle | MCP Resource Lifecycle | derived from grounded behavioral evidence | 0 |
+| federated_bootstrap_integrity | Federated Bootstrap Integrity | derived from grounded behavioral evidence | 0 |
+| discipline_enforcement_lifecycle | Discipline Enforcement Lifecycle | derived from grounded behavioral evidence | 0 |
+| federated_archetype_exchange | Federated Archetype Exchange | derived from grounded behavioral evidence | 0 |
+| archetype_exchange | Archetype Exchange Workflow | derived from grounded behavioral evidence | 0 |
+| discipline_validation_chain | Discipline Validation Chain | derived from grounded behavioral evidence | 0 |
+| session_policy_integration | Session Policy Integration | derived from grounded behavioral evidence | 0 |
+| federated_archetype_import_export | Federated Archetype Import/Export | derived from grounded behavioral evidence | 0 |
+| mcp_tool_invocation_flow | MCP Tool Invocation Flow | derived from grounded behavioral evidence | 0 |
+| context_enrichment_flow | Context Enrichment Flow | derived from grounded behavioral evidence | 0 |
+| policy_validation_flow | Policy Validation Flow | derived from grounded behavioral evidence | 0 |
+| federated_dream_archetype_exchange | Federated Dream Archetype Exchange | derived from grounded behavioral evidence | 0 |
+| archetype_exchange_hub | Archetype Exchange Hub | derived from grounded behavioral evidence | 0 |
+| enforced_session_lifecycle | Enforced Session Lifecycle | derived from grounded behavioral evidence | 0 |
+| webview_tool_trace | Webview Tool Trace Workflow | derived from grounded behavioral evidence | 0 |
+| ui_semantic_migration_framework | UI Semantic Migration Framework | derived from grounded behavioral evidence | 0 |
+| snapshot_version_guard | Snapshot Version Guard | derived from grounded behavioral evidence | 0 |
+| federated_dream_exchange | Federated Dream Exchange | derived from grounded behavioral evidence | 0 |
+| explorer_snapshot_compatibility_gate | Explorer Snapshot Compatibility Gate | derived from grounded behavioral evidence | 0 |
+| ui_semantic_migration_planner | UI Semantic Migration Planner | derived from grounded behavioral evidence | 0 |
+| advisory_context_fetch | Advisory Context Fetch | derived from grounded behavioral evidence | 0 |
+| ui_migration_gap_analysis | UI Migration Gap Analysis | derived from grounded behavioral evidence | 0 |
+| advisory_context_fallback | Advisory Context Fallback | derived from grounded behavioral evidence | 0 |
+| snapshot_version_gate | Snapshot Version Gate | derived from grounded behavioral evidence | 0 |
+| snapshot_version_handshake | Snapshot Version Handshake | derived from grounded behavioral evidence | 0 |
+
+<!-- architect-continuation-proof-test: Slice 5 completed -->
+
+<!-- architect-continuation-proof-test: Slice 5 completed -->

@@ -1,4 +1,4 @@
-# Test Suites (101)
+# Test Suites (120)
 
 | ID | Name | URI | Source Files | Tags |
 |----|------|-----|--------------|------|
@@ -103,4 +103,23 @@
 | `test_suite_solidify_insight` | solidify-insight.test.ts | `test_suite://test_suite_solidify_insight` | `tests/tools/solidify-insight.test.ts` | vitest_or_jest |
 | `test_suite_ui_migration_plan` | ui-migration-plan.test.ts | `test_suite://test_suite_ui_migration_plan` | `tests/tools/ui-migration-plan.test.ts` | vitest_or_jest |
 | `test_suite_wire_links` | wire-links.test.ts | `test_suite://test_suite_wire_links` | `tests/tools/wire-links.test.ts` | vitest_or_jest |
+| `test_suite_architect_cli_bridge` | architect-cli-bridge.test.ts | `test_suite://test_suite_architect_cli_bridge` | `tests/architect-cli-bridge.test.ts` | vitest_or_jest |
+| `test_suite_architect_cli` | architect-cli.test.ts | `test_suite://test_suite_architect_cli` | `tests/architect-cli.test.ts` | vitest_or_jest |
+| `test_suite_architect_continuation` | architect-continuation.test.ts | `test_suite://test_suite_architect_continuation` | `tests/architect-continuation.test.ts` | vitest_or_jest |
+| `test_suite_architect_native_tool_loop` | architect-native-tool-loop.test.ts | `test_suite://test_suite_architect_native_tool_loop` | `tests/architect-native-tool-loop.test.ts` | vitest_or_jest |
+| `test_suite_architect_pulse` | architect-pulse.test.ts | `test_suite://test_suite_architect_pulse` | `tests/architect-pulse.test.ts` | vitest_or_jest |
+| `test_suite_architect_root_route` | architect-root-route.test.ts | `test_suite://test_suite_architect_root_route` | `tests/architect-root-route.test.ts` | vitest_or_jest |
+| `test_suite_cli_status` | cli-status.test.ts | `test_suite://test_suite_cli_status` | `tests/cli-status.test.ts` | vitest_or_jest |
+| `test_suite_explorer_root_route` | explorer-root-route.test.ts | `test_suite://test_suite_explorer_root_route` | `tests/explorer-root-route.test.ts` | vitest_or_jest |
+| `test_suite_living_dreamgraph_projections` | living-dreamgraph-projections.test.ts | `test_suite://test_suite_living_dreamgraph_projections` | `tests/living-dreamgraph-projections.test.ts` | vitest_or_jest |
+| `test_suite_onboarding_readiness` | onboarding-readiness.test.ts | `test_suite://test_suite_onboarding_readiness` | `tests/onboarding-readiness.test.ts` | vitest_or_jest |
+| `test_suite_project_plans_scaffold` | project-plans-scaffold.test.ts | `test_suite://test_suite_project_plans_scaffold` | `tests/project-plans-scaffold.test.ts` | vitest_or_jest |
+| `test_suite_action_checklist_example` | action-checklist-example.test.ts | `test_suite://test_suite_action_checklist_example` | `tests/sdk/action-checklist-example.test.ts` | vitest_or_jest |
+| `test_suite_architect_contract` | architect-contract.test.ts | `test_suite://test_suite_architect_contract` | `tests/sdk/architect-contract.test.ts` | vitest_or_jest |
+| `test_suite_architect_contributions` | architect-contributions.test.ts | `test_suite://test_suite_architect_contributions` | `tests/sdk/architect-contributions.test.ts` | vitest_or_jest |
+| `test_suite_architect_plan_state` | architect-plan-state.test.ts | `test_suite://test_suite_architect_plan_state` | `tests/sdk/architect-plan-state.test.ts` | vitest_or_jest |
+| `test_suite_architect_routes` | architect-routes.test.ts | `test_suite://test_suite_architect_routes` | `tests/sdk/architect-routes.test.ts` | vitest_or_jest |
+| `test_suite_shell_integration_slice5_slice6` | shell-integration-slice5-slice6.test.ts | `test_suite://test_suite_shell_integration_slice5_slice6` | `tests/shell-integration-slice5-slice6.test.ts` | vitest_or_jest |
+| `test_suite_standalone_token_economy_store` | standalone-token-economy-store.test.ts | `test_suite://test_suite_standalone_token_economy_store` | `tests/standalone-token-economy-store.test.ts` | vitest_or_jest |
+| `test_suite_atomic_write` | atomic-write.test.ts | `test_suite://test_suite_atomic_write` | `tests/utils/atomic-write.test.ts` | vitest_or_jest |
 

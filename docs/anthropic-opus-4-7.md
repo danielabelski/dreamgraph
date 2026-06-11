@@ -1,16 +1,16 @@
-# Anthropic Architect Configuration and Claude Opus 4.7 Migration
+# Anthropic Architect Configuration and Claude Migration
 
-This document describes how DreamGraph's VS Code architect integrates with Anthropic models, with special guidance for **Claude Opus 4.7**.
+This document describes how DreamGraph's VS Code architect integrates with Anthropic models, with guidance for **Claude Opus 4.7**, **Claude Fable 5**, and **Claude Mythos 5**.
 
 ## Current DreamGraph defaults
 
-DreamGraph currently keeps **`claude-opus-4-6`** as the default Anthropic Architect model while exposing **`claude-opus-4-7`** as a first-class selectable option in the model picker and settings.
+DreamGraph currently keeps **`claude-opus-4-7`** as the default Anthropic Architect model. `claude-fable-5` and `claude-mythos-5` are first-class selectable options, but they do not change first-run behavior.
 
 Why:
 
-- it preserves the currently established default behavior
-- it allows immediate Opus 4.7 adoption without requiring `Custom...`
-- it gives a compatibility margin while Anthropic-specific request shaping evolves
+- ADR-150 locks the Anthropic default to Opus 4.7 and xhigh effort until a superseding ADR is accepted
+- Fable 5 can be adopted explicitly without requiring `Custom...`
+- Mythos 5 may require Anthropic account access and must not be presented as generally available
 
 ## Relevant VS Code settings
 
@@ -26,17 +26,37 @@ Recommended starting values:
 
 | Model | Recommended effort | Adaptive thinking | Thinking summary |
 |---|---|---:|---:|
-| `claude-opus-4-6` | `high` | off or conservative | optional |
 | `claude-opus-4-7` | `xhigh` for coding/agentic work | on | on |
+| `claude-fable-5` | `xhigh` for coding/agentic work | on | on |
+| `claude-mythos-5` | `xhigh`, if the account has access | on | on |
+| `claude-opus-4-6` | `high` | off or conservative | optional |
+
+Example settings:
+
+```json
+{
+  "dreamgraph.architect.provider": "anthropic",
+  "dreamgraph.architect.model": "claude-fable-5"
+}
+```
+
+```json
+{
+  "dreamgraph.architect.provider": "anthropic",
+  "dreamgraph.architect.model": "claude-mythos-5"
+}
+```
 
 ## Implemented DreamGraph behavior
 
 Current Architect behavior for Anthropic requests:
 
-- **Opus 4.6** remains the default UI selection.
-- **Opus 4.7** is directly selectable.
+- **Opus 4.7** remains the governed default selection.
+- **Fable 5** and **Mythos 5** are directly selectable in VS Code and standalone Architect surfaces.
+- **Mythos 5** selection only sends the configured model string; Anthropic account access controls may still reject unauthorized calls.
 - If effort is configured as `xhigh` while using **Opus 4.6**, DreamGraph clamps it to `high` for compatibility.
-- For **Opus 4.7**, DreamGraph can send adaptive thinking and optionally summarized thinking visibility.
+- For **Opus 4.7**, **Opus 4.8**, **Fable 5**, and **Mythos 5**, DreamGraph sends `output_config.effort` and can send adaptive thinking with optional summarized visibility.
+- For unknown custom `claude-*` IDs, DreamGraph avoids adaptive thinking and provider-specific beta fields.
 
 ## Claude Opus 4.7 API migration notes
 
@@ -59,19 +79,20 @@ New pattern:
 
 ```python
 client.messages.create(
-    model="claude-opus-4-7",
-    max_tokens=64000,
+    model="claude-fable-5",
+    max_tokens=128000,
     thinking={"type": "adaptive"},
-    output_config={"effort": "high"},
+    output_config={"effort": "xhigh"},
     messages=[{"role": "user", "content": "..."}],
 )
 ```
 
 For DreamGraph this means:
 
-- do not send `thinking: { type: "enabled", budget_tokens: N }` to Opus 4.7
-- use adaptive thinking instead
+- do not send `thinking: { type: "enabled", budget_tokens: N }` to Opus 4.7, Opus 4.8, Fable 5, or Mythos 5
+- use adaptive thinking instead for the supported model IDs
 - control depth primarily through `output_config.effort`
+- omit non-default sampling parameters unless a later provider contract explicitly supports them
 
 ### 2. Effort matters more on Opus 4.7
 
@@ -85,8 +106,8 @@ Anthropic guidance indicates:
 Practical DreamGraph guidance:
 
 - use `xhigh` for graph-grounded coding, architecture analysis, and multi-step tool orchestration on Opus 4.7
-- keep `high` as the stable default extension setting for now unless you intentionally optimize for Opus 4.7-first behavior
-- if you later switch the UI default model to Opus 4.7, reconsider making `xhigh` the default effort at the same time
+- keep `claude-opus-4-7` as the stable default model unless an accepted ADR supersedes ADR-150
+- use explicit user settings to move a workspace to Fable 5 or Mythos 5
 
 ### 3. Thinking summaries are no longer implicit
 
@@ -167,14 +188,15 @@ Recommended posture:
 
 ## Suggested migration checklist for DreamGraph users
 
-- Update model name from `claude-opus-4-6` to `claude-opus-4-7` when ready.
-- Remove non-default `temperature`, `top_p`, and `top_k` from Opus 4.7 request payloads.
+- Update model name to `claude-opus-4-7`, `claude-fable-5`, or `claude-mythos-5` when ready.
+- Use Mythos 5 only when the Anthropic account has access.
+- Remove non-default `temperature`, `top_p`, and `top_k` from modern Claude request payloads.
 - Replace old extended thinking budgets with adaptive thinking plus effort.
 - Explicitly enable summarized thinking if your UX depends on visible progress.
 - Re-test token usage, latency, and cost.
 - Re-tune `max_tokens` for long-running Architect tasks.
 - Re-budget image-heavy workloads because high-resolution vision can use materially more tokens.
-- Review prompts for Opus 4.7's more literal instruction following and different verbosity calibration.
+- Review prompts for modern Claude models' more literal instruction following and different verbosity calibration.
 
 ## Prompting considerations
 

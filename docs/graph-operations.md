@@ -112,3 +112,4 @@ For curation, prefer:
 A concise framing that works well:
 
 > Enrich grows the graph. Curate sharpens it.
+<!-- CONTINUATION TEST SLICE 7 -->

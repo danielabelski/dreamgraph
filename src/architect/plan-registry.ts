@@ -45,6 +45,7 @@ export interface ArchitectPlanCheckpoint {
   status: string;
   label: string;
   resume_note: string | null;
+  body: string;
 }
 
 export type ArchitectPlanLifecycle =
@@ -143,16 +144,20 @@ export interface LivingPlanState {
 
 export type ArchitectPlanActionKind = "plan_action" | "review_gate";
 
+export type ArchitectPlanActionAuditStatus = "recorded" | "completed" | "implemented" | "verified" | "partial" | "failed" | "timed_out" | "cancelled";
+
 export interface ArchitectPlanActionAuditInput {
   kind: ArchitectPlanActionKind;
   action: string;
   audit_reason: string;
   actor?: string | null;
   slice_id?: string | null;
+  status?: ArchitectPlanActionAuditStatus | null;
   gate_id?: string | null;
   decision?: string | null;
   evidence?: string | null;
   content?: string | null;
+  resume_note?: string | null;
 }
 
 export interface ArchitectPlanActionAuditResult {
@@ -777,6 +782,7 @@ function extractCheckpoints(logMarkdown: string | null): ArchitectPlanCheckpoint
       status,
       label: `${sliceId} — ${status}`,
       resume_note: parseFirstMatch(block, /^- Resume note:\s*(.+)$/m),
+      body: block,
     });
   }
   return checkpoints.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
@@ -802,12 +808,29 @@ function sliceRef(slice: ArchitectPlanSlice | null | undefined, fallback?: Archi
   return { id: fallback.slice_id, title: fallback.slice_id, status: fallback.status };
 }
 
+function sliceSlugWithoutOrdinal(slice: ArchitectPlanSlice): string {
+  return slugifySliceSegment(slice.id).replace(/^slice-[a-z0-9]+-?/, "");
+}
+
+function sliceMatchesSlug(slice: ArchitectPlanSlice, normalized: string): boolean {
+  const idSlug = slugifySliceSegment(slice.id);
+  const titleSlug = slugifySliceSegment(slice.title);
+  const idWithoutOrdinal = sliceSlugWithoutOrdinal(slice);
+  const titleWithoutOrdinal = titleSlug.replace(/^slice-[a-z0-9]+-?/, "");
+  return (
+    idSlug === normalized ||
+    titleSlug === normalized ||
+    (idWithoutOrdinal.length > 0 && idWithoutOrdinal === normalized) ||
+    (titleWithoutOrdinal.length > 0 && titleWithoutOrdinal === normalized)
+  );
+}
+
 function findSliceById(slices: ArchitectPlanSlice[], sliceId: string | null | undefined): ArchitectPlanSlice | null {
   if (!sliceId) return null;
   const normalized = slugifySliceSegment(sliceId);
   const ordinal = normalized.match(/^(?:slice-)?([a-z0-9]+)$/i)?.[1] ?? null;
   return (
-    slices.find((slice) => slice.id === sliceId || slugifySliceSegment(slice.id) === normalized) ??
+    slices.find((slice) => slice.id === sliceId || sliceMatchesSlug(slice, normalized)) ??
     (ordinal == null ? null : slices.find((slice) => slice.id === `slice-${ordinal}` || slice.id.startsWith(`slice-${ordinal}-`))) ??
     null
   );
@@ -821,23 +844,39 @@ function sliceOrdinal(slice: ArchitectPlanSlice): number | null {
 }
 
 function checkpointCompletedSliceIds(slices: ArchitectPlanSlice[], checkpoint: ArchitectPlanCheckpoint): string[] {
-  const direct = findSliceById(slices, checkpoint.slice_id);
-  if (direct) return [direct.id];
+  const implementationSlices = slices.filter((slice) => slice.category === "slice");
+  const completed = new Map<string, ArchitectPlanSlice>();
+  const direct = findSliceById(implementationSlices, checkpoint.slice_id);
+  if (direct) completed.set(direct.id, direct);
+
   const normalized = slugifySliceSegment(checkpoint.slice_id);
   const rangeMatch = normalized.match(/^slices?-([0-9]+)-(?:through|to)-([0-9]+)$/i);
-  if (!rangeMatch) return [];
-  const start = Number.parseInt(rangeMatch[1], 10);
-  const end = Number.parseInt(rangeMatch[2], 10);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
-  const low = Math.min(start, end);
-  const high = Math.max(start, end);
-  return slices
-    .filter((slice) => slice.category === "slice")
-    .filter((slice) => {
-      const ordinal = sliceOrdinal(slice);
-      return ordinal != null && ordinal >= low && ordinal <= high;
-    })
-    .map((slice) => slice.id);
+  if (rangeMatch) {
+    const start = Number.parseInt(rangeMatch[1], 10);
+    const end = Number.parseInt(rangeMatch[2], 10);
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      const low = Math.min(start, end);
+      const high = Math.max(start, end);
+      for (const slice of implementationSlices) {
+        const ordinal = sliceOrdinal(slice);
+        if (ordinal != null && ordinal >= low && ordinal <= high) completed.set(slice.id, slice);
+      }
+    }
+  }
+
+  const completionLines = checkpoint.body
+    .split(/\r?\n/g)
+    .filter((line) => /^-\s*(?:Action|Result):/i.test(line))
+    .filter((line) => /\b(?:implemented|completed|verified|finished)\b/i.test(line));
+  for (const line of completionLines) {
+    for (const match of line.matchAll(/\bSlice\s+([0-9]+)\b/gi)) {
+      const ordinal = match[1];
+      const slice = implementationSlices.find((candidate) => candidate.id === `slice-${ordinal}` || candidate.id.startsWith(`slice-${ordinal}-`));
+      if (slice) completed.set(slice.id, slice);
+    }
+  }
+
+  return [...completed.keys()];
 }
 
 function findNextSliceFromResume(slices: ArchitectPlanSlice[], resumeHint: string | null, afterSliceId: string | null): ArchitectPlanSlice | null {
@@ -1238,8 +1277,10 @@ function buildPlanActionLogEntry(
 ): string {
   const action = compactAuditValue(input.action) ?? "unspecified";
   const sliceId = compactAuditValue(input.slice_id) ?? "standalone-architect-project-bound-chat-shell";
-  const status = input.kind === "review_gate" ? "review_gate_recorded" : "action_recorded";
+  const explicitStatus = compactAuditValue(input.status);
+  const status = explicitStatus ?? (input.kind === "review_gate" ? "review_gate_recorded" : "action_recorded");
   const chatPlanUpdate = input.kind === "plan_action" && action === "chat_plan_update";
+  const architectPassCompletion = input.kind === "plan_action" && action === "architect_pass_completed";
   const lines = [
     `### ${timestamp} — slice: ${sliceId} — status: ${status}`,
     "",
@@ -1255,11 +1296,15 @@ function buildPlanActionLogEntry(
     auditLine("Content", input.content),
     chatPlanUpdate
       ? "- Tool groups used: `/api/architect/v1/chat`, selected-plan markdown update, implementation-log projection"
-      : "- Tool groups used: `/api/architect/v1/plans/{planId}/actions`, `/api/architect/v1/plans/{planId}/review-gates`, implementation-log projection",
+      : architectPassCompletion
+        ? "- Tool groups used: `/api/architect/v1/chat`, continuation envelope parsing, implementation-log projection"
+        : "- Tool groups used: `/api/architect/v1/plans/{planId}/actions`, `/api/architect/v1/plans/{planId}/review-gates`, implementation-log projection",
     chatPlanUpdate
       ? "- Result: selected plan markdown was updated by the daemon and the request was captured in the append-only implementation log"
-      : "- Result: request captured in the append-only implementation log; no source patch was applied by the browser endpoint",
-    "- Resume note: continue from the project-bound Architect browser surface with daemon-governed chat, plan, review, and scheduler controls",
+      : architectPassCompletion
+        ? "- Result: successful Architect pass was captured as a completed implementation checkpoint for cursor projection"
+        : "- Result: request captured in the append-only implementation log; no source patch was applied by the browser endpoint",
+    `- Resume note: ${compactAuditValue(input.resume_note) ?? "continue from the project-bound Architect browser surface with daemon-governed chat, plan, review, and scheduler controls"}`,
   ].filter((line): line is string => line != null);
 
   return `${lines.join("\n")}\n`;

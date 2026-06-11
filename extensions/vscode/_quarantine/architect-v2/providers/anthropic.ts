@@ -13,6 +13,40 @@ import { AnthropicAdapter } from "./transports/anthropic-adapter";
 
 const ANTHROPIC_MODELS: readonly ModelDescriptor[] = [
   {
+    id: "claude-fable-5",
+    displayName: "Claude Fable 5",
+    contextWindow: 1_000_000,
+    capabilities: {
+      api: "anthropic-messages",
+      streaming: true,
+      toolCallShape: "anthropic",
+      attachments: { text: true, image: true, pdf: true },
+      reasoning: {
+        supported: true,
+        effortLevels: ["low", "medium", "high", "xhigh", "max"],
+        defaultEffort: "xhigh",
+      },
+      maxOutputTokens: 128_000,
+    },
+  },
+  {
+    id: "claude-mythos-5",
+    displayName: "Claude Mythos 5",
+    contextWindow: 1_000_000,
+    capabilities: {
+      api: "anthropic-messages",
+      streaming: true,
+      toolCallShape: "anthropic",
+      attachments: { text: true, image: true, pdf: true },
+      reasoning: {
+        supported: true,
+        effortLevels: ["low", "medium", "high", "xhigh", "max"],
+        defaultEffort: "xhigh",
+      },
+      maxOutputTokens: 65_536,
+    },
+  },
+  {
     id: "claude-opus-4-7",
     displayName: "Claude Opus 4.7",
     contextWindow: 200_000,

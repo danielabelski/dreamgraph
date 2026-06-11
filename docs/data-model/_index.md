@@ -109,3 +109,76 @@
 | instance_auth_actor_context | Instance Authentication Actor Context | - | - |
 | vscode_webview_protocol_definitions | VSCode Webview Protocol Definitions | - | - |
 | webview_chat_protocol | Webview Chat Protocol | - | - |
+| quarantine_record | Quarantine Record | - | - |
+| plan_context | Tension Plan Context | - | - |
+| cross_link_metadata | Cross-Link Metadata | - | - |
+| validation_outcome_history | Validation Outcome History | - | - |
+| dream_cycle_state | Dream Cycle State | - | - |
+| rem_cycle_state | REM Cycle State | - | - |
+| cross_layer_metrics_hub | Cross-Layer Metrics Hub | - | - |
+| structured_conversation_attachment | Structured Conversation Attachment | - | - |
+| attachment_pipeline | Attachment Pipeline | - | - |
+| architect_llm_capabilities | Architect LLM Capabilities | - | - |
+| tool_trace_history | Tool Trace History | - | - |
+| bootstrap_fingerprint | Bootstrap Fingerprint | - | - |
+| enriched_cross_link | Enriched Graph Cross-Link | - | - |
+| model_bootstrap_fingerprint | Model Bootstrap Fingerprint | - | - |
+| graph_enrichment_metadata | Graph Enrichment Metadata | - | - |
+| entity_link_cross_metadata | Entity Link Cross-Metadata | - | - |
+| architect_llm_config | Architect LLM Config | - | - |
+| llm_bootstrap_fingerprint | LLM Bootstrap Fingerprint | - | - |
+| tool_interaction_trace | Tool Interaction Trace | - | - |
+| structured_llm_interaction_protocol | Structured LLM Interaction Protocol | - | - |
+| plugin_discipline_resource_manifest | Plugin Discipline Resource Manifest | - | - |
+| enrichment_metadata_bag | Enrichment Metadata Bag | - | - |
+| deep_insights_slot | Deep Insights Slot | - | - |
+| multi_instance_config_snapshot | Multi-Instance Config Snapshot | - | - |
+| chat_attachment_structure | Chat Attachment Structure | - | - |
+| instance_bootstrap_audit | Instance Bootstrap Audit | - | - |
+| attachment_verification_model | Attachment Verification Model | - | - |
+| chat_attachment_contract | Chat Attachment Message Contract | - | - |
+| fed_pattern_archetype | Federated Pattern Archetype | - | - |
+| mcp_context_cache | MCP Context Cache | - | - |
+| discipline_manifest_rules | Discipline Manifest Rules | - | - |
+| bootstrap_fingerprint_journal | Bootstrap Fingerprint Journal | - | - |
+| bootstrap_evidence_log | Bootstrap Evidence Log | - | - |
+| semantic_ui_element | Semantic UI Element | - | - |
+| discipline_rule_manifest | Discipline Rule Manifest | - | - |
+| discipline_manifest | Discipline Manifest | - | - |
+| deep_context_cache | Deep Context Cache | - | - |
+| discipline_manifest_management | Discipline Manifest Management | - | - |
+| delta_table_tracking | Delta Table Tracking | - | - |
+| bootstrap_fingerprint_tracking | Bootstrap Fingerprint Tracking | - | - |
+| webview_verification_status | Webview Verification Status | - | - |
+| chat_message_activity_stream | Chat Message Activity Stream | - | - |
+| bootstrap_event_log | Bootstrap Event Log | - | - |
+| entity_verification_log | Entity Verification Log | - | - |
+| cognitive_pattern_exchange_audit | Cognitive Pattern Exchange Audit | - | - |
+| instance_scope | Instance Scope | - | - |
+| cognitive_bootstrap_log | Cognitive Bootstrap Log | - | - |
+| plugin_manifest_rules | Plugin Manifest Rules | - | - |
+| federated_archetype | Federated Pattern Archetype | - | - |
+| bootstrap_fingerprint_guard | Bootstrap Fingerprint Guard | - | - |
+| discipline_manifest_resource | Discipline Manifest Resource | - | - |
+| ui_migration_plan | UI Migration Plan | - | - |
+| chat_attachment_protocol | Chat Attachment Protocol | - | - |
+| deep_insights_cache_slot | Deep Insights Cache Slot | - | - |
+| entity_verification_state | Entity Verification State | - | - |
+| tool_trace_telemetry | Tool Trace Telemetry | - | - |
+| tool_trace_protocol | Tool Trace Protocol | - | - |
+| bootstrap_fingerprint_log | Bootstrap Fingerprint Log | - | - |
+| bootstrap_fingerprint_history | Bootstrap Fingerprint History | - | - |
+| chat_trace_protocol | Chat Trace Protocol | - | - |
+| webview_trace_contract | Webview Trace Contract | - | - |
+| advisory_context_timeout_cache | Advisory Context Timeout Cache | - | - |
+| machine_readable_discipline_manifest | Machine-readable Discipline Manifest | - | - |
+| webview_trace_payload | Webview Trace Payload | - | - |
+| webview_trace_protocol | Webview Trace Protocol | - | - |
+| tool_trace_contract | Tool Trace Contract | - | - |
+| webview_tool_telemetry | Webview Tool Telemetry | - | - |
+| snapshot_version_contract | Snapshot Version Contract | - | - |
+| semantic_ui_migration_plan | Semantic UI Migration Plan | - | - |
+| webview_chat_contract | Webview Chat Contract | - | - |
+| tool_trace_payload | Tool Trace Payload | - | - |
+
+<!-- CONTINUATION TEST SLICE 4 -->

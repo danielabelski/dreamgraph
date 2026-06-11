@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { Script } from "node:vm";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { JSDOM, VirtualConsole } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
 
 import { config } from "../src/config/config.js";
@@ -25,10 +26,13 @@ import {
   buildArchitectProviderReadiness,
   formatUserVisibleFallbackReason,
   architectPassStatusFromFallback,
+  classifyStandaloneRouteFailure,
   handleArchitectRoute,
 } from "../src/architect/routes.js";
 import * as lifecycle from "../src/instance/lifecycle.js";
 import { initLlmProvider } from "../src/cognitive/llm.js";
+import { ARCHITECT_CONTINUATION_SCHEMA } from "../src/architect/continuation.js";
+import { normalizeArchitectVerbosityMode, resolveArchitectNarrativeDensity } from "../src/architect/verbosity.js";
 
 async function withArchitectServer<T>(run: (baseUrl: string) => Promise<T>): Promise<T> {
   let server: Server | undefined;
@@ -60,7 +64,154 @@ async function expectJsonOk(response: Response): Promise<Record<string, unknown>
   return await response.json() as Record<string, unknown>;
 }
 
+function extractArchitectMainScript(html: string): string {
+  const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  return scripts.find((script) => script.includes("const initialRuntimePayload")) ?? "";
+}
+
+async function waitForCondition(check: () => boolean, timeoutMs = 1_500): Promise<void> {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > timeoutMs) throw new Error("Timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+async function executeArchitectShellInJsdom(input: {
+  baseUrl: string;
+  html: string;
+  chatHistoryPayload: Record<string, unknown>;
+}): Promise<{ dom: JSDOM; errors: string[] }> {
+  const errors: string[] = [];
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on("jsdomError", (error) => errors.push(error.message));
+  const html = input.html.replace(/<script src="[^"]+"><\/script>\s*/g, "");
+  const dom = new JSDOM(html, {
+    url: `${input.baseUrl}/architect`,
+    runScripts: "dangerously",
+    resources: "usable",
+    pretendToBeVisual: true,
+    virtualConsole,
+    beforeParse(window) {
+      const win = window as unknown as Window & {
+        fetch: typeof fetch;
+        EventSource: unknown;
+        ResizeObserver: unknown;
+      };
+      window.addEventListener("error", (event) => errors.push(String(event.error?.message || event.message)));
+      window.addEventListener("unhandledrejection", (event) => errors.push(String(event.reason?.message || event.reason)));
+      win.fetch = async (resource: RequestInfo | URL, init?: RequestInit) => {
+        const raw = typeof resource === "string" || resource instanceof URL ? String(resource) : resource.url;
+        const url = new URL(raw, input.baseUrl);
+        if (url.pathname === "/api/architect/v1/chat-history") {
+          return new Response(JSON.stringify(input.chatHistoryPayload), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.pathname === "/api/architect/v1/plugin-tabs") {
+          return new Response(JSON.stringify({ ok: true, tabs: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/api/architect/v1/repo-setup") {
+          return new Response(JSON.stringify({
+            ok: true,
+            repo_setup: { repositories: [], project_map: { status: "ready" }, persisted: true },
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/api/architect/v1/plans") {
+          return new Response(JSON.stringify({
+            ok: true,
+            project_scope: { project_root: "test", plans_root: "plans", instance_id: "test", binding_status: "bound" },
+            architect_runtime: { adapter: "native_api_tool_loop", provider: "none", model: "test", session_id: "test-session", verbosity_mode: "balanced" },
+            architect_llm: { capabilities: { textAttachments: false, imageAttachments: false } },
+            plans: [],
+            plan_tree: [],
+            plan_filters: { status_options: [], phase_options: [] },
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/api/architect/v1/pulse") {
+          return new Response(JSON.stringify({
+            ok: true,
+            pulse: {
+              pulse_hash: "test",
+              cognitive: { state: "ready", llm_ready: true, unresolved_tensions: 0, expiring_next_cycle: 0 },
+              weather: { kind: "clear", label: "Clear", reasons: [] },
+              plan: {},
+              authority_boundary: { repository_authority: "dreamgraph_mcp", mutation_mode: "governed_tools_only" },
+            },
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/api/architect/v1/onboarding-events") {
+          return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return fetch(url, init);
+      };
+      win.EventSource = class {
+        onerror: ((event: unknown) => void) | null = null;
+        readonly url: string;
+        private readonly listeners = new Map<string, (event: MessageEvent) => void>();
+        constructor(url: string) {
+          this.url = url;
+          window.setTimeout(() => {
+            const listener = this.listeners.get("architect.noop");
+            if (!listener) return;
+            listener(new window.MessageEvent("architect.noop", {
+              data: JSON.stringify({
+                seq: 1,
+                kind: "architect.noop",
+                ts: new Date().toISOString(),
+                payload: {
+                  status: "ready",
+                  project_scope: { project_root: "test", instance_id: "test", binding_status: "bound" },
+                  architect_llm: { adapter: "native_api_tool_loop", provider: "none", model: "test" },
+                },
+              }),
+            }));
+          }, 0);
+        }
+        addEventListener(type: string, listener: (event: MessageEvent) => void): void {
+          this.listeners.set(type, listener);
+        }
+        close(): void {}
+      };
+      win.ResizeObserver = class {
+        observe(): void {}
+        disconnect(): void {}
+      };
+      window.requestAnimationFrame = (callback: FrameRequestCallback) => window.setTimeout(() => callback(Date.now()), 0);
+      window.cancelAnimationFrame = (handle: number) => window.clearTimeout(handle);
+      window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
+      window.confirm = () => true;
+      window.prompt = () => null;
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return { dom, errors };
+}
+
 describe("standalone Architect route hardening", () => {
+  it("maps Architect verbosity modes to shared narrative density", () => {
+    expect(resolveArchitectNarrativeDensity("concise")).toEqual({
+      verbosity_mode: "concise",
+      provider_text_verbosity: "low",
+      story_visibility: "hidden",
+      prompt_profile: "compact",
+    });
+    expect(resolveArchitectNarrativeDensity("balanced")).toMatchObject({
+      verbosity_mode: "balanced",
+      provider_text_verbosity: "medium",
+      story_visibility: "compact",
+      prompt_profile: "standard",
+    });
+    expect(resolveArchitectNarrativeDensity("detailed")).toMatchObject({
+      verbosity_mode: "detailed",
+      provider_text_verbosity: "high",
+      story_visibility: "expanded",
+      prompt_profile: "diagnostic",
+    });
+    expect(normalizeArchitectVerbosityMode("unknown", "balanced")).toBe("balanced");
+  });
+
   it("advertises bridge-local run_command during CLI MCP preflight", () => {
     expect(resolveArchitectCliBridgeToolNames(["query_resource", "read_source_code", "search_source_code"])).toEqual([
       "query_resource",
@@ -101,11 +252,20 @@ describe("standalone Architect route hardening", () => {
         "=C:": "C:\\Users\\Mika",
         "CommonProgramFiles(x86)": "C:\\Program Files (x86)\\Common Files",
         DREAMGRAPH_RUN_ID: "run-1",
+        DREAMGRAPH_ARCHITECT_VERBOSITY_MODE: "detailed",
+        DREAMGRAPH_ARCHITECT_STORY_VISIBILITY: "expanded",
+        DREAMGRAPH_ARCHITECT_PROMPT_PROFILE: "diagnostic",
       },
       tools: ["run_command", "query.resource"],
+      modelVerbosity: "high",
     });
 
+    expect(content).toContain('model_verbosity = "high"');
+    expect(content.indexOf('model_verbosity = "high"')).toBeLessThan(content.indexOf("[mcp_servers.dreamgraph]"));
     expect(content).toContain('"=C:" = "C:\\\\Users\\\\Mika"');
+    expect(content).toContain('DREAMGRAPH_ARCHITECT_VERBOSITY_MODE = "detailed"');
+    expect(content).toContain('DREAMGRAPH_ARCHITECT_STORY_VISIBILITY = "expanded"');
+    expect(content).toContain('DREAMGRAPH_ARCHITECT_PROMPT_PROFILE = "diagnostic"');
     expect(content).toContain('"CommonProgramFiles(x86)" = "C:\\\\Program Files (x86)\\\\Common Files"');
     expect(content).toContain("[mcp_servers.dreamgraph.tools.run_command]");
     expect(content).toContain('[mcp_servers.dreamgraph.tools."query.resource"]');
@@ -158,7 +318,7 @@ describe("standalone Architect route hardening", () => {
       const response = await fetch(`${baseUrl}/architect`);
       expect(response.status).toBe(200);
       const html = await response.text();
-      const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+      const script = extractArchitectMainScript(html);
 
       expect(script).toBeTruthy();
       expect(() => new Script(script!, { filename: "architect-shell.js" })).not.toThrow();
@@ -167,6 +327,21 @@ describe("standalone Architect route hardening", () => {
       expect(script).toContain("function splitArchitectWords");
       expect(script).toContain("function describeStructuredToolResult");
       expect(script).toContain("function toolPreviewDetails");
+      expect(script).toContain("openPanel: true");
+      expect(script).toContain("openRows: false");
+      expect(script).not.toContain("openRows: visibility === 'expanded'");
+      expect(script).toContain("appendToolTraceMessage(trace, result.provenance, runtime);\n          renderedAssistantMessage = appendChatMessage('assistant', finalContent);");
+      expect(script).toContain("} else {\n          updateChatMessageContent(assistantMessage, finalContent);");
+      expect(script).toContain("renderArchitectContinuationReport(renderedAssistantMessage, result, runtime);");
+      expect(script).toContain("activeContinuationToken = continuation && continuation.token ? continuation.token : (typeof result.continuation_token === 'string' ? result.continuation_token : null);");
+      expect(script).toContain("parsed.pass_report_id || parsed.governed_tools_used || parsed.follow_up_recommendation || parsed.verification");
+      expect(script).toContain("refreshArchitectContinuationPills();");
+      expect(script).toContain("nextContinuation.status === 'continue'");
+      expect(script).toContain("continuationToken: nextContinuation.token");
+      expect(script).toContain("selected_plan_id: dispatchScope === 'plan' ? activePlanId : null");
+      expect(script).toContain("if (dispatchScope === 'plan' && activePlanId) {");
+      expect(script).not.toContain("updateChatMessageContent(assistantMessage, result.content || 'Architect returned an empty response.');");
+      expect(script).not.toContain("selected_plan_id: activePlanId,");
       expect(script).not.toContain("replace(/s+/g");
       expect(script).not.toContain("JSON.stringify(parsed.value, null, 2)");
       expect(html).toContain("Project scope loading...");
@@ -217,6 +392,174 @@ describe("standalone Architect route hardening", () => {
       expect(script).toContain("Multi-repo system");
       expect(script).toContain("/api/architect/v1/repo-setup");
     });
+  });
+
+  it("ignores selected_plan_id for project-scope chat requests", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const chat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "Answer in project scope without using the selected plan.",
+          scope: "project",
+          chat_scope: "project",
+          selected_plan_id: "missing-plan-that-must-not-load",
+          adapter: "deterministic_fallback",
+          provider: "none",
+          model: "auto",
+        }),
+      }));
+
+      const result = chat.result as Record<string, unknown>;
+      const route = result.route as Record<string, unknown>;
+      const continuation = result.continuation as Record<string, unknown>;
+      expect(result.chat_scope).toBe("project");
+      expect(result.selected_plan_id).toBeNull();
+      expect(result.plan_id).toBeNull();
+      expect(route.session_id).toBeTruthy();
+      expect((route.continuation as Record<string, unknown>).selected_action_id ?? null).toBeNull();
+      expect(continuation.input_token_present).toBe(false);
+    });
+  });
+
+  it("executes browser bootstrap and bounds poisoned persisted chat history replay", async () => {
+    await withArchitectServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/architect`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      const rawPatchPayload = "patch_file: completed filePath=src/architect/routes.ts edits=[{old_text: 'Route Tool Trace spam', new_text: 'compact'}]";
+      const { dom, errors } = await executeArchitectShellInJsdom({
+        baseUrl,
+        html,
+        chatHistoryPayload: {
+          ok: true,
+          warnings: ["Persisted Architect chat history was oversized and was moved aside before startup replay."],
+          transcript: {
+            schema: "dreamgraph.architect.chat_transcript.v1",
+            messages: [
+              { role: "tool", content: `${rawPatchPayload}\n${"x".repeat(40_000)}` },
+              {
+                role: "assistant",
+                content: `Implemented compact replay.\n\nRoute Tool Trace:\n${rawPatchPayload}`,
+                tool_trace: [{ tool: "patch_file", result_preview: rawPatchPayload }],
+                pass_report: {
+                  summary: "Recovered compactly.",
+                  work_completed: ["mutations for src/architect/routes.ts: 1"],
+                  files_touched: ["src/architect/routes.ts"],
+                  graph_entities_touched: ["Files / Graph Entities Touched {"],
+                  tool_trace_summary: ["tools completed: 1", rawPatchPayload],
+                  graph_plan_updates: [],
+                  evidence: ["Route Tool Trace:", rawPatchPayload],
+                  blockers: ["assistant_text_missing_continuation_envelope"],
+                  uncertainty: 1,
+                  continuation_options: [],
+                  fallback_evidence: [
+                    {
+                      source: "fallback_evidence_summary",
+                      label: "Fallback Evidence Summary",
+                      items: ["mutations for src/architect/routes.ts: 1", rawPatchPayload, "recommended next action: repair envelope"],
+                    },
+                  ],
+                },
+                continuation: { status: "stopped", reason: "missing_or_malformed_envelope", completed_passes: 1, max_passes: 3 },
+              },
+            ],
+          },
+        },
+      });
+      try {
+        await waitForCondition(() => (dom.window.document.getElementById("chat-status")?.textContent || "").includes("Restored 1 persisted chat messages")).catch((error) => {
+          throw new Error(`${(error as Error).message}; chatStatus=${dom.window.document.getElementById("chat-status")?.textContent || ""}; errors=${errors.join(" | ")}`);
+        });
+        expect(errors).toEqual([]);
+        expect(dom.window.document.getElementById("project-scope")?.textContent).not.toContain("loading");
+        expect(dom.window.document.getElementById("architect-model-config")?.textContent).not.toContain("loading");
+        expect(dom.window.document.getElementById("live-event-status")?.textContent).not.toContain("connecting");
+        const chatStatus = dom.window.document.getElementById("chat-status")?.textContent || "";
+        const chatText = dom.window.document.getElementById("chat-log")?.textContent || "";
+        expect(chatStatus).toContain("oversized");
+        expect(chatText).toContain("Implemented compact replay.");
+        expect(chatText).toContain("Fallback Evidence Summary");
+        expect(chatText).toContain("mutations for src/architect/routes.ts: 1");
+        expect(chatText).not.toContain("Route Tool Trace spam");
+        expect(chatText).not.toContain("edits=[{old_text");
+        expect(chatText).not.toContain("Files / Graph Entities Touched {");
+      } finally {
+        dom.window.close();
+      }
+    });
+  });
+
+  it("sanitizes persisted chat history and recovers corrupt transcript files", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-chat-history-"));
+    const runtimeDir = join(tempRoot, "runtime");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-chat-history-test",
+      projectRoot: tempRoot,
+      runtimeDir,
+    } as never);
+
+    try {
+      await withArchitectServer(async (baseUrl) => {
+        const rawPatchPayload = "patch_file: completed filePath=src/architect/routes.ts edits=[{old_text: 'raw payload should not persist'}]";
+        const posted = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat-history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: "history-sanitize",
+            scope: "project",
+            messages: [
+              { role: "tool", content: rawPatchPayload, result_preview: rawPatchPayload },
+              {
+                role: "assistant",
+                content: `Summary before trace.\nRoute Tool Trace:\n${rawPatchPayload}`,
+                tool_trace: [{ tool: "patch_file", result_preview: rawPatchPayload }],
+                provenance: { tool_calls: [{ raw: rawPatchPayload }] },
+                pass_report: {
+                  summary: "Recovered.",
+                  work_completed: ["mutations for src/architect/routes.ts: 1"],
+                  files_touched: ["src/architect/routes.ts"],
+                  graph_entities_touched: ["Files / Graph Entities Touched {"],
+                  tool_trace_summary: ["tools completed: 1", rawPatchPayload],
+                  evidence: ["Route Tool Trace:", rawPatchPayload],
+                  blockers: [],
+                  uncertainty: 0.5,
+                  continuation_options: [],
+                },
+              },
+            ],
+          }),
+        }));
+        const transcript = posted.transcript as Record<string, unknown>;
+        const messages = transcript.messages as Record<string, unknown>[];
+        expect(messages).toHaveLength(1);
+        expect(messages[0].role).toBe("assistant");
+        expect(messages[0]).not.toHaveProperty("tool_trace");
+        expect(messages[0]).not.toHaveProperty("provenance");
+        expect(messages[0].content).toBe("Summary before trace.");
+        const persistedText = JSON.stringify(posted);
+        expect(persistedText).toContain("mutations for src/architect/routes.ts: 1");
+        expect(persistedText).not.toContain("raw payload should not persist");
+        expect(persistedText).not.toContain("edits=[{old_text");
+        expect(persistedText).not.toContain("Files / Graph Entities Touched {");
+
+        const chatDir = join(runtimeDir, "architect", "chat-history");
+        await mkdir(chatDir, { recursive: true });
+        await writeFile(join(chatDir, "poison.project.project.json"), "{ malformed", "utf-8");
+        const recovered = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat-history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: "poison", scope: "project", messages: [] }),
+        }));
+        expect(recovered.warnings).toEqual([
+          "Persisted Architect chat history was corrupt and was moved aside before startup replay.",
+        ]);
+        expect(((recovered.transcript as Record<string, unknown>).messages as unknown[])).toEqual([]);
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("serves the Architect pulse projection contract", async () => {
@@ -472,6 +815,7 @@ describe("standalone Architect route hardening", () => {
       const routes = payload.routes as Record<string, string>;
       const future = payload.adaptive_future_projection as Record<string, unknown>;
       const interop = payload.vscode_interop as Record<string, unknown>;
+      const adapterCapabilities = payload.adapter_capabilities as Record<string, unknown>;
 
       expect(routes.config).toBe("POST /api/architect/v1/config");
       expect(routes.provider_readiness).toBe("POST /api/architect/v1/provider-readiness");
@@ -484,6 +828,10 @@ describe("standalone Architect route hardening", () => {
       expect(routes.commands).toBe("POST /api/architect/v1/commands");
       expect(((payload.architect_llm as Record<string, unknown>).capabilities as Record<string, unknown>).textAttachments).toBeTypeOf("boolean");
       expect(((payload.architect_llm as Record<string, unknown>).capabilities as Record<string, unknown>).imageAttachments).toBeTypeOf("boolean");
+      expect(adapterCapabilities.selectable).not.toContain("claude-cli");
+      expect(adapterCapabilities.future_gated).toEqual(expect.arrayContaining([
+        expect.objectContaining({ adapter: "claude-cli", selectable: false }),
+      ]));
       expect(future.advisory).toBe(true);
       expect(future.fallback_visible).toBe(true);
       expect(interop.companion_surface).toBe(true);
@@ -694,6 +1042,13 @@ describe("standalone Architect route hardening", () => {
     }
   });
 
+  it("classifies standalone route failures before envelope parsing", () => {
+    expect(classifyStandaloneRouteFailure("empty_cli_bridge_response", "", "codex-cli")).toBe("empty_cli_bridge_response");
+    expect(classifyStandaloneRouteFailure("architect_provider_failed: boom", "partial text", "native_api_tool_loop")).toBe("architect_provider_failed: boom");
+    expect(classifyStandaloneRouteFailure("operator_selected_deterministic_fallback", "", "deterministic_fallback")).toBeNull();
+    expect(classifyStandaloneRouteFailure("architect_mcp_port_unavailable", "valid envelope", "native_api_tool_loop")).toBeNull();
+  });
+
   it("keeps empty native responses out of user-facing fallback copy", () => {
     expect(formatUserVisibleFallbackReason("empty_llm_response")).toBe("");
     expect(formatUserVisibleFallbackReason("empty_cli_bridge_response")).toBe("");
@@ -710,6 +1065,7 @@ describe("standalone Architect route hardening", () => {
     const previousApiKey = process.env.DREAMGRAPH_LLM_API_KEY;
     let providerServer: Server | undefined;
     const seenPaths: string[] = [];
+    const seenBodies: Record<string, unknown>[] = [];
     providerServer = createServer(async (req, res) => {
       const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       seenPaths.push(path);
@@ -720,6 +1076,9 @@ describe("standalone Architect route hardening", () => {
         return;
       }
       if (path === "/responses") {
+        let rawBody = "";
+        for await (const chunk of req) rawBody += String(chunk);
+        seenBodies.push(JSON.parse(rawBody) as Record<string, unknown>);
         res.end(JSON.stringify({
           model: "gpt-5.5",
           output_text: "native route executed",
@@ -750,6 +1109,7 @@ describe("standalone Architect route hardening", () => {
             adapter: "native_api_tool_loop",
             provider: "openai",
             model: "gpt-5.5",
+            verbosity_mode: "detailed",
           }),
         }));
         const result = chat.result as Record<string, unknown>;
@@ -761,6 +1121,7 @@ describe("standalone Architect route hardening", () => {
 
       expect(seenPaths).not.toContain("/models");
       expect(seenPaths).toContain("/responses");
+      expect(seenBodies[0].text).toEqual({ verbosity: "high" });
     } finally {
       await new Promise<void>((resolve, reject) => providerServer!.close((error) => error ? reject(error) : resolve()));
       if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_PROVIDER; else process.env.DREAMGRAPH_LLM_PROVIDER = previousProvider;
@@ -769,6 +1130,400 @@ describe("standalone Architect route hardening", () => {
       if (previousArchitectUrl == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_URL; else process.env.DREAMGRAPH_LLM_ARCHITECT_URL = previousArchitectUrl;
       if (previousApiKey == null) delete process.env.DREAMGRAPH_LLM_API_KEY; else process.env.DREAMGRAPH_LLM_API_KEY = previousApiKey;
       initLlmProvider();
+    }
+  });
+
+  it("returns structured continuation reports and ADR-152 default pass budget from native chat", async () => {
+    const previousProvider = process.env.DREAMGRAPH_LLM_PROVIDER;
+    const previousArchitectProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousArchitectModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    const previousArchitectUrl = process.env.DREAMGRAPH_LLM_ARCHITECT_URL;
+    const previousApiKey = process.env.DREAMGRAPH_LLM_API_KEY;
+    let providerServer: Server | undefined;
+    providerServer = createServer(async (req, res) => {
+      const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      if (path === "/responses") {
+        for await (const _chunk of req) {
+          // Drain the request body before returning the synthetic completion.
+        }
+        res.end(JSON.stringify({
+          model: "gpt-5.5",
+          output_text: [
+            "Implemented the current bounded pass.",
+            "```architect_continuation",
+            JSON.stringify({
+              schema: ARCHITECT_CONTINUATION_SCHEMA,
+              pass_id: "slice-3-controller",
+              status: "completed",
+              summary: "Controller pass completed and ready for rendering.",
+              work_completed: ["Captured the pass report."],
+              files_touched: ["src/architect/routes.ts"],
+              graph_entities_touched: ["standalone_architect_continuation_report"],
+              tool_trace_summary: ["read_source_code inspected route code"],
+              graph_plan_updates: ["pass report published"],
+              evidence: ["route response includes continuation metadata"],
+              blockers: [],
+              uncertainty: 0.2,
+              recommended_actions: [{
+                id: "slice-4-rendering",
+                label: "Render continuation pills",
+                rationale: "The controller now exposes options for the browser.",
+                kind: "continue",
+                prompt: "Render continuation report sections and option pills.",
+                safe: true,
+                recommended: true,
+                required_tools: ["dreamgraph:read_source_code", "dreamgraph:patch_file"],
+                preferred_tools: ["dreamgraph:run_command"],
+              }],
+            }),
+            "```",
+          ].join("\n"),
+          status: "completed",
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "unexpected path" }));
+    });
+
+    await new Promise<void>((resolve) => providerServer!.listen(0, "127.0.0.1", resolve));
+    try {
+      const providerAddress = providerServer.address() as AddressInfo;
+      process.env.DREAMGRAPH_LLM_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = "gpt-5.5";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_URL = `http://127.0.0.1:${providerAddress.port}`;
+      process.env.DREAMGRAPH_LLM_API_KEY = "test-key";
+      initLlmProvider();
+
+      await withArchitectServer(async (baseUrl) => {
+        const chat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "continue the current plan slice",
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.5",
+            mode: "autonomous",
+          }),
+        }));
+        const result = chat.result as Record<string, unknown>;
+        const report = result.pass_report as Record<string, unknown>;
+        const continuation = result.continuation as Record<string, unknown>;
+        const options = result.continuation_options as Record<string, unknown>[];
+        const route = result.route as Record<string, unknown>;
+        const routeContinuation = route.continuation as Record<string, unknown>;
+
+        expect(report).toMatchObject({
+          pass_id: "slice-3-controller",
+          summary: "Controller pass completed and ready for rendering.",
+          recommended_next_step: { id: "slice-4-rendering" },
+        });
+        expect(options[0]).toMatchObject({ id: "slice-4-rendering", required_tools: ["read_source_code", "patch_file", "query_resource", "query_architecture_decisions"] });
+        expect(continuation).toMatchObject({
+          status: "continue",
+          reason: "recommended_action_selected",
+          selected_action_id: "slice-4-rendering",
+          completed_passes: 1,
+          max_passes: 50,
+        });
+        expect(typeof continuation.token).toBe("string");
+        expect(routeContinuation).toMatchObject({ selected_action_id: "slice-4-rendering", token_present: true });
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => providerServer!.close((error) => error ? reject(error) : resolve()));
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_PROVIDER; else process.env.DREAMGRAPH_LLM_PROVIDER = previousProvider;
+      if (previousArchitectProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousArchitectProvider;
+      if (previousArchitectModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousArchitectModel;
+      if (previousArchitectUrl == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_URL; else process.env.DREAMGRAPH_LLM_ARCHITECT_URL = previousArchitectUrl;
+      if (previousApiKey == null) delete process.env.DREAMGRAPH_LLM_API_KEY; else process.env.DREAMGRAPH_LLM_API_KEY = previousApiKey;
+      initLlmProvider();
+    }
+  });
+
+  it("persists and returns refreshed plan cursors for completed standalone Architect passes", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-pass-cursor-"));
+    const plansDir = join(tempRoot, "plans");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-pass-cursor-test",
+      projectRoot: tempRoot,
+    } as never);
+    const previousProvider = process.env.DREAMGRAPH_LLM_PROVIDER;
+    const previousArchitectProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousArchitectModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    const previousArchitectUrl = process.env.DREAMGRAPH_LLM_ARCHITECT_URL;
+    const previousApiKey = process.env.DREAMGRAPH_LLM_API_KEY;
+    const responses = [
+      { type: "envelope", pass_id: "slice-1-setup", next: "slice-2-finish", nextLabel: "Finish slice two" },
+      { type: "tool_call" },
+      { type: "envelope", pass_id: "slice-2-finish", next: null, nextLabel: null },
+    ];
+    let providerServer: Server | undefined;
+    providerServer = createServer(async (req, res) => {
+      const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      if (path === "/responses") {
+        for await (const _chunk of req) {
+          // Drain the request body before returning the synthetic completion.
+        }
+        const nextResponse = responses.shift();
+        if (!nextResponse) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: "no synthetic response remaining" }));
+          return;
+        }
+        if (nextResponse.type === "tool_call") {
+          res.end(JSON.stringify({
+            model: "gpt-5.5",
+            output: [{
+              type: "function_call",
+              call_id: "call_run_command_cursor_verification",
+              name: "run_command",
+              arguments: JSON.stringify({ command: "node --version", timeoutMs: 10_000 }),
+            }],
+            status: "requires_action",
+          }));
+          return;
+        }
+        const actions = nextResponse.next ? [{
+          id: nextResponse.next,
+          label: nextResponse.nextLabel,
+          rationale: "Continue the plan.",
+          kind: "continue",
+          prompt: `Continue ${nextResponse.nextLabel}.`,
+          safe: true,
+          recommended: true,
+          required_tools: ["dreamgraph:read_source_code"],
+          preferred_tools: ["dreamgraph:run_command"],
+        }] : [];
+        res.end(JSON.stringify({
+          model: "gpt-5.5",
+          output_text: [
+            "Completed the bounded slice pass.",
+            "```architect_continuation",
+            JSON.stringify({
+              schema: ARCHITECT_CONTINUATION_SCHEMA,
+              pass_id: nextResponse.pass_id,
+              status: "completed",
+              summary: `Completed ${nextResponse.pass_id}.`,
+              work_completed: [`Finished ${nextResponse.pass_id}.`],
+              files_touched: ["src/architect/routes.ts"],
+              graph_entities_touched: ["architect-pass-cursor"],
+              tool_trace_summary: ["read_source_code inspected cursor path"],
+              graph_plan_updates: ["implementation cursor checkpoint persisted"],
+              evidence: ["plan cursor response refreshed"],
+              blockers: [],
+              uncertainty: 0.1,
+              recommended_actions: actions,
+            }),
+            "```",
+          ].join("\n"),
+          status: "completed",
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "unexpected path" }));
+    });
+
+    await new Promise<void>((resolve) => providerServer!.listen(0, "127.0.0.1", resolve));
+    try {
+      const providerAddress = providerServer.address() as AddressInfo;
+      process.env.DREAMGRAPH_LLM_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = "gpt-5.5";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_URL = `http://127.0.0.1:${providerAddress.port}`;
+      process.env.DREAMGRAPH_LLM_API_KEY = "test-key";
+      initLlmProvider();
+
+      await mkdir(plansDir, { recursive: true });
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/plans`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Pass Cursor Plan" }),
+        });
+        expect(createdResponse.status).toBe(201);
+        const created = await createdResponse.json() as Record<string, unknown>;
+        const planId = String((created.result as Record<string, unknown>).plan_id);
+        await writeFile(join(plansDir, `${planId}.md`), [
+          "# Pass Cursor Plan",
+          "",
+          "Status: Implementation Ready",
+          "",
+          "## Implementation Slices",
+          "",
+          "### Slice 1 - Setup",
+          "",
+          "Build setup.",
+          "",
+          "### Slice 2 - Finish",
+          "",
+          "Finish the work.",
+          "",
+        ].join("\n"), "utf-8");
+
+        const first = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "complete the active slice",
+            planId,
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.5",
+            mode: "autonomous",
+            max_passes: 3,
+          }),
+        }));
+        const firstResult = first.result as Record<string, unknown>;
+        const firstCursor = firstResult.plan_cursor as Record<string, unknown>;
+        const firstOperational = firstCursor.operational_state as Record<string, unknown>;
+        expect((firstOperational.last_completed_slice as Record<string, unknown>).title).toBe("Slice 1 - Setup");
+        expect((firstOperational.active_slice as Record<string, unknown>).title).toBe("Slice 2 - Finish");
+        expect(firstCursor.completed_passes).toBe(1);
+
+        const second = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "continue",
+            planId,
+            continuation_token: (firstResult.continuation as Record<string, unknown>).token,
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.5",
+            mode: "autonomous",
+            max_passes: 3,
+          }),
+        }));
+        const secondCursor = (second.result as Record<string, unknown>).plan_cursor as Record<string, unknown>;
+        const secondOperational = secondCursor.operational_state as Record<string, unknown>;
+        expect((secondOperational.last_completed_slice as Record<string, unknown>).title).toBe("Slice 2 - Finish");
+        expect(secondOperational.active_slice).toBeNull();
+        expect(secondOperational.next_slice).toBeNull();
+        expect(secondOperational.plan_lifecycle).toBe("completed");
+        expect(secondCursor.completed_passes).toBe(2);
+
+        const refreshed = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/plans/${planId}`));
+        const refreshedPlan = refreshed.plan as Record<string, unknown>;
+        const refreshedOperational = refreshedPlan.operational_state as Record<string, unknown>;
+        expect(refreshedOperational.active_slice).toBeNull();
+        expect(refreshedOperational.next_slice).toBeNull();
+        expect(refreshedOperational.plan_lifecycle).toBe("completed");
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => providerServer!.close((error) => error ? reject(error) : resolve()));
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_PROVIDER; else process.env.DREAMGRAPH_LLM_PROVIDER = previousProvider;
+      if (previousArchitectProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousArchitectProvider;
+      if (previousArchitectModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousArchitectModel;
+      if (previousArchitectUrl == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_URL; else process.env.DREAMGRAPH_LLM_ARCHITECT_URL = previousArchitectUrl;
+      if (previousApiKey == null) delete process.env.DREAMGRAPH_LLM_API_KEY; else process.env.DREAMGRAPH_LLM_API_KEY = previousApiKey;
+      initLlmProvider();
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advance the selected plan cursor for malformed pass reports", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-pass-cursor-malformed-"));
+    const plansDir = join(tempRoot, "plans");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-pass-cursor-malformed-test",
+      projectRoot: tempRoot,
+    } as never);
+    const previousProvider = process.env.DREAMGRAPH_LLM_PROVIDER;
+    const previousArchitectProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousArchitectModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    const previousArchitectUrl = process.env.DREAMGRAPH_LLM_ARCHITECT_URL;
+    const previousApiKey = process.env.DREAMGRAPH_LLM_API_KEY;
+    let providerServer: Server | undefined;
+    providerServer = createServer(async (req, res) => {
+      const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      if (path === "/responses") {
+        for await (const _chunk of req) {
+          // Drain the request body before returning the synthetic completion.
+        }
+        res.end(JSON.stringify({ model: "gpt-5.5", output_text: "done without an envelope", status: "completed" }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "unexpected path" }));
+    });
+
+    await new Promise<void>((resolve) => providerServer!.listen(0, "127.0.0.1", resolve));
+    try {
+      const providerAddress = providerServer.address() as AddressInfo;
+      process.env.DREAMGRAPH_LLM_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = "openai";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = "gpt-5.5";
+      process.env.DREAMGRAPH_LLM_ARCHITECT_URL = `http://127.0.0.1:${providerAddress.port}`;
+      process.env.DREAMGRAPH_LLM_API_KEY = "test-key";
+      initLlmProvider();
+
+      await mkdir(plansDir, { recursive: true });
+      await withArchitectServer(async (baseUrl) => {
+        const createdResponse = await fetch(`${baseUrl}/api/architect/v1/plans`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Malformed Cursor Plan" }),
+        });
+        expect(createdResponse.status).toBe(201);
+        const created = await createdResponse.json() as Record<string, unknown>;
+        const planId = String((created.result as Record<string, unknown>).plan_id);
+        await writeFile(join(plansDir, `${planId}.md`), [
+          "# Malformed Cursor Plan",
+          "",
+          "Status: Implementation Ready",
+          "",
+          "## Implementation Slices",
+          "",
+          "### Slice 1 - Setup",
+          "",
+          "Build setup.",
+          "",
+          "### Slice 2 - Finish",
+          "",
+          "Finish the work.",
+          "",
+        ].join("\n"), "utf-8");
+
+        const chat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "complete the active slice",
+            planId,
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.5",
+            mode: "autonomous",
+            max_passes: 3,
+          }),
+        }));
+        const result = chat.result as Record<string, unknown>;
+        expect(result.plan_cursor_update).toBeNull();
+        const cursor = result.plan_cursor as Record<string, unknown>;
+        const operational = cursor.operational_state as Record<string, unknown>;
+        expect((operational.active_slice as Record<string, unknown>).title).toBe("Slice 1 - Setup");
+        expect(operational.last_completed_slice).toBeNull();
+
+        const log = await readFile(join(plansDir, `${planId}.implementation-log.md`), "utf-8");
+        expect(log).not.toContain("architect_pass_completed");
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => providerServer!.close((error) => error ? reject(error) : resolve()));
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_PROVIDER; else process.env.DREAMGRAPH_LLM_PROVIDER = previousProvider;
+      if (previousArchitectProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousArchitectProvider;
+      if (previousArchitectModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousArchitectModel;
+      if (previousArchitectUrl == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_URL; else process.env.DREAMGRAPH_LLM_ARCHITECT_URL = previousArchitectUrl;
+      if (previousApiKey == null) delete process.env.DREAMGRAPH_LLM_API_KEY; else process.env.DREAMGRAPH_LLM_API_KEY = previousApiKey;
+      initLlmProvider();
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
     }
   });
 
@@ -792,6 +1547,86 @@ describe("standalone Architect route hardening", () => {
       if (previousAdapter == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER; else process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER = previousAdapter;
       if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousProvider;
       if (previousModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousModel;
+    }
+  });
+
+  it("round-trips daemon-owned Architect verbosity modes", async () => {
+    const previousAdapter = process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER;
+    const previousProvider = process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER;
+    const previousModel = process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL;
+    const previousVerbosity = process.env.DREAMGRAPH_ARCHITECT_VERBOSITY_MODE;
+    try {
+      delete process.env.DREAMGRAPH_ARCHITECT_VERBOSITY_MODE;
+      await withArchitectServer(async (baseUrl) => {
+        const contract = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1`));
+        expect((contract.verbosity as Record<string, unknown>).modes).toEqual(["concise", "balanced", "detailed"]);
+        expect((contract.runtime as Record<string, unknown>).verbosity_mode).toBe("balanced");
+        expect((contract.runtime as Record<string, unknown>).verbosity_modes).toEqual(["concise", "balanced", "detailed"]);
+        expect((contract.runtime as Record<string, unknown>).narrative_density).toMatchObject({
+          provider_text_verbosity: "medium",
+          story_visibility: "compact",
+          prompt_profile: "standard",
+        });
+
+        for (const verbosity_mode of ["concise", "balanced", "detailed"]) {
+          const configured = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/config`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              adapter: "native_api_tool_loop",
+              provider: "openai",
+              model: "gpt-5.5",
+              verbosity_mode,
+            }),
+          }));
+          const runtime = configured.runtime as Record<string, unknown>;
+          expect(runtime).toMatchObject({
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.5",
+            verbosity_mode,
+          });
+          expect((configured.result as Record<string, unknown>).verbosity_mode).toBe(verbosity_mode);
+          expect((runtime.narrative_density as Record<string, unknown>).verbosity_mode).toBe(verbosity_mode);
+        }
+
+        const invalid = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adapter: "native_api_tool_loop",
+            provider: "openai",
+            model: "gpt-5.5",
+            verbosity_mode: "extreme",
+          }),
+        }));
+        expect((invalid.runtime as Record<string, unknown>).verbosity_mode).toBe("detailed");
+
+        const chat = await expectJsonOk(await fetch(`${baseUrl}/api/architect/v1/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "what model are you running?",
+            adapter: "deterministic_fallback",
+            provider: "none",
+            model: "gpt-5.5",
+            verbosity_mode: "concise",
+          }),
+        }));
+        const result = chat.result as Record<string, unknown>;
+        const resultRuntime = result.runtime as Record<string, unknown>;
+        expect(resultRuntime.verbosity_mode).toBe("concise");
+        expect(resultRuntime.model).toBe("gpt-5.5");
+        expect(resultRuntime.provider).toBe("none");
+        expect(result.story_visibility).toBe("hidden");
+        expect(result.story_source).toBe("deterministic");
+        expect(result.content).toContain("Verbosity mode: concise");
+      });
+    } finally {
+      if (previousAdapter == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER; else process.env.DREAMGRAPH_LLM_ARCHITECT_ADAPTER = previousAdapter;
+      if (previousProvider == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER; else process.env.DREAMGRAPH_LLM_ARCHITECT_PROVIDER = previousProvider;
+      if (previousModel == null) delete process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL; else process.env.DREAMGRAPH_LLM_ARCHITECT_MODEL = previousModel;
+      if (previousVerbosity == null) delete process.env.DREAMGRAPH_ARCHITECT_VERBOSITY_MODE; else process.env.DREAMGRAPH_ARCHITECT_VERBOSITY_MODE = previousVerbosity;
     }
   });
 
@@ -914,9 +1749,10 @@ describe("standalone Architect route hardening", () => {
   });
 
   it("keeps native tool-loop budget and Responses API routing behind source contracts", async () => {
-    const [nativeLoopSource, llmSource] = await Promise.all([
+    const [nativeLoopSource, llmSource, routesSource] = await Promise.all([
       readFile(new URL("../src/architect/native-tool-loop.ts", import.meta.url), "utf-8"),
       readFile(new URL("../src/cognitive/llm.ts", import.meta.url), "utf-8"),
+      readFile(new URL("../src/architect/routes.ts", import.meta.url), "utf-8"),
     ]);
     expect(nativeLoopSource).toContain('completeWithNativeTools as completeLlmWithNativeTools');
     expect(nativeLoopSource).toContain('return completeLlmWithNativeTools(config, messages, tools);');
@@ -925,6 +1761,10 @@ describe("standalone Architect route hardening", () => {
     expect(nativeLoopSource).toContain('context_pressure: ${coordinator.getContextPressureLabel()}');
     expect(nativeLoopSource).toContain('compressToolResult(resultText, input.budgetCoordinator, call.name)');
     expect(nativeLoopSource).toContain('recordComponentActual(`tool:${call.name}`, finalTokens)');
+    expect(routesSource).toContain('buildArchitectChatPromptBundle(passMessage, plan, runtime, chatScope, budgetCoordinator)');
+    expect(routesSource).toContain('budgetCoordinator?.recordComponentEstimate("preamble", maxPreambleTokens)');
+    expect(routesSource).toContain('recordComponentActual("preamble", preambleTokens)');
+    expect(routesSource).toContain('estimateTokensFromString(promptBundle.systemPrompt) - promptBundle.preambleTokens');
     expect(llmSource).toContain('export async function completeWithNativeTools');
     expect(llmSource).toContain('capabilities.api === "responses"');
     expect(llmSource).toContain('fetch(`${config.baseUrl}/responses`');
@@ -1229,7 +2069,6 @@ describe("standalone Architect route hardening", () => {
         body: JSON.stringify({
           message: "hello what is the project?",
           planId: "STANDALONE_ARCHITECT_MIGRATION_PLAN",
-          continuationToken: "test-continuation",
           mode: "autonomous",
           responseTransport: "sse",
         }),
@@ -1467,6 +2306,72 @@ describe("standalone Architect route hardening", () => {
     }
   });
 
+  it("projects current Architect Continuation status from verified implementation log entries", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dreamgraph-architect-continuation-projection-"));
+    const dataDir = join(tempRoot, "data");
+    const plansDir = join(tempRoot, "plans");
+    const scopeSpy = vi.spyOn(lifecycle, "getActiveScope").mockReturnValue({
+      uuid: "standalone-architect-continuation-projection-test",
+      projectRoot: tempRoot,
+      dataDir,
+    } as never);
+
+    try {
+      await mkdir(plansDir, { recursive: true });
+      await writeFile(join(plansDir, "architect-continuation.md"), [
+        "# Architect Continuation",
+        "",
+        "Status: Draft",
+        "",
+        "## 3. Implementation Slices",
+        "",
+        "### Slice 1: Shared Web Continuation Contract",
+        "",
+        "### Slice 2: Adapter Tool Manifest Routing",
+        "",
+        "### Slice 3: Web Pass Controller",
+        "",
+        "### Slice 4: Output Rendering And Continuation Pills",
+        "",
+      ].join("\n"), "utf-8");
+      await writeFile(join(plansDir, "architect-continuation.implementation-log.md"), [
+        "# Architect Continuation Implementation Log",
+        "",
+        "### 2026-06-08T22:51:20.000+03:00 - slice: shared-web-continuation-contract - status: verified",
+        "",
+        "- Action: implemented `src/architect/continuation.ts` as the shared standalone Architect continuation contract.",
+        "",
+        "### 2026-06-08T22:54:10.000+03:00 - slice: adapter-tool-manifest-routing - status: verified",
+        "",
+        "- Action: added continuation tool manifest support to `src/architect/native-tool-loop.ts` and `src/architect/cli-bridge.ts`.",
+        "",
+        "### 2026-06-08T23:08:30.000+03:00 - slice: web-pass-controller-and-continuation-pills - status: verified",
+        "",
+        "- Action: implemented Slice 3 Web Pass Controller and Slice 4 Output Rendering And Continuation Pills through governed DreamGraph MCP mutation tools.",
+        "",
+      ].join("\n"), "utf-8");
+
+      await withArchitectServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/architect/v1/plans/architect-continuation`);
+        const payload = await expectJsonOk(response);
+        const plan = payload.plan as { status?: string | null; operational_state?: Record<string, unknown> };
+        const operational = plan.operational_state ?? {};
+        const lastCompleted = operational.last_completed_slice as { title?: string } | null;
+
+        expect(plan.status).toBe("completed");
+        expect(operational.plan_lifecycle).toBe("completed");
+        expect(operational.execution_state).toBe("complete");
+        expect(operational.active_slice).toBeNull();
+        expect(operational.next_slice).toBeNull();
+        expect(String(lastCompleted?.title ?? lastCompleted?.id ?? "")).toContain("Slice 4");
+        expect(operational.completed_checkpoint_count).toBe(3);
+      });
+    } finally {
+      scopeSpy.mockRestore();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("formats status command JSON into chat-safe status text", () => {
     const rendered = formatArchitectStatusPayload({
       identity: { uuid: "instance-1", name: "Architect", status: "active", mode: "standalone", policy: "local" },
@@ -1697,12 +2602,23 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("id=\"architect-adapter-select\"");
       expect(html).toContain("value=\"codex-cli\"");
       expect(html).toContain("value=\"copilot-cli\"");
+      expect(html).not.toContain("value=\"claude-cli\"");
       expect(html).toContain("id=\"architect-provider-select\"");
       expect(html).toContain(".control-field option");
       expect(html).toContain("id=\"architect-model-input\"");
       expect(html).toContain("architectModelOptionsByProvider");
       expect(html).toContain("function renderArchitectModelOptions");
       expect(html).toContain("function persistArchitectControls");
+      expect(html).toContain("function toolTraceDensity");
+      expect(html).toContain("openPanel: true");
+      expect(html).toContain("details.dataset.storyVisibility = density.visibility");
+      expect(html).toContain("row.dataset.storyVisibility = density.visibility");
+      expect(html).toContain("function updateChatMessageContent");
+      expect(html).toContain("const assistantMessage = appendChatMessage('assistant'");
+      expect(html).toContain("appendToolTraceMessage(trace, result.provenance, runtime);");
+      expect(html).toContain("renderedAssistantMessage = appendChatMessage('assistant', finalContent);");
+      expect(html).toContain("updateChatMessageContent(assistantMessage, finalContent);");
+      expect(html).toContain("renderArchitectContinuationReport(renderedAssistantMessage, result, runtime);");
       expect(html).toContain("function persistSelectedPlan");
       expect(html).toContain("function clearSelectedPlan");
       expect(html).toContain("function parseChatSlashOverride");
@@ -1739,6 +2655,14 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("/api/architect/v1/config");
       expect(html).toContain("engine.env updated");
       expect(html).toContain("id=\"architect-autonomy-mode-select\"");
+      expect(html).toContain("id=\"architect-verbosity-mode-select\"");
+      expect(html).toContain('<option value="concise">Concise</option>');
+      expect(html).toContain('<option value="balanced">Balanced</option>');
+      expect(html).toContain('<option value="detailed">Detailed</option>');
+      expect(html).toContain("const architectVerbosityModeSelectEl");
+      expect(html).toContain("verbosity_mode: controls.verbosity_mode");
+      expect(html).toContain("verbosity_mode: requestRuntime.verbosity_mode || controls.verbosity_mode");
+      expect(html).toContain("architectVerbosityModeSelectEl.value = runtime.verbosity_mode || 'balanced'");
       expect(html).toContain("function renderChatContent");
       expect(html).toContain("function appendTextWithAdrPreviews");
       expect(html).toContain("function loadAdrPreview");
@@ -1795,6 +2719,16 @@ describe("standalone Architect route hardening", () => {
       expect(html).toContain("adr-preview-trigger");
       expect(html).toContain("daemon-governed ADR preview on hover or focus");
       expect(html).toContain("function appendToolTraceMessage");
+      expect(html).toContain("function renderArchitectContinuationReport");
+      expect(html).toContain("function parseContinuationToolLine");
+      expect(html).toContain("continuation-tool-row");
+      expect(html).toContain("standalone_architect_continuation_report");
+      expect(html).toContain("standalone_architect_continuation_option_pills");
+      expect(html).toContain("standalone_architect_autonomy_auto_selection");
+      expect(html).toContain("selected_action_id: continuation ? continuation.selectedActionId : null");
+      expect(html).toContain("function refreshArchitectContinuationPills");
+      expect(html).toContain("refreshArchitectContinuationPills();");
+      expect(html).toContain("button.dataset.actionDisabled");
       expect(html).toContain("function renderToolTraceRow");
       expect(html).toContain("architect.tool_result");
       expect(html).toContain("semanticToolArgSummary");

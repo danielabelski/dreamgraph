@@ -5,21 +5,6 @@
 **Trigger:** A user submits an Architect chat turn, selects an autonomy mode from the chat header, or an eligible continuation pass completes.  
 **Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/autonomy-loop.ts, extensions/vscode/src/autonomy.ts, extensions/vscode/src/reporting.ts, extensions/vscode/src/test/slice5-ui.test.ts, docs/workflows/workflow-vscode-autonomy-continuation-loop.md  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Resolve configured autonomy state"]
-    S2["Persist header mode selection"]
-    S1 --> S2
-    S3["Broadcast visible counters"]
-    S2 --> S3
-    S4["Analyze pass outcome"]
-    S3 --> S4
-    S5["Continue or pause"]
-    S4 --> S5
-```
-
 ## Steps
 
 ### 1. Resolve configured autonomy state

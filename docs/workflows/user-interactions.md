@@ -5,17 +5,6 @@
 **Trigger:** User API request  
 **Source files:** src/api/routes.ts, explorer/src/api.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Receive API Request"]
-    S2["Process Request"]
-    S1 --> S2
-    S3["Send Response"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Receive API Request

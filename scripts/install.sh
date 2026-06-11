@@ -20,13 +20,15 @@ FORCE=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --source)  SOURCE_DIR="$2"; shift 2 ;;
-        --force)   FORCE=true; shift ;;
+        --force|-f) FORCE=true; shift ;;
+        --verbose|-v) shift ;;
         --help|-h)
             echo "Usage: install.sh [--source <dir>] [--force]"
             echo ""
             echo "Options:"
             echo "  --source <dir>   Path to DreamGraph source repo (default: parent of scripts/)"
-            echo "  --force          Overwrite existing installation without prompting"
+            echo "  --force, -f      Overwrite existing installation without prompting"
+            echo "  --verbose, -v    Accepted for parity with install.ps1 -Verbose"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -91,21 +93,70 @@ run_logged() {
 
 ensure_root_build_dependencies() {
     local needs_install=false
+    local missing=()
+
+    # The build imports workspace packages by package name and also compiles
+    # Architect/CLI/scanner surfaces that depend on runtime packages. A stale
+    # node_modules from an older DreamGraph install can contain TypeScript and
+    # a few shared deps while missing these v12 links, causing a large TS2307
+    # cascade before the installer reaches the deployment dependency install.
+    local required_paths=(
+        "$SOURCE_DIR/node_modules/typescript"
+        "$SOURCE_DIR/node_modules/@types/node"
+        "$SOURCE_DIR/node_modules/zod"
+        "$SOURCE_DIR/node_modules/@modelcontextprotocol"
+        "$SOURCE_DIR/node_modules/@dreamgraph/sdk/package.json"
+        "$SOURCE_DIR/node_modules/@dreamgraph/host/package.json"
+        "$SOURCE_DIR/node_modules/@dreamgraph/token-economy/package.json"
+        "$SOURCE_DIR/node_modules/node-pty/package.json"
+        "$SOURCE_DIR/node_modules/ws/package.json"
+        "$SOURCE_DIR/node_modules/react/package.json"
+        "$SOURCE_DIR/node_modules/ink/package.json"
+        "$SOURCE_DIR/node_modules/web-tree-sitter/package.json"
+    )
 
     if [[ ! -d "$SOURCE_DIR/node_modules" ]]; then
         needs_install=true
-    elif [[ ! -d "$SOURCE_DIR/node_modules/typescript" ]]; then
-        needs_install=true
-    elif [[ ! -d "$SOURCE_DIR/node_modules/@types/node" ]]; then
-        needs_install=true
-    elif [[ ! -d "$SOURCE_DIR/node_modules/zod" ]]; then
-        needs_install=true
-    elif [[ ! -d "$SOURCE_DIR/node_modules/@modelcontextprotocol" ]]; then
-        needs_install=true
+        missing+=("node_modules")
+    else
+        for required_path in "${required_paths[@]}"; do
+            if [[ ! -e "$required_path" ]]; then
+                needs_install=true
+                missing+=("${required_path#$SOURCE_DIR/}")
+            fi
+        done
+    fi
+
+    if [[ "$needs_install" == "false" ]]; then
+        local internal_versions_ok
+        internal_versions_ok=$(node -e "
+          const fs = require('fs');
+          const path = require('path');
+          const root = process.argv[1];
+          const expected = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+          const names = ['@dreamgraph/sdk', '@dreamgraph/host', '@dreamgraph/token-economy'];
+          for (const name of names) {
+            const pkgPath = path.join(root, 'node_modules', ...name.split('/'), 'package.json');
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (pkg.version !== expected) {
+              process.stdout.write(`${name}@${pkg.version} != ${expected}`);
+              process.exit(1);
+            }
+          }
+          process.stdout.write('ok');
+        " "$SOURCE_DIR" 2>/dev/null || true)
+        if [[ "$internal_versions_ok" != "ok" ]]; then
+            needs_install=true
+            missing+=("workspace package versions ($internal_versions_ok)")
+        fi
     fi
 
     if [[ "$needs_install" == "true" ]]; then
-        echo -e "  ${CYAN}Installing root dependencies (including dev dependencies for build)...${NC}"
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            echo -e "  ${CYAN}Refreshing root dependencies; missing/stale: ${missing[*]}${NC}"
+        else
+            echo -e "  ${CYAN}Installing root dependencies (including dev dependencies for build)...${NC}"
+        fi
         (
             cd "$SOURCE_DIR"
             run_logged -- npm install --include=dev --loglevel=warn
@@ -289,14 +340,14 @@ mkdir -p "$BIN_DIR"
 cp -r "$SOURCE_DIST" "$DIST_TARGET"
 ok "dist/ copied"
 
-# Workspace packages (@dreamgraph/sdk, @dreamgraph/host) cannot be resolved
-# from the registry; pack them into the bin vendor dir and rewrite the deps
-# to file: references so `npm install --omit=dev` can complete offline.
+# Workspace packages cannot be resolved from the registry; pack them into
+# the bin vendor dir and rewrite the deps to file: references so
+# `npm install --omit=dev` can complete offline.
 VENDOR_DIR="$BIN_DIR/vendor"
 [[ -d "$VENDOR_DIR" ]] && rm -rf "$VENDOR_DIR"
 mkdir -p "$VENDOR_DIR"
 
-WORKSPACE_PACKAGES=("@dreamgraph/sdk" "@dreamgraph/host")
+WORKSPACE_PACKAGES=("@dreamgraph/sdk" "@dreamgraph/host" "@dreamgraph/token-economy")
 declare -A WORKSPACE_TARBALLS=()
 for ws_name in "${WORKSPACE_PACKAGES[@]}"; do
     echo -e "  ${CYAN}Packing $ws_name...${NC}"

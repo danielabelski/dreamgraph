@@ -19,4 +19,7 @@
 | plugin_session_audit_trail | feature | related_to | moderate | auto-backlink |
 | plugin_management | feature | related_to | moderate | auto-backlink |
 | plugin_tool_session_orchestrator | feature | related_to | moderate | auto-backlink |
+| feature_architect_plugin_tabs | feature | related_to | moderate | auto-backlink |
+| architect_plugin_tab_snapshot_action | feature | related_to | moderate | auto-backlink |
+| capability_architect_plugin_sdk | feature | related_to | moderate | auto-backlink |
 

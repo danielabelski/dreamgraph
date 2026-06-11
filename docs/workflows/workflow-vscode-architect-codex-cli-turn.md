@@ -5,21 +5,6 @@
 **Trigger:** User selects codex-cli as the Architect provider and submits a chat turn or autonomy continuation.  
 **Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/architect-core/adapters/codex-cli/provider-port.ts, extensions/vscode/src/architect-core/adapters/codex-cli/orchestrator.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Resolve Codex provider settings"]
-    S2["Build authoritative bridge config"]
-    S1 --> S2
-    S3["Run Codex CLI"]
-    S2 --> S3
-    S4["Stream live MCP tool progress"]
-    S3 --> S4
-    S5["Reconcile final trace and reviews"]
-    S4 --> S5
-```
-
 ## Steps
 
 ### 1. Resolve Codex provider settings
