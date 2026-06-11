@@ -84,6 +84,7 @@ export interface CodexCliFailure {
     | "schema-args-failure"
     | "provider-native-restriction"
     | "continuation-authorization-needed"
+    | "missing-continuation-envelope"
     | "runtime-mcp-failure"
     | "mcp-load-failed"
     | "registry-mismatch"
@@ -413,7 +414,7 @@ export async function runCodexCli(
     const failure = processSucceeded && !terminalTranscriptFailure
       ? recorded.length === 0 && (transcriptWitnessedDreamGraphCalls || hasCancelledMcpToolCallFailure(transcript))
         ? transcriptMcpAuditMissingFailure(transcript)
-        : mcpRuntimeFailureFor(transcript, toolCalls)
+        : mcpRuntimeFailureFor(transcript, toolCalls) ?? missingContinuationEnvelopeFailure(transcript, toolCalls)
       : spawnFailureFor(spawn, transcript, toolCalls);
     const endedAtEpochMs = deps.clock.nowMs();
 
@@ -449,6 +450,18 @@ export async function runCodexCli(
       }
     }
   }
+}
+
+function missingContinuationEnvelopeFailure(transcript: CodexCliTranscript, toolCalls: readonly ClassifiedToolCall[]): CodexCliFailure | undefined {
+  if (countSuccessfulDreamGraphToolCalls(toolCalls) === 0) return undefined;
+  if (/```architect_continuation\s*[\s\S]*?```/i.test(transcript.assistantText || "")) return undefined;
+  const tools = toolCalls.map((entry) => `${entry.call.server}.${entry.call.tool}`).join(", ");
+  return {
+    code: "CONTINUATION_ENVELOPE_MISSING",
+    cause: "missing-continuation-envelope",
+    preSpawn: false,
+    message: `Codex CLI produced assistant text after DreamGraph MCP tool work but no architect_continuation envelope. Observed tools: ${tools || "none recorded"}.`,
+  };
 }
 
 function notifyRunId(input: CodexCliRunInput, runId: string): void {

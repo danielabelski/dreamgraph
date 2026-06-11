@@ -5,17 +5,6 @@
 **Trigger:** User logs in or out  
 **Source files:** src/discipline/session.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Create Session"]
-    S2["Validate Session"]
-    S1 --> S2
-    S3["Terminate Session"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Create Session

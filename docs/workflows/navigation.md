@@ -5,17 +5,6 @@
 **Trigger:** User navigates through the application  
 **Source files:** explorer/src/App.tsx  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Detect Navigation Event"]
-    S2["Update Application State"]
-    S1 --> S2
-    S3["Render New View"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Detect Navigation Event

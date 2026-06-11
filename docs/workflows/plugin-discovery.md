@@ -5,15 +5,6 @@
 **Trigger:** Server startup  
 **Source files:** src/discipline/register.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Scan for Plugins"]
-    S2["Register Plugins"]
-    S1 --> S2
-```
-
 ## Steps
 
 ### 1. Scan for Plugins

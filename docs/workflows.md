@@ -374,3 +374,4 @@ candidate → [normalization] → validated (promoted)
 
 **Inert when unconfigured**: with no `DATABASE_URL`, the dashboard card renders a `NOT CONFIGURED` pill, no auto-seed runs, `schema_grounding` returns `[]` immediately, and the `orphan_bridging` hub-bias bonus is `0` � zero impact on non-DB instances.
 
+<!-- CONTINUATION TEST SLICE 3 -->

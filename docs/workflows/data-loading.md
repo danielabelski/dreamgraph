@@ -5,15 +5,6 @@
 **Trigger:** Server startup  
 **Source files:** src/api/routes.ts, src/instance/index.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Load JSON Data"]
-    S2["Validate Loaded Data"]
-    S1 --> S2
-```
-
 ## Steps
 
 ### 1. Load JSON Data

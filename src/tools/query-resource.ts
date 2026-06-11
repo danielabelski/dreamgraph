@@ -54,6 +54,12 @@ const URI_TO_FILE: Record<string, string> = {
   "ops://api-surface": "api_surface.json",
 };
 
+const DREAM_HISTORY_QUERY_LIMIT = 50;
+
+function isDreamHistoryResource(uri: string): boolean {
+  return uri === "dream://history";
+}
+
 /** Zod schema for query_resource input */
 export const QueryResourceInputSchema = {
   uri: z
@@ -144,8 +150,15 @@ export function registerQueryResourceTool(server: McpServer): void {
               }
             }
 
-            // If no filter, return the full dataset
+            // The dream history file is append-only and can be many MB. Never expose
+            // the whole audit trail through generic resource reads.
             if (!filter || Object.keys(filter).length === 0) {
+              if (isDreamHistoryResource(uri)) {
+                return error(
+                  "FILTER_REQUIRED",
+                  `dream://history is too large for unfiltered context reads. Use cognitive_status, get_dream_insights, get_temporal_insights, or provide a narrow filter. Filtered history results are capped at ${DREAM_HISTORY_QUERY_LIMIT}.`
+                );
+              }
               return success(data);
             }
 
@@ -159,6 +172,17 @@ export function registerQueryResourceTool(server: McpServer): void {
                   "NO_MATCH",
                   `No entries matched the filter ${JSON.stringify(filter)} in resource "${uri}".`
                 );
+              }
+              if (isDreamHistoryResource(uri)) {
+                return success({
+                  summary: {
+                    total_matches: filtered.length,
+                    returned: Math.min(filtered.length, DREAM_HISTORY_QUERY_LIMIT),
+                    limit: DREAM_HISTORY_QUERY_LIMIT,
+                    truncated: filtered.length > DREAM_HISTORY_QUERY_LIMIT,
+                  },
+                  results: filtered.slice(-DREAM_HISTORY_QUERY_LIMIT),
+                });
               }
               return success(filtered);
             }

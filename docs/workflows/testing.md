@@ -5,15 +5,6 @@
 **Trigger:** Test command executed  
 **Source files:** tests/cognitive-producers.test.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Run Test Suite"]
-    S2["Report Results"]
-    S1 --> S2
-```
-
 ## Steps
 
 ### 1. Run Test Suite

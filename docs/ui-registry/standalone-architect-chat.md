@@ -19,14 +19,12 @@
 
 | Name | Type | Trigger | Description |
 |------|------|---------|-------------|
-| assistant_response | `object` | chat_submit | Assistant content with route metadata, tool_trace, provenance, and token_economy metadata. |
-| budget_status | `object | null` | chat_finalize / architect.chat.status | Daemon-owned read-only budget balance: turn, actual/expected tokens, debt or credit, pressure label, model id, and top component contributors. |
+| assistant_response | `object` | chat_submit | Assistant content with route metadata, tool_trace, and provenance. |
 
 ## Interactions
 
 - **submit_message** — Posts a chat request to the daemon Architect endpoint.
 - **inspect_tool_trace** — Shows MCP tool execution trace and provenance in the browser event log/status surface.
-- **read_budget_balance** — Renders the daemon-sourced token economy balance pill from chat JSON or SSE/event payloads; browser state is display-only and never budget authority.
 
 ## Visual Semantics
 
@@ -38,7 +36,6 @@
 ### State Styling
 
 - **tool_trace_present** — Expose compact trace/provenance entries in the event log and status text.
-- **budget_status_present** — Show actual/expected tokens, debt or credit, and context pressure in the compact token economy pill.
 
 ## Layout Semantics
 
@@ -54,4 +51,4 @@
 
 **Used by features:** standalone-architect
 
-**Tags:** standalone-architect, chat, mcp, tool-trace, provenance, token-economy, budget-status
+**Tags:** standalone-architect, chat, mcp, tool-trace, provenance

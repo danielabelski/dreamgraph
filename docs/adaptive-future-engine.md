@@ -33,3 +33,4 @@ The v11 release wires the shared scaffold into graph-tool and cognitive-workflow
 - `src/tools/solidify-insight.ts` carries Adaptive Future audit metadata through cognitive insight solidification.
 
 See also the user-facing guide page: [`guide/14-adaptive-future-engine.md`](../guide/14-adaptive-future-engine.md).
+<!-- CONTINUATION TEST SLICE 11 -->

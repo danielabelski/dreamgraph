@@ -5,17 +5,6 @@
 **Trigger:** Graph data update  
 **Source files:** scripts/enrich-graph.mjs  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Load Existing Graph Data"]
-    S2["Add Metadata and Links"]
-    S1 --> S2
-    S3["Save Updated Graph Data"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Load Existing Graph Data

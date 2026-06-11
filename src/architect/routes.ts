@@ -5,7 +5,7 @@ import * as pty from "node-pty";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildPlanSummary as buildArchitectPlanSummary,
@@ -70,6 +70,26 @@ import {
   loadArchitectTabSnapshot,
 } from "../plugins/architect-contributions.js";
 import { ArchitectPlanStateError } from "../plugins/architect-plan-state.js";
+import {
+  ARCHITECT_VERBOSITY_MODE_OPTIONS,
+  normalizeArchitectVerbosityMode,
+  resolveArchitectNarrativeDensity,
+  type ArchitectNarrativeDensity,
+  type ArchitectVerbosityMode,
+} from "./verbosity.js";
+import {
+  buildArchitectContinuationPrompt,
+  buildArchitectContinuationToolManifest,
+  decideArchitectContinuation,
+  decodeArchitectContinuationToken,
+  parseArchitectContinuationEnvelope,
+  synthesizeArchitectRecoveredContinuation,
+  synthesizeArchitectRouteFailureContinuation,
+  type ArchitectContinuationState,
+  type ArchitectContinuationToolManifest,
+  type ArchitectPassReport,
+  type ArchitectRecommendedAction,
+} from "./continuation.js";
 
 interface ArchitectPlanSummary {
   id: string;
@@ -265,6 +285,10 @@ interface ActiveArchitectSessionRuntime {
   model_source: string;
   autonomy_mode: ArchitectAutonomyMode;
   autonomy_source: string;
+  verbosity_mode: ArchitectVerbosityMode;
+  verbosity_source: string;
+  verbosity_modes: ArchitectVerbosityMode[];
+  narrative_density: ArchitectNarrativeDensity;
   pass_state: ArchitectSessionPassState;
   execution_route: ArchitectExecutionRoute;
   session_id: string;
@@ -334,6 +358,8 @@ interface ArchitectTokenEconomyConfig {
 
 interface ArchitectChatPromptBundle {
   systemPrompt: string;
+  preambleBlock: string | null;
+  preambleTokens: number;
   tokenEconomy: Record<string, unknown>;
 }
 
@@ -348,6 +374,7 @@ interface ArchitectPlanChatUpdateResult {
   runtime: ActiveArchitectSessionRuntime;
 }
 
+const ARCHITECT_VERBOSITY_MODE_ENV_KEY = "DREAMGRAPH_ARCHITECT_VERBOSITY_MODE";
 const ARCHITECT_PREAMBLE_COMPILER_ENV_KEY = "DREAMGRAPH_ARCHITECT_PREAMBLE_COMPILER";
 const ARCHITECT_TOKEN_ECONOMY_ENV_KEY = "DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY";
 const ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET_ENV_KEY = "DREAMGRAPH_ARCHITECT_TOKEN_ECONOMY_SOFT_TARGET";
@@ -408,6 +435,21 @@ function architectAutonomyModeField(body: Record<string, unknown>, field: string
 function getArchitectAutonomyMode(): { mode: ArchitectAutonomyMode; source: "architect" | "default" } {
   const mode = architectAutonomyModeFromText(process.env.DREAMGRAPH_ARCHITECT_AUTONOMY_MODE?.trim() ?? null);
   return mode ? { mode, source: "architect" } : { mode: "autonomous", source: "default" };
+}
+
+function architectVerbosityModeField(body: Record<string, unknown>, field: string): ArchitectVerbosityMode | null {
+  const raw = textField(body, field);
+  if (!raw) return null;
+  const normalized = normalizeArchitectVerbosityMode(raw, "balanced");
+  return ARCHITECT_VERBOSITY_MODE_OPTIONS.includes(raw.trim().toLowerCase().replace(/_/g, "-") as ArchitectVerbosityMode) || raw.trim().toLowerCase() === "default" || raw.trim().toLowerCase() === "detail"
+    ? normalized
+    : null;
+}
+
+function getArchitectVerbosityMode(): { mode: ArchitectVerbosityMode; source: "architect" | "default" } {
+  const raw = process.env[ARCHITECT_VERBOSITY_MODE_ENV_KEY]?.trim();
+  const mode = raw ? architectVerbosityModeField({ value: raw }, "value") : null;
+  return mode ? { mode, source: "architect" } : { mode: "balanced", source: "default" };
 }
 
 function architectBooleanFromEnv(value: string | undefined, defaultValue: boolean): boolean {
@@ -541,14 +583,16 @@ function buildArchitectExecutionControlPayload(runtime: ActiveArchitectSessionRu
   };
 }
 
-function buildActiveArchitectSessionRuntime(overrides: Partial<Pick<ActiveArchitectSessionRuntime, "adapter" | "provider" | "model" | "autonomy_mode" | "pass_state">> = {}): ActiveArchitectSessionRuntime {
+function buildActiveArchitectSessionRuntime(overrides: Partial<Pick<ActiveArchitectSessionRuntime, "adapter" | "provider" | "model" | "autonomy_mode" | "verbosity_mode" | "pass_state">> = {}): ActiveArchitectSessionRuntime {
   const architect = getArchitectLlmConfig();
   const adapter = getArchitectAdapterConfig();
   const autonomy = getArchitectAutonomyMode();
+  const verbosity = getArchitectVerbosityMode();
   const runtimeAdapter = overrides.adapter ?? adapter.adapter;
   const runtimeProvider = overrides.provider ?? architect.provider;
   const runtimeModel = overrides.model ?? architect.model;
   const runtimeAutonomyMode = overrides.autonomy_mode ?? autonomy.mode;
+  const runtimeVerbosityMode = overrides.verbosity_mode ?? verbosity.mode;
 
   return {
     adapter: runtimeAdapter,
@@ -559,6 +603,10 @@ function buildActiveArchitectSessionRuntime(overrides: Partial<Pick<ActiveArchit
     model_source: overrides.model ? "request" : architect.modelSource,
     autonomy_mode: runtimeAutonomyMode,
     autonomy_source: overrides.autonomy_mode ? "request" : autonomy.source,
+    verbosity_mode: runtimeVerbosityMode,
+    verbosity_source: overrides.verbosity_mode ? "request" : verbosity.source,
+    verbosity_modes: [...ARCHITECT_VERBOSITY_MODE_OPTIONS],
+    narrative_density: resolveArchitectNarrativeDensity(runtimeVerbosityMode),
     pass_state: { ...(overrides.pass_state ?? activeArchitectPassState) },
     execution_route: runtimeAdapter,
     session_id: ACTIVE_ARCHITECT_SESSION_ID,
@@ -678,6 +726,8 @@ function buildArchitectLlmPayload(runtime: ActiveArchitectSessionRuntime = build
     max_tokens: getArchitectLlmConfig().maxTokens,
     base_url: getArchitectLlmConfig().baseUrl,
     autonomy_mode: runtime.autonomy_mode,
+    verbosity_mode: runtime.verbosity_mode,
+    verbosity_modes: runtime.verbosity_modes,
     execution_route: runtime.execution_route,
     session_id: runtime.session_id,
     provenance_authority: runtime.provenance_authority,
@@ -1726,6 +1776,39 @@ async function applyPlanChatUpdate(
     section_title: update.sectionTitle,
     audit_id: audit?.audit_id ?? null,
     runtime,
+  };
+}
+
+async function recordArchitectPassCompletionCursor(input: {
+  plan: ArchitectPlanProjection;
+  report: ArchitectPassReport;
+  runtime: ActiveArchitectSessionRuntime;
+  completedPasses: number;
+  maxPasses: number;
+}): Promise<Record<string, unknown> | null> {
+  const next = input.report.recommended_next_step;
+  const resumeNote = next
+    ? `continue with ${next.label || next.id}`
+    : "no continuation action remains after this completed pass";
+  const audit = await recordPlanActionAudit(input.plan.id, {
+    kind: "plan_action",
+    action: "architect_pass_completed",
+    status: "completed",
+    audit_reason: "Successful standalone Architect pass completed with a parsed continuation envelope; persist the plan cursor projection.",
+    actor: "standalone-architect-browser",
+    slice_id: input.report.pass_id,
+    evidence: `runtime=${input.runtime.adapter}/${input.runtime.provider}/${input.runtime.model || "none"}; session=${input.runtime.session_id}; completed_passes=${input.completedPasses}/${input.maxPasses}`,
+    content: input.report.summary,
+    resume_note: resumeNote,
+  });
+  if (!audit) return null;
+  return {
+    changed: true,
+    audit_id: audit.audit_id,
+    log_path: audit.log_path,
+    pass_id: input.report.pass_id,
+    completed_passes: input.completedPasses,
+    max_passes: input.maxPasses,
   };
 }
 
@@ -3672,6 +3755,8 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
   const model = normalizeArchitectModelForAdapter(adapter, optionalTextField(body, "model") ?? current.model);
   const autonomyMode =
     architectAutonomyModeField(body, "autonomy_mode") ?? architectAutonomyModeField(body, "mode") ?? getArchitectAutonomyMode().mode;
+  const verbosityMode =
+    architectVerbosityModeField(body, "verbosity_mode") ?? architectVerbosityModeField(body, "verbosityMode") ?? architectVerbosityModeField(body, "mode") ?? getArchitectVerbosityMode().mode;
   const requestedTokenEconomy = architectBooleanField(body, "token_economy");
   const tokenEconomy = requestedTokenEconomy ?? getArchitectTokenEconomyConfig().token_economy;
 
@@ -3685,6 +3770,7 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
     DREAMGRAPH_LLM_ARCHITECT_PROVIDER: provider,
     DREAMGRAPH_LLM_ARCHITECT_MODEL: model,
     DREAMGRAPH_ARCHITECT_AUTONOMY_MODE: autonomyMode,
+    [ARCHITECT_VERBOSITY_MODE_ENV_KEY]: verbosityMode,
     [ARCHITECT_TOKEN_ECONOMY_ENV_KEY]: tokenEconomy ? "true" : "false",
   };
   const scope = getActiveScope();
@@ -3695,7 +3781,7 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
     process.env[key] = value;
   }
   const architect = updateArchitectLlmConfig({ provider, model });
-  const runtime = buildActiveArchitectSessionRuntime();
+  const runtime = buildActiveArchitectSessionRuntime({ verbosity_mode: verbosityMode });
   const result = {
     changed: true,
     persisted: Boolean(scope?.engineEnvPath),
@@ -3705,6 +3791,8 @@ async function handleArchitectConfigRequest(req: IncomingMessage, res: ServerRes
     model: runtime.model,
     mode: runtime.autonomy_mode,
     autonomy_mode: runtime.autonomy_mode,
+    verbosity_mode: runtime.verbosity_mode,
+    verbosity_modes: runtime.verbosity_modes,
     token_economy: runtime.token_economy,
     provider_source: architect.providerSource,
     model_source: architect.modelSource,
@@ -3839,13 +3927,27 @@ function formatCompiledTaskPreambleForPrompt(compiled: CompiledTaskPreamble | nu
   ].join("\n");
 }
 
-async function buildArchitectChatPromptBundle(message: string, plan: ArchitectPlanProjection | null, runtime: ArchitectRuntimeRouteContext, chatScope: ArchitectChatScope): Promise<ArchitectChatPromptBundle> {
+async function buildArchitectChatPromptBundle(
+  message: string,
+  plan: ArchitectPlanProjection | null,
+  runtime: ArchitectRuntimeRouteContext,
+  chatScope: ArchitectChatScope,
+  budgetCoordinator: BudgetCoordinator | null = null,
+): Promise<ArchitectChatPromptBundle> {
   const config = getArchitectTokenEconomyConfig();
   let compiled: CompiledTaskPreamble | null = null;
-  if (config.preamble_compiler && config.token_economy) {
+  const remainingTarget = budgetCoordinator?.getRemainingTargetTokens() ?? config.soft_target_tokens;
+  const pressureLabel = budgetCoordinator?.getContextPressureLabel() ?? "normal";
+  const maxPreambleTokens = pressureLabel === "high"
+    ? 0
+    : Math.min(240, Math.max(64, Math.floor(remainingTarget * 0.015)));
+
+  if (config.preamble_compiler && config.token_economy && maxPreambleTokens > 0) {
+    budgetCoordinator?.recordComponentEstimate("preamble", maxPreambleTokens);
     compiled = await compileTaskPreamble({
       task: message,
-      max_tokens: Math.min(512, Math.max(120, Math.floor(config.soft_target_tokens * 0.02))),
+      max_tokens: maxPreambleTokens,
+      min_expected_savings_tokens: Math.max(64, Math.floor(maxPreambleTokens * 1.5)),
     }).catch((error) => ({
       preamble_text: "",
       evidence_anchors: [],
@@ -3858,15 +3960,39 @@ async function buildArchitectChatPromptBundle(message: string, plan: ArchitectPl
       selected_model: null,
       fallback_reason: "task_preamble_compiler_failed",
     }));
+  } else if (config.preamble_compiler && config.token_economy) {
+    compiled = {
+      preamble_text: "",
+      evidence_anchors: [],
+      token_count: 0,
+      budget_decision: "omit_over_budget" as const,
+      omitted_context_reasons: ["token economy pressure left no prompt budget for preloaded cognitive context"],
+      validation_failures: [],
+      selected_model_layer: "deterministic_fallback" as const,
+      selected_model_provider: null,
+      selected_model: null,
+      fallback_reason: pressureLabel === "high" ? "context_pressure_high" : "no_remaining_prompt_budget",
+    };
   }
+
   const preambleBlock = formatCompiledTaskPreambleForPrompt(compiled);
+  const preambleTokens = preambleBlock ? estimateTokensFromString(preambleBlock) : 0;
+  if (budgetCoordinator) {
+    budgetCoordinator.recordComponentActual("preamble", preambleTokens);
+  }
+
   return {
     systemPrompt: buildArchitectChatSystemPrompt(plan, runtime, chatScope, preambleBlock),
+    preambleBlock,
+    preambleTokens,
     tokenEconomy: {
       ...config,
       status: config.token_economy ? "enabled" : "full_context",
+      context_pressure: pressureLabel,
+      remaining_target_tokens: remainingTarget,
+      preamble_budget_tokens: maxPreambleTokens,
       preamble_status: config.preamble_compiler ? (compiled?.budget_decision ?? "not_attempted") : "disabled",
-      preamble_token_count: compiled?.token_count ?? 0,
+      preamble_token_count: preambleTokens,
       evidence_anchors: compiled?.evidence_anchors ?? [],
       omitted_context_reasons: compiled?.omitted_context_reasons ?? [],
       validation_failures: compiled?.validation_failures ?? [],
@@ -3901,7 +4027,7 @@ function finalizeChatBudgetStatus(
 ): ArchitectBudgetStatus | null {
   if (!coordinator) return null;
   const pressureLabel = coordinator.getContextPressureLabel();
-  const systemTokens = estimateTokensFromString(promptBundle.systemPrompt);
+  const systemTokens = Math.max(0, estimateTokensFromString(promptBundle.systemPrompt) - promptBundle.preambleTokens);
   const userTokens = estimateTokensFromString(message);
   const assistantTokens = estimateTokensFromString(assistantContent);
   coordinator.recordComponentActual("system", systemTokens);
@@ -3924,6 +4050,8 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
     `- Provider: ${runtime.provider}`,
     `- Model: ${runtime.model || "none"}`,
     `- Autonomy mode: ${runtime.autonomy_mode}`,
+    `- Verbosity mode: ${runtime.verbosity_mode}`,
+    `- Narrative density: provider=${runtime.narrative_density.provider_text_verbosity}; story=${runtime.narrative_density.story_visibility}; prompt=${runtime.narrative_density.prompt_profile}`,
     `- Pass state: ${runtime.pass_state.completed} completed; ${runtime.pass_state.tools} tools; ${runtime.pass_state.status}`,
     `- Execution route: ${runtime.execution_route}`,
     `- Session id: ${runtime.session_id}`,
@@ -3933,8 +4061,11 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
   ].join("\n");
   return [
     "You are DreamGraph Architect inside the daemon-served standalone browser surface.",
-    "Use the provided DreamGraph MCP tools for project facts, graph health, ADRs, workflows, data model, source inspection, and verification before answering repository-specific questions.",
+    "Graph-bound execution contract: every repository-specific pass must ground itself with DreamGraph MCP graph context before acting. Use query_resource for system/project resources and query_architecture_decisions for ADR guard rails; use graph_rag_retrieve, query_api_surface, search_data_model, workflows, or data-model resources when they fit the task.",
+    "Mutation contract: source, docs, UI, data-model, or plan changes must be recorded back into DreamGraph evidence using the appropriate governed graph tool, such as enrich_seed_data, modify_api_surface, register_ui_element, solidify_cognitive_insight, or another exposed graph-write tool. Final reports must name the graph entities/resources updated or explain a concrete unavailable-tool blocker.",
+    "ADR contract: check accepted ADRs before choosing an implementation path. If the pass introduces a new durable architectural policy, reverses a guard rail, or creates a lasting cross-module decision, record it with record_architecture_decision; otherwise report the ADRs consulted and why no new ADR was needed.",
     "Keep answers concise, project-bound, and grounded in daemon authority. Do not claim direct browser filesystem authority.",
+    "Honor the Current execution runtime narrative density: compact means brief status/final answers, standard means readable summaries, diagnostic means include evidence/provenance summaries without dumping raw JSON unless explicitly requested.",
     "Project scope is not unsafe mode: source, graph, ADR, and file mutations still require the normal governed DreamGraph MCP/tool authority.",
     "If asked which model, provider, adapter, route, autonomy state, or session you are running, answer from the Current execution runtime block. Never say this runtime identity is unknown inside DreamGraph.",
     `Project root: ${String(project.project_root ?? "unbound")}. Plans root: ${String(project.plans_root ?? "unbound")}.`,
@@ -3946,7 +4077,10 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
 }
 
 function isEmptyCompletionFallback(fallbackReason: string | null): boolean {
-  return fallbackReason === "empty_llm_response" || fallbackReason === "empty_cli_bridge_response";
+  return fallbackReason === "empty_llm_response"
+    || fallbackReason === "empty_cli_bridge_response"
+    || fallbackReason === "empty_llm_response_no_tools"
+    || fallbackReason === "empty_cli_bridge_response_no_tools";
 }
 
 export function formatUserVisibleFallbackReason(fallbackReason: string | null): string {
@@ -3972,6 +4106,8 @@ function deterministicArchitectChatReply(
       `- Provider: ${runtime.provider}`,
       `- Model: ${runtime.model || "none"}`,
       `- Autonomy mode: ${runtime.autonomy_mode}`,
+      `- Verbosity mode: ${runtime.verbosity_mode}`,
+      `- Narrative density: provider=${runtime.narrative_density.provider_text_verbosity}; story=${runtime.narrative_density.story_visibility}; prompt=${runtime.narrative_density.prompt_profile}`,
       `- Pass state: ${runtime.pass_state.completed} completed; ${runtime.pass_state.tools} tools; ${runtime.pass_state.status}`,
       `- Execution route: ${runtime.execution_route}`,
       `- Session id: ${runtime.session_id}`,
@@ -3998,6 +4134,43 @@ function wantsChatSseResponse(req: IncomingMessage, body: Record<string, unknown
   const acceptText = Array.isArray(accept) ? accept.join(",") : accept ?? "";
   const responseTransport = textField(body, "response_transport") ?? textField(body, "responseTransport");
   return acceptText.toLowerCase().includes("text/event-stream") || responseTransport === "sse" || body.stream === true;
+}
+
+function positiveIntegerField(body: Record<string, unknown>, field: string): number | null {
+  const value = body[field];
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function autonomyAllowsArchitectContinuation(mode: typeof ARCHITECT_AUTONOMY_MODE_OPTIONS[number]): boolean {
+  return mode === "autonomous";
+}
+
+const ARCHITECT_CONTINUATION_PASS_BUDGET_BY_MODE: Record<typeof ARCHITECT_AUTONOMY_MODE_OPTIONS[number], number> = {
+  manual: 3,
+  supervised: 8,
+  autonomous: 50,
+};
+
+function defaultArchitectContinuationPassBudget(mode: typeof ARCHITECT_AUTONOMY_MODE_OPTIONS[number]): number {
+  return ARCHITECT_CONTINUATION_PASS_BUDGET_BY_MODE[mode] ?? ARCHITECT_CONTINUATION_PASS_BUDGET_BY_MODE.manual;
+}
+
+function selectArchitectContinuationAction(
+  state: ArchitectContinuationState,
+  selectedActionId: string | null,
+): ArchitectRecommendedAction | null {
+  const requestedId = selectedActionId ?? state.selected_action_id ?? null;
+  if (!requestedId) return null;
+  return state.recommended_actions.find((action) => action.id === requestedId) ?? null;
+}
+
+function summarizeArchitectContinuationTools(manifest: ArchitectContinuationToolManifest | null): Record<string, unknown> | null {
+  if (!manifest) return null;
+  return {
+    required_tools: manifest.required_tools,
+    preferred_tools: manifest.preferred_tools,
+  };
 }
 
 function writeSsePayload(res: ServerResponse, eventName: string, payload: unknown): void {
@@ -4027,6 +4200,9 @@ function finishChatSseResponse(res: ServerResponse, payload: Record<string, unkn
     generated_at: payload.generated_at,
     project_scope: payload.project_scope,
     architect_llm: payload.architect_llm,
+    verbosity_mode: (payload.runtime as Record<string, unknown> | undefined)?.verbosity_mode,
+    story_visibility: ((payload.runtime as Record<string, unknown> | undefined)?.narrative_density as Record<string, unknown> | undefined)?.story_visibility,
+    story_source: (payload.result as Record<string, unknown> | undefined)?.story_source,
   });
   writeSsePayload(res, "architect.chat.result", payload);
   res.end();
@@ -4039,6 +4215,386 @@ function writeChatSseResponse(res: ServerResponse, payload: Record<string, unkno
     architect_llm: payload.architect_llm,
   });
   finishChatSseResponse(res, payload);
+}
+
+const ARCHITECT_CHAT_TRANSCRIPT_SCHEMA = "dreamgraph.architect.chat_transcript.v1";
+const ARCHITECT_CHAT_TRANSCRIPT_LIMIT = 200;
+const ARCHITECT_CHAT_TRANSCRIPT_CONTENT_LIMIT = 24_000;
+const ARCHITECT_CHAT_TRANSCRIPT_FILE_LIMIT = 2_000_000;
+const ARCHITECT_CHAT_TRANSCRIPT_REPORT_ITEM_LIMIT = 240;
+
+function architectChatTranscriptPath(input: { sessionId?: string | null; chatScope?: ArchitectChatScope | null; planId?: string | null }): string | null {
+  const scope = getActiveScope();
+  if (!scope?.runtimeDir) return null;
+  const sessionId = sanitizeTranscriptKey(input.sessionId || "standalone");
+  const chatScope = input.chatScope === "plan" ? "plan" : "project";
+  const planPart = chatScope === "plan" ? sanitizeTranscriptKey(input.planId || "unselected") : "project";
+  return resolve(scope.runtimeDir, "architect", "chat-history", `${sessionId}.${chatScope}.${planPart}.json`);
+}
+
+function sanitizeTranscriptKey(value: string): string {
+  const safe = String(value || "standalone").replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120);
+  return safe || "standalone";
+}
+
+interface ArchitectChatTranscriptReadResult {
+  transcript: Record<string, unknown>;
+  warnings: string[];
+  recovered_path: string | null;
+}
+
+function emptyArchitectChatTranscript(): Record<string, unknown> {
+  return { schema: ARCHITECT_CHAT_TRANSCRIPT_SCHEMA, messages: [] };
+}
+
+function compactTranscriptText(value: unknown, limit = ARCHITECT_CHAT_TRANSCRIPT_REPORT_ITEM_LIMIT): string {
+  const text = String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 3)).trim()}...`;
+}
+
+function isPersistableReportText(value: unknown): boolean {
+  const text = compactTranscriptText(value);
+  if (!text) return false;
+  if (/^[A-Za-z /_-]+\s*\{$/.test(text)) return false;
+  if (/^Route Tool Trace:?$/i.test(text)) return false;
+  if (/Route Tool Trace:/i.test(text)) return false;
+  if (/\bCURRENT USER REQUEST\b/i.test(text)) return false;
+  if (/\bpatch_file\b/i.test(text) && /\bedits\s*=\s*\[?\{/i.test(text)) return false;
+  return true;
+}
+
+function compactTranscriptList(value: unknown, maxItems = 12, itemLimit = ARCHITECT_CHAT_TRANSCRIPT_REPORT_ITEM_LIMIT): string[] {
+  const values = Array.isArray(value) ? value : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of values) {
+    const text = compactTranscriptText(item, itemLimit);
+    if (!isPersistableReportText(text) || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function compactTranscriptToolList(value: unknown): string[] {
+  return compactTranscriptList(value, 24, 80).filter((tool) => /^[A-Za-z0-9_.:-]+$/.test(tool));
+}
+
+function compactTranscriptAction(value: unknown): Record<string, unknown> | null {
+  const action = asRecord(value);
+  if (!action) return null;
+  const id = compactTranscriptText(action.id, 120);
+  const label = compactTranscriptText(action.label ?? action.action ?? id, 160);
+  if (!id && !label) return null;
+  return {
+    id: id || label,
+    label: label || id,
+    rationale: compactTranscriptText(action.rationale, 240),
+    kind: compactTranscriptText(action.kind ?? "continue", 80),
+    prompt: compactTranscriptText(action.prompt, 600),
+    safe: action.safe !== false,
+    recommended: action.recommended === true,
+    required_tools: compactTranscriptToolList(action.required_tools),
+    preferred_tools: compactTranscriptToolList(action.preferred_tools),
+    disabled_reason: action.disabled_reason == null ? null : compactTranscriptText(action.disabled_reason, 160),
+  };
+}
+
+function compactTranscriptActionList(value: unknown): Record<string, unknown>[] {
+  return (Array.isArray(value) ? value : [])
+    .map(compactTranscriptAction)
+    .filter((action): action is Record<string, unknown> => action != null)
+    .slice(0, 8);
+}
+
+function normalizeArchitectChatTranscriptPassReport(value: unknown): Record<string, unknown> | null {
+  const report = asRecord(value);
+  if (!report) return null;
+  const fallbackEvidence = (Array.isArray(report.fallback_evidence) ? report.fallback_evidence : [])
+    .map((section) => {
+      const record = asRecord(section);
+      if (!record) return null;
+      const items = compactTranscriptList(record.items, 16, ARCHITECT_CHAT_TRANSCRIPT_REPORT_ITEM_LIMIT);
+      if (items.length === 0) return null;
+      return {
+        source: compactTranscriptText(record.source ?? "fallback_evidence_summary", 120),
+        label: compactTranscriptText(record.label ?? "Fallback Evidence Summary", 160),
+        items,
+      };
+    })
+    .filter((section): section is { source: string; label: string; items: string[] } => section != null)
+    .slice(0, 4);
+  const recommendedNextStep = compactTranscriptAction(report.recommended_next_step);
+  const continuationOptions = compactTranscriptActionList(report.continuation_options);
+  return {
+    id: compactTranscriptText(report.id, 160),
+    pass_id: compactTranscriptText(report.pass_id, 160),
+    created_at: compactTranscriptText(report.created_at, 80),
+    summary: compactTranscriptText(report.summary, 600),
+    work_completed: compactTranscriptList(report.work_completed, 12, 300),
+    files_touched: compactTranscriptList(report.files_touched, 24, 240),
+    graph_entities_touched: compactTranscriptList(report.graph_entities_touched, 24, 240),
+    tool_trace_summary: compactTranscriptList(report.tool_trace_summary, 16, 240),
+    graph_plan_updates: compactTranscriptList(report.graph_plan_updates, 12, 300),
+    evidence: compactTranscriptList(report.evidence, 12, 240),
+    blockers: compactTranscriptList(report.blockers, 12, 240),
+    uncertainty: typeof report.uncertainty === "number" ? Math.min(1, Math.max(0, report.uncertainty)) : 1,
+    recommended_next_step: recommendedNextStep,
+    continuation_options: continuationOptions,
+    diagnostics: compactTranscriptList(report.diagnostics, 12, 160),
+    ...(fallbackEvidence.length > 0 ? { fallback_evidence: fallbackEvidence } : {}),
+  };
+}
+
+function normalizeArchitectChatTranscriptContinuation(value: unknown): Record<string, unknown> | null {
+  const continuation = asRecord(value);
+  if (!continuation) return null;
+  return {
+    status: compactTranscriptText(continuation.status, 80),
+    reason: compactTranscriptText(continuation.reason, 160),
+    token: typeof continuation.token === "string" ? continuation.token.slice(0, 4096) : null,
+    selected_action_id: compactTranscriptText(continuation.selected_action_id, 160),
+    selected_action: compactTranscriptAction(continuation.selected_action),
+    tool_manifest: asRecord(continuation.tool_manifest) ? {
+      required_tools: compactTranscriptToolList(asRecord(continuation.tool_manifest)?.required_tools),
+      preferred_tools: compactTranscriptToolList(asRecord(continuation.tool_manifest)?.preferred_tools),
+      unavailable_required_tools: compactTranscriptToolList(asRecord(continuation.tool_manifest)?.unavailable_required_tools),
+    } : null,
+    max_passes: typeof continuation.max_passes === "number" ? continuation.max_passes : null,
+    completed_passes: typeof continuation.completed_passes === "number" ? continuation.completed_passes : null,
+    diagnostics: compactTranscriptList(continuation.diagnostics, 12, 160),
+    auto_continue: continuation.auto_continue === true,
+  };
+}
+
+function normalizeArchitectChatTranscriptRuntime(value: unknown): Record<string, unknown> | undefined {
+  const runtime = asRecord(value);
+  if (!runtime) return undefined;
+  return {
+    session_id: compactTranscriptText(runtime.session_id, 160),
+    adapter: compactTranscriptText(runtime.adapter, 80),
+    provider: compactTranscriptText(runtime.provider, 80),
+    model: compactTranscriptText(runtime.model, 160),
+    execution_route: compactTranscriptText(runtime.execution_route, 120),
+    autonomy_mode: compactTranscriptText(runtime.autonomy_mode, 80),
+    verbosity_mode: compactTranscriptText(runtime.verbosity_mode, 80),
+    provenance_authority: compactTranscriptText(runtime.provenance_authority, 120),
+  };
+}
+
+function stripPersistedAssistantTraceContent(text: string): string {
+  let out = text;
+  const lower = out.toLowerCase();
+  const routeTraceIndex = lower.indexOf("route tool trace:");
+  if (routeTraceIndex >= 0) out = out.slice(0, routeTraceIndex);
+  const promptIndex = out.toLowerCase().indexOf("current user request");
+  if (promptIndex >= 0) out = out.slice(0, promptIndex);
+  out = out.replace(/```(?:json\s+)?architect_continuation\s*\n[\s\S]*?```/gi, " ");
+  out = stripBareArchitectStructuredOutput(out);
+  return out.trim();
+}
+
+function stripBareArchitectStructuredOutput(text: string): string {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return text;
+  const candidate = text.slice(start, end + 1);
+  try {
+    const parsed = JSON.parse(candidate) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && (
+      parsed.summary
+      || parsed.work_completed
+      || parsed.recommended_actions
+      || parsed.recommended_next_actions
+      || parsed.pass_report_id
+      || parsed.governed_tools_used
+      || parsed.follow_up_recommendation
+      || parsed.verification
+    )) {
+      return `${text.slice(0, start)}${text.slice(end + 1)}`;
+    }
+  } catch {
+    // Keep non-JSON prose untouched.
+  }
+  return text;
+}
+
+function normalizeArchitectChatTranscriptContent(value: unknown, role = "assistant"): string {
+  const text = typeof value === "string" ? value : String(value ?? "");
+  const normalized = role === "assistant" ? stripPersistedAssistantTraceContent(text) : text;
+  const safeText = normalized || (text ? "[DreamGraph: raw restored tool trace omitted for startup safety.]" : "");
+  if (safeText.length <= ARCHITECT_CHAT_TRANSCRIPT_CONTENT_LIMIT) return safeText;
+  return `${safeText.slice(0, ARCHITECT_CHAT_TRANSCRIPT_CONTENT_LIMIT)}\n\n[DreamGraph: persisted chat content truncated from ${safeText.length} characters for startup safety.]`;
+}
+
+function normalizeArchitectChatTranscriptMessage(message: unknown): Record<string, unknown> | null {
+  const record = asRecord(message);
+  if (!record) return null;
+  const rawRole = compactTranscriptText(record.role, 40).toLowerCase();
+  if (rawRole === "tool") return null;
+  const role = rawRole === "user" ? "user" : "assistant";
+  const content = normalizeArchitectChatTranscriptContent(record.content, role);
+  const out: Record<string, unknown> = {
+    role,
+    content,
+  };
+  const createdAt = compactTranscriptText(record.created_at, 80);
+  if (createdAt) out.created_at = createdAt;
+  const chatScope = compactTranscriptText(record.chat_scope, 40);
+  if (chatScope) out.chat_scope = chatScope === "plan" ? "plan" : "project";
+  const selectedPlanId = compactTranscriptText(record.selected_plan_id, 160);
+  if (selectedPlanId) out.selected_plan_id = selectedPlanId;
+  const planId = compactTranscriptText(record.plan_id, 160);
+  if (planId) out.plan_id = planId;
+  const runtime = normalizeArchitectChatTranscriptRuntime(record.runtime);
+  if (runtime) out.runtime = runtime;
+  if (role === "assistant") {
+    const passReport = normalizeArchitectChatTranscriptPassReport(record.pass_report);
+    if (passReport) out.pass_report = passReport;
+    const continuation = normalizeArchitectChatTranscriptContinuation(record.continuation);
+    if (continuation) out.continuation = continuation;
+    const options = compactTranscriptActionList(record.continuation_options);
+    if (options.length > 0) out.continuation_options = options;
+    const mode = compactTranscriptText(record.mode, 80);
+    if (mode) out.mode = mode;
+    const verbosity = compactTranscriptText(record.verbosity_mode, 80);
+    if (verbosity) out.verbosity_mode = verbosity;
+  }
+  if (!content && !out.pass_report) return null;
+  return out;
+}
+
+function normalizeArchitectChatTranscriptMessages(messages: unknown[]): Record<string, unknown>[] {
+  return messages
+    .slice(-ARCHITECT_CHAT_TRANSCRIPT_LIMIT)
+    .map(normalizeArchitectChatTranscriptMessage)
+    .filter((message): message is Record<string, unknown> => message != null);
+}
+
+async function recoverArchitectChatTranscriptFile(filePath: string, reason: string): Promise<string | null> {
+  const suffix = new Date().toISOString().replace(/[^0-9A-Za-z.-]+/g, "");
+  const recoveredPath = `${filePath}.${reason}.${suffix}.recovered`;
+  try {
+    await rename(filePath, recoveredPath);
+    return recoveredPath;
+  } catch {
+    try {
+      await rm(filePath, { force: true });
+    } catch {
+      // Best effort: startup must continue even when recovery cleanup fails.
+    }
+    return null;
+  }
+}
+
+async function readArchitectChatTranscript(input: { sessionId?: string | null; chatScope?: ArchitectChatScope | null; planId?: string | null }): Promise<ArchitectChatTranscriptReadResult> {
+  const filePath = architectChatTranscriptPath(input);
+  if (!filePath) return { transcript: emptyArchitectChatTranscript(), warnings: [], recovered_path: null };
+  try {
+    const metadata = await stat(filePath);
+    if (metadata.size > ARCHITECT_CHAT_TRANSCRIPT_FILE_LIMIT) {
+      const recoveredPath = await recoverArchitectChatTranscriptFile(filePath, "oversized");
+      return {
+        transcript: emptyArchitectChatTranscript(),
+        warnings: [`Persisted Architect chat history was ${metadata.size} bytes and was moved aside before startup replay.`],
+        recovered_path: recoveredPath,
+      };
+    }
+    const parsed = JSON.parse(await readFile(filePath, "utf-8")) as Record<string, unknown>;
+    const messages = Array.isArray(parsed.messages) ? normalizeArchitectChatTranscriptMessages(parsed.messages) : [];
+    return {
+      transcript: { schema: ARCHITECT_CHAT_TRANSCRIPT_SCHEMA, version: 1, messages },
+      warnings: [],
+      recovered_path: null,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { transcript: emptyArchitectChatTranscript(), warnings: [], recovered_path: null };
+    }
+    const recoveredPath = await recoverArchitectChatTranscriptFile(filePath, "corrupt");
+    return {
+      transcript: emptyArchitectChatTranscript(),
+      warnings: ["Persisted Architect chat history was corrupt and was moved aside before startup replay."],
+      recovered_path: recoveredPath,
+    };
+  }
+}
+
+async function writeArchitectChatTranscript(input: { sessionId?: string | null; chatScope?: ArchitectChatScope | null; planId?: string | null; messages: unknown[] }): Promise<void> {
+  const filePath = architectChatTranscriptPath(input);
+  if (!filePath) return;
+  const payload = {
+    schema: ARCHITECT_CHAT_TRANSCRIPT_SCHEMA,
+    version: 1,
+    session_id: input.sessionId ?? null,
+    chat_scope: input.chatScope === "plan" ? "plan" : "project",
+    plan_id: input.planId ?? null,
+    updated_at: new Date().toISOString(),
+    messages: normalizeArchitectChatTranscriptMessages(input.messages),
+  };
+  await mkdir(dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf-8");
+  await rename(tmpPath, filePath);
+}
+
+async function appendArchitectChatTranscript(input: { sessionId?: string | null; chatScope?: ArchitectChatScope | null; planId?: string | null; messages: unknown[] }): Promise<ArchitectChatTranscriptReadResult> {
+  const current = await readArchitectChatTranscript(input);
+  const messages = Array.isArray(current.transcript.messages) ? current.transcript.messages : [];
+  await writeArchitectChatTranscript({ ...input, messages: [...messages, ...input.messages] });
+  return current;
+}
+
+async function clearArchitectChatTranscript(input: { sessionId?: string | null; chatScope?: ArchitectChatScope | null; planId?: string | null }): Promise<void> {
+  const filePath = architectChatTranscriptPath(input);
+  if (!filePath) return;
+  await rm(filePath, { force: true });
+}
+
+async function handleArchitectChatHistoryRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown> = {};
+  if (req.method === "POST" || req.method === "DELETE") {
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      jsonError(res, 400, "bad_json", "Expected a JSON object request body");
+      return;
+    }
+  }
+  const sessionId = textField(body, "session_id") ?? textField(body, "sessionId") ?? ACTIVE_ARCHITECT_SESSION_ID;
+  const planId = textField(body, "plan_id") ?? textField(body, "planId") ?? textField(body, "selected_plan_id");
+  const chatScope = architectChatScopeFromText(textField(body, "scope") ?? textField(body, "chat_scope") ?? textField(body, "chatScope")) ?? (planId ? "plan" : "project");
+  if (req.method === "DELETE" || body.clear === true) {
+    await clearArchitectChatTranscript({ sessionId, chatScope, planId });
+    json(res, 200, { ok: true, cleared: true, schema: ARCHITECT_CHAT_TRANSCRIPT_SCHEMA }, { "Cache-Control": "no-store" });
+    return;
+  }
+  if (req.method === "POST") {
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const recovery = await appendArchitectChatTranscript({ sessionId, chatScope, planId, messages });
+    const transcript = await readArchitectChatTranscript({ sessionId, chatScope, planId });
+    json(res, 200, {
+      ok: true,
+      transcript: transcript.transcript,
+      warnings: [...recovery.warnings, ...transcript.warnings],
+      recovered_path: recovery.recovered_path ?? transcript.recovered_path,
+    }, { "Cache-Control": "no-store" });
+    return;
+  }
+  const transcript = await readArchitectChatTranscript({ sessionId, chatScope, planId });
+  json(res, 200, {
+    ok: true,
+    transcript: transcript.transcript,
+    warnings: transcript.warnings,
+    recovered_path: transcript.recovered_path,
+  }, { "Cache-Control": "no-store" });
 }
 
 function architectToolTraceKey(entry: ArchitectToolTraceEntry): string {
@@ -4063,6 +4619,35 @@ export function architectPassStatusFromFallback(fallbackReason: string | null): 
   return "failed";
 }
 
+function classifyEmptyResponseReason(baseReason: string, toolTrace: ArchitectToolTraceEntry[]): string {
+  return toolTrace.length > 0 ? `${baseReason}_after_tool_use` : `${baseReason}_no_tools`;
+}
+
+function hasArchitectContinuationEnvelope(text: string): boolean {
+  if (/```architect_continuation\s*[\s\S]*?```/i.test(text)) return true;
+  const trimmed = text.trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return false;
+  const candidate = trimmed.slice(start, end + 1);
+  if (!candidate.includes("summary")) return false;
+  if (!candidate.includes("work_completed") && !candidate.includes("recommended_actions") && !candidate.includes("recommended_next_actions")) return false;
+  try {
+    const parsed = JSON.parse(candidate) as Record<string, unknown>;
+    return parsed != null && typeof parsed === "object";
+  } catch {
+    return false;
+  }
+}
+
+export function classifyStandaloneRouteFailure(fallbackReason: string | null, assistantText: string, adapter: string): string | null {
+  if (!fallbackReason) return null;
+  if (adapter === "deterministic_fallback" && fallbackReason === "operator_selected_deterministic_fallback") return null;
+  if (assistantText.trim().length === 0) return fallbackReason;
+  if (fallbackReason.startsWith("architect_provider_failed:") || fallbackReason === "architect_execution_cancelled" || fallbackReason === "architect_llm_not_configured") return fallbackReason;
+  return null;
+}
+
 async function handleArchitectChatRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   let body: Record<string, unknown>;
   try {
@@ -4083,10 +4668,11 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     return;
   }
 
-  const selectedPlanId = textField(body, "plan_id") ?? textField(body, "planId") ?? textField(body, "selected_plan_id");
+  const requestedSelectedPlanId = textField(body, "plan_id") ?? textField(body, "planId") ?? textField(body, "selected_plan_id");
   const slashOverride = parseArchitectChatSlashScope(rawMessage);
   const bodyScope = architectChatScopeFromText(textField(body, "scope") ?? textField(body, "chat_scope") ?? textField(body, "chatScope"));
-  const chatScope: ArchitectChatScope = slashOverride.scope ?? bodyScope ?? (selectedPlanId ? "plan" : "project");
+  const chatScope: ArchitectChatScope = slashOverride.scope ?? bodyScope ?? (requestedSelectedPlanId ? "plan" : "project");
+  const selectedPlanId = chatScope === "plan" ? requestedSelectedPlanId : null;
   const message = slashOverride.message.trim();
   if (!message) {
     jsonError(res, 400, "bad_request", "Missing message after chat scope command");
@@ -4098,9 +4684,12 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     return;
   }
 
-  const planId = chatScope === "plan" ? selectedPlanId : null;
+  const planId = selectedPlanId;
   const continuationToken = textField(body, "continuation_token") ?? textField(body, "continuationToken");
+  const selectedActionId = textField(body, "selected_action_id") ?? textField(body, "selectedActionId");
   const mode = architectAutonomyModeField(body, "autonomy_mode") ?? architectAutonomyModeField(body, "mode") ?? getArchitectAutonomyMode().mode;
+  const verbosityMode =
+    architectVerbosityModeField(body, "verbosity_mode") ?? architectVerbosityModeField(body, "verbosityMode") ?? architectVerbosityModeField(body, "mode") ?? getArchitectVerbosityMode().mode;
   const adapter = architectAdapterField(body, "adapter") ?? getArchitectAdapterConfig().adapter;
   const streamResponse = wantsChatSseResponse(req, body);
   const plan = planId ? await loadArchitectPlanDetail(planId) : null;
@@ -4111,6 +4700,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
 
   const architectConfig = buildArchitectLlmRequestConfig(body);
   architectConfig.model = normalizeArchitectModelForAdapter(adapter, architectConfig.model);
+  architectConfig.textVerbosity = resolveArchitectNarrativeDensity(verbosityMode).provider_text_verbosity;
   const provider = createLlmProviderForConfig(architectConfig);
   let providerAvailable = false;
   let fallbackReason: string | null = null;
@@ -4121,11 +4711,41 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   let toolLoopRoute: unknown = null;
   let planUpdate: ArchitectPlanChatUpdateResult | null = null;
   let tokenEconomy: unknown = getArchitectTokenEconomyConfig();
+  let continuationState: ArchitectContinuationState | null = null;
+  let continuationAction: ArchitectRecommendedAction | null = null;
+  let continuationToolManifest: ArchitectContinuationToolManifest | null = null;
+  let continuationInputError: string | null = null;
+  let passMessage = message;
+  if (continuationToken) {
+    const decoded = decodeArchitectContinuationToken(continuationToken, {
+      selected_plan_id: selectedPlanId ?? null,
+      chat_scope: chatScope,
+    });
+    if (!decoded.ok) {
+      continuationInputError = decoded.reason;
+    } else {
+      continuationState = decoded.state;
+      continuationAction = selectArchitectContinuationAction(decoded.state, selectedActionId);
+      if (!continuationAction) {
+        continuationInputError = "continuation_action_not_found";
+      } else if (!continuationAction.safe || continuationAction.disabled_reason) {
+        continuationInputError = continuationAction.disabled_reason || "continuation_action_disabled";
+      } else {
+        continuationToolManifest = buildArchitectContinuationToolManifest(continuationAction);
+        passMessage = buildArchitectContinuationPrompt(decoded.state, continuationAction);
+      }
+    }
+  }
+  if (continuationInputError) {
+    jsonError(res, 400, "bad_continuation", continuationInputError);
+    return;
+  }
   let runtime = buildActiveArchitectSessionRuntime({
     adapter,
     provider: architectConfig.provider,
     model: architectConfig.model,
     autonomy_mode: mode,
+    verbosity_mode: verbosityMode,
     pass_state: updateActiveArchitectPassState({ status: "running", tools: 0 }),
   });
   const executionController = new AbortController();
@@ -4152,6 +4772,9 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
       plan_id: plan?.id ?? null,
       continuation_token_present: continuationToken != null,
       mode,
+      verbosity_mode: runtime.verbosity_mode,
+      story_visibility: runtime.narrative_density.story_visibility,
+      story_source: adapter === "deterministic_fallback" ? "deterministic" : adapter === "native_api_tool_loop" ? "native_api" : adapter,
       runtime,
       architect_runtime: runtime,
     });
@@ -4162,9 +4785,9 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   });
   void publishArchitectPulseIfChanged(false);
 
-  const promptBundle = await buildArchitectChatPromptBundle(message, plan, runtime, chatScope);
-  tokenEconomy = promptBundle.tokenEconomy;
   const budgetCoordinator = createChatBudgetCoordinator(runtime, getArchitectTokenEconomyConfig());
+  const promptBundle = await buildArchitectChatPromptBundle(passMessage, plan, runtime, chatScope, budgetCoordinator);
+  tokenEconomy = promptBundle.tokenEconomy;
   let budgetStatus: ArchitectBudgetStatus | null = null;
 
   if (adapter === "deterministic_fallback") {
@@ -4172,16 +4795,18 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   } else if (adapter === "codex-cli" || adapter === "copilot-cli") {
     const messages: LlmMessage[] = [
       { role: "system", content: promptBundle.systemPrompt },
-      { role: "user", content: message },
+      { role: "user", content: passMessage },
     ];
     try {
       const completion = await runArchitectCliBridge({
         adapter,
         req,
         messages,
-        userMessage: message,
+        userMessage: passMessage,
         model: architectConfig.model,
         timeoutMs: architectConfig.timeoutMs,
+        verbosityMode,
+        toolManifest: continuationToolManifest,
         signal: executionController.signal,
         onToolTrace: (entry) => {
           toolTrace = mergeArchitectToolTraceEntries(toolTrace, entry);
@@ -4190,6 +4815,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
             provider: architectConfig.provider,
             model: architectConfig.model,
             autonomy_mode: mode,
+            verbosity_mode: verbosityMode,
             pass_state: updateActiveArchitectPassState({ status: "running", tools: toolTrace.length }),
           });
           const toolEvent = {
@@ -4198,6 +4824,9 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
             plan_id: plan?.id ?? null,
             continuation_token_present: continuationToken != null,
             mode,
+            verbosity_mode: runtime.verbosity_mode,
+            story_visibility: runtime.narrative_density.story_visibility,
+            story_source: adapter === "codex-cli" ? "codex_cli" : "copilot_cli",
             iteration: entry.iteration,
             trace_id: entry.trace_id,
             tool: entry.tool,
@@ -4222,7 +4851,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
       toolLoopRoute = completion.route;
       fallbackReason = completion.route.fallback_reason;
       if (!assistantText) {
-        fallbackReason = fallbackReason ?? "empty_cli_bridge_response";
+        fallbackReason = fallbackReason ?? classifyEmptyResponseReason("empty_cli_bridge_response", toolTrace);
       }
     } catch (error) {
       fallbackReason = executionController.signal.aborted
@@ -4234,7 +4863,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   } else {
     const messages: LlmMessage[] = [
       { role: "system", content: promptBundle.systemPrompt },
-      { role: "user", content: message },
+      { role: "user", content: passMessage },
     ];
     try {
       const completion = await runArchitectNativeToolLoop({
@@ -4242,8 +4871,9 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
         config: architectConfig,
         provider,
         messages,
-        userMessage: message,
+        userMessage: passMessage,
         budgetCoordinator,
+        toolManifest: continuationToolManifest,
         onToolTrace: (entry) => {
           toolTrace = mergeArchitectToolTraceEntries(toolTrace, entry);
           runtime = buildActiveArchitectSessionRuntime({
@@ -4251,6 +4881,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
             provider: architectConfig.provider,
             model: architectConfig.model,
             autonomy_mode: mode,
+            verbosity_mode: verbosityMode,
             pass_state: updateActiveArchitectPassState({ status: "running", tools: toolTrace.length }),
           });
           const toolEvent = {
@@ -4259,6 +4890,9 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
             plan_id: plan?.id ?? null,
             continuation_token_present: continuationToken != null,
             mode,
+            verbosity_mode: runtime.verbosity_mode,
+            story_visibility: runtime.narrative_density.story_visibility,
+            story_source: "native_api",
             iteration: entry.iteration,
             trace_id: entry.trace_id,
             tool: entry.tool,
@@ -4283,7 +4917,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
       toolLoopRoute = completion.route;
       fallbackReason = completion.route.fallback_reason;
       if (!assistantText) {
-        fallbackReason = fallbackReason ?? "empty_llm_response";
+        fallbackReason = fallbackReason ?? classifyEmptyResponseReason("empty_llm_response", toolTrace);
       }
     } catch (error) {
       fallbackReason = executionController.signal.aborted
@@ -4300,8 +4934,15 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     planUpdate = await applyPlanChatUpdate(plan!, message, runtime);
   }
 
+  const continuationNow = new Date();
+  const previousContinuationPasses = continuationState?.budget?.completed_passes ?? 0;
+  const completedPasses = previousContinuationPasses + 1;
+  const continuationMaxPasses = positiveIntegerField(body, "max_passes")
+    ?? positiveIntegerField(body, "maxPasses")
+    ?? continuationState?.budget?.max_passes
+    ?? defaultArchitectContinuationPassBudget(mode);
   const finalPassState = updateActiveArchitectPassState({
-    completed: activeArchitectPassState.completed + 1,
+    completed: completedPasses,
     tools: toolTrace.length,
     status: executionController.signal.aborted ? "cancelled" : architectPassStatusFromFallback(fallbackReason),
   });
@@ -4310,6 +4951,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     provider: architectConfig.provider,
     model: architectConfig.model,
     autonomy_mode: mode,
+    verbosity_mode: verbosityMode,
     pass_state: finalPassState,
   });
   const provenanceRecord = asRecord(provenance);
@@ -4323,13 +4965,72 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   };
 
   const normalizedAssistantText = typeof assistantText === "string" ? assistantText.trim() : "";
+  const routeFailureReason = classifyStandaloneRouteFailure(fallbackReason, normalizedAssistantText, adapter);
+  const assistantMissingEnvelope = normalizedAssistantText.length > 0 && !hasArchitectContinuationEnvelope(normalizedAssistantText);
+  if (assistantMissingEnvelope) {
+    fallbackReason = fallbackReason ?? "assistant_text_missing_continuation_envelope";
+  }
   const finalAssistantContent = normalizedAssistantText.length > 0
     ? normalizedAssistantText
     : deterministicArchitectChatReply(message, fallbackReason, plan, runtime, chatScope, planUpdate);
-  budgetStatus = finalizeChatBudgetStatus(runtime, budgetCoordinator, promptBundle, message, finalAssistantContent);
+  const continuationContext = {
+    selected_plan_id: selectedPlanId ?? null,
+    chat_scope: chatScope,
+    completed_passes: completedPasses,
+    max_passes: continuationMaxPasses,
+    now: continuationNow,
+  };
+  const continuationParseResult = routeFailureReason
+    ? synthesizeArchitectRouteFailureContinuation({
+      reason: routeFailureReason,
+      adapter,
+      provider: architectConfig.provider,
+      model: architectConfig.model,
+      context: continuationContext,
+      tool_trace_summary: toolTrace.map((entry) => `${entry.tool}: ${entry.status}`),
+    })
+    : assistantMissingEnvelope
+      ? synthesizeArchitectRecoveredContinuation({
+        reason: "assistant_text_missing_continuation_envelope",
+        adapter,
+        provider: architectConfig.provider,
+        model: architectConfig.model,
+        context: continuationContext,
+        route_tool_trace: toolTrace.map((entry) => `${entry.tool}: ${entry.status} ${entry.args_summary || ""}`.trim()),
+        chat_transcript: [`user: ${message}`, `assistant: ${finalAssistantContent.slice(0, 600)}`],
+        observed_file_mutations: toolTrace
+          .filter((entry) => /^(patch_file|append_to_file|create_file|edit_file|delete_file|rename_file|edit_entity|edit_markdown_section|patch_markdown_chapter)$/.test(entry.tool))
+          .map((entry) => `${entry.tool}: ${entry.status} ${entry.args_summary || entry.result_preview || ""}`.trim()),
+        verification_output: toolTrace
+          .filter((entry) => entry.tool === "run_command")
+          .map((entry) => `${entry.tool}: ${entry.result_preview || entry.status}`),
+        assistant_reported_unverified: finalAssistantContent ? [finalAssistantContent.slice(0, 1000)] : [],
+        mutation_tools_seen: toolTrace.some((entry) => /^(patch_file|append_to_file|create_file|edit_file|delete_file|rename_file|edit_entity|edit_markdown_section|patch_markdown_chapter)$/.test(entry.tool)),
+        verification_incomplete: !toolTrace.some((entry) => entry.tool === "run_command"),
+      })
+      : parseArchitectContinuationEnvelope(finalAssistantContent, continuationContext);
+  const continuationDecision = decideArchitectContinuation({
+    parseResult: continuationParseResult,
+    context: continuationContext,
+    autonomyAllowsContinue: autonomyAllowsArchitectContinuation(mode),
+  });
+  budgetStatus = finalizeChatBudgetStatus(runtime, budgetCoordinator, promptBundle, passMessage, finalAssistantContent);
   if (budgetStatus) {
     const tokenEconomyRecord = asRecord(tokenEconomy) ?? {};
     tokenEconomy = { ...tokenEconomyRecord, budget_status: budgetStatus };
+  }
+
+  let passCursorUpdate: Record<string, unknown> | null = null;
+  let refreshedPlan = plan;
+  if (chatScope === "plan" && plan && continuationParseResult.envelope?.status === "completed" && !executionController.signal.aborted) {
+    passCursorUpdate = await recordArchitectPassCompletionCursor({
+      plan,
+      report: continuationDecision.report,
+      runtime,
+      completedPasses,
+      maxPasses: continuationMaxPasses,
+    });
+    refreshedPlan = await loadArchitectPlanDetail(plan.id) ?? plan;
   }
 
   const result = {
@@ -4339,8 +5040,26 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     chat_scope: chatScope,
     selected_plan_id: selectedPlanId ?? null,
     plan_id: plan?.id ?? null,
-    continuation_token: continuationToken,
+    continuation_token: continuationDecision.continuation_token,
+    continuation: {
+      status: continuationDecision.status,
+      reason: continuationDecision.reason,
+      token: continuationDecision.continuation_token,
+      selected_action: continuationDecision.selected_action,
+      selected_action_id: continuationDecision.selected_action?.id ?? null,
+      tool_manifest: summarizeArchitectContinuationTools(continuationDecision.tool_manifest),
+      input_token_present: continuationToken != null,
+      input_selected_action_id: selectedActionId ?? null,
+      input_action: continuationAction,
+      max_passes: continuationMaxPasses,
+      completed_passes: completedPasses,
+      diagnostics: continuationParseResult.diagnostics,
+      auto_continue: continuationDecision.status === "continue" && continuationDecision.continuation_token != null,
+    },
+    pass_report: continuationDecision.report,
+    continuation_options: continuationDecision.report.continuation_options,
     mode: runtime.autonomy_mode,
+    verbosity_mode: runtime.verbosity_mode,
     runtime,
     route: {
       adapter: runtime.adapter,
@@ -4358,19 +5077,65 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
       execution_route: runtime.execution_route,
       session_id: runtime.session_id,
       autonomy_mode: runtime.autonomy_mode,
+      verbosity_mode: runtime.verbosity_mode,
+      verbosity_modes: runtime.verbosity_modes,
+      narrative_density: runtime.narrative_density,
       pass_state: runtime.pass_state,
       provenance_authority: runtime.provenance_authority,
       runtime,
       tool_loop: toolLoopRoute,
       token_economy: tokenEconomy,
+      continuation: {
+        status: continuationDecision.status,
+        reason: continuationDecision.reason,
+        token_present: continuationDecision.continuation_token != null,
+        selected_action_id: continuationDecision.selected_action?.id ?? null,
+        tool_manifest: summarizeArchitectContinuationTools(continuationDecision.tool_manifest),
+        max_passes: continuationMaxPasses,
+        completed_passes: completedPasses,
+        auto_continue: continuationDecision.status === "continue" && continuationDecision.continuation_token != null,
+      },
     },
     token_economy: tokenEconomy,
     provenance: runtimeProvenance,
     tool_trace: toolTrace.map((entry) => ({ ...entry, runtime })),
     plan_update: planUpdate,
+    plan_cursor_update: passCursorUpdate,
+    plan_cursor: refreshedPlan ? {
+      plan_id: refreshedPlan.id,
+      status: refreshedPlan.status,
+      operational_state: refreshedPlan.operational_state,
+      active_slice: refreshedPlan.operational_state?.active_slice ?? null,
+      last_completed_slice: refreshedPlan.operational_state?.last_completed_slice ?? null,
+      next_slice: refreshedPlan.operational_state?.next_slice ?? null,
+      completed_passes: completedPasses,
+      max_passes: continuationMaxPasses,
+    } : null,
     project_scope: buildProjectScopePayload(),
+    story_visibility: runtime.narrative_density.story_visibility,
+    story_source: adapter === "deterministic_fallback" ? "deterministic" : adapter === "native_api_tool_loop" ? "native_api" : adapter,
   };
 
+  publishEvent("architect.pass_report", {
+    chat_scope: chatScope,
+    selected_plan_id: selectedPlanId ?? null,
+    plan_id: result.plan_id,
+    mode: runtime.autonomy_mode,
+    verbosity_mode: runtime.verbosity_mode,
+    report: continuationDecision.report,
+    continuation: result.continuation,
+    runtime,
+    architect_runtime: runtime,
+  });
+  if (streamResponse && !res.writableEnded) {
+    writeSsePayload(res, "architect.chat.pass_report", {
+      ok: true,
+      report: continuationDecision.report,
+      continuation: result.continuation,
+      runtime,
+      architect_runtime: runtime,
+    });
+  }
   publishEvent("architect.chat", {
     chat_scope: chatScope,
     selected_plan_id: selectedPlanId ?? null,
@@ -4378,6 +5143,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     message_length: message.length,
     continuation_token_present: continuationToken != null,
     mode: runtime.autonomy_mode,
+    verbosity_mode: runtime.verbosity_mode,
     route: result.route,
     runtime,
     architect_runtime: runtime,
@@ -4392,6 +5158,24 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
   if (activeArchitectExecutionControl?.controller === executionController) {
     activeArchitectExecutionControl = null;
   }
+
+  await appendArchitectChatTranscript({
+    sessionId: runtime.session_id,
+    chatScope,
+    planId,
+    messages: [
+      {
+        role: "user",
+        content: message,
+        created_at: continuationNow.toISOString(),
+        chat_scope: chatScope,
+        selected_plan_id: selectedPlanId ?? null,
+        plan_id: plan?.id ?? null,
+        runtime,
+      },
+      result,
+    ],
+  });
 
   const meta = buildMeta();
   const payload = {
@@ -5798,7 +6582,7 @@ function renderArchitectShell(): string {
     .architect-provider-show { margin-left: 8px; }
     .runtime-controls {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 6px;
       align-items: end;
       border: 1px solid var(--line);
@@ -5908,6 +6692,62 @@ function renderArchitectShell(): string {
       border-radius: 6px;
       background: rgba(255, 255, 255, 0.04);
       padding: 8px 10px;
+    }
+    .continuation-report {
+      display: grid;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.035);
+      padding: 8px;
+    }
+    .continuation-report h4 {
+      margin: 0;
+      color: var(--accent);
+      font-size: 0.78rem;
+    }
+    .continuation-report-section {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+    .continuation-report-section strong {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+    }
+    .continuation-report-section ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .continuation-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+    .continuation-pill {
+      min-height: 28px;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--ink);
+      padding: 5px 9px;
+      font: 0.74rem/1.2 var(--sans);
+      overflow-wrap: anywhere;
+    }
+    .continuation-pill.recommended {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .continuation-pill.running {
+      border-color: var(--success);
+      color: var(--success);
+    }
+    .continuation-pill:disabled {
+      opacity: 0.58;
+      cursor: not-allowed;
     }
     .chat-card pre {
       max-height: 28vh;
@@ -6346,6 +7186,14 @@ function renderArchitectShell(): string {
       background: rgba(255, 255, 255, 0.045);
       overflow-wrap: anywhere;
     }
+    #slice-list li.slice-completed {
+      opacity: 0.56;
+      background: rgba(255, 255, 255, 0.025);
+    }
+    #slice-list li.slice-completed strong,
+    #slice-list li.slice-completed .meta {
+      color: var(--muted);
+    }
     .dense-list strong {
       display: block;
       margin-bottom: 4px;
@@ -6570,6 +7418,11 @@ function renderArchitectShell(): string {
         order: 3;
       }
     }
+    @media (max-width: 840px) {
+      .runtime-controls {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
     @media (max-width: 640px) {
       main {
         gap: 12px;
@@ -6672,6 +7525,13 @@ function renderArchitectShell(): string {
             <option value="autonomous">Autonomous</option>
             <option value="supervised">Supervised</option>
             <option value="manual">Manual</option>
+          </select>
+        </label>
+        <label class="control-field">Verbosity
+          <select id="architect-verbosity-mode-select">
+            <option value="concise">Concise</option>
+            <option value="balanced">Balanced</option>
+            <option value="detailed">Detailed</option>
           </select>
         </label>
         <label class="control-field">Passes
@@ -6916,6 +7776,7 @@ function renderArchitectShell(): string {
     const architectProviderSelectEl = document.getElementById('architect-provider-select');
     const architectModelInputEl = document.getElementById('architect-model-input');
     const architectAutonomyModeSelectEl = document.getElementById('architect-autonomy-mode-select');
+    const architectVerbosityModeSelectEl = document.getElementById('architect-verbosity-mode-select');
     const architectPassViewEl = document.getElementById('architect-pass-view');
     const recordActionButtonEl = document.getElementById('record-action-button');
     const reviewGateButtonEl = document.getElementById('review-gate-button');
@@ -6949,6 +7810,8 @@ function renderArchitectShell(): string {
     let liveToolTraceSeen = false;
     let activeToolTracePanel = null;
     let activeToolTraceRows = new Map();
+    let activeContinuationToken = null;
+    let activeContinuationOptions = [];
     let adrPreviewCache = new Map();
     let activeAdrEditorId = null;
     let activeAdrEditorPayload = null;
@@ -7003,7 +7866,7 @@ function renderArchitectShell(): string {
     let architectCodeEditorModulePromise = null;
 ${isArchitectDoomEnabled() ? "    let architectDoomRuntimePromise = null;\n" : ""}    const architectTabTypeRegistry = new Map();
     const architectModelOptionsByProvider = {
-      anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+      anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-mythos-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
       openai: ['gpt-5.5', 'gpt-5', 'gpt-5.4', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini', 'o3', 'o4-mini'],
       ollama: ['qwen3:8b', 'llama3.1', 'mistral', 'codellama'],
       lmstudio: ['local-model'],
@@ -8325,6 +9188,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       chatScopePillEl.disabled = processing;
       chatInputEl.disabled = false;
       chatProcessingLightEl.setAttribute('aria-hidden', processing ? 'false' : 'true');
+      refreshArchitectContinuationPills();
     }
 
     function runtimeFromPayload(payload) {
@@ -8645,8 +9509,18 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       return formatToolResultPreview(item.tool || item.name || 'tool', item.result_preview);
     }
 
-    function ensureToolTracePanel(provenance) {
+    function toolTraceDensity(runtime) {
+      const visibility = runtime && runtime.narrative_density && runtime.narrative_density.story_visibility || 'compact';
+      return {
+        visibility: visibility,
+        openPanel: true,
+        openRows: false,
+      };
+    }
+
+    function ensureToolTracePanel(provenance, runtime) {
       if (activeToolTracePanel) return activeToolTracePanel;
+      const density = toolTraceDensity(runtime);
       const node = document.createElement('div');
       node.className = 'chat-message tool';
       const label = document.createElement('strong');
@@ -8655,7 +9529,8 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       body.className = 'chat-message-body';
       const details = document.createElement('details');
       details.className = 'tool-trace-panel';
-      details.open = true;
+      details.open = density.openPanel;
+      details.dataset.storyVisibility = density.visibility;
       const summary = document.createElement('summary');
       summary.textContent = 'Tool trace (0)';
       const list = document.createElement('div');
@@ -8690,8 +9565,10 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       activeToolTracePanel.summary.textContent = 'Tool trace (' + parts.join('; ') + ')';
     }
 
-    function renderToolTraceRow(row, item) {
+    function renderToolTraceRow(row, item, runtime) {
+      const density = toolTraceDensity(runtime);
       resetNode(row);
+      row.dataset.storyVisibility = density.visibility;
       const header = document.createElement('div');
       header.className = 'tool-trace-header';
       const name = document.createElement('span');
@@ -8722,6 +9599,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       }
       if (item.result_preview || item.args_summary) {
         const details = document.createElement('details');
+        details.open = density.openRows;
         const summary = document.createElement('summary');
         summary.textContent = 'Details';
         details.appendChild(summary);
@@ -8732,8 +9610,8 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       }
     }
 
-    function appendToolTraceMessage(trace, provenance) {
-      const panel = ensureToolTracePanel(provenance);
+    function appendToolTraceMessage(trace, provenance, runtime) {
+      const panel = ensureToolTracePanel(provenance, runtime);
       const items = Array.isArray(trace) ? trace : [];
       if (items.length === 0 && provenance) {
         updateToolTracePanelSummary();
@@ -8750,7 +9628,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
           activeToolTraceRows.set(key, record);
         }
         record.item = item;
-        renderToolTraceRow(record.row, item);
+        renderToolTraceRow(record.row, item, runtime);
       }
       updateToolTracePanelSummary();
       chatLogEl.scrollTop = chatLogEl.scrollHeight;
@@ -8855,6 +9733,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
             model: controls.model,
             mode: controls.mode,
             autonomy_mode: controls.mode,
+            verbosity_mode: controls.verbosity_mode,
             token_economy: economyEnabled,
           }),
         });
@@ -8865,8 +9744,8 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         const runtime = updateActiveArchitectRuntime(payload);
         renderRuntime(payload);
         const result = payload.result || {};
-        chatStatusEl.textContent = 'Architect runtime saved: ' + architectRuntimeLabel(runtime) + ' | ' + (runtime.autonomy_mode || controls.mode) + (result.persisted ? ' | engine.env updated' : ' | in-memory only');
-        appendEventLine('[config] selected ' + architectRuntimeLabel(runtime));
+        chatStatusEl.textContent = 'Architect runtime saved: ' + architectRuntimeLabel(runtime) + ' | ' + (runtime.autonomy_mode || controls.mode) + ' | ' + (runtime.verbosity_mode || controls.verbosity_mode) + (result.persisted ? ' | engine.env updated' : ' | in-memory only');
+        appendEventLine('[config] selected ' + architectRuntimeLabel(runtime) + ' | verbosity ' + (runtime.verbosity_mode || controls.verbosity_mode));
         return payload;
       } catch (error) {
         chatStatusEl.textContent = 'Architect route save failed: ' + String(error instanceof Error ? error.message : error);
@@ -8931,6 +9810,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       if (!architectProviderSelectEl.value) architectProviderSelectEl.value = 'none';
       lastNativeArchitectProvider = architectProviderSelectEl.value !== 'none' ? architectProviderSelectEl.value : '';
       architectAutonomyModeSelectEl.value = runtime.autonomy_mode || saved.mode || 'autonomous';
+      architectVerbosityModeSelectEl.value = runtime.verbosity_mode || 'balanced';
       syncArchitectControlState(runtime.model || saved.model || '');
       architectAdapterSelectEl.addEventListener('change', function() {
         syncArchitectControlState('');
@@ -8945,6 +9825,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         saveArchitectControls();
       });
       architectAutonomyModeSelectEl.addEventListener('change', saveArchitectControls);
+      architectVerbosityModeSelectEl.addEventListener('change', saveArchitectControls);
     }
 
     function selectedArchitectControls() {
@@ -8954,6 +9835,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         provider: deterministicProviderForAdapter(adapter),
         model: architectModelInputEl.value.trim(),
         mode: architectAutonomyModeSelectEl.value || 'autonomous',
+        verbosity_mode: architectVerbosityModeSelectEl.value || 'balanced',
       };
     }
 
@@ -9353,6 +10235,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         return true;
       }
       if (slash.name === 'clear') {
+        await clearPersistedChatHistory();
         resetNode(chatLogEl);
         chatStatusEl.textContent = 'Chat history cleared.';
         return true;
@@ -9415,8 +10298,8 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       }
       const llm = payload.architect_llm || {};
       syncAttachmentCapabilities(llm.capabilities || computeAttachmentCapabilities(runtime.adapter, runtime.provider, runtime.model));
-      architectModelConfigEl.textContent = 'Model: ' + architectRuntimeLabel(runtime);
-      architectModelConfigEl.title = 'session: ' + (runtime.session_id || 'unknown') + ' | route: ' + (runtime.execution_route || runtime.adapter || 'unknown') + ' | autonomy: ' + (runtime.autonomy_mode || 'unknown') + ' | provenance: ' + (runtime.provenance_authority || 'unknown') + ' | adapter source: ' + (runtime.adapter_source || 'unknown') + ' | model source: ' + (runtime.model_source || 'unknown') + ' | provider source: ' + (runtime.provider_source || 'unknown');
+      architectModelConfigEl.textContent = 'Model: ' + architectRuntimeLabel(runtime) + ' | ' + (runtime.verbosity_mode || 'balanced');
+      architectModelConfigEl.title = 'session: ' + (runtime.session_id || 'unknown') + ' | route: ' + (runtime.execution_route || runtime.adapter || 'unknown') + ' | autonomy: ' + (runtime.autonomy_mode || 'unknown') + ' | verbosity: ' + (runtime.verbosity_mode || 'balanced') + ' | provenance: ' + (runtime.provenance_authority || 'unknown') + ' | adapter source: ' + (runtime.adapter_source || 'unknown') + ' | model source: ' + (runtime.model_source || 'unknown') + ' | provider source: ' + (runtime.provider_source || 'unknown');
     }
 
     function renderArchitectPulse(pulse) {
@@ -9712,6 +10595,24 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       }
     }
 
+    function stripArchitectStructuredOutput(content, role) {
+      const text = typeof content === 'string' ? content : String(content || '');
+      if (role !== 'assistant') return text;
+      const continuationFencePattern = new RegExp('\\x60{3}(?:json\\s+)?architect_continuation\\s*\\n[\\s\\S]*?\\x60{3}', 'gi');
+      const withoutFences = text.replace(continuationFencePattern, '').trim();
+      const start = withoutFences.indexOf('{');
+      const end = withoutFences.lastIndexOf('}');
+      if (start < 0 || end <= start) return withoutFences;
+      const candidate = withoutFences.slice(start, end + 1);
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === 'object' && (parsed.summary || parsed.work_completed || parsed.recommended_actions || parsed.recommended_next_actions || parsed.pass_report_id || parsed.governed_tools_used || parsed.follow_up_recommendation || parsed.verification)) {
+          return (withoutFences.slice(0, start) + withoutFences.slice(end + 1)).trim();
+        }
+      } catch (_) {}
+      return withoutFences;
+    }
+
     function appendChatMessage(role, content) {
       const node = document.createElement('div');
       node.className = 'chat-message ' + role;
@@ -9719,11 +10620,365 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       label.textContent = role === 'user' ? 'You' : (role === 'tool' ? 'Tool Trace' : 'Architect');
       const body = document.createElement('div');
       body.className = 'chat-message-body';
-      renderChatContent(body, content, role);
+      renderChatContent(body, stripArchitectStructuredOutput(content, role), role);
       node.appendChild(label);
       node.appendChild(body);
       chatLogEl.appendChild(node);
       chatLogEl.scrollTop = chatLogEl.scrollHeight;
+      return { node: node, body: body, role: role };
+    }
+
+    const architectHistoryRestoreLimit = 40;
+    const architectHistoryContentLimit = 24000;
+    const architectHistoryTotalContentLimit = 90000;
+
+    function stripPersistedChatContent(content, role) {
+      let text = typeof content === 'string' ? content : String(content || '');
+      if (role !== 'assistant') return text;
+      text = stripArchitectStructuredOutput(text, role);
+      const lower = text.toLowerCase();
+      const routeTraceIndex = lower.indexOf('route tool trace:');
+      if (routeTraceIndex >= 0) text = text.slice(0, routeTraceIndex).trim();
+      const promptIndex = text.toLowerCase().indexOf('current user request');
+      if (promptIndex >= 0) text = text.slice(0, promptIndex).trim();
+      return text || '[DreamGraph: raw restored tool trace omitted for startup safety.]';
+    }
+
+    function clampPersistedChatContent(content, role) {
+      const text = stripPersistedChatContent(content, role);
+      if (text.length <= architectHistoryContentLimit) return text;
+      return text.slice(0, architectHistoryContentLimit) + '\\n\\n[DreamGraph: restored chat content truncated from ' + text.length + ' characters for startup safety.]';
+    }
+
+    function normalizePersistedChatHistoryItem(item) {
+      if (!item || typeof item !== 'object') return null;
+      if (item.role === 'tool') return null;
+      const role = item.role === 'user' ? 'user' : 'assistant';
+      const content = clampPersistedChatContent(item.content, role);
+      if (!content && !item.pass_report) return null;
+      return {
+        role: role,
+        content: content,
+        pass_report: role === 'assistant' ? item.pass_report || null : null,
+        continuation: role === 'assistant' ? item.continuation || null : null,
+        continuation_options: role === 'assistant' ? item.continuation_options || [] : [],
+        runtime: item.runtime || null,
+      };
+    }
+
+    function persistedHistoryWarnings(payload) {
+      const warnings = Array.isArray(payload && payload.warnings) ? payload.warnings : [];
+      return warnings.map(function(item) { return collapseWhitespace(item); }).filter(Boolean).slice(0, 3);
+    }
+
+    function appendHistoryReplayStatus(restored, rawCount, skipped, warnings) {
+      const parts = [];
+      if (warnings.length > 0) parts.push(warnings.join(' | '));
+      if (restored > 0) {
+        parts.push('Restored ' + restored + ' persisted chat messages' + (rawCount > restored ? ' (showing bounded safe replay of ' + rawCount + ')' : '') + '.');
+      } else {
+        parts.push('No persisted chat messages restored.');
+      }
+      if (skipped > 0) parts.push('Skipped ' + skipped + ' oversized or raw trace message(s).');
+      chatStatusEl.textContent = parts.join(' ');
+    }
+
+    function persistedHistoryReplayCandidates(rawMessages) {
+      const out = [];
+      let skipped = 0;
+      let restoredChars = 0;
+      const candidates = rawMessages.slice(-architectHistoryRestoreLimit * 2);
+      for (let index = 0; index < candidates.length; index += 1) {
+        const normalized = normalizePersistedChatHistoryItem(candidates[index]);
+        if (!normalized) {
+          skipped += 1;
+          continue;
+        }
+        const contentLength = normalized.content.length;
+        if (contentLength > architectHistoryContentLimit || restoredChars + contentLength > architectHistoryTotalContentLimit) {
+          skipped += 1;
+          continue;
+        }
+        restoredChars += contentLength;
+        out.push(normalized);
+      }
+      return { messages: out.slice(-architectHistoryRestoreLimit), skipped: skipped };
+    }
+
+    async function loadPersistedChatHistory() {
+      const runtime = activeArchitectRuntime || {};
+      const response = await fetch('/api/architect/v1/chat-history', { cache: 'no-store' });
+      const payload = await response.json().catch(function() { return {}; });
+      const warnings = persistedHistoryWarnings(payload);
+      if (!response.ok || !payload.transcript) {
+        if (warnings.length > 0) appendHistoryReplayStatus(0, 0, 0, warnings);
+        return;
+      }
+      const rawMessages = Array.isArray(payload.transcript.messages) ? payload.transcript.messages : [];
+      const replay = persistedHistoryReplayCandidates(rawMessages);
+      const messages = replay.messages;
+      if (!messages.length) {
+        appendHistoryReplayStatus(0, rawMessages.length, replay.skipped, warnings);
+        return;
+      }
+      resetNode(chatLogEl);
+      for (let index = 0; index < messages.length; index += 1) {
+        const item = messages[index];
+        const role = item.role;
+        const rendered = appendChatMessage(role, item.content);
+        if (role === 'assistant' && item.pass_report) {
+          renderArchitectContinuationReport(rendered, item, item.runtime || runtime);
+        }
+        if (index % 4 === 3) {
+          await new Promise(function(resolve) { window.setTimeout(resolve, 0); });
+        }
+      }
+      appendHistoryReplayStatus(messages.length, rawMessages.length, replay.skipped, warnings);
+    }
+
+    async function clearPersistedChatHistory() {
+      const response = await fetch('/api/architect/v1/chat-history', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: (activeArchitectRuntime || {}).session_id || null, scope: activeChatScope, plan_id: activeChatScope === 'plan' ? activePlanId : null }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(function() { return {}; });
+        throw new Error(payload.message || ('Chat history clear failed with HTTP ' + response.status));
+      }
+    }
+
+    function updateChatMessageContent(message, content) {
+      if (!message || !message.body) return;
+      resetNode(message.body);
+      renderChatContent(message.body, stripArchitectStructuredOutput(content, message.role || 'assistant'), message.role || 'assistant');
+      chatLogEl.scrollTop = chatLogEl.scrollHeight;
+    }
+
+    function compactContinuationReportText(value) {
+      const raw = String(value == null ? '' : value);
+      let cleaned = '';
+      for (let index = 0; index < raw.length; index += 1) {
+        const code = raw.charCodeAt(index);
+        cleaned += code <= 31 || code === 127 ? ' ' : raw.charAt(index);
+      }
+      return collapseWhitespace(cleaned);
+    }
+
+    function isDanglingContinuationReportObjectHeader(text) {
+      const trimmed = String(text || '').trim();
+      if (!trimmed || trimmed.charAt(trimmed.length - 1) !== '{') return false;
+      const label = trimmed.slice(0, -1).trim();
+      if (!label) return false;
+      for (let index = 0; index < label.length; index += 1) {
+        const char = label.charAt(index);
+        const code = char.charCodeAt(0);
+        const allowed = (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || char === ' ' || char === '/' || char === '_' || char === '-';
+        if (!allowed) return false;
+      }
+      return true;
+    }
+
+    function isRenderableContinuationReportText(value) {
+      const text = compactContinuationReportText(value);
+      if (!text) return false;
+      if (isDanglingContinuationReportObjectHeader(text)) return false;
+      const lower = text.toLowerCase();
+      if (lower === 'route tool trace' || lower === 'route tool trace:') return false;
+      if (lower.indexOf('route tool trace:') >= 0) return false;
+      if (lower.indexOf('current user request') >= 0) return false;
+      if (lower.indexOf('patch_file') >= 0 && (lower.indexOf('edits=') >= 0 || lower.indexOf('edits =') >= 0 || lower.indexOf('old_text') >= 0 || lower.indexOf('new_text') >= 0)) return false;
+      return true;
+    }
+
+    function normalizeContinuationReportItems(items) {
+      return (Array.isArray(items) ? items : [])
+        .map(compactContinuationReportText)
+        .filter(isRenderableContinuationReportText)
+        .slice(0, 24);
+    }
+
+    function parseContinuationToolLine(item) {
+      const text = compactContinuationReportText(item);
+      const match = text.match(/^([A-Za-z0-9_:-]+):\s*([A-Za-z_ -]+)(?:\s+([\s\S]+))?$/);
+      if (!match) return null;
+      const tool = match[1];
+      if (tool.indexOf('_') < 0 && tool.indexOf(':') < 0) return null;
+      const status = collapseWhitespace(match[2] || 'completed').toLowerCase().replace(new RegExp(String.fromCharCode(92) + 's+', 'g'), '-');
+      const payload = (match[3] || '').trim();
+      const parsed = tryParseJsonPayload(payload);
+      const itemLike = {
+        tool: tool,
+        status: status,
+        args_summary: parsed ? JSON.stringify(parsed.value) : payload,
+      };
+      return {
+        tool: toolShortName(itemLike),
+        status: status,
+        summary: semanticToolArgSummary(itemLike) || summarizeJsonObject(parsed && parsed.value) || collapseWhitespace(payload).slice(0, 180),
+        details: parsed ? JSON.stringify(parsed.value, undefined, 2) : payload,
+      };
+    }
+
+    function appendContinuationToolRow(parent, parsed) {
+      const row = document.createElement('div');
+      row.className = 'tool-trace-row continuation-tool-row';
+      const header = document.createElement('div');
+      header.className = 'tool-trace-header';
+      const name = document.createElement('span');
+      name.textContent = parsed.tool || 'tool';
+      const status = document.createElement('span');
+      status.className = 'tool-trace-pill status-' + (parsed.status || 'completed');
+      status.textContent = parsed.status || 'completed';
+      header.appendChild(name);
+      header.appendChild(status);
+      row.appendChild(header);
+      if (parsed.summary) {
+        const summary = document.createElement('div');
+        summary.className = 'meta';
+        summary.textContent = parsed.summary;
+        row.appendChild(summary);
+      }
+      if (parsed.details && parsed.details !== parsed.summary) {
+        const details = document.createElement('details');
+        const detailsSummary = document.createElement('summary');
+        detailsSummary.textContent = 'Details';
+        details.appendChild(detailsSummary);
+        const pre = document.createElement('pre');
+        pre.textContent = parsed.details.length > 1800 ? parsed.details.slice(0, 1800).trim() + '...' : parsed.details;
+        details.appendChild(pre);
+        row.appendChild(details);
+      }
+      parent.appendChild(row);
+    }
+
+    function appendContinuationList(section, items) {
+      const values = normalizeContinuationReportItems(items);
+      if (values.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'meta';
+        empty.textContent = 'None recorded.';
+        section.appendChild(empty);
+        return;
+      }
+      const list = document.createElement('ul');
+      values.forEach(function(item) {
+        const parsedTool = parseContinuationToolLine(item);
+        const li = document.createElement('li');
+        if (parsedTool) {
+          appendContinuationToolRow(li, parsedTool);
+        } else {
+          li.textContent = item;
+        }
+        list.appendChild(li);
+      });
+      section.appendChild(list);
+    }
+
+    function appendContinuationReportSection(panel, title, value) {
+      const section = document.createElement('div');
+      section.className = 'continuation-report-section';
+      const heading = document.createElement('strong');
+      heading.textContent = title;
+      section.appendChild(heading);
+      if (Array.isArray(value)) {
+        appendContinuationList(section, value);
+      } else {
+        const text = document.createElement('div');
+        const normalized = compactContinuationReportText(value);
+        text.textContent = isRenderableContinuationReportText(normalized) ? normalized : 'None recorded.';
+        section.appendChild(text);
+      }
+      panel.appendChild(section);
+    }
+
+    function renderArchitectContinuationReport(message, result, runtime) {
+      if (!message || !message.body || !result) return;
+      const report = result.pass_report || null;
+      const continuation = result.continuation || null;
+      if (!report && !continuation) return;
+      activeContinuationToken = continuation && continuation.token ? continuation.token : (typeof result.continuation_token === 'string' ? result.continuation_token : null);
+      activeContinuationOptions = report && Array.isArray(report.continuation_options)
+        ? report.continuation_options
+        : (Array.isArray(result.continuation_options) ? result.continuation_options : []);
+
+      const panel = document.createElement('section');
+      panel.className = 'continuation-report';
+      panel.id = 'standalone_architect_continuation_report';
+      const title = document.createElement('h4');
+      title.textContent = 'Pass Report';
+      panel.appendChild(title);
+      if (report) {
+        appendContinuationReportSection(panel, 'Executive Summary', report.summary);
+        appendContinuationReportSection(panel, 'Work Completed', report.work_completed);
+        appendContinuationReportSection(panel, 'Files / Graph Entities Touched', [].concat(report.files_touched || [], report.graph_entities_touched || []));
+        appendContinuationReportSection(panel, 'Tool Trace', report.tool_trace_summary);
+        appendContinuationReportSection(panel, 'Graph / Plan Updates Recorded', report.graph_plan_updates);
+        appendContinuationReportSection(panel, 'Evidence', report.evidence);
+        const fallbackEvidence = Array.isArray(report.fallback_evidence) ? report.fallback_evidence : [];
+        const fallbackSummary = [];
+        fallbackEvidence.forEach(function(section) {
+          normalizeContinuationReportItems(section && section.items).forEach(function(item) { fallbackSummary.push(item); });
+        });
+        if (fallbackSummary.length > 0) {
+          appendContinuationReportSection(panel, 'Fallback Evidence Summary', fallbackSummary.slice(0, 12));
+        }
+        appendContinuationReportSection(panel, 'Blockers And Uncertainty', [].concat(report.blockers || [], ['uncertainty: ' + String(report.uncertainty ?? 'unknown')]));
+        appendContinuationReportSection(panel, 'Recommended Next Step', report.recommended_next_step ? report.recommended_next_step.label : (Array.isArray(report.recommended_next_actions) ? report.recommended_next_actions.map(function(action) { return action && (action.label || action.action || action.id) || action; }) : 'None recorded.'));
+      }
+      if (continuation) {
+        appendContinuationReportSection(panel, 'Provenance', [
+          'decision: ' + continuation.status + ' (' + continuation.reason + ')',
+          'runtime: ' + architectRuntimeLabel(runtime || activeArchitectRuntime || {}),
+          'completed passes: ' + String(continuation.completed_passes || 0) + '/' + String(continuation.max_passes || 0),
+        ]);
+      }
+      renderArchitectContinuationPills(panel, result, runtime);
+      message.body.appendChild(panel);
+      chatLogEl.scrollTop = chatLogEl.scrollHeight;
+    }
+
+    function renderArchitectContinuationPills(panel, result, runtime) {
+      const continuation = result.continuation || {};
+      const options = Array.isArray(result.continuation_options) ? result.continuation_options : activeContinuationOptions;
+      const wrap = document.createElement('div');
+      wrap.className = 'continuation-pills';
+      wrap.id = 'standalone_architect_continuation_option_pills';
+      options.forEach(function(action) {
+        if (!action || !action.id) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'continuation-pill' + (action.recommended ? ' recommended' : '') + (continuation.selected_action_id === action.id ? ' running' : '');
+        button.dataset.actionId = action.id;
+        button.textContent = (action.recommended ? 'Recommended: ' : '') + (action.label || action.id);
+        const tools = [].concat(action.required_tools || [], action.preferred_tools || []).join(', ') || 'no tools listed';
+        button.title = String(action.rationale || '') + ' | tools: ' + tools + (action.disabled_reason ? ' | disabled: ' + action.disabled_reason : '');
+        button.dataset.actionDisabled = action.safe === false || Boolean(action.disabled_reason) ? 'true' : 'false';
+        button.disabled = shouldDisableArchitectContinuationPill(button);
+        button.addEventListener('click', function() {
+          button.classList.add('running');
+          button.id = 'standalone_architect_autonomy_auto_selection';
+          sendChatMessage(action.prompt || action.label || action.id, {
+            continuationToken: activeContinuationToken,
+            selectedActionId: action.id,
+          }).catch(function(error) {
+            button.classList.remove('running');
+            chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+          });
+        });
+        wrap.appendChild(button);
+      });
+      if (options.length > 0) panel.appendChild(wrap);
+    }
+
+    function shouldDisableArchitectContinuationPill(button) {
+      return chatProcessing || !activeContinuationToken || button.dataset.actionDisabled === 'true';
+    }
+
+    function refreshArchitectContinuationPills() {
+      document.querySelectorAll('.continuation-pill').forEach(function(button) {
+        button.disabled = shouldDisableArchitectContinuationPill(button);
+      });
     }
 
     function appendListItem(node, primary, secondary) {
@@ -9738,6 +10993,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         item.appendChild(meta);
       }
       node.appendChild(item);
+      return item;
     }
 
     function renderList(node, items, emptyText, renderer) {
@@ -10154,7 +11410,10 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
 
       renderList(sliceListEl, registry.slices, 'No structured slices projected yet.', function(node, slice) {
         const meta = (slice.status || 'unknown') + ' • ' + slice.category + ' • ' + slice.heading_path;
-        appendListItem(node, slice.title, meta);
+        const item = appendListItem(node, slice.title, meta);
+        if (/complete|done|verified/i.test(slice.status || '')) {
+          item.classList.add('slice-completed');
+        }
       });
 
       renderList(checkpointListEl, (registry.checkpoints || []).slice(-10).reverse(), 'No checkpoints found in implementation log.', function(node, checkpoint) {
@@ -10253,6 +11512,13 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       await persistSelectedPlan(null);
     }
 
+    function focusPlanButtonInRail(button) {
+      if (!button || !planListEl || typeof button.scrollIntoView !== 'function') return;
+      window.requestAnimationFrame(function() {
+        button.scrollIntoView({ block: 'center', inline: 'nearest' });
+      });
+    }
+
     async function loadPlan(planId, button, options) {
       const loadToken = ++activePlanLoadToken;
       futureStatusEl.textContent = 'Loading advisory future review for ' + planId + '...';
@@ -10274,6 +11540,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       for (const node of document.querySelectorAll('button.plan-item')) {
         node.classList.toggle('active', node === button);
       }
+      focusPlanButtonInRail(button);
       actionStatusEl.textContent = 'Governed actions ready for ' + planId;
       renderPlan(payload.plan);
       refreshOpenArchitectPluginTabs();
@@ -10329,8 +11596,9 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       return resultPayload;
     }
 
-    async function sendChatMessage(message) {
+    async function sendChatMessage(message, continuationRequest) {
       const controls = selectedArchitectControls();
+      const continuation = continuationRequest || null;
       const slash = parseChatSlashOverride(message);
       const dispatchScope = setChatScope(slash.scope || activeChatScope);
       const dispatchMessage = String(slash.message || '').trim();
@@ -10348,10 +11616,14 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       liveToolTraceSeen = false;
       activeToolTracePanel = null;
       activeToolTraceRows = new Map();
+      if (!continuation) {
+        activeContinuationToken = null;
+        activeContinuationOptions = [];
+      }
       const persistedPayload = await persistArchitectControls();
       const requestRuntime = updateActiveArchitectRuntime(persistedPayload);
       appendChatMessage('user', outboundMessage);
-      appendChatMessage('assistant', 'I am starting on that now. I will check the governed project context first, use DreamGraph tools where needed, and report the result when the pass is complete.');
+      const assistantMessage = appendChatMessage('assistant', 'I am starting on that now. I will check the governed project context first, use DreamGraph tools where needed, and report the result when the pass is complete.');
       autonomyPassCount += 1;
       updateAutonomyPassView('running', 0);
       setChatProcessing(true);
@@ -10365,10 +11637,12 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
             scope: dispatchScope,
             chat_scope: dispatchScope,
             planId: dispatchScope === 'plan' ? activePlanId : null,
-            selected_plan_id: activePlanId,
-            continuationToken: null,
+            selected_plan_id: dispatchScope === 'plan' ? activePlanId : null,
+            continuationToken: continuation ? continuation.continuationToken : null,
+            selected_action_id: continuation ? continuation.selectedActionId : null,
             mode: requestRuntime.autonomy_mode || controls.mode,
             autonomy_mode: requestRuntime.autonomy_mode || controls.mode,
+            verbosity_mode: requestRuntime.verbosity_mode || controls.verbosity_mode,
             adapter: requestRuntime.adapter || controls.adapter,
             provider: requestRuntime.provider || controls.provider,
             model: requestRuntime.model || controls.model,
@@ -10384,22 +11658,41 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
         renderRuntime(payload);
         const runtime = updateActiveArchitectRuntime(payload);
         const result = payload.result || {};
-        appendChatMessage('assistant', result.content || 'Architect returned an empty response.');
+        const finalContent = result.content || 'Architect returned an empty response.';
         const route = result.route || {};
         const toolLoop = route.tool_loop || {};
         const trace = Array.isArray(result.tool_trace) ? result.tool_trace : [];
         updateAutonomyPassView(route.fallback_reason ? 'partial' : 'complete', trace.length);
+        let renderedAssistantMessage = assistantMessage;
         if (trace.length > 0) {
-          appendToolTraceMessage(trace, result.provenance);
+          appendToolTraceMessage(trace, result.provenance, runtime);
+          renderedAssistantMessage = appendChatMessage('assistant', finalContent);
+        } else {
+          updateChatMessageContent(assistantMessage, finalContent);
         }
+        renderArchitectContinuationReport(renderedAssistantMessage, result, runtime);
         if (result.provenance) {
           appendEventLine('[provenance] ' + summarizeProvenance(result.provenance));
         }
-        if (activePlanId) {
+        refreshArchitectContinuationPills();
+        if (dispatchScope === 'plan' && activePlanId) {
           appendEventLine(result.plan_update && result.plan_update.changed ? '[plan-action] updated ' + activePlanId + ' via chat' : '[plan-action] refreshed ' + activePlanId + ' projection');
           await loadPlans(activePlanId, { activatePlanScope: dispatchScope === 'plan' });
         }
-        chatStatusEl.textContent = 'Using ' + architectRuntimeLabel(runtime) + ' | scope ' + (result.chat_scope || dispatchScope) + ' | model source ' + (runtime.model_source || route.model_source || 'unknown') + ' | session ' + (runtime.session_id || 'unknown') + ' | tools ' + (toolLoop.advertised_tool_count || 0) + '/' + (toolLoop.available_tool_count || 0) + ' | trace ' + trace.length + (route.fallback_reason ? ' | ' + route.fallback_reason : '');
+        const continuationStatus = result.continuation ? ' | continuation ' + result.continuation.status + ':' + result.continuation.reason : '';
+        chatStatusEl.textContent = 'Using ' + architectRuntimeLabel(runtime) + ' | scope ' + (result.chat_scope || dispatchScope) + ' | model source ' + (runtime.model_source || route.model_source || 'unknown') + ' | session ' + (runtime.session_id || 'unknown') + ' | tools ' + (toolLoop.advertised_tool_count || 0) + '/' + (toolLoop.available_tool_count || 0) + ' | trace ' + trace.length + continuationStatus + (route.fallback_reason ? ' | ' + route.fallback_reason : '');
+        const nextContinuation = result.continuation || {};
+        if (nextContinuation.status === 'continue' && nextContinuation.token && nextContinuation.selected_action) {
+          const selected = nextContinuation.selected_action;
+          window.setTimeout(function() {
+            sendChatMessage(selected.prompt || selected.label || selected.id || 'Continue', {
+              continuationToken: nextContinuation.token,
+              selectedActionId: nextContinuation.selected_action_id || selected.id,
+            }).catch(function(error) {
+              chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
+            });
+          }, 0);
+        }
       } finally {
         setChatProcessing(false);
       }
@@ -10763,6 +12056,7 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       const requestedButton = treeSelection.requestedButton;
       const requestedResolvedPlanId = treeSelection.requestedResolvedPlanId;
       if (requestedButton && requestedResolvedPlanId) {
+        focusPlanButtonInRail(requestedButton);
         await loadPlan(requestedResolvedPlanId, requestedButton, options);
       } else {
         renderNoPlanSelected('No plan selected. Project-scope chat remains available.');
@@ -11138,6 +12432,9 @@ ${isArchitectDoomEnabled() ? "      registerArchitectTabType({ type: 'doom', tit
       railStatusEl.textContent = 'Plan index failed';
       planBodyEl.textContent = String(error instanceof Error ? error.message : error);
       centerPlanBodyEl.textContent = planBodyEl.textContent;
+    });
+    loadPersistedChatHistory().catch(function(error) {
+      chatStatusEl.textContent = String(error instanceof Error ? error.message : error);
     });
     loadArchitectPulse();
     connectEvents();
@@ -11523,6 +12820,23 @@ function handleArchitectContract(req: IncomingMessage, res: ServerResponse): voi
     contract: "architect",
     version: "v1",
     ...buildMeta(),
+    verbosity: {
+      default_mode: "balanced",
+      modes: [...ARCHITECT_VERBOSITY_MODE_OPTIONS],
+      field: "verbosity_mode",
+      authority: "daemon_config",
+    },
+    adapter_capabilities: {
+      selectable: [...ARCHITECT_ADAPTER_OPTIONS],
+      future_gated: [
+        {
+          adapter: "claude-cli",
+          selectable: false,
+          reason: "No registered standalone Architect Claude CLI adapter or local verified flag surface exists yet.",
+          verbosity_support: "future_prompt_profile_only_until_adapter_verified",
+        },
+      ],
+    },
     routes: {
       shell: "/architect",
       ...(isArchitectDoomEnabled() ? { doom_spike_harness: "/architect/doom-spike" } : {}),
@@ -11693,6 +13007,11 @@ export async function handleArchitectRoute(
 
     if (req.method === "POST" && pathname === "/api/architect/v1/attachments") {
       await handleArchitectAttachmentUpload(req, res);
+      return true;
+    }
+
+    if (pathname === "/api/architect/v1/chat-history" && (req.method === "GET" || req.method === "POST" || req.method === "DELETE")) {
+      await handleArchitectChatHistoryRequest(req, res);
       return true;
     }
 

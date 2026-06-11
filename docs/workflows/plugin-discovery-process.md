@@ -5,19 +5,6 @@
 **Trigger:** Application or server startup  
 **Source files:** src/plugins/manager.ts, src/cli/commands/plugin.ts, docs/live-docs/workflows/_index.md, docs/site/workflows/_index.md, docs/sdk/plugin-developer-guide/10-lifecycle-and-installation.md  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["discover plugin roots"]
-    S2["validate and classify manifests"]
-    S1 --> S2
-    S3["construct runtime context and activate"]
-    S2 --> S3
-    S4["publish inventory and telemetry"]
-    S3 --> S4
-```
-
 ## Steps
 
 ### 1. discover plugin roots

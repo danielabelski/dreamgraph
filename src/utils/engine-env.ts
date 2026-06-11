@@ -13,9 +13,12 @@
  * precedence (per-instance config > global env).
  */
 
-import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, unlinkSync, openSync, fdatasyncSync, closeSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, unlinkSync, openSync, fdatasyncSync, closeSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { logger } from "./logger.js";
+
+const ENGINE_ENV_MAX_BYTES = 1024 * 1024;
+const ENGINE_ENV_MAX_LINE_CHARS = 16 * 1024;
 
 /**
  * Write a set of KEY=VALUE pairs to an engine.env file.
@@ -478,10 +481,20 @@ export function loadEngineEnv(envPath: string): number {
   let loaded = 0;
 
   try {
+    const stats = statSync(envPath);
+    if (stats.size > ENGINE_ENV_MAX_BYTES) {
+      logger.warn(`engine.env: refusing to load ${envPath}; file is ${stats.size} bytes, above ${ENGINE_ENV_MAX_BYTES}. Move pasted prompt/history content out of engine.env and restart.`);
+      return 0;
+    }
+
     const content = readFileSync(envPath, "utf-8");
     const lines = content.split(/\r?\n/);
 
     for (const raw of lines) {
+      if (raw.length > ENGINE_ENV_MAX_LINE_CHARS) {
+        logger.warn(`engine.env: skipping oversized line (${raw.length} chars) in ${envPath}`);
+        continue;
+      }
       const line = raw.trim();
 
       // Skip empty lines and comments

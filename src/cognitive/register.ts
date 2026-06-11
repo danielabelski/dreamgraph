@@ -89,6 +89,7 @@ import type {
   ClearDreamsOutput,
   DreamInsights,
   DreamHistoryEntry,
+  DreamHistoryFile,
   ToolResponse,
   CausalInsights,
   TemporalInsights,
@@ -116,6 +117,30 @@ function surfaceAnchorIsValid(anchor: string): boolean {
 
 function roundFutureFitScore(value: number): number {
   return Math.round(Math.max(0, Math.min(1, value)) * 100) / 100;
+}
+
+const DREAM_HISTORY_RESOURCE_LIMIT = 25;
+const QUERY_DREAMS_DEFAULT_LIMIT = 25;
+
+function summarizeDreamHistoryForResource(history: DreamHistoryFile): {
+  metadata: DreamHistoryFile["metadata"];
+  summary: { total_cycles: number; returned_recent_cycles: number; truncated: boolean };
+  recent: DreamHistoryEntry[];
+} {
+  const sessions = history.sessions;
+  return {
+    metadata: history.metadata,
+    summary: {
+      total_cycles: sessions.length,
+      returned_recent_cycles: Math.min(sessions.length, DREAM_HISTORY_RESOURCE_LIMIT),
+      truncated: sessions.length > DREAM_HISTORY_RESOURCE_LIMIT,
+    },
+    recent: sessions.slice(-DREAM_HISTORY_RESOURCE_LIMIT),
+  };
+}
+
+function limitDreamArtifacts<T>(items: T[], limit: number): T[] {
+  return items.length > limit ? items.slice(0, limit) : items;
 }
 
 function uniqueSurfaceAnchors(anchors: Array<string | undefined | null>): string[] {
@@ -318,18 +343,18 @@ export function registerCognitiveResources(server: McpServer): void {
     }
   );
 
-  // dream://history — Audit trail
+  // dream://history — Audit trail summary
   server.resource(
     "dream-history",
     "dream://history",
     {
       description:
-        "Dream History — audit trail of every cognitive cycle with generation, decay, deduplication, normalization, and tension statistics.",
+        "Dream History — bounded audit summary of recent cognitive cycles. The full append-only history is intentionally not exposed to LLM context.",
       mimeType: "application/json",
     },
     async (uri) => {
       logger.debug(`Resource requested: ${uri.href}`);
-      const data = await engine.loadDreamHistory();
+      const data = summarizeDreamHistoryForResource(await engine.loadDreamHistory());
       return {
         contents: [
           {
@@ -1008,12 +1033,12 @@ export function registerCognitiveTools(server: McpServer): void {
   // =========================================================================
   server.tool(
     "query_dreams",
-    "Search and filter dream graph data. Query dream nodes, edges, and validated edges by type, domain, minimum confidence, or validation status. Use this to explore what the system has dreamed and what passed validation.",
+    "Search and filter dream graph data with a hard bounded result set. Query dream nodes, edges, and validated edges by type, domain, minimum confidence, or validation status. Results default to 25 items per section and never dump the full dream graph into LLM context.",
     {
       type: z
         .enum(["node", "edge", "all"])
         .optional()
-        .describe('Filter by artifact type: "node", "edge", or "all" (default: "all").'),
+        .describe('Filter by artifact type: "node", "edge", or "all" (default: "all", still bounded by limit).'),
       domain: z
         .string()
         .optional()
@@ -1028,12 +1053,20 @@ export function registerCognitiveTools(server: McpServer): void {
         .enum(["candidate", "latent", "validated", "rejected", "expired", "raw"])
         .optional()
         .describe(
-          'Filter by lifecycle status: "candidate" (unevaluated), "latent" (speculative memory), "validated" (proven), "rejected" (discarded), "expired" (decayed), or "raw" (unvalidated). Default: return all.'
+          'Filter by lifecycle status: "candidate" (unevaluated), "latent" (speculative memory), "validated" (proven), "rejected" (discarded), "expired" (decayed), or "raw" (unvalidated). Default: all statuses, still bounded by limit.'
         ),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Maximum returned items per section (default: 25, hard cap: 100)."),
     },
-    async ({ type, domain, min_confidence, status }) => {
+    async ({ type, domain, min_confidence, status, limit }) => {
+      const resolvedLimit = limit ?? QUERY_DREAMS_DEFAULT_LIMIT;
       logger.debug(
-        `query_dreams tool called: type=${type}, domain=${domain}, min_confidence=${min_confidence}, status=${status}`
+        `query_dreams tool called: type=${type}, domain=${domain}, min_confidence=${min_confidence}, status=${status}, limit=${resolvedLimit}`
       );
 
       const result = await safeExecute<QueryDreamsOutput>(
@@ -1093,10 +1126,30 @@ export function registerCognitiveTools(server: McpServer): void {
             });
           }
 
+          const totals = {
+            nodes: nodes.length,
+            edges: edges.length,
+            validated: validatedEdges.length,
+          };
+          const limitedNodes = limitDreamArtifacts(nodes, resolvedLimit);
+          const limitedEdges = limitDreamArtifacts(edges, resolvedLimit);
+          const limitedValidated = limitDreamArtifacts(validatedEdges, resolvedLimit);
+
           return success<QueryDreamsOutput>({
-            nodes,
-            edges,
-            validated: validatedEdges,
+            nodes: limitedNodes,
+            edges: limitedEdges,
+            validated: limitedValidated,
+            total_available: totals,
+            returned: {
+              nodes: limitedNodes.length,
+              edges: limitedEdges.length,
+              validated: limitedValidated.length,
+            },
+            limit: resolvedLimit,
+            truncated:
+              totals.nodes > limitedNodes.length ||
+              totals.edges > limitedEdges.length ||
+              totals.validated > limitedValidated.length,
           });
         }
       );

@@ -5,15 +5,6 @@
 **Trigger:** Error occurrence  
 **Source files:** src/utils/logger.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Log Error"]
-    S2["Notify User"]
-    S1 --> S2
-```
-
 ## Steps
 
 ### 1. Log Error

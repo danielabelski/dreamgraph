@@ -5,17 +5,6 @@
 **Trigger:** Error occurrence in the application  
 **Source files:** src/utils/logger.ts  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Capture Error"]
-    S2["Log Error Details"]
-    S1 --> S2
-    S3["Notify User"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Capture Error

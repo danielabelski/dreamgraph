@@ -5,19 +5,6 @@
 **Trigger:** Build command execution  
 **Source files:** package.json, tsconfig.json  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Compile TypeScript"]
-    S2["Install Dependencies"]
-    S1 --> S2
-    S3["Package Application"]
-    S2 --> S3
-    S4["Deploy Application"]
-    S3 --> S4
-```
-
 ## Steps
 
 ### 1. Compile TypeScript

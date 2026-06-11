@@ -5,17 +5,6 @@
 **Trigger:** Build command execution  
 **Source files:** package.json, scripts/build.sh  
 
-## Flowchart
-
-```mermaid
-flowchart TD
-    S1["Compile TypeScript"]
-    S2["Install Explorer Dependencies"]
-    S1 --> S2
-    S3["Build Explorer"]
-    S2 --> S3
-```
-
 ## Steps
 
 ### 1. Compile TypeScript

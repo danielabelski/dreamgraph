@@ -1,14 +1,7 @@
 # Instance Scope
 
-> Defines the boundaries and permissions for an instance of the DreamGraph application. It ensures that instances do not interfere with each other and manage their own resources.
+> A shared abstraction governing isolation, containment, and policy enforcement boundaries between instances throughout the platform.. Intent: Highlight the cross-cutting concept underpinning instance isolation, policy validation, and registry management as surfaced in both implementation and testing.
 
-**Table:** `instance_scope`  
-**Storage:** json  
-
-## Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| id | string | Unique identifier for the instance scope. |
-| tempMaster | string | Temporary directory path for the instance. |
+**Table:** `N/A`  
+**Storage:** N/A  
 

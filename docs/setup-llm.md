@@ -208,3 +208,4 @@ Some Architect UI changes may persist to VS Code user settings rather than works
 - Dreamer and Normalizer overrides are set only when needed
 - VS Code architect provider/model are configured separately
 - after changes, restart the daemon if needed
+<!-- CONTINUATION TEST SLICE 8 -->
