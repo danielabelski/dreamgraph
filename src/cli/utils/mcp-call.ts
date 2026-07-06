@@ -8,6 +8,7 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { CLI_VERSION } from "../version.js";
 
 export interface McpCallResult {
   content: Array<{ type: string; text: string }>;
@@ -35,7 +36,7 @@ export async function mcpCallTool(
 
   const client = new Client({
     name: "dreamgraph-cli",
-    version: "12.5.0",
+    version: CLI_VERSION,
   });
 
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -80,7 +81,7 @@ export async function mcpListTools(
 
   const client = new Client({
     name: "dreamgraph-cli",
-    version: "12.5.0",
+    version: CLI_VERSION,
   });
 
   try {

@@ -127,6 +127,7 @@ src/
   src/cli/utils/architect-client.ts
   src/cli/utils/daemon.ts
   src/cli/utils/mcp-call.ts
+  src/cli/version.ts
   src/cognitive/adaptive-future-scaffold.ts
   src/cognitive/adversarial.ts
   src/cognitive/bootstrap-driver.ts
@@ -457,6 +458,7 @@ scripts/
   scripts/add-backlinks.mjs
   scripts/audit-nodes.mjs
   scripts/audit-orphans.mjs
+  scripts/benchmark-token-economy.mjs
   scripts/build-plugin-docs.ps1
   scripts/enrich-graph.mjs
   scripts/generate-architecture-tree.mjs

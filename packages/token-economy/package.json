@@ -1,6 +1,6 @@
 {
   "name": "@dreamgraph/token-economy",
-  "version": "12.5.0",
+  "version": "12.6.0",
   "description": "Shared DreamGraph Architect token economy contracts",
   "type": "commonjs",
   "main": "dist/index.js",

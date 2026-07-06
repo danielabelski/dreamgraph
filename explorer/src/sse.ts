@@ -23,7 +23,12 @@ export type GraphEventKind =
   | "candidate.added"
   | "candidate.promoted"
   | "candidate.rejected"
-  | "audit.appended";
+  | "audit.appended"
+  | "schedule.skipped"
+  | "schedule.claimed"
+  | "schedule.executed"
+  | "schedule.timed_out"
+  | "schedule.paused";
 
 export interface GraphEvent {
   seq: number;
@@ -121,6 +126,11 @@ export function useEventStream(url: string = "/explorer/events"): UseEventStream
       "candidate.promoted",
       "candidate.rejected",
       "audit.appended",
+      "schedule.skipped",
+      "schedule.claimed",
+      "schedule.executed",
+      "schedule.timed_out",
+      "schedule.paused",
     ];
     const handlers = kinds.map((k) => {
       const h = handleEvent(k);

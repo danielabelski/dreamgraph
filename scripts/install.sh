@@ -348,7 +348,27 @@ VENDOR_DIR="$BIN_DIR/vendor"
 mkdir -p "$VENDOR_DIR"
 
 WORKSPACE_PACKAGES=("@dreamgraph/sdk" "@dreamgraph/host" "@dreamgraph/token-economy")
-declare -A WORKSPACE_TARBALLS=()
+WORKSPACE_TARBALLS=""
+workspace_tarball_put() {
+    local name="$1"
+    local spec="$2"
+    WORKSPACE_TARBALLS="${WORKSPACE_TARBALLS}${name}=${spec}
+"
+}
+workspace_tarball_get() {
+    local name="$1"
+    local line key value
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        key="${line%%=*}"
+        value="${line#*=}"
+        if [[ "$key" == "$name" ]]; then
+            printf '%s' "$value"
+            return 0
+        fi
+    done <<< "$WORKSPACE_TARBALLS"
+    return 1
+}
 for ws_name in "${WORKSPACE_PACKAGES[@]}"; do
     echo -e "  ${CYAN}Packing $ws_name...${NC}"
     pushd "$SOURCE_DIR" >/dev/null
@@ -387,18 +407,20 @@ for ws_name in "${WORKSPACE_PACKAGES[@]}"; do
         fi
     fi
     [[ -z "$tarball_name" ]] && fail "Could not determine tarball name for $ws_name"
-    WORKSPACE_TARBALLS[$ws_name]="file:./vendor/$tarball_name"
+    workspace_tarball_put "$ws_name" "file:./vendor/$tarball_name"
     ok "Packed $ws_name -> vendor/$tarball_name"
 done
 
 # Build the bin package.json, swapping workspace deps for file: tarballs.
 WS_OVERRIDES_JSON="{}"
 for ws_name in "${WORKSPACE_PACKAGES[@]}"; do
+    ws_spec="$(workspace_tarball_get "$ws_name" || true)"
+    [[ -n "$ws_spec" ]] || fail "Missing workspace tarball mapping for $ws_name"
     WS_OVERRIDES_JSON=$(node -e "
       const o = JSON.parse(process.argv[1]);
       o[process.argv[2]] = process.argv[3];
       process.stdout.write(JSON.stringify(o));
-    " "$WS_OVERRIDES_JSON" "$ws_name" "${WORKSPACE_TARBALLS[$ws_name]}")
+    " "$WS_OVERRIDES_JSON" "$ws_name" "$ws_spec")
 done
 
 node -e "

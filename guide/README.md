@@ -8,7 +8,7 @@ If you are looking for the auto-generated reference (every tool, every parameter
 
 For the shortest route from install to a working browser setup, start with **[DreamGraph Easy Start](00-easy-start.md)**.
 
-Current release: **v12.4.0 - Hippodamus**.
+Current release: **v12.6.0 - Hippodamus**.
 
 ---
 

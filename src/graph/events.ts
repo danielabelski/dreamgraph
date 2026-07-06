@@ -31,6 +31,8 @@ export type GraphEventKind =
   | "candidate.promoted"
   | "candidate.rejected"
   | "audit.appended"
+  | "schedule.skipped"
+  | "schedule.claimed"
   | "schedule.executed"
   | "schedule.timed_out"
   | "schedule.paused"

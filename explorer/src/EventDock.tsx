@@ -24,6 +24,11 @@ const KIND_COLORS: Record<GraphEventKind, string> = {
   "candidate.promoted": "#a8c2ff",
   "candidate.rejected": "#c87ab8",
   "audit.appended": "#f0d56b",
+  "schedule.skipped": "#8b96a8",
+  "schedule.claimed": "#7aa2ff",
+  "schedule.executed": "#9be8de",
+  "schedule.timed_out": "#ff7474",
+  "schedule.paused": "#ffc58a",
 };
 
 const KIND_LABELS: Record<GraphEventKind, string> = {
@@ -36,6 +41,11 @@ const KIND_LABELS: Record<GraphEventKind, string> = {
   "candidate.promoted": "promoted",
   "candidate.rejected": "rejected",
   "audit.appended": "audit",
+  "schedule.skipped": "schedule skipped",
+  "schedule.claimed": "schedule claimed",
+  "schedule.executed": "schedule ran",
+  "schedule.timed_out": "schedule timeout",
+  "schedule.paused": "schedule paused",
 };
 
 const SHOW_CACHE_KEY = "dg.explorer.eventDock.showCache";

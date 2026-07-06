@@ -1,5 +1,13 @@
 # DreamGraph Release Notes
 
+## v12.6.0 - Hippodamus
+
+DreamGraph v12.6.0 keeps the v12 major release title as Hippodamus and ships scheduler lifecycle evidence, CLI adapter provenance cleanup, Bash 3 compatible installer packaging, and release-wide version alignment across the daemon, MCP server, dashboard, CLI, Explorer, VS Code extension, packages, guide, README, documentation, and release artifacts.
+
+This release preserves the governed seven-stage `release_workflow`: version alignment, documentation refresh, artifact packaging, release notes, commit/tag/push, GitHub release publication, and website update must each have real completion evidence before `v12.6.0` is treated as released.
+
+See [`../RELEASE_NOTES_v12.6.0.md`](../RELEASE_NOTES_v12.6.0.md) for the full distribution notes.
+
 ## v12.4.0 - Hippodamus
 
 DreamGraph v12.4.0 keeps the v12 major release title as Hippodamus and aligns the daemon, MCP server, dashboard, CLI, Explorer, VS Code extension, packages, guide, README, documentation, and release artifacts on the current v12 release line.

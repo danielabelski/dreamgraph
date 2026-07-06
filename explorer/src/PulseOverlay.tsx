@@ -28,6 +28,11 @@ const COLORS: Record<PulseToken["kind"], string> = {
   "candidate.promoted": "#a8c2ff",
   "candidate.rejected": "#c87ab8",
   "audit.appended": "#f0d56b",
+  "schedule.skipped": "#8b96a8",
+  "schedule.claimed": "#7aa2ff",
+  "schedule.executed": "#9be8de",
+  "schedule.timed_out": "#ff7474",
+  "schedule.paused": "#ffc58a",
 };
 
 export function PulseOverlay<N extends Attributes, E extends Attributes>({

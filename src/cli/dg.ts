@@ -37,6 +37,7 @@ import { cmdRestart } from "./commands/restart.js";
 import { cmdScan } from "./commands/scan.js";
 import { cmdSchedule } from "./commands/schedule.js";
 import { cmdArchitect } from "./commands/architect.js";
+import { CLI_RELEASE_NAME, CLI_VERSION } from "./version.js";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -44,7 +45,7 @@ import { cmdArchitect } from "./commands/architect.js";
 
 function printUsage(): void {
   console.log(`
-DreamGraph CLI — Instance Management (v12.5.0 Living DreamGraph)
+DreamGraph CLI — Instance Management (v${CLI_VERSION} ${CLI_RELEASE_NAME})
 
 Usage:
   dg <command> [options]
@@ -82,7 +83,7 @@ Run 'dg <command> --help' for command-specific options.
 }
 
 function printVersion(): void {
-  console.log("DreamGraph CLI v12.5.0 (Living DreamGraph)");
+  console.log(`DreamGraph CLI v${CLI_VERSION} (${CLI_RELEASE_NAME})`);
 }
 
 /* ------------------------------------------------------------------ */

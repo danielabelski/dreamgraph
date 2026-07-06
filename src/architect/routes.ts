@@ -4848,7 +4848,17 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
       completionModel = completion.model || architectConfig.model;
       toolTrace = mergeArchitectToolTraceEntries(toolTrace, completion.tool_trace);
       provenance = completion.provenance;
-      toolLoopRoute = completion.route;
+      toolLoopRoute = {
+        ...completion.route,
+        report_contract: "daemon_synthesized_cli_pass_report",
+        provider_envelope_required: false,
+        report_evidence: {
+          source: "daemon_cli_bridge",
+          tool_trace_count: completion.tool_trace.length,
+          run_id: completion.route.run_id,
+          stop_reason: completion.route.stop_reason,
+        },
+      };
       fallbackReason = completion.route.fallback_reason;
       if (!assistantText) {
         fallbackReason = fallbackReason ?? classifyEmptyResponseReason("empty_cli_bridge_response", toolTrace);
@@ -4955,6 +4965,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     pass_state: finalPassState,
   });
   const provenanceRecord = asRecord(provenance);
+  const isCliAdapterRoute = adapter === "codex-cli" || adapter === "copilot-cli";
   const runtimeProvenance: Record<string, unknown> = {
     ...(provenanceRecord ?? {}),
     authority: String(provenanceRecord?.authority ?? runtime.provenance_authority),
@@ -4962,6 +4973,12 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
     session_id: runtime.session_id,
     execution_route: runtime.execution_route,
     provenance_authority: runtime.provenance_authority,
+    ...(isCliAdapterRoute ? {
+      report_contract: "daemon_synthesized_cli_pass_report",
+      provider_envelope_required: false,
+      report_source: "daemon_runtime_tool_evidence",
+      status_honesty: "assistant_prose_is_not_verification_evidence",
+    } : {}),
   };
 
   const normalizedAssistantText = typeof assistantText === "string" ? assistantText.trim() : "";

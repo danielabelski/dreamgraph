@@ -2428,6 +2428,8 @@ export interface DreamSchedule {
   last_cycle_checked: number;
   error_count: number;
   last_error: string | null;
+  /** Last scheduler tick skip/claim diagnostic, for operator-visible evidence. */
+  last_skip_reason?: string | null;
   created_at: string;
   updated_at: string;
 }

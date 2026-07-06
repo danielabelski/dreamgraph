@@ -268,38 +268,28 @@ function resetHourWindowIfNeeded(): void {
   }
 }
 
-function canRunSchedule(schedule: DreamSchedule): boolean {
+function getScheduleSkipReason(schedule: DreamSchedule, now = Date.now()): string | null {
   resetHourWindowIfNeeded();
 
-  // Global rate limit
-  if (runsThisHour >= config.max_runs_per_hour) {
+  if (!config.enabled) return "scheduler_disabled";
+  if (!schedule.enabled) return "schedule_disabled";
+  if (schedule.status !== "active") return `status_${schedule.status}`;
+  if (runsThisHour >= config.max_runs_per_hour) return "rate_limit";
+  if (now - lastRunTimestamp < config.global_cooldown_ms) return "global_cooldown";
+  if (schedule.action === "nightmare_cycle" && now - lastRunTimestamp < config.nightmare_cooldown_ms) {
+    return "nightmare_cooldown";
+  }
+  if (schedule.max_runs !== null && schedule.run_count >= schedule.max_runs) return "max_runs";
+  if (schedule.error_count >= config.max_error_streak) return "error_streak";
+  return null;
+}
+
+function canRunSchedule(schedule: DreamSchedule, now = Date.now()): boolean {
+  const reason = getScheduleSkipReason(schedule, now);
+  if (reason === "rate_limit") {
     logger.warn(`Scheduler: rate limit reached (${config.max_runs_per_hour}/hr)`);
-    return false;
   }
-
-  // Global cooldown
-  if (Date.now() - lastRunTimestamp < config.global_cooldown_ms) {
-    return false;
-  }
-
-  // Nightmare extra cooldown
-  if (schedule.action === "nightmare_cycle") {
-    if (Date.now() - lastRunTimestamp < config.nightmare_cooldown_ms) {
-      return false;
-    }
-  }
-
-  // Max runs cap
-  if (schedule.max_runs !== null && schedule.run_count >= schedule.max_runs) {
-    return false;
-  }
-
-  // Error streak check
-  if (schedule.error_count >= config.max_error_streak) {
-    return false;
-  }
-
-  return true;
+  return reason === null;
 }
 
 // ---------------------------------------------------------------------------
@@ -665,9 +655,27 @@ async function tick(): Promise<void> {
     const out: ScheduleClaim[] = [];
 
     for (const schedule of file.schedules) {
-      if (inFlightSchedules.has(schedule.id)) continue;
-      if (!isDue(schedule, now)) continue;
-      if (!canRunSchedule(schedule)) continue;
+      let skipReason: string | null = null;
+      if (inFlightSchedules.has(schedule.id)) skipReason = "in_flight";
+      else if (!isDue(schedule, now)) skipReason = getScheduleSkipReason(schedule, now) ?? "not_due";
+      else skipReason = getScheduleSkipReason(schedule, now);
+
+      if (skipReason) {
+        if (schedule.last_skip_reason !== skipReason) {
+          schedule.last_skip_reason = skipReason;
+          schedule.updated_at = new Date(now).toISOString();
+        }
+        graphEventBus.emit("schedule.skipped", {
+          affected_ids: [schedule.id],
+          payload: {
+            schedule_id: schedule.id,
+            schedule_name: schedule.name,
+            action: schedule.action,
+            reason: skipReason,
+          },
+        });
+        continue;
+      }
 
       // Reserve the schedule: advance last_run_at so subsequent ticks see it
       // as not-due, bump the in-flight set so even an interval shorter than
@@ -675,11 +683,21 @@ async function tick(): Promise<void> {
       // execution record are written back in phase 3.
       schedule.last_run_at = new Date(now).toISOString();
       schedule.updated_at = schedule.last_run_at;
+      schedule.last_skip_reason = null;
       computeNextRun(schedule);
       inFlightSchedules.add(schedule.id);
 
       runsThisHour++;
       lastRunTimestamp = now;
+      graphEventBus.emit("schedule.claimed", {
+        affected_ids: [schedule.id],
+        payload: {
+          schedule_id: schedule.id,
+          schedule_name: schedule.name,
+          action: schedule.action,
+          triggered_at: schedule.last_run_at,
+        },
+      });
 
       out.push({
         scheduleId: schedule.id,
@@ -698,11 +716,13 @@ async function tick(): Promise<void> {
   if (claims.length === 0) return;
 
   // -------- Phase 2 + 3: execute outside the file lock --------
-  for (const claim of claims) {
-    runClaimedSchedule(claim, "exec").catch((err) => {
-      logger.error(`Scheduler runClaimedSchedule unexpected failure: ${err}`);
-    });
-  }
+  await Promise.all(
+    claims.map((claim) =>
+      runClaimedSchedule(claim, "exec").catch((err) => {
+        logger.error(`Scheduler runClaimedSchedule unexpected failure: ${err}`);
+      }),
+    ),
+  );
 }
 
 /**
@@ -974,6 +994,7 @@ export async function createSchedule(opts: {
       last_cycle_checked: engine.getCurrentDreamCycle(),
       error_count: 0,
       last_error: null,
+      last_skip_reason: null,
       created_at: now,
       updated_at: now,
     };
