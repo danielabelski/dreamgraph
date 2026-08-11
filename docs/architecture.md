@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **12.1.0**
+Version: **13.0.0**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -95,6 +95,7 @@ src/
   src/api/routes.ts
   src/architect/cli-bridge.ts
   src/architect/cli-mcp-bridge.ts
+  src/architect/continuation.ts
   src/architect/desire-ledger.ts
   src/architect/native-tool-loop.ts
   src/architect/onboarding-readiness.ts
@@ -104,6 +105,8 @@ src/
   src/architect/repo-setup.ts
   src/architect/routes.ts
   src/architect/token-economy/standalone-store.ts
+  src/architect/tool-selection.ts
+  src/architect/verbosity.ts
   src/cli/commands/architect.ts
   src/cli/commands/attach.ts
   src/cli/commands/bootstrap.ts
@@ -139,6 +142,7 @@ src/
   src/cognitive/event-router.ts
   src/cognitive/evidence-ledger.ts
   src/cognitive/federation.ts
+  src/cognitive/graph-maintenance-state.ts
   src/cognitive/graph-paths.ts
   src/cognitive/graph-rag.ts
   src/cognitive/intervention.ts
@@ -163,6 +167,7 @@ src/
   src/cognitive/strategies/symmetry-completion.ts
   src/cognitive/strategies/tension-directed.ts
   src/cognitive/strategies/weak-reinforcement.ts
+  src/cognitive/targeted-dreams.ts
   src/cognitive/temporal.ts
   src/cognitive/tension-clustering.ts
   src/cognitive/trust-state.ts
@@ -240,6 +245,7 @@ src/
   src/tools/get-workflow.ts
   src/tools/git-senses.ts
   src/tools/graph-edge-mutations.ts
+  src/tools/graph-health.ts
   src/tools/graph-integrity.ts
   src/tools/init-graph.ts
   src/tools/living-docs-exporter.ts
@@ -376,6 +382,7 @@ extensions/vscode/src/
   extensions/vscode/src/task-reporter.ts
   extensions/vscode/src/test/action-card-renderer.test.ts
   extensions/vscode/src/test/adaptive-future-inspector.test.ts
+  extensions/vscode/src/test/anthropic-fable-mythos.test.ts
   extensions/vscode/src/test/architect-core-pass.test.ts
   extensions/vscode/src/test/architect-lens.test.ts
   extensions/vscode/src/test/architect-v2-isolation.test.ts

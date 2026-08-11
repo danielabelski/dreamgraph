@@ -38,10 +38,9 @@
 //    treats provider errors as recoverable and surfaces them to the
 //    chat panel; this matches v1 `ArchitectLlm` behavior.
 //
-//  * `getCapabilities()` reports `imageAttachments: false` and
-//    `textAttachments: false`. The CLI accepts only a single string
-//    prompt; binary attachments are converted to placeholder text by
-//    the prompt serializer to keep multi-modal output uniform.
+//  * `getCapabilities()` exposes text and image attachments. The host
+//    normalizes them into the CLI conversation payload before this
+//    adapter serializes the prompt.
 //
 //  * `onStreamChunk`, when supplied, receives the full assistant text
 //    once at the end of the run. The CLI does not stream tokens to

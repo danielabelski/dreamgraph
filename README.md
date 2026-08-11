@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v12.6.0 - Hippodamus
+# DreamGraph v13.0.0 - Cognitive Maintenance
 
-![Version](https://img.shields.io/badge/version-12.6.0-blue)
+![Version](https://img.shields.io/badge/version-13.0.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -14,7 +14,7 @@
 
 **New here?** Use the [DreamGraph Easy Start guide](guide/00-easy-start.md) for a short path from install to Dashboard, Explorer, and Architect.
 
-**v12.6.0 - Hippodamus** ships scheduler lifecycle evidence, CLI adapter provenance cleanup, Bash 3 compatible installer packaging, and release-wide version alignment across the daemon, MCP server, dashboard, CLI, packages, guide, README, documentation, and release artifacts while preserving the Hippodamus title for the full v12 major line.
+**v13.0.0 - Cognitive Maintenance** makes graph quality an active architectural responsibility. Every scan performs graph-wide, multi-hop semantic enrichment; enriched neighborhoods act as confidence-aware cache entries; Architect assesses graph health and proposes the smallest approved repair; configured PostgreSQL schemas participate in code ownership discovery; major graph changes schedule targeted stabilizing dreams; and Explorer renders nested knowledge, links, contracts, and enrichment metadata as structured UI across every node type.
 
 DreamGraph is a governed architecture cognition layer for MCP-enabled software projects. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so project understanding is grounded in source, ADRs, workflows, tests, runtime observations, and human review rather than any single file read or isolated chat turn.
 
@@ -111,9 +111,9 @@ Tier ladder: $5/mo (sponsor badge + name in [`SPONSORS.md`](SPONSORS.md)) · $10
 
 *DreamGraph Architect with the DreamGraph Explorer in VS Code*
 
-## GPT-5.5 and OpenAI Responses API
+## GPT-5.6 Codex CLI models and OpenAI Responses API
 
-DreamGraph's VS Code architect supports OpenAI `gpt-5.5` models through the OpenAI Responses API, following OpenAI's [migration guide from Chat Completions to Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses). GPT-5.5 Architect calls use Responses-style input, function-tool definitions, tool-call output replay, reasoning effort, and text verbosity controls. DreamGraph currently uses the Responses API statelessly: DreamGraph's knowledge graph remains the source of memory and context, while prior conversation/tool context is replayed explicitly when needed.
+The VS Code architect's Codex CLI adapter offers `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`, with an `xhigh` default reasoning effort for the GPT-5.6 family. Direct OpenAI `gpt-5.5` Architect calls continue through the Responses API with Responses-style input, function-tool definitions, tool-call output replay, reasoning effort, and text verbosity controls. DreamGraph keeps both routes stateless at the model boundary: the knowledge graph remains the source of memory and context.
 
 ## Local LLMs (Ollama and LM Studio)
 

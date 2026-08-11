@@ -47,12 +47,13 @@ ${repoList}
 Default repo hint: ${defaultRepo}
 
 Core workflow:
-1. Discover current knowledge with system://overview, system://capabilities, system://index, or cognitive_status().
-2. If knowledge is sparse, scan_project() or init_graph() can bootstrap graph data.
+1. Before substantial architectural work, inspect semantic quality with graph_health_report(); explain reasoning-impacting gaps instead of silently assuming graph completeness.
+2. Recommend the smallest evidence-backed maintenance action: enrich_parser_nodes() before scan_project() when structure is current, and scan_project() before bootstrap_instance() when it is not. Execute maintenance only after the user requests or approves it.
 3. Read code with list_directory(repo, dirPath?) and read_source_code(repo, filePath, entity?/range?). Prefer entity/range reads over full files.
 4. Inspect graph/resources with query_resource(uri) and focused tools such as get_workflow(), search_data_model(), query_api_surface(), graph_rag_retrieve(), shortest_path().
 5. Enrich durable facts with enrich_seed_data(), register_ui_element(), record_architecture_decision(), or solidify_cognitive_insight() when new knowledge is confirmed.
 6. Explore speculative cognition with dream_cycle(), cognitive_status(), get_dream_insights(), get_temporal_insights(), get_causal_insights(), and get_remediation_plan().
+7. After a major implementation or graph change, record richer semantics and schedule_dream() over the affected entities with at least two focus hops.
 
 Common resources:
 - System: system://overview, system://features, system://workflows, system://data-model, system://capabilities, system://index

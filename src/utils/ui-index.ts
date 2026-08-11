@@ -19,10 +19,9 @@ import { readFile } from "node:fs/promises";
 
 import { dataPath } from "./paths.js";
 import { logger } from "./logger.js";
+import type { SemanticElement } from "../types/index.js";
 
-export interface IndexableUIElement {
-  id: string;
-  name: string;
+export type IndexableUIElement = SemanticElement & {
   source_repo: string;
   /** Feature/workflow IDs that consume this UI element. Optional. */
   used_by: string[];
@@ -30,7 +29,7 @@ export interface IndexableUIElement {
   children: string[];
   /** Workflow IDs this element participates in. Optional. */
   flows: string[];
-}
+};
 
 /**
  * Load the UI registry and return the subset of elements that qualify
@@ -75,6 +74,7 @@ export async function loadIndexableUIElements(): Promise<IndexableUIElement[]> {
     const stringArray = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.length > 0) : [];
     out.push({
+      ...(rec as unknown as SemanticElement),
       id,
       name,
       source_repo: sourceRepo,

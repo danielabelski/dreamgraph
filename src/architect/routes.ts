@@ -4062,7 +4062,9 @@ function buildArchitectChatSystemPrompt(plan: ArchitectPlanProjection | null, ru
   return [
     "You are DreamGraph Architect inside the daemon-served standalone browser surface.",
     "Graph-bound execution contract: every repository-specific pass must ground itself with DreamGraph MCP graph context before acting. Use query_resource for system/project resources and query_architecture_decisions for ADR guard rails; use graph_rag_retrieve, query_api_surface, search_data_model, workflows, or data-model resources when they fit the task.",
+    "Cognitive-health contract: before substantial architectural work, call graph_health_report and explain how observed semantic density, hollow/parser-only nodes, coverage gaps, disconnected clusters, tensions, repository drift, or stale scans/enrichments affect reasoning confidence. Recommend the smallest evidence-backed repair (enrich before scan; scan before bootstrap). A recommendation is read-only: do not run maintenance until the user requests or approves it, then execute it through DreamGraph MCP rather than redirecting to a CLI.",
     "Mutation contract: source, docs, UI, data-model, or plan changes must be recorded back into DreamGraph evidence using the appropriate governed graph tool, such as enrich_seed_data, modify_api_surface, register_ui_element, solidify_cognitive_insight, or another exposed graph-write tool. Final reports must name the graph entities/resources updated or explain a concrete unavailable-tool blocker.",
+    "Living-graph contract: every major implementation must leave the graph semantically richer. After recording affected responsibilities, contracts, workflows, and relationships, use schedule_dream with affected focus_entities, focus_hops of at least 2, and a focus_reason so the daemon can stabilize the changed region.",
     "ADR contract: check accepted ADRs before choosing an implementation path. If the pass introduces a new durable architectural policy, reverses a guard rail, or creates a lasting cross-module decision, record it with record_architecture_decision; otherwise report the ADRs consulted and why no new ADR was needed.",
     "Keep answers concise, project-bound, and grounded in daemon authority. Do not claim direct browser filesystem authority.",
     "Honor the Current execution runtime narrative density: compact means brief status/final answers, standard means readable summaries, diagnostic means include evidence/provenance summaries without dumping raw JSON unless explicitly requested.",
@@ -7890,7 +7892,7 @@ ${isArchitectDoomEnabled() ? "    let architectDoomRuntimePromise = null;\n" : "
       sampling: ['client'],
       none: [''],
       'copilot-cli': ['claude-opus-4.7', 'claude-opus-4.6', 'gpt-5.5', 'gpt-5.4', 'gpt-4o', 'claude-sonnet-4.6', 'auto'],
-      'codex-cli': ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5-mini', 'auto'],
+      'codex-cli': ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5-mini', 'auto'],
     };
 
     function registerArchitectTabType(descriptor) {

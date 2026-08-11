@@ -27,7 +27,7 @@ import { getEffectiveDataDir } from "../instance/index.js";
 import { logger } from "../utils/logger.js";
 
 const DEBOUNCE_MS = 250;
-const IGNORED_WATCH_FILES = new Set(["schedules.json"]);
+const IGNORED_WATCH_FILES = new Set(["schedules.json", "graph_maintenance.json"]);
 
 let watcher: FSWatcher | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;

@@ -15,13 +15,20 @@ export interface McpCallResult {
   isError?: boolean;
 }
 
+export interface McpCallProgress {
+  progress: number;
+  total?: number;
+  message?: string;
+}
+
 /**
  * Call a single MCP tool on a running DreamGraph daemon.
  *
  * @param port    The daemon HTTP port.
  * @param tool    MCP tool name (e.g. "scan_project").
  * @param args    Tool input arguments.
- * @param timeoutMs  Request timeout (default: 5 minutes).
+ * @param timeoutMs  Inactivity timeout (default: 5 minutes). Progress resets it.
+ * @param onProgress Optional progress observer.
  * @returns       The tool result content array.
  */
 export async function mcpCallTool(
@@ -29,6 +36,7 @@ export async function mcpCallTool(
   tool: string,
   args: Record<string, unknown> = {},
   timeoutMs = 300_000,
+  onProgress?: (progress: McpCallProgress) => void,
 ): Promise<McpCallResult> {
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${port}/mcp`),
@@ -39,28 +47,24 @@ export async function mcpCallTool(
     version: CLI_VERSION,
   });
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-
   try {
     await client.connect(transport);
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error(`Tool call '${tool}' timed out after ${timeoutMs}ms`)),
-        timeoutMs,
-      );
-    });
-
-    const result = await Promise.race([
-      client.callTool({ name: tool, arguments: args }),
-      timeoutPromise,
-    ]);
+    // Supplying onprogress is what causes the MCP SDK to attach a progress
+    // token to the request. Without it, resetTimeoutOnProgress is inert and a
+    // healthy multi-hour scan is indistinguishable from a stalled request.
+    const result = await client.callTool(
+      { name: tool, arguments: args },
+      undefined,
+      {
+        timeout: timeoutMs,
+        resetTimeoutOnProgress: true,
+        onprogress: (progress) => onProgress?.(progress as McpCallProgress),
+      },
+    );
 
     return result as McpCallResult;
   } finally {
-    if (timeoutHandle !== undefined) {
-      clearTimeout(timeoutHandle);
-    }
     try {
       await client.close();
     } catch {

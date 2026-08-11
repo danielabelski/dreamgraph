@@ -2,9 +2,8 @@
  * `dg enrich` — High-level graph coverage operation.
  *
  * Calls scan_project (deep mode by default) and enrich_parser_nodes on a
- * running daemon to expand graph coverage and add semantic data (intent,
- * purpose, tags, feature anchors) to every parser-discovered entry in a
- * single autonomous batch pass.
+ * running daemon to expand graph coverage and refresh rich semantic data for
+ * every canonical graph node.
  */
 
 import type { ParsedArgs } from "../dg.js";
@@ -15,10 +14,10 @@ import {
 } from "../utils/daemon.js";
 import { mcpCallTool } from "../utils/mcp-call.js";
 
-/** Deep project scans can be expensive on large repos; allow ~10 minutes. */
-const SCAN_TIMEOUT_MS = 600_000;
-/** Enrichment hits the LLM in batches; large graphs can take a while. Allow ~30 minutes. */
-const ENRICH_TIMEOUT_MS = 1_800_000;
+/** Deep project scans and mandatory per-node enrichment can be expensive. */
+const SCAN_TIMEOUT_MS = 7_200_000;
+/** Enrichment hits the LLM in batches; large graphs can take a while. */
+const ENRICH_TIMEOUT_MS = 7_200_000;
 
 /**
  * Parse the text payload of an MCP tool response. Tool errors (e.g. schema
@@ -36,27 +35,24 @@ function parseToolPayload(text: string): unknown {
 }
 
 /**
- * Map the comma-separated `--targets` flag onto the enrich_parser_nodes
- * `target` enum. The tool only enriches `features` and `data_model`
- * (workflows are not parser-discovered entities with EnrichableFields).
+ * Map the comma-separated `--targets` flag onto the graph-wide enrichment
+ * target enum. Multiple stores deliberately resolve to `all` so relation
+ * discovery retains complete cross-store context.
  */
 function mapEnrichTarget(flag: unknown): {
-  target: "features" | "data_model" | "both";
+  target: "features" | "workflows" | "data_model" | "capabilities" | "ui" | "datastores" | "auxiliary" | "all";
   ignoredTargets: string[];
 } {
   if (typeof flag !== "string" || flag.trim() === "") {
-    return { target: "both", ignoredTargets: [] };
+    return { target: "all", ignoredTargets: [] };
   }
   const requested = flag.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
-  const supported = new Set(["features", "data_model"]);
+  const supported = new Set(["features", "workflows", "data_model", "capabilities", "ui", "datastores", "auxiliary"]);
   const matched = requested.filter((t) => supported.has(t));
   const ignored = requested.filter((t) => !supported.has(t));
-  let target: "features" | "data_model" | "both";
-  if (matched.length === 0 || matched.length === supported.size) {
-    target = "both";
-  } else {
-    target = matched[0] as "features" | "data_model";
-  }
+  const target = matched.length === 1
+    ? matched[0] as "features" | "workflows" | "data_model" | "capabilities" | "ui" | "datastores" | "auxiliary"
+    : "all";
   return { target, ignoredTargets: ignored };
 }
 
@@ -71,19 +67,23 @@ dg enrich — Expand graph coverage
 Usage:
   dg enrich <uuid|name> [options]
 
-Runs a deep scan followed by autonomous batch enrichment on a running
-daemon. This is a convenience command that chains scan_project +
-enrich_parser_nodes for comprehensive graph coverage expansion: every
-parser-discovered features.json / data_model.json entry gets semantic
-data (description rewrite, intent, purpose, tags, feature anchors) in a
-single LLM batch pass.
+Runs a deep scan followed by autonomous multi-hop batch enrichment on a
+running daemon. Every canonical graph node receives a substantive description,
+intent, purpose, tags, and evidenced relations; UI nodes also receive contract,
+interaction, appearance, and layout knowledge.
 
 Options:
   --depth <shallow|deep>    Scan depth (default: deep)
-  --targets <list>          Comma-separated. Scan targets: features,workflows,data_model.
-                            Enrichment targets: features,data_model (workflows ignored).
+  --targets <list>          Comma-separated: features,workflows,data_model,capabilities,ui,datastores,auxiliary.
+                            Multiple targets enrich the complete graph for relation context.
   --batch-size <n>          Nodes per LLM call during enrichment (default: 10, max: 50).
-  --max-nodes <n>           Hard cap on nodes enriched per invocation (default: 500).
+  --max-nodes <n>           Hard cap on nodes enriched per invocation (default: 1000000).
+  --model-source <source>   auto, standalone, or architect (default: auto).
+  --no-semantic-cache      Disable enriched-neighborhood evidence reuse.
+  --semantic-cache-min-confidence <n>
+                            Minimum cache confidence from 0 to 1 (default: 0.72).
+  --semantic-cache-min-coverage <n>
+                            Minimum cache coverage from 0 to 1 (default: 0.75).
   --force                   Re-enrich entries that have already been enriched.
   --dry-run                 Run the LLM but do not persist any changes.
   --skip-scan               Skip the scan pass, only run enrichment
@@ -131,7 +131,12 @@ Options:
     }
 
     try {
-      const scanResult = await mcpCallTool(meta.port, "scan_project", scanArgs, SCAN_TIMEOUT_MS);
+      let lastScanProgress = "";
+      const scanResult = await mcpCallTool(meta.port, "scan_project", scanArgs, SCAN_TIMEOUT_MS, (update) => {
+        if (jsonOutput || !update.message || update.message === lastScanProgress) return;
+        lastScanProgress = update.message;
+        console.log(`  ${update.message}`);
+      });
       const text = scanResult.content?.[0]?.text ?? "{}";
       const parsed = parseToolPayload(text) as Record<string, unknown>;
       results.scan = (parsed?.data as Record<string, unknown> | undefined) ?? parsed;
@@ -151,12 +156,14 @@ Options:
     }
   }
 
-  // Pass 2: Enrich parser-discovered nodes (autonomous batch semantic enrichment)
+  // Pass 2: refresh graph-wide semantic knowledge. scan_project also performs
+  // this mandatory pass; a second forced pass remains useful for explicit
+  // re-enrichment and --skip-scan workflows.
   if (!skipEnrich) {
     const { target, ignoredTargets } = mapEnrichTarget(flags.targets);
 
     if (!jsonOutput) {
-      console.log(`\nPass 2: enriching parser-discovered nodes (target=${target})...`);
+      console.log(`\nPass 2: enriching graph nodes (target=${target})...`);
       if (ignoredTargets.length > 0) {
         console.log(`  Note: ignoring unsupported enrichment targets: ${ignoredTargets.join(", ")}`);
       }
@@ -173,6 +180,28 @@ Options:
     }
     if (flags.force === true) enrichArgs.force = true;
     if (flags["dry-run"] === true) enrichArgs.dry_run = true;
+    if (flags["no-semantic-cache"] === true) enrichArgs.semantic_cache = false;
+    for (const [flag, argument] of [
+      ["semantic-cache-min-confidence", "semantic_cache_min_confidence"],
+      ["semantic-cache-min-coverage", "semantic_cache_min_coverage"],
+    ] as const) {
+      const raw = flags[flag];
+      if (typeof raw !== "string") continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        console.error(`Invalid --${flag}: '${raw}'. Use a number from 0 to 1.`);
+        process.exit(1);
+      }
+      enrichArgs[argument] = value;
+    }
+    if (typeof flags["model-source"] === "string") {
+      const source = flags["model-source"].toLowerCase();
+      if (!["auto", "standalone", "architect"].includes(source)) {
+        console.error(`Invalid model source: '${flags["model-source"]}'. Use auto, standalone, or architect.`);
+        process.exit(1);
+      }
+      enrichArgs.model_source = source;
+    }
 
     try {
       const enrichResult = await mcpCallTool(
@@ -180,6 +209,14 @@ Options:
         "enrich_parser_nodes",
         enrichArgs,
         ENRICH_TIMEOUT_MS,
+        (() => {
+          let lastEnrichmentProgress = "";
+          return (update: { message?: string }) => {
+            if (jsonOutput || !update.message || update.message === lastEnrichmentProgress) return;
+            lastEnrichmentProgress = update.message;
+            console.log(`  ${update.message}`);
+          };
+        })(),
       );
       const text = enrichResult.content?.[0]?.text ?? "{}";
       const parsed = parseToolPayload(text) as Record<string, unknown>;
@@ -194,6 +231,16 @@ Options:
         if (d.total_skipped != null) console.log(`  Nodes skipped:      ${d.total_skipped}`);
         if (d.feature_anchors_written != null)
           console.log(`  Anchors written:    ${d.feature_anchors_written}`);
+        if (d.relations_written != null) console.log(`  Relations written:  ${d.relations_written}`);
+        const coverage = d.semantic_coverage as Record<string, unknown> | undefined;
+        if (coverage) console.log(`  Semantic coverage:  ${coverage.llm_enriched ?? 0}/${coverage.total_nodes ?? 0}`);
+        const semanticCache = d.semantic_cache as Record<string, unknown> | undefined;
+        if (semanticCache?.enabled === true) {
+          console.log(`  Cache-served nodes: ${semanticCache.nodes_served_from_cache ?? 0}`);
+          console.log(`  Source reads saved: ${semanticCache.source_reads_avoided ?? 0}`);
+          console.log(`  Physical reads:     ${semanticCache.source_file_reads ?? 0}`);
+          console.log(`  Shared prompt refs: ${semanticCache.prompt_source_reuses ?? 0}`);
+        }
         if (d.batches_run != null) console.log(`  Batches run:        ${d.batches_run}`);
         if (d.llm_calls != null) console.log(`  LLM calls:          ${d.llm_calls}`);
         if (d.tokens_used != null) console.log(`  Tokens used:        ${d.tokens_used}`);

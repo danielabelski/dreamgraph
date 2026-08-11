@@ -1,4 +1,4 @@
-# DreamGraph v12.1.0 — Living DreamGraph
+# DreamGraph v13.0.0 — Cognitive Maintenance
 ### The VS Code architect companion for the DreamGraph architect beta.
 
 DreamGraph is a model-agnostic, graph-grounded development agent. It replaces brute-force context dumping with architectural discipline, ensuring your project's logic remains persistent regardless of which LLM you choose to plug in.
@@ -9,10 +9,10 @@ DreamGraph is a model-agnostic, graph-grounded development agent. It replaces br
 * **Autonomous Normalization:** Background 'Dream Cycles' continuously map and resolve architectural tensions.
 * **100% Local Privacy:** Your database, your daemon, your keys. Sovereign by design.
 
-## Status: v12.1.0 "Living DreamGraph"
-* **Architect beta:** Standalone browser architect is the primary beta focus of the v12 release.
+## Status: v13.0.0 "Cognitive Maintenance"
+* **Architect beta:** Standalone browser architect continuously evaluates graph health and can run approved maintenance through DreamGraph MCP.
 * **VS Code architect:** Editor-integrated companion chat remains available through the extension.
-* **Explorer:** Production-ready graph browsing and curated mutations.
+* **Explorer:** Production-ready graph browsing with structured nested metadata and curated mutations.
 * **Governance:** ADR-enforced.
 * **Footprint:** Lean extension packaging.
 

@@ -94,6 +94,9 @@ const ADVERSARIAL_STRATEGIES = [
 const DreamCycleParamsSchema = z.object({
   strategy: z.enum(DREAM_STRATEGIES).default("all"),
   max_dreams: z.number().int().positive().default(100),
+  focus_entities: z.array(z.string().min(1)).max(100).default([]),
+  focus_hops: z.number().int().min(1).max(4).default(2),
+  focus_reason: z.string().max(500).optional(),
 });
 
 const NightmareCycleParamsSchema = z.object({
@@ -391,7 +394,11 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
       engine.enterRem();
       const decayResult = await engine.applyDecay();
       const tensionDecay = await engine.applyTensionDecay();
-      const dreamResult = await dream(strategy, maxDreams);
+      const dreamResult = await dream(strategy, maxDreams, {
+        entity_ids: params.focus_entities,
+        hops: params.focus_hops,
+        reason: params.focus_reason,
+      });
 
       engine.enterNormalizing();
       const normResult = await normalize();
@@ -546,7 +553,7 @@ async function executeAction(schedule: DreamSchedule): Promise<string> {
 
       if (engine.getState() !== "awake") await engine.interrupt();
 
-      return `dream_cycle(${strategy}): ${dreamResult.edges.length} edges, ${normResult.promotedEdges.length} promoted, ${normResult.rejected} rejected${resolverSummary}`;
+      return `dream_cycle(${strategy}${dreamResult.focus_entities.length > 0 ? `, focus=${dreamResult.focus_entities.length}` : ""}): ${dreamResult.edges.length} edges, ${normResult.promotedEdges.length} promoted, ${normResult.rejected} rejected${resolverSummary}`;
     }
 
     case "nightmare_cycle": {

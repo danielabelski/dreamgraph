@@ -1,6 +1,6 @@
 {
   "name": "dreamgraph",
-  "version": "12.6.0",
+  "version": "13.0.0",
   "description": "Graph-first cognitive daemon with MCP tools, CLI, dashboard, Explorer, and VS Code integration",
   "engines": {
     "node": ">=20.0.0"
@@ -40,8 +40,8 @@
     "@dreamgraph/sdk"
   ],
   "dependencies": {
-    "@dreamgraph/host": "12.6.0",
-    "@dreamgraph/sdk": "12.6.0",
+    "@dreamgraph/host": "13.0.0",
+    "@dreamgraph/sdk": "13.0.0",
     "@modelcontextprotocol/sdk": "^1.17.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
@@ -52,6 +52,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "fast-glob": "^3.3.3",
+    "ignore": "^7.0.6",
     "ink": "^5.2.1",
     "jsdom": "^24.1.1",
     "lucide": "^1.17.0",
@@ -68,7 +69,7 @@
     "web-tree-sitter": "^0.20.8",
     "ws": "^8.21.0",
     "zod": "^3.23.8",
-    "@dreamgraph/token-economy": "12.6.0"
+    "@dreamgraph/token-economy": "13.0.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

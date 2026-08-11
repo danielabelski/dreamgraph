@@ -39,13 +39,15 @@ Architect is for project-bound engineering work where DreamGraph is the authorit
 
 Architect is beta because the browser shell is now usable as the primary DreamGraph Architect surface, but the UX and some workflows are still being hardened. The daemon, graph, ADR, source-inspection, and mutation authority remain the same governed DreamGraph systems used by the rest of the project.
 
+In v13, Architect also owns cognitive graph health as part of ordinary reasoning. Before substantial architectural work it evaluates semantic density, parser-only nodes, hollow descriptions, missing contracts, stale scans/enrichments, datastore/UI coverage, disconnected clusters, tensions, and dream-promotion activity. When quality can affect the requested work, Architect explains the impact and proposes the smallest maintenance action. After user approval it executes that action through DreamGraph MCP rather than redirecting the user to a CLI.
+
 ---
 
 ## Prerequisites
 
 Before opening architect, you need:
 
-- DreamGraph v12.1.0 Living DreamGraph installed.
+- DreamGraph v13.0.0 Cognitive Maintenance installed.
 - A DreamGraph instance created with `dg init`.
 - A project attached to that instance, either during `dg init` or later with `dg attach`.
 - The daemon running in HTTP mode.

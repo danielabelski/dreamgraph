@@ -1,4 +1,4 @@
-# Automation Scripts (26)
+# Automation Scripts (28)
 
 | ID | Name | URI | Source Files | Tags |
 |----|------|-----|--------------|------|
@@ -28,4 +28,6 @@
 | `automation_script_validate_live_manifest_mjs` | validate-live-manifest.mjs | `automation_script://automation_script_validate_live_manifest_mjs` | `scripts/validate-live-manifest.mjs` | - |
 | `automation_script_webhook_test_receiver_mjs` | webhook-test-receiver.mjs | `automation_script://automation_script_webhook_test_receiver_mjs` | `scripts/webhook-test-receiver.mjs` | - |
 | `automation_script_wire_links_cli_mjs` | wire-links-cli.mjs | `automation_script://automation_script_wire_links_cli_mjs` | `scripts/wire-links-cli.mjs` | - |
+| `automation_script_benchmark_token_economy_mjs` | benchmark-token-economy.mjs | `automation_script://automation_script_benchmark_token_economy_mjs` | `scripts/benchmark-token-economy.mjs` | - |
+| `automation_script_generate_easy_start_docs_mjs` | generate-easy-start-docs.mjs | `automation_script://automation_script_generate_easy_start_docs_mjs` | `scripts/generate-easy-start-docs.mjs` | - |
 

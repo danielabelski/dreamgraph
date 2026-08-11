@@ -13,7 +13,7 @@
 //   • orchestrator failures throw an annotated Error
 //   • `onRunResult` fires for both ok and failed runs
 //   • observer exceptions never crash the pass driver
-//   • `getCapabilities` returns text-only / image-disabled
+//   • `getCapabilities` exposes text and image attachment support
 //   • `port.llm` is the injected reference
 //   • options validation rejects missing / malformed inputs
 
@@ -195,7 +195,7 @@ function makeCallInput(over: Partial<CallProviderInput> = {}): CallProviderInput
 
 // ---------------------------------------------------------------------------
 
-test("provider-port: getCapabilities reports text-only / images-disabled", () => {
+test("provider-port: getCapabilities reports text and image attachments", () => {
   const port = createCopilotCliProviderPort({
     hostLlm: FAKE_LLM,
     invocationCwd: "/work",
@@ -204,8 +204,8 @@ test("provider-port: getCapabilities reports text-only / images-disabled", () =>
     deps: makeDeps(),
   });
   const caps = port.getCapabilities();
-  assert.equal(caps.textAttachments, false);
-  assert.equal(caps.imageAttachments, false);
+  assert.equal(caps.textAttachments, true);
+  assert.equal(caps.imageAttachments, true);
 });
 
 test("provider-port: exposes hostLlm reference verbatim through `llm`", () => {

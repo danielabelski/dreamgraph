@@ -282,12 +282,21 @@ test("HOST_PROCESS.spawn: aborting twice is idempotent and still settles", async
 
 test("HOST_PROCESS.spawn: aborted child stops emitting stdout chunks before resolve", async () => {
   // Child writes 'a' immediately, then would write 'b' after 5s. We
-  // abort before 'b' is sent. The collected chunks must contain 'a'
-  // and must not contain 'b'.
+  // abort after observing 'a' and before 'b' is sent. Waiting for the
+  // first chunk avoids racing slow Windows process startup under load.
   const ac = new AbortController();
   const chunks: string[] = [];
-  setTimeout(() => ac.abort(), 100).unref?.();
-  const result = await HOST_PROCESS.spawn({
+  let resolveFirstChunk!: () => void;
+  let rejectFirstChunk!: (error: Error) => void;
+  const firstChunk = new Promise<void>((resolve, reject) => {
+    resolveFirstChunk = resolve;
+    rejectFirstChunk = reject;
+  });
+  const startupTimeout = setTimeout(
+    () => rejectFirstChunk(new Error("child did not emit its first stdout chunk within 5s")),
+    5_000,
+  );
+  const run = HOST_PROCESS.spawn({
     command: process.execPath,
     args: [
       "-e",
@@ -297,8 +306,22 @@ test("HOST_PROCESS.spawn: aborted child stops emitting stdout chunks before reso
     env: filteredEnv(),
     timeoutMs: 30_000,
     abortSignal: ac.signal,
-    onStdoutChunk: (c) => chunks.push(c),
+    onStdoutChunk: (c) => {
+      chunks.push(c);
+      resolveFirstChunk();
+    },
   });
+  let firstChunkError: unknown;
+  try {
+    await firstChunk;
+  } catch (error) {
+    firstChunkError = error;
+  } finally {
+    clearTimeout(startupTimeout);
+    ac.abort();
+  }
+  const result = await run;
+  if (firstChunkError) throw firstChunkError;
   assert.equal(result.aborted, true);
   assert.ok(chunks.join("").includes("a"));
   assert.ok(!chunks.join("").includes("b"), `late chunk leaked: ${chunks.join("")}`);

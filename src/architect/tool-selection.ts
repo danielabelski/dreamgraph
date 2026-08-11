@@ -13,6 +13,8 @@ export type ArchitectToolGroupKey =
   | "ui_registry"
   | "cognitive_read"
   | "cognitive_run"
+  | "graph_health"
+  | "graph_maintenance"
   | "scheduler"
   | "project_scan"
   | "docs_visuals"
@@ -46,9 +48,12 @@ const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const GRAPH_GROUNDING_REQUIRED_TOOLS = ["query_resource", "query_architecture_decisions"] as const;
 const GRAPH_GROUNDING_PREFERRED_TOOLS = ["graph_rag_retrieve", "cognitive_status", "get_cognitive_preamble"] as const;
 const GRAPH_RECORDING_REQUIRED_TOOLS = ["enrich_seed_data"] as const;
+const GRAPH_HEALTH_REQUIRED_TOOLS = ["graph_health_report"] as const;
+const TARGETED_DREAM_REQUIRED_TOOLS = ["schedule_dream"] as const;
 
 export const ARCHITECT_TOOL_GROUPS: Record<ArchitectToolGroupKey, readonly string[]> = {
   core_read: [
+    "graph_health_report",
     "cognitive_status",
     "query_resource",
     "graph_rag_retrieve",
@@ -114,6 +119,21 @@ export const ARCHITECT_TOOL_GROUPS: Record<ArchitectToolGroupKey, readonly strin
     "lucid_action",
     "wake_from_lucid",
   ],
+  graph_health: [
+    "graph_health_report",
+    "cognitive_status",
+    "query_self_metrics",
+  ],
+  graph_maintenance: [
+    "enrich_parser_nodes",
+    "scan_project",
+    "scan_database",
+    "normalize_dreams",
+    "get_remediation_plan",
+    "resolve_tension",
+    "export_living_docs",
+    "bootstrap_instance",
+  ],
   scheduler: [
     "schedule_dream",
     "list_schedules",
@@ -125,6 +145,8 @@ export const ARCHITECT_TOOL_GROUPS: Record<ArchitectToolGroupKey, readonly strin
   project_scan: [
     "init_graph",
     "scan_project",
+    "scan_database",
+    "bootstrap_instance",
     "extract_api_surface",
   ],
   docs_visuals: [
@@ -263,6 +285,31 @@ const PROJECT_SCAN_KEYWORDS = [
   "refresh graph", "reindex", "extract api surface", "extract_api_surface",
 ];
 
+const GRAPH_MAINTENANCE_KEYWORDS = [
+  "graph health", "semantic density", "hollow description", "parser-only",
+  "parser only", "stale scan", "stale enrichment", "re-enrich", "reenrich",
+  "force semantic enrichment", "scan database", "scan datastore", "database_url",
+  "refresh parser", "refresh ui metadata", "normalize dreams", "resolve tensions",
+  "bootstrap instance", "self-heal", "self healing", "cognitive maintenance",
+];
+
+const SUBSTANTIAL_ARCHITECTURAL_KEYWORDS = [
+  "architecture", "architectural", "plan", "planning", "design", "implement",
+  "implementation", "feature", "workflow", "contract", "capability", "invariant",
+  "refactor", "migration", "module", "public api", "data model", "datastore",
+  "codebase", "repository", "project", "system", "cross-module", "cross module",
+];
+
+const MAJOR_IMPLEMENTATION_KEYWORDS = [
+  "implement", "implementation", "feature", "workflow", "refactor",
+  "migration", "module", "public api", "data model", "datastore", "cross-module",
+  "cross module", "major", "substantial", "architectural change", "architecture change",
+];
+
+const MINOR_CHANGE_KEYWORDS = [
+  "typo", "formatting only", "comment only", "rename variable", "minor copy",
+];
+
 const DOCS_KEYWORDS = [
   "living docs", "export docs", "diagram", "visual flow", "mermaid",
   "ui migration", "migration plan", "archetype",
@@ -321,6 +368,8 @@ export function buildArchitectToolManifestFromText(parts: readonly string[]): Ar
   const recoveryOnly = isMissingToolRecoveryPrompt(text, explicitRequired);
   const required: string[] = [...GRAPH_GROUNDING_REQUIRED_TOOLS];
   const preferred: string[] = [...GRAPH_GROUNDING_PREFERRED_TOOLS, ...mentioned];
+  const substantialArchitecturalWork = isSubstantialArchitecturalWork(text, intent.mutating);
+  const majorImplementation = isMajorImplementationWork(text, intent.mutating);
 
   if (recoveryOnly) {
     required.push(...explicitRequired);
@@ -336,6 +385,15 @@ export function buildArchitectToolManifestFromText(parts: readonly string[]): Ar
       required_tools: requiredTools,
       preferred_tools: withoutToolNames(mergeToolNames(preferred), requiredTools),
     };
+  }
+
+  if (substantialArchitecturalWork) {
+    required.push(...GRAPH_HEALTH_REQUIRED_TOOLS);
+  } else {
+    preferred.push(...GRAPH_HEALTH_REQUIRED_TOOLS);
+  }
+  if (majorImplementation) {
+    required.push(...TARGETED_DREAM_REQUIRED_TOOLS);
   }
 
   if (intent.mutating) {
@@ -512,6 +570,10 @@ export function inferArchitectToolIntent(parts: readonly string[]): ArchitectToo
     groups.push("cognitive_read");
     rationale.push("cognitive/status intent -> cognitive_read");
   }
+  if (hasAny(lower, GRAPH_MAINTENANCE_KEYWORDS)) {
+    groups.push("graph_health", "graph_maintenance");
+    rationale.push("graph maintenance intent -> graph_health+graph_maintenance");
+  }
   if (hasAny(lower, ["dream_cycle", "run dream", "run a dream", "normalize dreams", "nightmare", "lucid"])) {
     groups.push("cognitive_run");
     rationale.push("cognitive run intent -> cognitive_run");
@@ -540,6 +602,19 @@ export function inferArchitectToolIntent(parts: readonly string[]): ArchitectToo
     graphWriting,
     rationale,
   };
+}
+
+function isSubstantialArchitecturalWork(text: string, mutating: boolean): boolean {
+  const lower = text.toLowerCase();
+  if (hasAny(lower, MINOR_CHANGE_KEYWORDS)) return false;
+  return hasAny(lower, SUBSTANTIAL_ARCHITECTURAL_KEYWORDS)
+    || (mutating && hasAny(lower, ["source", "code", "files", "route", "runtime"]));
+}
+
+function isMajorImplementationWork(text: string, mutating: boolean): boolean {
+  if (!mutating) return false;
+  const lower = text.toLowerCase();
+  return !hasAny(lower, MINOR_CHANGE_KEYWORDS) && hasAny(lower, MAJOR_IMPLEMENTATION_KEYWORDS);
 }
 
 function explicitRequiredToolMentions(text: string): string[] {

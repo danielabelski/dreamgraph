@@ -236,7 +236,7 @@ function makeCallInput(over: Partial<CallProviderInput> = {}): CallProviderInput
   };
 }
 
-test("codex provider-port: getCapabilities reports text-only / images-disabled", () => {
+test("codex provider-port: getCapabilities reports text and image attachments", () => {
   const port = createCodexCliProviderPort({
     hostLlm: FAKE_LLM,
     invocationCwd: "C:\\work",
@@ -244,7 +244,7 @@ test("codex provider-port: getCapabilities reports text-only / images-disabled",
     baseEnv: { PATH: "C:\\bin" },
     deps: makeDeps(),
   });
-  assert.deepEqual(port.getCapabilities(), { textAttachments: false, imageAttachments: false });
+  assert.deepEqual(port.getCapabilities(), { textAttachments: true, imageAttachments: true });
   assert.equal(port.llm, FAKE_LLM);
 });
 

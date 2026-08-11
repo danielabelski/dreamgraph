@@ -42,7 +42,7 @@ The installer only installs the extension if `code` is on PATH. Install manually
 ```bash
 cd extensions/vscode
 npm run build
-code --install-extension dreamgraph-vscode-12.1.0.vsix
+code --install-extension dreamgraph-vscode-13.0.0.vsix
 ```
 
 ---
@@ -109,7 +109,7 @@ Runtime dependencies didn't install. Fix:
 
 ```powershell
 # Windows
-cd "$env:USERPROFILE\.vscode\extensions\siteledger.dreamgraph-vscode-12.1.0"
+cd "$env:USERPROFILE\.vscode\extensions\siteledger.dreamgraph-vscode-13.0.0"
 npm install --omit=dev
 ```
 
@@ -138,6 +138,14 @@ Stale daemon connection. `Ctrl+Shift+P` → **DreamGraph: Connect to Daemon**, r
 ---
 
 ## Graph quality
+
+### Scan or bootstrap appears busy for hours
+
+v13 streams phase and batch progress to the CLI and refreshes the inactivity timer while work is advancing. Completed enrichment batches are persisted atomically, so useful work survives a later provider or transport failure. If progress stops, inspect the daemon log, then prefer the smallest recovery: `dg enrich <name> --skip-scan --force` for hollow current nodes, `dg scan <name> --depth deep` for repository drift, and `dg bootstrap <name> --mode full --force` only for an empty or unrecoverable instance.
+
+### Explorer shows raw JSON in Links or Enrichment
+
+The v13 Explorer parses structured values and renders them as nested cards, labels, chips, and badges for all node types. Reinstall the current release, restart the daemon, and hard-refresh the Explorer if an older cached bundle still shows one-line JSON.
 
 ### Candidates panel shows "? → ? edge"
 

@@ -32,6 +32,7 @@ import { atomicWriteFile } from "../utils/atomic-write.js";
 import { invalidateCache, loadJsonArray } from "../utils/cache.js";
 import { dataPath } from "../utils/paths.js";
 import type { Datastore, DatastoreTable, DataModelEntity, ToolResponse } from "../types/index.js";
+import { datastoreConnectionFingerprint, updateGraphMaintenanceState } from "../cognitive/graph-maintenance-state.js";
 
 // Lazy-import pg so the server doesn't crash if the pg module is
 // broken or missing (it's only needed when DATABASE_URL is set).
@@ -618,7 +619,7 @@ function isDenylisted(name: string, columns: number, fks: number): boolean {
   return false;
 }
 
-interface ScanResult {
+export interface ScanResult {
   datastore_id: string;
   tables_found: number;
   tables_kept: number;
@@ -626,6 +627,8 @@ interface ScanResult {
   skipped_reasons: Record<string, number>;
   /** Number of data_model entities created when create_missing=true. */
   data_models_created: number;
+  /** Existing code-side models linked to the scanned datastore by exact table evidence. */
+  data_models_linked: number;
   last_scanned_at: string;
 }
 
@@ -776,6 +779,7 @@ export async function runDatastoreScan(opts: {
   // duplicating entities the user already authored.
   // ---------------------------------------------------------------------
   let dataModelsCreated = 0;
+  let dataModelsLinked = 0;
   if (opts.createMissing && kept.length > 0) {
     try {
       const existing = await loadJsonArray<DataModelEntity>("data_model.json");
@@ -791,7 +795,35 @@ export async function runDatastoreScan(opts: {
       const additions: DataModelEntity[] = [];
       const nowIso = lastScannedAt;
       for (const t of kept) {
-        if (claimed.has(norm(t.name))) continue;
+        const tableKey = norm(t.name);
+        const matchIndex = existing.findIndex((dm) => {
+          const leaf = dm.id?.split(/[:.]/).pop() ?? dm.id ?? "";
+          return [leaf, dm.name, dm.table_name].some((value) => typeof value === "string" && norm(value) === tableKey);
+        });
+        if (matchIndex >= 0) {
+          const match = existing[matchIndex];
+          const links = Array.isArray(match.links) ? [...match.links] : [];
+          if (!links.some((link) => link.target === target.id && link.relationship === "stored_in")) {
+            links.push({
+              target: target.id,
+              type: "datastore",
+              relationship: "stored_in",
+              description: `Table ${t.schema}.${t.name} is stored in ${target.name ?? target.id}.`,
+              strength: "strong",
+              meta: { table: `${t.schema}.${t.name}`, evidence: "datastore_introspection" },
+            });
+            existing[matchIndex] = {
+              ...match,
+              table_name: match.table_name ?? t.name,
+              storage: match.storage ?? target.kind,
+              links,
+            };
+            dataModelsLinked++;
+          }
+          claimed.add(tableKey);
+          continue;
+        }
+        if (claimed.has(tableKey)) continue;
         const id = `data_model:db.${t.schema}.${t.name}`;
         if (existing.some((e) => e.id === id)) continue;
         additions.push({
@@ -821,10 +853,11 @@ export async function runDatastoreScan(opts: {
               strength: "strong",
             },
           ],
+          provenance: { scanner: "datastore", language: "sql", qualified_name: `${t.schema}.${t.name}` },
         } as DataModelEntity);
         claimed.add(norm(t.name));
       }
-      if (additions.length > 0) {
+      if (additions.length > 0 || dataModelsLinked > 0) {
         const merged = [...existing, ...additions];
         await atomicWriteFile(
           dataPath("data_model.json"),
@@ -844,8 +877,13 @@ export async function runDatastoreScan(opts: {
   const totalSkipped = Object.values(skipReasons).reduce((a, b) => a + b, 0);
   logger.info(
     `scan_database: ${target.id} found=${tables.length} kept=${kept.length} ` +
-      `skipped=${totalSkipped} created=${dataModelsCreated} elapsed=${Date.now() - t0}ms`,
+      `skipped=${totalSkipped} created=${dataModelsCreated} linked=${dataModelsLinked} elapsed=${Date.now() - t0}ms`,
   );
+
+  await updateGraphMaintenanceState({
+    last_datastore_scan_at: lastScannedAt,
+    datastore_connection_fingerprint: datastoreConnectionFingerprint(config.database.connectionString || process.env.DATABASE_URL),
+  }).catch((err) => logger.warn(`scan_database: could not update graph maintenance state: ${err instanceof Error ? err.message : err}`));
 
   return success<ScanResult>({
     datastore_id: target.id,
@@ -854,6 +892,7 @@ export async function runDatastoreScan(opts: {
     tables_skipped: totalSkipped,
     skipped_reasons: skipReasons,
     data_models_created: dataModelsCreated,
+    data_models_linked: dataModelsLinked,
     last_scanned_at: lastScannedAt,
   });
 }

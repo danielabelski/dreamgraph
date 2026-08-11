@@ -9,12 +9,14 @@
 
 import { loadJsonArray, loadJsonData } from "../utils/cache.js";
 import { loadIndexableUIElements, type IndexableUIElement } from "../utils/ui-index.js";
+import { loadAuxiliaryEntities } from "../tools/auxiliary-store.js";
 import type {
   Feature,
   Workflow,
   DataModelEntity,
   CapabilityEntity,
   Datastore,
+  AuxiliaryEntity,
   DreamGraphFile,
   ValidatedEdgesFile,
   CandidateEdgesFile,
@@ -83,6 +85,7 @@ export interface GraphRawSnapshot {
   dataModel: DataModelEntity[];
   capabilities: CapabilityEntity[];
   datastores: Datastore[];
+  auxiliary: AuxiliaryEntity[];
   dreamGraph: DreamGraphFile;
   validated: ValidatedEdgesFile;
   candidates: CandidateEdgesFile;
@@ -107,6 +110,7 @@ export async function loadGraphRaw(): Promise<GraphRawSnapshot> {
     candidates,
     tensions,
     uiElements,
+    auxiliaryFile,
   ] = await Promise.all([
     safe(() => loadJsonArray<Feature>("features.json"), []),
     safe(() => loadJsonArray<Workflow>("workflows.json"), []),
@@ -124,6 +128,7 @@ export async function loadGraphRaw(): Promise<GraphRawSnapshot> {
     ),
     safe(() => loadJsonData<TensionFile>("tension_log.json"), EMPTY_TENSIONS),
     safe(() => loadIndexableUIElements(), [] as IndexableUIElement[]),
+    safe(() => loadAuxiliaryEntities(), { metadata: { description: "", schema_version: "", last_scanned: null, total: 0 }, entries: [] }),
   ]);
 
   // Strip template-stub entries (entries with `_schema` / `_note` markers).
@@ -137,6 +142,7 @@ export async function loadGraphRaw(): Promise<GraphRawSnapshot> {
     dataModel,
     capabilities,
     datastores,
+    auxiliary: auxiliaryFile.entries,
     dreamGraph,
     validated,
     candidates,

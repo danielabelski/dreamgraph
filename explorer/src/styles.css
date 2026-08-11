@@ -54,7 +54,7 @@ html, body, #root {
   padding: 12px 14px;
   overflow-y: auto;
 }
-.right { border-right: none; border-left: 1px solid var(--grid-line); }
+.right { border-right: none; border-left: 1px solid var(--grid-line); overflow-x: hidden; }
 
 .panel-title {
   font-size: 11px;
@@ -320,7 +320,7 @@ html, body, #root {
 .filters-row--slider input[type=range] { flex: 1; }
 .filters-conf { font-variant-numeric: tabular-nums; color: var(--fg-dim); width: 40px; text-align: right; }
 
-.inspector { padding: 12px 14px; }
+.inspector { padding: 12px 14px; min-width: 0; }
 .inspector-title { font-size: 14px; margin: 0 0 4px; color: var(--fg); }
 .inspector-id {
   font-size: 11px;
@@ -338,6 +338,146 @@ html, body, #root {
 }
 .inspector-empty { color: var(--fg-dim); font-size: 12px; }
 .inspector-error { color: var(--danger); font-size: 12px; }
+
+.entity-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.entity-field {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  padding: 3px 0;
+}
+.entity-field--full {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.entity-field-label {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+.entity-field--full > .entity-field-label {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+.entity-field-value,
+.structured-object dd {
+  min-width: 0;
+  margin: 0;
+}
+.structured-text,
+.structured-code {
+  display: inline-block;
+  max-width: 100%;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.structured-code,
+.structured-number {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.structured-code { color: #b9c8e8; }
+.structured-number { color: #b8d6ff; font-variant-numeric: tabular-nums; }
+.structured-empty { color: var(--fg-dim); font-style: italic; font-size: 11px; }
+.structured-boolean {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.structured-boolean.is-true { color: var(--good); background: rgba(126, 231, 135, 0.10); }
+.structured-boolean.is-false { color: var(--fg-dim); background: rgba(138, 147, 160, 0.10); }
+.structured-object {
+  display: grid;
+  grid-template-columns: minmax(76px, 0.35fr) minmax(0, 1fr);
+  gap: 5px 8px;
+  margin: 0;
+  min-width: 0;
+  font-size: 11px;
+}
+.structured-object dt {
+  color: var(--fg-dim);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.structured-object--depth-2 {
+  grid-template-columns: minmax(66px, 0.3fr) minmax(0, 1fr);
+}
+.structured-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.structured-card {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(122, 162, 255, 0.14);
+  border-left: 2px solid rgba(122, 162, 255, 0.48);
+  border-radius: 5px;
+  background: rgba(11, 13, 16, 0.48);
+}
+.structured-card-title {
+  margin: 0 0 6px;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.structured-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.structured-chips li {
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow-wrap: anywhere;
+}
+.structured-entity-link {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.structured-entity-link:hover,
+.structured-entity-link:focus-visible {
+  color: #a9c1ff;
+  text-decoration: underline;
+  outline: none;
+}
 
 .edgelist { list-style: none; padding: 0; margin: 0; }
 .edgelist-item { padding: 2px 0; }

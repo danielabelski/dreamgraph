@@ -15,3 +15,5 @@ data/validated_edges.json
 .env.local
 extensions/vscode/dist/
 explorer/node_modules/
+art/dreamgraph-awake-lattice-2026-07-07.svg
+art/dreamgraph-identifies-self.svg

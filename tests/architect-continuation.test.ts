@@ -81,7 +81,7 @@ describe("Architect continuation contract", () => {
     expect(result.report.continuation_options).toHaveLength(2);
     expect(result.report.continuation_options[0]).toMatchObject({
       label: "Implement Slice 2",
-      required_tools: ["read_source_code", "patch_file", "run_command", "query_resource", "query_architecture_decisions", "enrich_seed_data"],
+      required_tools: ["read_source_code", "patch_file", "run_command", "query_resource", "query_architecture_decisions", "graph_health_report", "schedule_dream", "enrich_seed_data"],
       preferred_tools: [
         "search_source_code",
         "graph_rag_retrieve",
@@ -378,7 +378,7 @@ describe("Architect continuation contract", () => {
       status: "continue",
       selected_action: { id: "implement-prompted-change" },
       tool_manifest: {
-        required_tools: ["query_resource", "query_architecture_decisions", "read_source_code", "patch_file", "enrich_seed_data", "run_command"],
+        required_tools: ["query_resource", "query_architecture_decisions", "graph_health_report", "schedule_dream", "read_source_code", "patch_file", "enrich_seed_data", "run_command"],
         preferred_tools: [
           "graph_rag_retrieve",
           "cognitive_status",
@@ -394,7 +394,7 @@ describe("Architect continuation contract", () => {
     expect(decoded).toMatchObject({ ok: true });
     if (decoded.ok) {
       const prompt = buildArchitectContinuationPrompt(decoded.state, decision.selected_action!);
-      expect(prompt).toContain("Required DreamGraph MCP tools for this pass: query_resource, query_architecture_decisions, read_source_code, patch_file, enrich_seed_data, run_command");
+      expect(prompt).toContain("Required DreamGraph MCP tools for this pass: query_resource, query_architecture_decisions, graph_health_report, schedule_dream, read_source_code, patch_file, enrich_seed_data, run_command");
       expect(prompt).toContain("Preferred DreamGraph MCP tools for this pass: graph_rag_retrieve, cognitive_status, get_cognitive_preamble, modify_api_surface, solidify_cognitive_insight, record_architecture_decision, query_ui_elements");
     }
   });
@@ -444,16 +444,16 @@ describe("Architect continuation contract", () => {
       status: "continue",
       selected_action: { id: "add-chat-history-runtime-regressions" },
       tool_manifest: {
-        required_tools: ["read_source_code", "query_resource", "query_architecture_decisions", "patch_file", "enrich_seed_data", "run_command"],
+        required_tools: ["read_source_code", "query_resource", "query_architecture_decisions", "graph_health_report", "patch_file", "enrich_seed_data", "run_command"],
       },
     });
     expect(parseResult.report.recommended_next_step).toMatchObject({
-      required_tools: ["read_source_code", "query_resource", "query_architecture_decisions", "patch_file", "enrich_seed_data", "run_command"],
+      required_tools: ["read_source_code", "query_resource", "query_architecture_decisions", "graph_health_report", "patch_file", "enrich_seed_data", "run_command"],
     });
     const decoded = decodeArchitectContinuationToken(decision.continuation_token ?? "", { selected_plan_id: null, chat_scope: "project" });
     expect(decoded).toMatchObject({ ok: true });
     if (decoded.ok) {
-      expect(decoded.state.required_tools).toEqual(["read_source_code", "query_resource", "query_architecture_decisions", "patch_file", "enrich_seed_data", "run_command"]);
+      expect(decoded.state.required_tools).toEqual(["read_source_code", "query_resource", "query_architecture_decisions", "graph_health_report", "patch_file", "enrich_seed_data", "run_command"]);
     }
   });
 
@@ -556,7 +556,7 @@ describe("Architect continuation contract", () => {
       reason: "recommended_action_selected",
       selected_action: { id: "slice-2-adapter-routing" },
       tool_manifest: {
-        required_tools: ["read_source_code", "patch_file", "run_command", "query_resource", "query_architecture_decisions", "enrich_seed_data"],
+        required_tools: ["read_source_code", "patch_file", "run_command", "query_resource", "query_architecture_decisions", "graph_health_report", "schedule_dream", "enrich_seed_data"],
         preferred_tools: [
           "search_source_code",
           "graph_rag_retrieve",
@@ -577,11 +577,11 @@ describe("Architect continuation contract", () => {
         selected_plan_id: "architect-continuation",
         chat_scope: "plan",
         selected_action_id: "slice-2-adapter-routing",
-        required_tools: ["read_source_code", "patch_file", "run_command", "query_resource", "query_architecture_decisions", "enrich_seed_data"],
+        required_tools: ["read_source_code", "patch_file", "run_command", "query_resource", "query_architecture_decisions", "graph_health_report", "schedule_dream", "enrich_seed_data"],
       });
       const prompt = buildArchitectContinuationPrompt(decoded.state, decision.selected_action!);
       expect(prompt).toContain("Selected plan id: architect-continuation");
-      expect(prompt).toContain("Required DreamGraph MCP tools for this pass: read_source_code, patch_file, run_command, query_resource, query_architecture_decisions, enrich_seed_data");
+      expect(prompt).toContain("Required DreamGraph MCP tools for this pass: read_source_code, patch_file, run_command, query_resource, query_architecture_decisions, graph_health_report, schedule_dream, enrich_seed_data");
       expect(prompt).toContain("Do not substitute provider-native shell, read, or write routes");
       expect(prompt).toContain("Add manifest routing to native and CLI adapters.");
     }

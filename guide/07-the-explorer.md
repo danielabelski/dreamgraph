@@ -60,6 +60,8 @@ When you click a node or edge:
 - **Connections** — incoming and outgoing edges, grouped by relation type.
 - **Provenance** — which dream cycle introduced it, what evidence supported it.
 
+Nested knowledge is rendered consistently for every node type. Arrays become cards or chips; objects become labeled key/value groups; booleans become status badges; empty collections are called out explicitly; and stringified JSON containers are parsed before display. This applies especially to `links`, `enrichment`, semantic-cache evidence, data contracts, UI appearance/layout metadata, and relationship rationale. Actual `source` and `target` entity references remain clickable.
+
 For ADRs, you'll also see status (active/deprecated), rationale, and which entities the decision touches.
 
 ---

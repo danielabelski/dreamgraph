@@ -2,7 +2,7 @@
   "name": "dreamgraph-vscode",
   "displayName": "DreamGraph",
   "description": "DreamGraph-native development agent — intentional context, architectural discipline, knowledge-grounded AI.",
-  "version": "12.6.0",
+  "version": "13.0.0",
   "icon": "media/dreamgraph-icon.png",
   "publisher": "siteledger-solutions",
   "homepage": "https://dreamgraph.nofs.ai/",
@@ -293,7 +293,7 @@
         "dreamgraph.architect.model": {
           "type": "string",
           "default": "claude-opus-4-7",
-          "description": "Model name for the Architect (e.g., 'claude-opus-4-7', 'claude-fable-5', 'claude-mythos-5', or 'gpt-5.5')."
+          "description": "Model name for the Architect (e.g., 'claude-opus-4-7', 'claude-fable-5', 'claude-mythos-5', 'gpt-5.5', or a Codex CLI model such as 'gpt-5.6-sol')."
         },
         "dreamgraph.architect.baseUrl": {
           "type": "string",

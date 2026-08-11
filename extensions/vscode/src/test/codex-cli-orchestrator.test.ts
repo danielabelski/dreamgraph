@@ -153,7 +153,13 @@ function commandResult(over: Partial<CodexCliCommandResult> = {}): CodexCliComma
 
 function spawnResult(over: Partial<CodexCliSpawnResult> = {}): CodexCliSpawnResult {
   return {
-    stdout: "Implemented Slice 3.\n",
+    stdout: [
+      "Implemented Slice 3.",
+      "```architect_continuation",
+      '{"status":"complete","summary":"Implemented Slice 3.","recommended_next_steps":[]}',
+      "```",
+      "",
+    ].join("\n"),
     stderr: "",
     exitCode: 0,
     signal: null,
@@ -337,15 +343,13 @@ test("codex orchestrator: success writes isolated config, spawns codex exec with
     `${FAKE_HOME_DIR}\\.codex\\installation_id`,
   ]);
   assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\auth.json` && w.contents.includes("\"tokens\":true")));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("DREAMGRAPH_MCP_TOKEN = \"tok-codex\"")));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("[mcp_servers.dreamgraph.env]")));
-  assert.ok(fsLog.writes.every((w) => w.path !== `${runHome}\\config.toml` || !/^env = \{/m.test(w.contents)));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("DREAMGRAPH_BRIDGE_AUDIT_DIR = \"C:\\\\audit\"")));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("DREAMGRAPH_RUN_ID = \"codex-run-001\"")));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("default_tools_enabled = true")));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("trust_level = \"trusted\"")));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("default_tools_approval_mode = \"approve\"")));
-  assert.ok(fsLog.writes.some((w) => w.path === `${runHome}\\config.toml` && w.contents.includes("[mcp_servers.dreamgraph.tools.run_command]")));
+  const configWrite = fsLog.writes.find((w) => w.path === `${runHome}\\config.toml`);
+  assert.ok(configWrite);
+  assert.match(configWrite.contents, /^env = \{/m);
+  assert.match(configWrite.contents, /DREAMGRAPH_MCP_TOKEN = "tok-codex"/);
+  assert.match(configWrite.contents, /DREAMGRAPH_BRIDGE_AUDIT_DIR = "C:\\\\audit"/);
+  assert.match(configWrite.contents, /DREAMGRAPH_RUN_ID = "codex-run-001"/);
+  assert.match(configWrite.contents, /default_tools_approval_mode = "auto"/);
   assert.ok(fsLog.writes.some((w) => w.path === `${scratch}\\request.json` && w.contents.includes("outputLastMessagePath")));
   assert.ok(fsLog.writes.some((w) => w.path === `${scratch}\\request.json` && w.contents.includes("\"auth.json\"")));
 
@@ -641,7 +645,16 @@ test("codex orchestrator: audited read call clears MCP probe even with transcrip
         }),
         JSON.stringify({
           type: "item.completed",
-          item: { id: "item_1", type: "agent_message", text: "Verified graph read completed." },
+          item: {
+            id: "item_1",
+            type: "agent_message",
+            text: [
+              "Verified graph read completed.",
+              "```architect_continuation",
+              '{"status":"complete","summary":"Verified graph read completed.","recommended_next_steps":[]}',
+              "```",
+            ].join("\n"),
+          },
         }),
         JSON.stringify({ type: "turn.completed" }),
       ].join("\n"),

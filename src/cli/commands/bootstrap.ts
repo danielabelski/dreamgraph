@@ -88,13 +88,26 @@ Examples:
     }
   }
 
+  const startedAt = Date.now();
+  const heartbeat = jsonOutput ? undefined : setInterval(() => {
+    const elapsedMinutes = Math.max(1, Math.floor((Date.now() - startedAt) / 60_000));
+    console.log(`Bootstrap is still running (${elapsedMinutes} min); completed batches are persisted by the daemon.`);
+  }, 30_000);
+  heartbeat?.unref();
+
   try {
     // Generous timeout — full mode runs scan + LLM enrichment + ADR discovery.
+    let lastProgress = "";
     const result = await mcpCallTool(
       meta.port,
       "bootstrap_instance",
       { mode, force },
-      mode === "full" ? 600_000 : 120_000,
+      mode === "full" ? 7_200_000 : 3_600_000,
+      (update) => {
+        if (jsonOutput || !update.message || update.message === lastProgress) return;
+        lastProgress = update.message;
+        console.log(`  ${update.message}`);
+      },
     );
 
     const text = result.content?.[0]?.text ?? "{}";
@@ -137,5 +150,7 @@ Examples:
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`Bootstrap call failed: ${msg}`);
     process.exit(1);
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
   }
 }

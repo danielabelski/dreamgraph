@@ -259,7 +259,21 @@ export async function applyScannerUiElements(
       // any non-scanner fields a curator may have set on a previously
       // scanner-emitted entry.
       existing.name = incoming.name;
-      existing.purpose = incoming.purpose;
+      // A rescan must not replace LLM-authored knowledge with the scanner's
+      // mechanical placeholder. Refresh it only until a semantic pass exists.
+      if (existing.enrichment?.enriched !== true) {
+        existing.purpose = incoming.purpose;
+        existing.description = incoming.description;
+        existing.intent = incoming.intent;
+        existing.evidence_refs = [...(incoming.evidence_refs ?? [])];
+        existing.data_contract = incoming.data_contract;
+        existing.interactions = incoming.interactions;
+        existing.children = [...(incoming.children ?? [])];
+        existing.used_by = [...(incoming.used_by ?? [])];
+        existing.links = (incoming.links ?? []).map((link) => ({ ...link, meta: link.meta ? { ...link.meta } : undefined }));
+        existing.visual_semantics = incoming.visual_semantics;
+        existing.layout_semantics = incoming.layout_semantics;
+      }
       existing.implementations = incoming.implementations;
       existing.source_repo = incoming.source_repo;
       existing.source_file = incoming.source_file;

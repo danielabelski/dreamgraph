@@ -80,6 +80,156 @@ function extractReactComponentNames(source: string): string[] {
   return Array.from(names);
 }
 
+function matchingDelimiter(source: string, start: number, open: string, close: string): number {
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let i = start; i < source.length; i++) {
+    const char = source[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === open) depth++;
+    else if (char === close && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function splitTopLevel(value: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let braces = 0;
+  let brackets = 0;
+  let parens = 0;
+  let quote = "";
+  let escaped = false;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") quote = char;
+    else if (char === "{") braces++;
+    else if (char === "}") braces--;
+    else if (char === "[") brackets++;
+    else if (char === "]") brackets--;
+    else if (char === "(") parens++;
+    else if (char === ")") parens--;
+    else if (char === "," && braces === 0 && brackets === 0 && parens === 0) {
+      parts.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function destructuredPropsFor(source: string, componentName: string): Array<{
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+}> {
+  const escapedName = componentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const declarations = [
+    new RegExp(`\\bfunction\\s+${escapedName}\\s*\\(`),
+    new RegExp(`\\b(?:const|let)\\s+${escapedName}(?:\\s*:[^=]+)?\\s*=\\s*(?:async\\s*)?\\(`),
+  ];
+  let params = "";
+  for (const declaration of declarations) {
+    const match = declaration.exec(source);
+    if (!match) continue;
+    const openParen = source.indexOf("(", match.index);
+    const closeParen = matchingDelimiter(source, openParen, "(", ")");
+    if (closeParen > openParen) params = source.slice(openParen + 1, closeParen).trim();
+    if (params) break;
+  }
+  const openBrace = params.indexOf("{");
+  if (openBrace < 0) return [];
+  const closeBrace = matchingDelimiter(params, openBrace, "{", "}");
+  if (closeBrace < 0) return [];
+
+  const props = [];
+  for (const raw of splitTopLevel(params.slice(openBrace + 1, closeBrace))) {
+    const token = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/g, "").trim();
+    if (!token || token.startsWith("...")) continue;
+    const nameMatch = /^([A-Za-z_$][\w$]*)(\?)?/.exec(token);
+    if (!nameMatch) continue;
+    const name = nameMatch[1];
+    props.push({
+      name,
+      type: "source-inferred",
+      description: `Source-defined ${componentName} input '${name}' used by the component's rendering or behavior.`,
+      required: !nameMatch[2] && !token.includes("="),
+    });
+  }
+  return props;
+}
+
+function humanizeIdentifier(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
+}
+
+function applyReactSourceFacts(element: SemanticElement, source: string): void {
+  const inputs = destructuredPropsFor(source, element.name);
+  const events = new Set<string>();
+  for (const match of source.matchAll(/\bon([A-Z][A-Za-z0-9_]*)\s*=/g)) events.add(match[1].toLowerCase());
+  const semanticText = `${element.name} ${source.match(/className\s*=\s*["'`]([^"'`]*)/)?.[1] ?? ""}`.toLowerCase();
+  const pattern: NonNullable<SemanticElement["layout_semantics"]>["pattern"] =
+    /dialog|modal/.test(semanticText) ? "dialog" :
+      /toolbar|actions?/.test(semanticText) ? "toolbar" :
+        /grid/.test(semanticText) ? "grid" :
+          /table|list/.test(semanticText) ? "table" :
+            /inspector|details?/.test(semanticText) ? "inspector" :
+              /shell|workspace|app(?:lication)?/.test(semanticText) ? "shell" :
+                /split|sidebar|resiz/.test(semanticText) ? "split_view" : "stack";
+  const rootTag = source.match(/<([a-z][A-Za-z0-9-]*)\b/)?.[1] ?? "region";
+
+  element.data_contract = {
+    inputs,
+    outputs: [{
+      name: "rendered_view",
+      type: "ui",
+      description: `${element.name} renders a ${rootTag}-rooted interface from its source-defined inputs and local state.`,
+      trigger: "render",
+    }],
+  };
+  element.interactions = [...events].map((event) => ({
+    action: event,
+    description: `${element.name} handles the source-declared ${event} interaction.`,
+  }));
+  element.category = events.size > 0 ? "composite" : "data_display";
+  element.visual_semantics = {
+    visual_role: `${humanizeIdentifier(element.name)} interface`,
+    emphasis: "secondary",
+    density: "comfortable",
+    chrome: pattern === "shell" ? "full_shell" : pattern === "dialog" ? "panel" : "embedded",
+    state_styling: [],
+  };
+  element.layout_semantics = {
+    pattern,
+    alignment: /justify-content\s*:\s*(?:space-between|space-around)|justify-between/.test(source) ? "distributed" : "leading",
+    sizing_behavior: /width\s*:\s*100%|flex\s*:\s*1|w-full|h-full/.test(source) ? "fill_parent" : "fluid",
+    responsive_behavior: /overflow|scroll/.test(source) ? ["scroll"] : ["wrap"],
+    hierarchy: [{ region: rootTag, role: "primary" }],
+  };
+  element.description = `${element.name} is a React UI component whose ${rootTag}-rooted view renders ${inputs.length > 0 ? `from ${inputs.length} source-defined input${inputs.length === 1 ? "" : "s"}` : "from local or contextual state"}. ` +
+    `${events.size > 0 ? `It handles ${[...events].join(", ")} interactions` : "It is source-evidenced as a passive rendering surface"} and participates in a ${pattern.replace("_", " ")} layout. ` +
+    "Its scanner-derived contract and composition links provide grounded structure for deeper LLM enrichment.";
+  element.purpose = `${humanizeIdentifier(element.name)} UI surface`;
+  element.intent = `Present and operate the ${humanizeIdentifier(element.name)} user-facing responsibility through the inputs, interactions, and composition evidenced in its React source.`;
+}
+
 // ---------------------------------------------------------------------------
 // Single-file-component frameworks (Vue / Svelte / Razor / XAML)
 // ---------------------------------------------------------------------------
@@ -154,9 +304,18 @@ function buildElement(args: {
   return {
     id,
     name: componentName,
+    description: `${componentName} is a ${framework} UI component implemented in ${file.rel}; its source is the evidence boundary for semantic enrichment of behavior, data contract, appearance, and layout.`,
     purpose: `${framework} component '${componentName}' detected by scanner in ${file.rel}. Enrich for narrative description.`,
     category: "composite",
-    data_contract: { inputs: [], outputs: [] },
+    data_contract: {
+      inputs: [],
+      outputs: [{
+        name: "rendered_view",
+        type: "ui",
+        description: `${componentName} renders the ${framework} interface defined by ${file.rel}.`,
+        trigger: "render",
+      }],
+    },
     interactions: [],
     implementations: [
       {
@@ -166,10 +325,27 @@ function buildElement(args: {
       },
     ],
     used_by: [],
+    children: [],
     tags: ["scanner", framework],
     source_kind: "scanner",
     source_repo: repoName,
     source_file: file.rel,
+    evidence_refs: [file.rel],
+    intent: `Represent the ${humanizeIdentifier(componentName)} user-facing responsibility defined by the ${framework} source component.`,
+    visual_semantics: {
+      visual_role: `${humanizeIdentifier(componentName)} interface`,
+      emphasis: "secondary",
+      density: "comfortable",
+      chrome: "embedded",
+      state_styling: [],
+    },
+    layout_semantics: {
+      pattern: "flow",
+      alignment: "leading",
+      sizing_behavior: "fluid",
+      responsive_behavior: ["wrap"],
+      hierarchy: [{ region: "content", role: "primary" }],
+    },
   };
 }
 
@@ -178,6 +354,7 @@ async function extractFromFile(
   file: ScannedFile,
   framework: Framework,
   diagnostics: UiScanDiagnostic[],
+  sourceByFile: Map<string, string>,
 ): Promise<SemanticElement[]> {
   if (framework === "react") {
     let source: string;
@@ -191,6 +368,7 @@ async function extractFromFile(
       });
       return [];
     }
+    sourceByFile.set(file.rel, source);
     const names = extractReactComponentNames(source);
     if (names.length === 0) {
       // Fall back to filename if it looks like a component; many React
@@ -199,9 +377,15 @@ async function extractFromFile(
       // coverage high without hallucinating arbitrary identifiers.
       const stemName = componentNameFromFile(file);
       if (!stemName) return [];
-      return [buildElement({ repoName, file, framework, componentName: stemName })];
+      const fallback = buildElement({ repoName, file, framework, componentName: stemName });
+      applyReactSourceFacts(fallback, source);
+      return [fallback];
     }
-    return names.map((name) => buildElement({ repoName, file, framework, componentName: name }));
+    return names.map((name) => {
+      const element = buildElement({ repoName, file, framework, componentName: name });
+      applyReactSourceFacts(element, source);
+      return element;
+    });
   }
 
   // Single-file-component frameworks: filename is the component.
@@ -233,11 +417,12 @@ export async function extractNativeUiElements(scan: ProjectScan): Promise<Native
 
   const seenIds = new Set<string>();
   const elements: SemanticElement[] = [];
+  const sourceByFile = new Map<string, string>();
   for (const file of candidates) {
     const framework = frameworkFor(file)!;
     let perFile: SemanticElement[];
     try {
-      perFile = await extractFromFile(scan.repoName, file, framework, quality.diagnostics);
+      perFile = await extractFromFile(scan.repoName, file, framework, quality.diagnostics, sourceByFile);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn(`ui scan: ${framework} extractor failed on ${file.rel}: ${msg}`);
@@ -255,6 +440,49 @@ export async function extractNativeUiElements(scan: ProjectScan): Promise<Native
         seenIds.add(el.id);
         elements.push(el);
       }
+    }
+  }
+
+  // Convert source-evidenced JSX composition into reciprocal graph structure.
+  // Duplicate component names are intentionally not resolved: selecting one
+  // would manufacture an edge without enough source evidence.
+  const idsByName = new Map<string, string[]>();
+  for (const element of elements) {
+    const ids = idsByName.get(element.name) ?? [];
+    ids.push(element.id);
+    idsByName.set(element.name, ids);
+  }
+  const elementsById = new Map(elements.map((element) => [element.id, element]));
+  for (const parent of elements) {
+    const source = parent.source_file ? sourceByFile.get(parent.source_file) : undefined;
+    if (!source) continue;
+    const childIds = new Set(parent.children ?? []);
+    for (const match of source.matchAll(/<([A-Z][A-Za-z0-9_]*)\b/g)) {
+      const componentName = match[1];
+      const candidatesForName = idsByName.get(componentName) ?? [];
+      if (candidatesForName.length !== 1) continue;
+      const childId = candidatesForName[0];
+      if (childId === parent.id || childIds.has(childId)) continue;
+      childIds.add(childId);
+      parent.links = [...(parent.links ?? []), {
+        target: childId,
+        type: "ui_element",
+        relationship: "composes",
+        description: `${parent.name} renders ${componentName} in ${parent.source_file}.`,
+        strength: "strong",
+        meta: {
+          selected_by: "native-ui-scanner",
+          evidence_excerpt: `<${componentName}`,
+          source_file: parent.source_file,
+        },
+      }];
+      const child = elementsById.get(childId);
+      if (child && !child.used_by.includes(parent.id)) child.used_by.push(parent.id);
+    }
+    parent.children = [...childIds];
+    if (childIds.size > 0) {
+      const childNames = [...childIds].map((id) => elementsById.get(id)?.name ?? id);
+      parent.description = `${parent.description} It composes ${childNames.join(", ")} as source-evidenced child UI.`;
     }
   }
 

@@ -96,8 +96,12 @@ function collect(): { events: GraphEvent[]; off: () => void } {
   return { events, off };
 }
 
-async function flush(): Promise<void> {
-  await new Promise((r) => setTimeout(r, 50));
+async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await predicate())) {
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeoutMs}ms waiting for plugin activation output`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 beforeEach(async () => {
@@ -138,7 +142,7 @@ describe("plugin policy seam (M6 closure)", () => {
     const { events, off } = collect();
     try {
       await bootstrapPlugins();
-      await flush();
+      await waitUntil(async () => (await readProposals()).length === 1);
       const proposals = await readProposals();
       expect(proposals.length).toBe(1);
       expect(proposals[0].proposal_id).toBe("examples.policy-ok:no-undeclared-write");
@@ -170,7 +174,10 @@ describe("plugin policy seam (M6 closure)", () => {
     const { events, off } = collect();
     try {
       await bootstrapPlugins();
-      await flush();
+      await waitUntil(() => events.some(
+        (e) => e.kind === "plugin.output.rejected" &&
+          (e.payload as { reason?: string })?.reason === "policy_capability_missing",
+      ));
       expect((await readProposals()).length).toBe(0);
       const rej = events.find(
         (e) =>
@@ -199,7 +206,10 @@ describe("plugin policy seam (M6 closure)", () => {
     const { events, off } = collect();
     try {
       await bootstrapPlugins();
-      await flush();
+      await waitUntil(() => events.some(
+        (e) => e.kind === "plugin.output.rejected" &&
+          (e.payload as { reason?: string })?.reason === "policy_weakening_rejected",
+      ));
       expect((await readProposals()).length).toBe(0);
       const rej = events.find(
         (e) =>
@@ -226,7 +236,7 @@ describe("plugin policy seam (M6 closure)", () => {
     );
     vi.spyOn(lifecycle, "getActiveScope").mockReturnValue(scope);
     await bootstrapPlugins();
-    await flush();
+    await waitUntil(async () => (await readProposals()).length === 1);
     expect((await readProposals()).length).toBe(1);
     await unloadPluginById("examples.policy-prune", "disable");
     expect((await readProposals()).length).toBe(0);

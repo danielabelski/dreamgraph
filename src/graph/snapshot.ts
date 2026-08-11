@@ -28,6 +28,7 @@ import type {
   DataModelEntity,
   CapabilityEntity,
   Datastore,
+  AuxiliaryEntity,
   GraphLink,
 } from "../types/index.js";
 
@@ -160,6 +161,12 @@ function buildSnapshot(raw: GraphRawSnapshot): GraphSnapshot {
   for (const ds of (raw.datastores ?? []) as Datastore[]) {
     if (ds?.id) pushSeedNode(nodes, ds.id, "datastore", ds.name ?? ds.id);
   }
+  // Auxiliary scanner entities (tests, configuration, scripts, MCP tools)
+  // share the Explorer's capability presentation while retaining their full
+  // record and semantic links in the backing graph.
+  for (const auxiliary of (raw.auxiliary ?? []) as AuxiliaryEntity[]) {
+    if (auxiliary?.id) pushSeedNode(nodes, auxiliary.id, "capability", auxiliary.name ?? auxiliary.id);
+  }
 
   // ---- UI registry nodes (only entries with source_repo provenance) ----
   // Indexable UI elements are first-class graph citizens (per ui-index gate).
@@ -208,6 +215,8 @@ function buildSnapshot(raw: GraphRawSnapshot): GraphSnapshot {
   for (const w of raw.workflows as Workflow[]) ingestLinks(edges, nodes, w);
   for (const d of raw.dataModel as DataModelEntity[]) ingestLinks(edges, nodes, d);
   for (const c of raw.capabilities as CapabilityEntity[]) ingestLinks(edges, nodes, c);
+  for (const ds of (raw.datastores ?? []) as Datastore[]) ingestLinks(edges, nodes, ds);
+  for (const auxiliary of (raw.auxiliary ?? []) as AuxiliaryEntity[]) ingestLinks(edges, nodes, auxiliary);
 
   // ---- UI registry fact edges ----
   // `used_by` / `children` / `flows` are the registry's evidence-bound
@@ -215,6 +224,7 @@ function buildSnapshot(raw: GraphRawSnapshot): GraphSnapshot {
   // seeded, so UI nodes cannot synthesize ghost facts for unknown ids.
   for (const ui of raw.uiElements ?? []) {
     if (!ui?.id) continue;
+    ingestLinks(edges, nodes, ui);
     for (const target of ui.used_by ?? []) pushEdge(edges, nodes, ui.id, target, "fact", 1);
     for (const target of ui.children ?? []) pushEdge(edges, nodes, ui.id, target, "fact", 1);
     for (const target of ui.flows ?? []) pushEdge(edges, nodes, ui.id, target, "fact", 1);

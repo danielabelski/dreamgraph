@@ -61,6 +61,7 @@ Options:
       --output-schema <PATH>                  Validate final output schema
       --skip-git-repo-check                   Run outside a git worktree
       --ignore-user-config                    Do not load user config
+      --ignore-rules                          Do not load repository rule files
       --ephemeral                             Avoid persistence
       --full-auto                             Deprecated compatibility flag
       --dangerously-bypass-approvals-and-sandbox, --yolo
@@ -87,6 +88,7 @@ Options:
       --output-schema <PATH>                  Validate final output schema
       --skip-git-repo-check                   Run outside a git worktree
       --ignore-user-config                    Do not load user config
+      --ignore-rules                          Do not load repository rule files
       --ephemeral                             Avoid persistence
 `;
 
@@ -114,6 +116,7 @@ test("help-probe: parses Codex root and exec surfaces", () => {
   assert.equal(FULL_SURFACE.exec.outputSchema, true);
   assert.equal(FULL_SURFACE.exec.skipGitRepoCheck, true);
   assert.equal(FULL_SURFACE.exec.ignoreUserConfig, true);
+  assert.equal(FULL_SURFACE.exec.ignoreRules, true);
   assert.equal(FULL_SURFACE.exec.ephemeral, true);
   assert.deepEqual(
     [...FULL_SURFACE.safety.sandboxModes],
@@ -360,6 +363,17 @@ test("argv: emits authoritative codex exec shape with stdin positional dash", ()
   assert.equal(plan.policy.promptSource, "stdin-positional-dash");
   assert.equal(plan.policy.jsonEventsEnabled, true);
   assert.deepEqual([...plan.policy.addedDirs], ["C:\\repo\\.tmp\\run"]);
+});
+
+test("argv: gives GPT-5.6 Codex models xhigh reasoning by default", () => {
+  const plan = buildCodexArgv({
+    workspace: "C:\\repo",
+    model: "gpt-5.6-sol",
+    helpSurface: FULL_SURFACE,
+  });
+  assert.ok(plan.args.includes("--model"));
+  assert.ok(plan.args.includes("gpt-5.6-sol"));
+  assert.ok(plan.args.includes('model_reasoning_effort="xhigh"'));
 });
 
 test("argv: omits ask-for-approval when Codex exec does not advertise it", () => {

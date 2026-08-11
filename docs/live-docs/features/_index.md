@@ -525,3 +525,111 @@
 | persistence_isolation_barrier | Persistence Isolation Barrier | cognitive | discovered | dreamgraph |
 | cross_domain_bridge | Cross-Domain Bridge | cognitive | discovered | dreamgraph |
 | dream_cycle_audit | Dream Cycle Audit | cognitive | discovered | dreamgraph |
+| speculative_connection_strategy | Speculative Connection Strategy | cognitive | discovered | dreamgraph |
+| fact_snapshot_assembly | Fact Snapshot Assembly | graph | discovered | dreamgraph |
+| rem_output_quarantine | REM Output Quarantine | cognitive | discovered | dreamgraph |
+| strategy_portfolio_manager | Strategy Portfolio Manager | cognitive | discovered | dreamgraph |
+| cross_layer_protocol_adapter | Cross-Layer Protocol Adapter | plugin-system | discovered | dreamgraph |
+| cognitive_dream_strategy_registry | Cognitive Dream Strategy Registry | cognitive | discovered | dreamgraph |
+| tool_usage_metrics | Tool Usage Metrics | monitoring | discovered | dreamgraph |
+| strategy_selection_engine | Strategy Selection Engine | cognitive | discovered | dreamgraph |
+| cross_domain_enrichment | Cross-Domain Enrichment | graph | discovered | dreamgraph |
+| strategy_selection_coordinator | Dream Strategy Selection Coordinator | cognitive | discovered | dreamgraph |
+| llm_bootstrap_fingerprint_guard | LLM Bootstrap Fingerprint Guard | cognitive | discovered | dreamgraph |
+| ui_llm_integration | UI-LLM Integration Interface | ui | discovered | dreamgraph |
+| llm_provider_credential_management | LLM Provider Credential Management | core | discovered | dreamgraph |
+| strategy_yield_tracking | Strategy Yield Tracking | cognitive | discovered | dreamgraph |
+| dreamer_strategy_suite | Dreamer Strategy Suite | cognitive | discovered | dreamgraph |
+| dream_archetype | Dream Archetype | cognitive | discovered | dreamgraph |
+| strategy_registry | Strategy Registry | cognitive | discovered | dreamgraph |
+| cognitive_strategy_suite | Cognitive Strategy Suite | cognitive | discovered | dreamgraph |
+| bootstrap_guardrail | Bootstrap Guardrail | data-processing | discovered | dreamgraph |
+| cross_module_type_integration | Cross-Module Type Integration | core | discovered | dreamgraph |
+| protocol_boundary | Webview Protocol Boundary | ui | discovered | dreamgraph |
+| protocol_layer | Protocol Layer | core | discovered | dreamgraph |
+| discipline_tool_enforcement | Discipline Tool Enforcement | plugin-system | discovered | dreamgraph |
+| federated_pattern_exchange | Federated Pattern Exchange | cognitive | discovered | dreamgraph |
+| semantic_ui_archetype | Semantic UI Archetype | ui | discovered | dreamgraph |
+| instance_bootstrap_guardrail | Instance Bootstrap Guardrail | cognitive | discovered | dreamgraph |
+| discipline_mcp_abstraction | Discipline MCP Abstraction | core | discovered | dreamgraph |
+| context_cache | Context Cache Abstraction | core | discovered | dreamgraph |
+| bootstrap_fingerprint_lifecycle | Bootstrap Fingerprint Lifecycle | cognitive | discovered | dreamgraph |
+| semantic_persistence_layer | Semantic Persistence Layer | core | discovered | dreamgraph |
+| semantic_discipline_manifest | Semantic Discipline Manifest | core | discovered | dreamgraph |
+| attachment_verification_overlay | Attachment Verification Overlay | ui | discovered | dreamgraph |
+| bootstrap_fingerprint_guardrail | Bootstrap Fingerprint Guardrail | cognitive | discovered | dreamgraph |
+| discipline_manifest_runtime_contract | Discipline Manifest Runtime Contract | plugin-system | discovered | dreamgraph |
+| mcp_resource_registry | MCP Resource Registry | core | discovered | dreamgraph |
+| cross_instance_isolation_boundary | Cross-Instance Isolation Boundary | instance | discovered | dreamgraph |
+| discipline_manifest_protocol | Discipline Manifest Protocol | core | discovered | dreamgraph |
+| mcp_tool_surface | MCP Tool Surface | plugin-system | discovered | dreamgraph |
+| federated_bootstrap_guard | Federated Bootstrap Guard | cognitive | discovered | dreamgraph |
+| discipline_policy_enforcement | Discipline Policy Enforcement Layer | core | discovered | dreamgraph |
+| webview_context_integration | Webview-Context Data Integration | ui | discovered | dreamgraph |
+| instance_policy_boundary | Instance Policy Boundary | instance | discovered | dreamgraph |
+| atomic_file_operations | Atomic File Operations | infrastructure | discovered | dreamgraph |
+| llm_route_selection | LLM Route Selection | cognitive | discovered | dreamgraph |
+| snapshot_version_enforcement | Snapshot Version Enforcement | infrastructure | discovered | dreamgraph |
+| instance_scope_manager | Instance Scope Manager | instance | discovered | dreamgraph |
+| instance_scope_boundary | Instance Scope Boundary | instance | discovered | dreamgraph |
+| instance_isolation_boundary | Instance Isolation Boundary | core | discovered | dreamgraph |
+| archetype_integration_layer | Archetype Integration Layer | cognitive | discovered | dreamgraph |
+| discipline_runtime_policy_enforcement | Discipline Runtime Policy Enforcement | core | discovered | dreamgraph |
+| webview_entity_state_reflection | Webview Entity State Reflection | ui | discovered | dreamgraph |
+| mcp_tool_integration_layer | MCP Tool Integration Layer | core | discovered | dreamgraph |
+| tool_registry_contract | Tool Registry Contract | core | discovered | dreamgraph |
+| plugin_tool_traceability | Plugin Tool Traceability | plugin-system | discovered | dreamgraph |
+| mcp_tool_registration | MCP Tool Registration Pattern | core | discovered | dreamgraph |
+| cross_instance_pattern_sharing | Cross-Instance Pattern Sharing | cognitive | discovered | dreamgraph |
+| discipline_manifest_policy_enforcement | Discipline Manifest and Policy Enforcement | plugin | discovered | dreamgraph |
+| cognitive_bootstrap_guard | Cognitive Bootstrap Guard | cognitive | discovered | dreamgraph |
+| discipline_manifest_authority | Discipline Manifest Authority | discipline | discovered | dreamgraph |
+| federated_cognitive_archetype_exchange | Federated Cognitive Archetype Exchange | cognitive | discovered | dreamgraph |
+| federated_archetype_exchange_hub | Federated Archetype Exchange Hub | cognitive | discovered | dreamgraph |
+| tool_trace_audit_log | Tool Trace Audit Log | core | discovered | dreamgraph |
+| mcp_contextual_fetch_surface | MCP Contextual Fetch Surface | core | discovered | dreamgraph |
+| instance_boundary_contract | Instance Boundary Contract | instance | discovered | dreamgraph |
+| discipline_manifest_contract | Discipline Manifest Contract | discipline | discovered | dreamgraph |
+| semantic_ui_migration_planner | Semantic UI Migration Planner | ui | discovered | dreamgraph |
+| snapshot_compatibility_gate | Snapshot Compatibility Gate | graph | discovered | dreamgraph |
+| semantic_ui_migration_planning | Semantic UI Migration Planning | ui | discovered | dreamgraph |
+| ui_migration_planning | UI Migration Planning | ui | discovered | dreamgraph |
+| ui_migration_planner | UI Migration Planner | ui | discovered | dreamgraph |
+| discipline_enforcement_hub | Discipline Enforcement Hub | discipline | discovered | dreamgraph |
+| discipline_guardrail_layer | Discipline Guardrail Layer | discipline | discovered | dreamgraph |
+| semantic_ui_migration | Semantic UI Migration Planning | ui | discovered | dreamgraph |
+| snapshot_compatibility_guard | Snapshot Compatibility Guard | ui | discovered | dreamgraph |
+| ui_migration_llm_planner | UI Migration LLM Planner | ui | discovered | dreamgraph |
+| standalone_architect_daemon_routes | Standalone Architect Daemon Routes | architect | active | dreamgraph |
+| feature_architect_governed_tool_obligation_recovery | Architect governed tool obligation recovery | core | active | dreamgraph |
+| api_interaction_middleware | API Interaction Middleware | api_management | discovered | dreamgraph |
+| validated_archetype_integrator | Federated Archetype Integrator | cognitive | discovered | dreamgraph |
+| ui_cognitive_enricher | UI Cognitive Enrichment Adapter | ui | discovered | dreamgraph |
+| validation_integrator | Truth-Model Validation Integrator | core | discovered | dreamgraph |
+| context_cache_coordinator | Context Cache Coordinator | core | discovered | dreamgraph |
+| plugin_ui_element_abstraction | Plugin UI Element Abstraction | plugin-system | discovered | dreamgraph |
+| plugin_ui_diff_mediator | Plugin-UI Migration Diff Mediator | core | discovered | dreamgraph |
+| extension_graph_contract | Extension-Graph Data Contract | plugin-system | discovered | dreamgraph |
+| platform_agnostic_ui_design | Platform-Agnostic UIDefinition Strategy | ui | discovered | dreamgraph |
+| core_registry_event_coherence | Registry and Event Logging Coherence Contract | core | discovered | dreamgraph |
+| federated_archetype_lifecycle | Federated Archetype Lifecycle and Synchronization Policy | cognitive | discovered | dreamgraph |
+| user_ui_sync_registrar | User–UI Synchronization Registry | ui | discovered | dreamgraph |
+| graph_snapshot_live_events_coupler | Graph Snapshot Live Events Pipeline | graph | discovered | dreamgraph |
+| context_driven_deep_insight_orchestrator | Context-Driven Deep Insight Orchestrator | core | discovered | dreamgraph |
+| cognitive_event_handoff | Cognitive↔Event Handoff Bridge | core | discovered | dreamgraph |
+| api_graph_sync_validator | API↔Graph Integrity Validation | core | discovered | dreamgraph |
+| ui_migration_plan_hub | UI Migration Plan Hub | ui | discovered | dreamgraph |
+| semantic_archetype_exchange | Federated Semantic Archetype Exchange | cognitive | discovered | dreamgraph |
+| plugin_security_mediation | Plugin Security Mediation Layer | plugin-system | discovered | dreamgraph |
+| ui_element_data_contract | UI Element Data Contract Integration | ui | discovered | dreamgraph |
+| semantic_registry_writer | Semantic Registry Writer | ui | discovered | dreamgraph |
+| semantic_bridge_between_ui_and_cognitive_dreaming | Semantic Bridge Between UI and Cognitive Dreaming | core | discovered | dreamgraph |
+| graph_api_validation | Graph API Validation Layer | graph | discovered | dreamgraph |
+| ui_semantic_intent_adapter | UI Semantic Intent Adapter | ui | discovered | dreamgraph |
+| instance_bootstrap_safety_guard | Instance Bootstrap Safety Guard | cognitive | discovered | dreamgraph |
+| bootstrap_audit_ledger | Bootstrap Audit Ledger | core | discovered | dreamgraph |
+| federated_ui_pattern_exchange | Federated UI Pattern Exchange | ui | discovered | dreamgraph |
+| graph_snapshot_safety_controller | Graph Snapshot Safety Controller | data_management | discovered | dreamgraph |
+| decoupled_ui_manifest | Decoupled UI Manifest | ui | discovered | dreamgraph |
+| contamination_prevention_guard | Contamination Prevention Guard | testing | discovered | dreamgraph |
+| distributed_ui_sync | Distributed UI Registry Synchronization Channel | ui | discovered | dreamgraph |

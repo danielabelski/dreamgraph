@@ -4,7 +4,7 @@
  * Provides helpers used by scan_project to perform first-scan bootstrapping:
  *   1. Detect whether the instance has been scanned yet (isFreshInstance)
  *   2. Discover and record Architecture Decision Records via LLM
- *   3. Schedule follow-up dream cycles
+ *   3. Refresh all model-derived graph knowledge on demand
  *
  * These are NOT triggered automatically on daemon start — the user must
  * configure their LLM provider first, then run `dg scan <instance>`.
@@ -21,6 +21,7 @@ import { loadJsonArray } from "../utils/cache.js";
 import { hasSchemaField } from "../utils/json-store.js";
 import { getActiveScope } from "./lifecycle.js";
 import { runScanProject } from "../tools/scan-project.js";
+import { enrichParserNodesProgrammatic } from "../tools/enrich-parser-nodes.js";
 import { recordADR, getADRCount } from "../tools/adr-historian.js";
 import { createSchedule } from "../cognitive/scheduler.js";
 import { getLlmProvider, getDreamerLlmConfig, isLlmAvailable } from "../cognitive/llm.js";
@@ -330,7 +331,10 @@ export async function scheduleFollowUpDreams(): Promise<void> {
  * The scan_project tool handles ADR discovery and follow-up scheduling
  * as Phase 4 and Phase 5.
  */
-export async function bootstrapNewInstance(): Promise<void> {
+export async function bootstrapNewInstance(options: {
+  force?: boolean;
+  onProgress?: (message: string, step: number, total: number) => void;
+} = {}): Promise<void> {
   // Must have repos configured — otherwise there's nothing to scan
   const repoCount = Object.keys(config.repos).length;
   if (repoCount === 0) {
@@ -339,48 +343,42 @@ export async function bootstrapNewInstance(): Promise<void> {
   }
 
   const fresh = await isFreshInstance();
-  if (!fresh) {
+  if (!fresh && !options.force) {
     logger.debug("[bootstrap] Instance already has seed data — skipping auto-scan");
     return;
   }
 
   const scope = getActiveScope();
   const tag = scope ? ` [${scope.uuid.slice(0, 8)}]` : "";
-  const repoName = Object.keys(config.repos)[0] ?? "unknown";
   logger.info(`[bootstrap]${tag} Fresh instance detected — starting auto-scan…`);
 
   try {
-    // Phase 1-3: scan + LLM enrichment + auto-dream
+    // runScanProject owns the complete pipeline: scan, mandatory graph-wide
+    // enrichment, dreaming, ADR discovery, and follow-up scheduling. Keeping a
+    // single owner avoids repeating expensive LLM work during `dg bootstrap`.
     const result = await runScanProject({
       depth: "deep",
       onProgress: (message, step, total) => {
         logger.info(`[bootstrap] [${step}/${total}] ${message}`);
+        options.onProgress?.(message, step, total);
       },
     });
 
     logger.info(
       `[bootstrap]${tag} Auto-scan complete: ${result.message}`,
     );
-
-    // Phase 4: ADR discovery from seed data
-    logger.info(`[bootstrap]${tag} Phase 4 — discovering architecture decisions…`);
-    const adrsRecorded = await discoverAndRecordADRs(repoName);
-    if (adrsRecorded > 0) {
-      const totalADRs = await getADRCount();
-      logger.info(
-        `[bootstrap]${tag} ADR discovery complete: ${adrsRecorded} decisions recorded (${totalADRs} total)`,
+    if (result.semantic_enrichment?.semantic_coverage.complete !== true) {
+      throw new Error(
+        `scan completed without full semantic coverage (` +
+        `${result.semantic_enrichment?.semantic_coverage.llm_enriched ?? 0}/` +
+        `${result.semantic_enrichment?.semantic_coverage.total_nodes ?? 0} nodes)`,
       );
-    } else {
-      logger.info(`[bootstrap]${tag} No ADRs discovered (LLM unavailable or no seed data)`);
     }
-
-    // Phase 5: Schedule follow-up dreams to deepen the graph
-    await scheduleFollowUpDreams();
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`[bootstrap]${tag} Auto-scan failed: ${msg}`);
-    // Non-fatal — the daemon continues normally, user can scan manually
+    throw err;
   }
 }
 
@@ -393,6 +391,8 @@ export interface ReEnrichmentResult {
   reason: string;
   adrs_recorded: number;
   total_adrs: number;
+  nodes_enriched: number;
+  semantic_complete: boolean;
 }
 
 /**
@@ -400,14 +400,16 @@ export interface ReEnrichmentResult {
  *
  * ADR-098 guard rail #2 forbids a full rescan on fingerprint rotation
  * (provider/model/endpoint change). This helper refreshes the parts of the
- * graph whose semantics are LLM-derived — currently the auto-discovered
- * ADRs — using the now-current model. Existing seed-data entity ids are
- * left untouched (guard rail #3); a future expansion may also re-derive
- * descriptions/keywords/links for existing entities.
+ * graph whose semantics are LLM-derived: descriptions, intent, UI knowledge,
+ * multi-hop relations, and auto-discovered ADRs. Existing seed-data entity
+ * ids are left untouched (guard rail #3).
  *
  * Safe to invoke from anywhere; non-fatal on failure.
  */
-export async function runReEnrichment(repoName?: string): Promise<ReEnrichmentResult> {
+export async function runReEnrichment(
+  repoName?: string,
+  onProgress?: (message: string, batch: number) => void,
+): Promise<ReEnrichmentResult> {
   const scope = getActiveScope();
   const tag = scope ? ` [${scope.uuid.slice(0, 8)}]` : "";
   const repo = repoName ?? Object.keys(config.repos)[0] ?? "unknown";
@@ -419,11 +421,24 @@ export async function runReEnrichment(repoName?: string): Promise<ReEnrichmentRe
       reason: "instance is fresh; nothing to re-enrich (run full bootstrap)",
       adrs_recorded: 0,
       total_adrs: await getADRCount(),
+      nodes_enriched: 0,
+      semantic_complete: false,
     };
   }
 
-  logger.info(`[re-enrich]${tag} Refreshing model-derived metadata (ADR discovery)…`);
+  logger.info(`[re-enrich]${tag} Refreshing graph-wide model-derived knowledge…`);
   try {
+    const enrichment = await enrichParserNodesProgrammatic({
+      target: "all",
+      maxNodes: Number.MAX_SAFE_INTEGER,
+      batchSize: Math.max(1, Math.min(20, Number(process.env.DREAMGRAPH_ENRICHMENT_BATCH_SIZE) || 12)),
+      force: true,
+      contextHops: 3,
+      relationContextSize: 40,
+      modelSource: "auto",
+      onProgress,
+    });
+    if (!enrichment.success) throw new Error(enrichment.error.message);
     const recorded = await discoverAndRecordADRs(repo);
     const total = await getADRCount();
     logger.info(
@@ -434,6 +449,8 @@ export async function runReEnrichment(repoName?: string): Promise<ReEnrichmentRe
       reason: "ok",
       adrs_recorded: recorded,
       total_adrs: total,
+      nodes_enriched: enrichment.data.semantic_coverage.llm_enriched,
+      semantic_complete: enrichment.data.semantic_coverage.complete,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -443,6 +460,8 @@ export async function runReEnrichment(repoName?: string): Promise<ReEnrichmentRe
       reason: `failed: ${msg}`,
       adrs_recorded: 0,
       total_adrs: await getADRCount().catch(() => 0),
+      nodes_enriched: 0,
+      semantic_complete: false,
     };
   }
 }

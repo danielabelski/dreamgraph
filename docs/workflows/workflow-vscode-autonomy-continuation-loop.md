@@ -1,9 +1,26 @@
 # VS Code Autonomy Continuation Loop
 
+> Auto-generated primary workflow doc. Canonical structured source: data/workflows.json.
+
 > After each Architect pass, the extension broadcasts visible autonomy status, parses the structured continuation envelope, and may self-continue according to the selected mode and remaining pass/time budget. Header dropdown selections are persisted before later settings-sync paths rebuild autonomy state.
 
 **Trigger:** A user submits an Architect chat turn, selects an autonomy mode from the chat header, or an eligible continuation pass completes.  
 **Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/autonomy-loop.ts, extensions/vscode/src/autonomy.ts, extensions/vscode/src/reporting.ts, extensions/vscode/src/test/slice5-ui.test.ts, docs/workflows/workflow-vscode-autonomy-continuation-loop.md  
+
+## Flowchart
+
+```mermaid
+flowchart TD
+    S1["Resolve configured autonomy state"]
+    S2["Persist header mode selection"]
+    S1 --> S2
+    S3["Broadcast visible counters"]
+    S2 --> S3
+    S4["Analyze pass outcome"]
+    S3 --> S4
+    S5["Continue or pause"]
+    S4 --> S5
+```
 
 ## Steps
 

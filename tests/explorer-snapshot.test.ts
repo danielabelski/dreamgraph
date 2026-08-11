@@ -24,6 +24,7 @@ function emptyRaw(): GraphRawSnapshot {
     workflows: [],
     dataModel: [],
     capabilities: [],
+    auxiliary: [],
     dreamGraph: {
       metadata: {
         description: "",
@@ -112,6 +113,21 @@ describe("Explorer snapshot envelope", () => {
     expect(f1.confidence).toBe(1);
   });
 
+  it("surfaces auxiliary entities and their semantic links", () => {
+    const raw = emptyRaw();
+    raw.features = [{ id: "F1", name: "Login" } as any];
+    raw.auxiliary = [{
+      id: "T1",
+      name: "Login contract test",
+      kind: "test_suite",
+      links: [{ target: "F1", relationship: "verifies", strength: "strong" }],
+    } as any];
+
+    const snap = buildSnapshotForTest(raw);
+    expect(snap.nodes.find((node) => node.id === "T1")).toMatchObject({ type: "capability", degree: 1 });
+    expect(snap.edges).toContainEqual({ s: "T1", t: "F1", kind: "fact", conf: 1 });
+  });
+
   it("registers tensions as nodes and lowers health on linked entities", () => {
     const raw = emptyRaw();
     raw.features = [
@@ -183,7 +199,8 @@ describe("Explorer snapshot envelope", () => {
         source_repo: "myproj",
         used_by: ["F1"],
         children: [],
-        flows: ["W1"],
+        flows: [],
+        links: [{ target: "W1", type: "workflow", relationship: "participates_in", description: "UI participates in login", strength: "weak" }],
       },
       // Unknown-endpoint edges must be silently skipped by pushEdge.
       {

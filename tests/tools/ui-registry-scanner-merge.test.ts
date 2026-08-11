@@ -114,9 +114,10 @@ describe("applyScannerUiElements", () => {
     expect(res.skipped_protected).toBe(0);
 
     const [el] = await readRegistryElements();
-    // Detection-time fields refreshed.
+    // Detection identity refreshes, but semantic knowledge is never replaced
+    // with the scanner's mechanical placeholder during a rescan.
     expect(el.name).toBe("Foo");
-    expect(el.purpose).toContain("detected by scanner");
+    expect(el.purpose).toBe("outdated stub");
     // Tags merged additively.
     expect(el.tags).toEqual(expect.arrayContaining(["scanner", "react", "user-tag"]));
     // Enrichment work preserved.
@@ -124,6 +125,35 @@ describe("applyScannerUiElements", () => {
     expect((el as any).description_raw).toBe("raw human notes");
     expect((el as any).enrichment).toMatchObject({ enriched: true });
     expect((el as any).links).toHaveLength(1);
+  });
+
+  it("repairs structural UI knowledge on deterministic-fallback records", async () => {
+    await writeRegistry([scannerElement({
+      description: "old hollow record",
+      enrichment: { enriched: false, enricher: "enrich_parser_nodes/1.1", model: "deterministic_fallback" },
+    })]);
+    const refreshed = scannerElement({
+      description: "Foo renders source-evidenced information and composes Child for the user workflow.",
+      data_contract: {
+        inputs: [{ name: "items", type: "array", description: "Items to render", required: true }],
+        outputs: [{ name: "rendered_view", type: "ui", description: "Rendered items", trigger: "render" }],
+      },
+      interactions: [{ action: "select", description: "Selects an item" }],
+      children: ["demo.src.Child.Child"],
+      used_by: ["feature.foo"],
+      links: [{ target: "demo.src.Child.Child", type: "ui_element", relationship: "composes", description: "Renders Child", strength: "strong" }],
+      visual_semantics: { visual_role: "item panel", emphasis: "secondary", density: "comfortable", chrome: "panel" },
+      layout_semantics: { pattern: "stack", alignment: "leading", sizing_behavior: "fluid" },
+    });
+
+    await applyScannerUiElements("demo", [refreshed]);
+    const [element] = await readRegistryElements();
+    expect(element.data_contract.inputs).toEqual([expect.objectContaining({ name: "items" })]);
+    expect(element.data_contract.outputs).toEqual([expect.objectContaining({ name: "rendered_view" })]);
+    expect(element.children).toEqual(["demo.src.Child.Child"]);
+    expect(element.links).toEqual([expect.objectContaining({ relationship: "composes" })]);
+    expect(element.visual_semantics?.visual_role).toBe("item panel");
+    expect(element.enrichment?.enriched).toBe(false);
   });
 
   it("skips manual-origin entries and counts them as skipped_protected", async () => {

@@ -112,7 +112,7 @@ Open VS Code settings (`Ctrl+,`) and search for `dreamgraph.architect`:
 | Setting | Purpose |
 |---------|---------|
 | `dreamgraph.architect.provider` | `openai`, `anthropic`, `ollama`, `lmstudio`, `copilot-cli`, or `codex-cli`. |
-| `dreamgraph.architect.model` | Model id (e.g. `gpt-5.5`, `claude-3-5-sonnet`). |
+| `dreamgraph.architect.model` | Model id (e.g. `gpt-5.5`, `gpt-5.6-sol` for Codex CLI, or `claude-opus-4-7`). |
 | `dreamgraph.architect.baseUrl` | Override only when needed (custom proxy, Azure, etc.). |
 | `dreamgraph.architect.openai.reasoningEffort` | GPT-5.5 only: `low`, `medium`, `high`. |
 | `dreamgraph.architect.openai.verbosity` | GPT-5.5 only: text verbosity. |
@@ -155,6 +155,8 @@ Knobs:
 ### Codex CLI (no API key)
 
 Set `dreamgraph.architect.provider` to `codex-cli` to route Architect chat turns through your locally-installed Codex CLI (`codex` binary on `PATH`, or set an absolute path in `dreamgraph.architect.codexCli.command`). This uses your existing Codex login and the same DreamGraph MCP inheritance proxy model as Copilot CLI: the extension validates the live tool registry, injects the audited `dreamgraph` MCP server, and fails closed if graph grounding is unavailable.
+
+The model selector includes `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`. The adapter defaults GPT-5.6-family runs to `xhigh` reasoning effort unless you explicitly override the CLI configuration.
 
 Knobs:
 

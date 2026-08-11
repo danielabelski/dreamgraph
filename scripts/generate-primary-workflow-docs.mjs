@@ -3,7 +3,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const repoRoot = process.cwd();
-const workflowsPath = path.join(repoRoot, 'data', 'workflows.json');
+const workflowsPath = process.env.DREAMGRAPH_DATA_DIR
+  ? path.resolve(process.env.DREAMGRAPH_DATA_DIR, 'workflows.json')
+  : path.join(repoRoot, 'data', 'workflows.json');
 
 const TARGETS = new Map([
   ['workflow_dream_cycle', path.join(repoRoot, 'docs', 'workflows', 'workflow-dream-cycle.md')],
@@ -98,19 +100,26 @@ async function main() {
     return [workflow.id, workflow];
   }));
 
+  let updated = 0;
+  const missing = [];
   for (const [id, filePath] of TARGETS.entries()) {
     const workflow = byId.get(id);
-    if (!workflow) {
-      throw new Error(`Missing structured workflow entry for ${id}`);
-    }
-    if (!workflow.steps.length) {
-      throw new Error(`Workflow ${id} has no steps`);
+    if (!workflow || !workflow.steps.length) {
+      missing.push(id);
+      continue;
     }
     const content = buildDoc(workflow);
     await writeFile(filePath, content, 'utf8');
+    updated += 1;
   }
 
-  console.log(`Updated ${TARGETS.size} primary workflow docs from structured workflow data`);
+  if (updated === 0) {
+    throw new Error(`None of the ${TARGETS.size} primary workflow ids exist with steps in ${workflowsPath}`);
+  }
+  console.log(`Updated ${updated} primary workflow docs from ${workflowsPath}`);
+  if (missing.length > 0) {
+    console.warn(`Skipped ${missing.length} workflow ids not present in the active graph: ${missing.join(', ')}`);
+  }
 }
 
 main().catch((error) => {

@@ -5,7 +5,7 @@
  * The daemon must be running (`dg start <instance>`).
  *
  * Usage:
- *   dg scan <uuid|name> [--depth shallow|deep] [--targets features,workflows,data_model]
+ *   dg scan <uuid|name> [--depth shallow|deep] [--targets features,workflows,data_model,ui]
  */
 
 import { resolve } from "node:path";
@@ -33,7 +33,7 @@ must be started first with 'dg start <instance>'.
 
 Options:
   --depth <shallow|deep>    Scan depth (default: deep)
-  --targets <list>          Comma-separated: features,workflows,data_model
+  --targets <list>          Comma-separated: features,workflows,data_model,ui
   --json                    Output raw JSON result
   --master-dir <path>       Override master directory
 `);
@@ -79,7 +79,12 @@ Options:
   }
 
   try {
-    const result = await mcpCallTool(meta.port, "scan_project", args, 600_000);
+    let lastProgress = "";
+    const result = await mcpCallTool(meta.port, "scan_project", args, 7_200_000, (update) => {
+      if (jsonOutput || !update.message || update.message === lastProgress) return;
+      lastProgress = update.message;
+      console.log(`  ${update.message}`);
+    });
 
     if (jsonOutput) {
       // Raw JSON output
@@ -103,6 +108,10 @@ Options:
         if (d.features) console.log(`  Features:          ${d.features.total ?? 0} (${d.features.inserted ?? 0} new, ${d.features.updated ?? 0} updated)`);
         if (d.workflows) console.log(`  Workflows:         ${d.workflows.total ?? 0} (${d.workflows.inserted ?? 0} new, ${d.workflows.updated ?? 0} updated)`);
         if (d.data_model) console.log(`  Data Model:        ${d.data_model.total ?? 0} (${d.data_model.inserted ?? 0} new, ${d.data_model.updated ?? 0} updated)`);
+        if (d.semantic_enrichment?.semantic_coverage) {
+          const coverage = d.semantic_enrichment.semantic_coverage;
+          console.log(`  Semantic coverage: ${coverage.llm_enriched ?? 0}/${coverage.total_nodes ?? 0}`);
+        }
         console.log(`  Index entries:     ${d.index_entries ?? "?"}`);
         if (d.dream_cycle) {
           console.log(`  Dream edges:       ${d.dream_cycle.edges_created ?? 0} created, ${d.dream_cycle.edges_validated ?? 0} validated`);

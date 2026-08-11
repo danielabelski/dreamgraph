@@ -26,6 +26,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import ignore, { type Ignore } from "ignore";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "../config/config.js";
@@ -40,7 +41,8 @@ import type { LlmMessage } from "../cognitive/llm.js";
 import { dream } from "../cognitive/dreamer.js";
 import { normalize } from "../cognitive/normalizer.js";
 import { engine } from "../cognitive/engine.js";
-import { discoverAndRecordADRs, isFreshInstance, scheduleFollowUpDreams } from "../instance/bootstrap.js";
+import { discoverAndRecordADRs } from "../instance/bootstrap.js";
+import { scheduleTargetedDreamStabilization } from "../cognitive/targeted-dreams.js";
 import type { ProjectScan, ScannedFile } from "./scan-types.js";
 import {
   stripTemplateStubs,
@@ -61,10 +63,19 @@ import { mergeAuxiliaryEntities, loadAuxiliaryEntities } from "./auxiliary-store
 import { extractNativeDataModel, hasNativeCodeFiles } from "./native-data-model.js";
 import { extractNativeUiElements, hasScannableUiFiles } from "./native-ui-scanner.js";
 import { applyScannerUiElements } from "./ui-registry.js";
+import { enrichParserNodesProgrammatic, type EnrichResult } from "./enrich-parser-nodes.js";
+import { runDatastoreScan } from "./db-senses.js";
+import { autoSeedPrimaryDatastore } from "../instance/datastore-bootstrap.js";
+import {
+  captureRepositoryGitHeads,
+  datastoreConnectionFingerprint,
+  updateGraphMaintenanceState,
+} from "../cognitive/graph-maintenance-state.js";
 import type {
   Feature,
   Workflow,
   DataModelEntity,
+  Datastore,
   IndexEntry,
   ResourceIndex,
   GraphLink,
@@ -120,10 +131,13 @@ const UI_FILE_PATTERNS = [
 // back to this orchestrator file.
 export type { ScannedFile, ProjectScan };
 
-async function detectTechnology(repoRoot: string): Promise<string> {
+async function detectTechnology(
+  repoRoot: string,
+  isGitignored: (relativePath: string, directory?: boolean) => boolean = () => false,
+): Promise<string> {
   const techs: string[] = [];
   try {
-    const entries = await fs.readdir(repoRoot);
+    const entries = (await fs.readdir(repoRoot)).filter((entry) => !isGitignored(entry));
     const names = new Set(entries.map(e => e.toLowerCase()));
 
     // .NET / C#
@@ -157,6 +171,33 @@ async function detectTechnology(repoRoot: string): Promise<string> {
   return techs.length > 0 ? techs.join(", ") : "Unknown";
 }
 
+/**
+ * Build the repository-root .gitignore matcher used by every scan phase.
+ * Git paths are always relative POSIX paths; directories include a trailing
+ * slash so directory-only patterns (for example `generated/`) behave exactly
+ * as they do in Git.
+ */
+export async function createRootGitignoreFilter(
+  repoRoot: string,
+): Promise<(relativePath: string, directory?: boolean) => boolean> {
+  let matcher: Ignore | null = null;
+  try {
+    const rules = await fs.readFile(path.join(repoRoot, ".gitignore"), "utf-8");
+    matcher = ignore().add(rules);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      logger.warn(`scan_project: could not read ${path.join(repoRoot, ".gitignore")}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  return (relativePath: string, directory = false): boolean => {
+    if (!matcher) return false;
+    const normalized = relativePath.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+    if (!normalized || normalized === ".") return false;
+    return matcher.ignores(directory && !normalized.endsWith("/") ? `${normalized}/` : normalized);
+  };
+}
+
 async function scanProject(
   repoName: string,
   repoRoot: string,
@@ -172,14 +213,19 @@ async function scanProject(
   };
   const manifestContent: Record<string, string> = {};
   const topLevelDirs: string[] = [];
-  const technology = await detectTechnology(repoRoot);
+  const isGitignored = await createRootGitignoreFilter(repoRoot);
+  const technology = await detectTechnology(repoRoot, isGitignored);
 
   // Collect top-level directories
   try {
     const topEntries = await fs.readdir(repoRoot, { withFileTypes: true });
     for (const e of topEntries) {
       const entryPath = path.join(repoRoot, e.name);
-      if (e.isDirectory() && !shouldSkipScanDirectory({ repoRoot, absDir: entryPath, entryName: e.name })) {
+      if (
+        e.isDirectory() &&
+        !isGitignored(e.name, true) &&
+        !shouldSkipScanDirectory({ repoRoot, absDir: entryPath, entryName: e.name })
+      ) {
         topLevelDirs.push(e.name);
       }
     }
@@ -188,6 +234,7 @@ async function scanProject(
   // Read key manifest files
   for (const manifestName of MANIFEST_FILES) {
     if (manifestName.startsWith("*")) continue; // glob patterns handled below
+    if (isGitignored(manifestName)) continue;
     try {
       const content = await fs.readFile(path.join(repoRoot, manifestName), "utf-8");
       manifestContent[manifestName] = content.slice(0, 4096); // cap size
@@ -199,6 +246,7 @@ async function scanProject(
     const rootEntries = await fs.readdir(repoRoot);
     for (const entry of rootEntries) {
       if (/\.(csproj|sln|fsproj)$/i.test(entry)) {
+        if (isGitignored(entry)) continue;
         try {
           const content = await fs.readFile(path.join(repoRoot, entry), "utf-8");
           manifestContent[entry] = content.slice(0, 4096);
@@ -217,11 +265,16 @@ async function scanProject(
 
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
+      const relEntry = path.relative(repoRoot, entryPath).replace(/\\/g, "/");
       if (entry.isDirectory()) {
-        if (!shouldSkipScanDirectory({ repoRoot, absDir: entryPath, entryName: entry.name })) {
+        if (
+          !isGitignored(relEntry, true) &&
+          !shouldSkipScanDirectory({ repoRoot, absDir: entryPath, entryName: entry.name })
+        ) {
           await walk(entryPath, depth + 1);
         }
       } else if (entry.isFile()) {
+        if (isGitignored(relEntry)) continue;
         const ext = path.extname(entry.name).toLowerCase();
         const abs = entryPath;
         const rel = path.relative(repoRoot, abs).replace(/\\/g, "/");
@@ -470,6 +523,7 @@ async function rebuildIndex(): Promise<number> {
   const features = await loadJsonArray<Feature>("features.json");
   const workflows = await loadJsonArray<Workflow>("workflows.json");
   const dataModel = await loadJsonArray<DataModelEntity>("data_model.json");
+  const datastores = await loadJsonArray<Datastore>("datastores.json");
 
   const entities: Record<string, IndexEntry> = {};
   for (const f of stripTemplateStubs(features)) {
@@ -480,6 +534,9 @@ async function rebuildIndex(): Promise<number> {
   }
   for (const d of stripTemplateStubs(dataModel)) {
     entities[d.id] = { type: "data_model", uri: `dreamgraph://resource/data_model/${d.id}`, name: d.name, source_repo: d.source_repo };
+  }
+  for (const d of stripTemplateStubs(datastores)) {
+    entities[d.id] = { type: "datastore", uri: `dreamgraph://resource/datastore/${d.id}`, name: d.name, source_repo: d.source_repo };
   }
 
   // Slice 1 — first-class UI graph citizens. Only source-bound entries.
@@ -576,6 +633,14 @@ export interface ScanProjectResult {
     total: number;
     by_kind: { test_suite: number; configuration: number; automation_script: number; mcp_tool: number };
   };
+  datastore_scan?: {
+    datastore_id: string;
+    tables_found: number;
+    tables_kept: number;
+    data_models_created: number;
+    data_models_linked: number;
+  };
+  semantic_enrichment?: EnrichResult;
   index_entries: number;
   llm_tokens_used: number;
   dream_cycle?: {
@@ -583,6 +648,12 @@ export interface ScanProjectResult {
     nodes_created: number;
     edges_validated?: number;
     edges_promoted?: number;
+  };
+  targeted_dream_schedules?: {
+    created: number;
+    reused: number;
+    schedule_ids: string[];
+    focus_entities: string[];
   };
   errors: string[];
   message: string;
@@ -658,16 +729,6 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
       partialModeUsed = true;
     }
 
-    const tooLargeForLlm = scan.files.length > 500 || scan.uiFiles.length > 120;
-    if (tooLargeForLlm && requestedMaxDepth > 2) {
-      partialModeUsed = true;
-      errors.push(
-        `Adaptive scan fallback for ${repoName}: large repo (${scan.files.length} source files, ${scan.uiFiles.length} UI files) — using bounded structural scan to avoid timeout.`
-      );
-      progress(`Large repo detected for ${repoName}; using bounded structural scan to avoid timeout…`);
-      scan = await scanProject(repoName, repoRoot, Math.min(2, requestedMaxDepth));
-    }
-
     scans.push(scan);
     logger.info(
       `scan_project: ${repoName} — ${scan.files.length} files, ${scan.uiFiles.length} UI files, ` +
@@ -688,9 +749,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
   const workflowResult = { inserted: 0, updated: 0, total: 0 };
   const dataModelResult = { inserted: 0, updated: 0, total: 0 };
 
-  const repoRequiresStructuralOnly = (scan: ProjectScan): boolean => (
-    partialModeUsed || scan.files.length > 300 || scan.uiFiles.length > 80
-  );
+  const repoRequiresStructuralOnly = (_scan: ProjectScan): boolean => partialModeUsed;
 
   if (llmAvailable) {
     logger.info(`scan_project: Phase 2 — LLM enrichment (model: ${dreamerConfig.model})`);
@@ -740,7 +799,9 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
         .map(([name, content]) => `--- ${name} ---\n${content}`)
         .join("\n\n");
 
-      for (const target of targetList) {
+      // UI nodes are produced by the source-aware UI scanner below and then
+      // enriched with every other canonical node in the graph-wide pass.
+      for (const target of targetList.filter((candidate) => candidate !== "ui")) {
         try {
           const messages = buildEnrichmentPrompt(
             treeSummary, fileListing, keyFileContents, manifestSummary, target as "features" | "workflows" | "data_model", scan.repoName,
@@ -839,7 +900,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
   } else {
     logger.info("scan_project: Phase 2 — LLM unavailable, structural-only mode");
     progress("Phase 2 — LLM unavailable, using structural analysis…");
-    errors.push("LLM not available — generated structural entries only. Consider running enrich_seed_data manually for richer data.");
+    errors.push("Standalone LLM unavailable for coarse extraction; generated structural entries before the mandatory standalone/Architect semantic pass.");
 
     for (const scan of scans) {
       if (targetList.includes("features")) {
@@ -1023,14 +1084,87 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     }
   }
 
+  // Datastore sensing runs after code/UI discovery and before semantic
+  // enrichment so table nodes participate in the same multi-hop pass.
+  let datastoreScanResult: ScanProjectResult["datastore_scan"];
+  if (config.database.connectionString || process.env.DATABASE_URL) {
+    try {
+      progress("Scanning configured PostgreSQL datastore…");
+      await autoSeedPrimaryDatastore(config.repos);
+      const scanned = await runDatastoreScan({ createMissing: true });
+      if (scanned.success) {
+        datastoreScanResult = {
+          datastore_id: scanned.data.datastore_id,
+          tables_found: scanned.data.tables_found,
+          tables_kept: scanned.data.tables_kept,
+          data_models_created: scanned.data.data_models_created,
+          data_models_linked: scanned.data.data_models_linked,
+        };
+      } else {
+        errors.push(`Datastore scan skipped: ${scanned.error.message}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Datastore scan failed: ${msg}`);
+    }
+  }
+
+  // Mandatory graph-wide pass after every structural scanner. It covers all
+  // canonical nodes, always traverses more than one semantic hop, and may use
+  // either standalone or Architect LLM configuration.
+  let semanticEnrichment: EnrichResult | undefined;
+  try {
+    progress("Enriching every graph node with multi-hop semantic context…");
+    const enriched = await enrichParserNodesProgrammatic({
+      target: "all",
+      maxNodes: Number.MAX_SAFE_INTEGER,
+      batchSize: Math.max(1, Math.min(20, Number(process.env.DREAMGRAPH_ENRICHMENT_BATCH_SIZE) || 12)),
+      dryRun: false,
+      force: true,
+      contextHops: 3,
+      relationContextSize: 40,
+      modelSource: "auto",
+      scheduleStabilization: false,
+      onProgress: (message) => {
+        // Keep the parent MCP request alive during the longest scan phase and
+        // expose durable per-batch checkpoints to CLI/Architect callers.
+        opts.onProgress?.(message, _step, _totalSteps);
+      },
+    });
+    if (enriched.success) {
+      semanticEnrichment = enriched.data;
+      totalTokens += enriched.data.tokens_used;
+      if (!enriched.data.semantic_coverage.complete) {
+        errors.push(
+          `Semantic enrichment incomplete: ${enriched.data.semantic_coverage.llm_enriched}/` +
+          `${enriched.data.semantic_coverage.total_nodes} nodes received LLM knowledge; ` +
+          `${enriched.data.semantic_coverage.fallback_nodes} used evidence-only fallback.`,
+        );
+      }
+    } else {
+      errors.push(`Semantic enrichment failed: ${enriched.error.message}`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Semantic enrichment failed: ${msg}`);
+  }
+  const semanticComplete = semanticEnrichment?.semantic_coverage.complete === true;
+
   progress("Rebuilding resource index…");
   const indexEntries = await rebuildIndex();
   logger.info(`scan_project: index rebuilt with ${indexEntries} entries`);
 
+  const changedNodeCount = featureResult.inserted + featureResult.updated +
+    workflowResult.inserted + workflowResult.updated + dataModelResult.inserted + dataModelResult.updated +
+    (uiResult?.inserted ?? 0) + (uiResult?.updated ?? 0) +
+    (auxiliaryResult?.inserted ?? 0) + (auxiliaryResult?.updated ?? 0) +
+    (datastoreScanResult?.data_models_created ?? 0) + (datastoreScanResult?.data_models_linked ?? 0);
+  const majorGraphChangeThreshold = Math.max(1, Number(process.env.DREAMGRAPH_MAJOR_GRAPH_CHANGE_NODES) || 20);
+
   let dreamCycleResult: ScanProjectResult["dream_cycle"] | undefined;
   const totalSeeds = featureResult.total + workflowResult.total + dataModelResult.total;
 
-  if (totalSeeds > 0 && llmAvailable && !partialModeUsed) {
+  if (totalSeeds > 0 && semanticComplete) {
     try {
       progress("Phase 3 — dreaming (building graph from seed data)…");
       logger.info("scan_project: Phase 3 — auto-dream cycle");
@@ -1072,8 +1206,8 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
       logger.warn(`scan_project: auto-dream error: ${msg}`);
       try { await engine.interrupt(); } catch { /* best effort */ }
     }
-  } else if (totalSeeds > 0 && partialModeUsed) {
-    errors.push("Adaptive partial scan mode was used — auto-dream skipped to prioritize fast, non-failing enrichment. Run dream_cycle manually after targeted enrichment if desired.");
+  } else if (totalSeeds > 0 && !semanticComplete) {
+    errors.push("Auto-dream skipped because mandatory per-node semantic enrichment is incomplete. Configure an LLM and run re-enrichment.");
   } else if (totalSeeds > 0) {
     errors.push(
       "Graph is empty — no LLM available for dream cycle. " +
@@ -1082,10 +1216,9 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
   }
 
   let adrsRecorded = 0;
-  const wasFresh = await isFreshInstance().catch(() => false);
   const hasRealSeeds = featureResult.total > 0 || workflowResult.total > 0 || dataModelResult.total > 0;
 
-  if (hasRealSeeds && llmAvailable && !partialModeUsed) {
+  if (hasRealSeeds && semanticComplete) {
     try {
       const repoName = Object.keys(config.repos)[0] ?? "project";
       progress("Phase 4 — discovering architecture decisions…");
@@ -1102,15 +1235,27 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     }
   }
 
-  if (hasRealSeeds && dreamCycleResult) {
+  let targetedDreamSchedules: ScanProjectResult["targeted_dream_schedules"];
+  if (hasRealSeeds && semanticComplete && changedNodeCount >= majorGraphChangeThreshold) {
     try {
-      progress("Phase 5 — scheduling follow-up dream cycles…");
-      logger.info("scan_project: Phase 5 — scheduling follow-up dreams");
-      await scheduleFollowUpDreams();
+      progress("Phase 5 — scheduling targeted graph-stabilization dreams…");
+      logger.info("scan_project: Phase 5 — scheduling targeted dreams for major graph changes");
+      const scheduled = await scheduleTargetedDreamStabilization({
+        entity_ids: semanticEnrichment?.enriched_node_ids ?? [],
+        reason: `Major scan changed ${changedNodeCount} canonical nodes` +
+          (datastoreScanResult ? ` and refreshed datastore ${datastoreScanResult.datastore_id}` : ""),
+        max_runs: 3,
+      });
+      targetedDreamSchedules = {
+        created: scheduled.scheduled.length,
+        reused: scheduled.reused.length,
+        schedule_ids: [...scheduled.scheduled, ...scheduled.reused].map((schedule) => schedule.id),
+        focus_entities: scheduled.focus_entities,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`Follow-up scheduling failed: ${msg}`);
-      logger.warn(`scan_project: follow-up scheduling error: ${msg}`);
+      errors.push(`Targeted dream scheduling failed: ${msg}`);
+      logger.warn(`scan_project: targeted dream scheduling error: ${msg}`);
     }
   }
 
@@ -1138,7 +1283,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     ? ` Dream: ${dreamCycleResult.edges_created} edges, ${dreamCycleResult.nodes_created} nodes, ${dreamCycleResult.edges_promoted ?? 0} promoted.`
     : "";
   const adrSummary = adrsRecorded > 0 ? ` ADRs: ${adrsRecorded} discovered.` : "";
-  const partialSummary = partialModeUsed ? " Adaptive partial scan mode avoided timeout and preserved partial enrichment." : "";
+  const partialSummary = partialModeUsed && !semanticComplete ? " Adaptive partial scan mode preserved evidence for later enrichment." : "";
   const auxSummary = auxiliaryResult && auxiliaryResult.total > 0
     ? ` Auxiliary: ${auxiliaryResult.inserted} new / ${auxiliaryResult.total} total ` +
       `(tests=${auxiliaryResult.by_kind.test_suite}, config=${auxiliaryResult.by_kind.configuration}, ` +
@@ -1148,10 +1293,21 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     ? ` Native scan: ${scanQuality.parser_backed_files}/${scanQuality.total_native_files} ` +
       `C/C++ files parsed (${scanQuality.parser_backed_pct}%).`
     : "";
+  const targetedDreamSummary = targetedDreamSchedules
+    ? ` Targeted stabilization: ${targetedDreamSchedules.created} schedule(s) created, ${targetedDreamSchedules.reused} reused for ${targetedDreamSchedules.focus_entities.length} nodes.`
+    : "";
+
+  const scanCompletedAt = new Date().toISOString();
+  await updateGraphMaintenanceState({
+    last_scan_at: scanCompletedAt,
+    last_scan_git_heads: await captureRepositoryGitHeads(config.repos),
+    datastore_connection_fingerprint: datastoreConnectionFingerprint(config.database.connectionString || process.env.DATABASE_URL),
+    ...(changedNodeCount >= majorGraphChangeThreshold ? { last_major_graph_change_at: scanCompletedAt } : {}),
+  }).catch((err) => errors.push(`Graph maintenance state update failed: ${err instanceof Error ? err.message : String(err)}`));
 
   const summary =
     `Scan complete: ${scans.length} repo(s), ${totalFiles} files. ` +
-    `${llmAvailable ? `LLM enrichment (${dreamerConfig.model}, ${totalTokens} tokens)` : "Structural-only (no LLM)"}. ` +
+    `${semanticComplete ? `LLM enrichment complete (${semanticEnrichment?.semantic_coverage.llm_enriched ?? 0} nodes, ${totalTokens} tokens)` : "Semantic enrichment incomplete"}. ` +
     `Features: ${featureResult.inserted} new / ${featureResult.total} total. ` +
     `Workflows: ${workflowResult.inserted} new / ${workflowResult.total} total. ` +
     `Data model: ${dataModelResult.inserted} new / ${dataModelResult.total} total. ` +
@@ -1160,6 +1316,7 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     qualitySummary +
     partialSummary +
     dreamSummary +
+    targetedDreamSummary +
     adrSummary +
     (errors.length > 0 ? ` ${errors.length} warning(s).` : "");
 
@@ -1170,16 +1327,19 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     files_discovered: totalFiles,
     ui_files_detected: totalUiFiles,
     technology: techSummary,
-    llm_used: llmAvailable,
+    llm_used: (semanticEnrichment?.semantic_coverage.llm_enriched ?? 0) > 0,
     features: featureResult,
     workflows: workflowResult,
     data_model: dataModelResult,
     ui: uiResult,
     scan_quality: scanQuality,
     auxiliary: auxiliaryResult,
+    datastore_scan: datastoreScanResult,
+    semantic_enrichment: semanticEnrichment,
     index_entries: indexEntries,
     llm_tokens_used: totalTokens,
     dream_cycle: dreamCycleResult,
+    targeted_dream_schedules: targetedDreamSchedules,
     errors,
     message: summary,
   };
@@ -1193,12 +1353,12 @@ export function registerScanProjectTool(server: McpServer): void {
   server.tool(
     "scan_project",
     "Scan the project and populate the knowledge graph with features, workflows, and data model entities. " +
-    "This is a convenience tool that automates the manual enrichment workflow: " +
-    "it reads the project structure, uses the LLM to extract rich semantic data, " +
-    "and populates all seed data files in merge mode (non-destructive). " +
+    "Every scan and rescan finishes with mandatory LLM enrichment of every canonical node, " +
+    "using source evidence and at least two semantic graph hops. UI contracts, appearance, " +
+    "layout, datastore tables, and cross-node relations are included. " +
     "Use this for quick initial enrichment — you can always refine with " +
     "enrich_seed_data and register_ui_element afterward. " +
-    "Falls back to structural-only analysis if no LLM is configured.",
+    "If no standalone or Architect model is available, incomplete semantic coverage is reported explicitly.",
     {
       depth: z
         .enum(["shallow", "deep"])

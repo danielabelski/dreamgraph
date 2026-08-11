@@ -59,6 +59,8 @@ Each cycle runs one or more strategies. You can pick one or use `all`.
 
 The engine adaptively benches strategies that produce zero results for several cycles, then probes them every sixth cycle. `llm_dream` and the PGO wave are never benched.
 
+Major graph changes can also schedule bounded **targeted stabilization dreams**. These schedules carry affected entity IDs, a two-hop focus, and a reason; they run a small number of times and reuse an equivalent active schedule instead of creating an unbounded queue. Datastore changes favor schema grounding, disconnected regions favor orphan bridging, and tension-heavy changes favor tension-directed dreaming.
+
 ---
 
 ## Triggering cycles

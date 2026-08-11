@@ -31,7 +31,7 @@ import { engine } from "./engine.js";
 import { causalReplayDream } from "./causal.js";
 import type { DreamNode, DreamEdge, DreamStrategy } from "./types.js";
 
-import { buildFactSnapshot } from "./strategies/_shared.js";
+import { buildFactSnapshot, focusFactSnapshot } from "./strategies/_shared.js";
 import { gapDetection } from "./strategies/gap-detection.js";
 import { weakReinforcement } from "./strategies/weak-reinforcement.js";
 import { crossDomainBridging } from "./strategies/cross-domain-bridging.js";
@@ -55,6 +55,13 @@ export interface DreamResult {
   strategy_yields: Record<string, number>;
   /** Strategies that were skipped this cycle due to adaptive selection */
   skipped_strategies: string[];
+  focus_entities: string[];
+}
+
+export interface DreamFocus {
+  entity_ids: string[];
+  hops?: number;
+  reason?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +123,7 @@ function recordStrategyYield(strategy: DreamStrategy, newEdges: number): void {
 export async function dream(
   strategy: DreamStrategy = "all",
   maxDreams: number = 100,
+  focus?: DreamFocus,
 ): Promise<DreamResult> {
   engine.assertState("rem", "dream");
 
@@ -124,9 +132,14 @@ export async function dream(
     `REM dream cycle #${cycle} starting (strategy: ${strategy}, max: ${maxDreams})`,
   );
 
-  const snapshot = await buildFactSnapshot();
+  const fullSnapshot = await buildFactSnapshot();
+  const focusIds = (focus?.entity_ids ?? []).filter((id) => fullSnapshot.entities.has(id)).slice(0, 100);
+  const snapshot = focusIds.length > 0
+    ? focusFactSnapshot(fullSnapshot, focusIds, focus?.hops ?? 2)
+    : fullSnapshot;
   logger.debug(
-    `Fact snapshot: ${snapshot.entities.size} entities, ${snapshot.edgeSet.size} edges, ${snapshot.domains.size} domains`,
+    `Fact snapshot: ${snapshot.entities.size} entities, ${snapshot.edgeSet.size} edges, ${snapshot.domains.size} domains` +
+      (focusIds.length > 0 ? `; targeted around ${focusIds.length} changed entities (${focus?.reason ?? "unspecified"})` : ""),
   );
 
   let allNodes: DreamNode[] = [];
@@ -325,5 +338,6 @@ export async function dream(
     duplicates_merged: totalMerged,
     strategy_yields: strategyYields,
     skipped_strategies: skippedStrategies,
+    focus_entities: focusIds,
   };
 }

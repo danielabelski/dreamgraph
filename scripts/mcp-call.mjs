@@ -11,7 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const toolName = process.argv[2];
-const argsJson = process.argv[3] ?? "{}";
+const argsJson = process.env.DREAMGRAPH_TOOL_ARGS ?? process.argv[3] ?? "{}";
 if (!toolName) {
   console.error("usage: node scripts/mcp-call.mjs <tool_name> '<json_args>'");
   process.exit(2);

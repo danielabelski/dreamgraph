@@ -66,6 +66,58 @@ export interface FactSnapshot {
   degree: Map<string, number>;
 }
 
+/**
+ * Restrict a fact snapshot to named entities and their bounded neighborhood.
+ * Targeted scheduled dreams use this to stabilize a changed graph region
+ * without spending a cycle rediscovering unrelated areas.
+ */
+export function focusFactSnapshot(
+  snapshot: FactSnapshot,
+  entityIds: readonly string[],
+  hops = 2,
+): FactSnapshot {
+  const roots = entityIds.filter((id) => snapshot.entities.has(id));
+  if (roots.length === 0) return snapshot;
+  const adjacency = new Map<string, Set<string>>();
+  const connect = (left: string, right: string): void => {
+    if (!snapshot.entities.has(left) || !snapshot.entities.has(right)) return;
+    const l = adjacency.get(left) ?? new Set<string>(); l.add(right); adjacency.set(left, l);
+    const r = adjacency.get(right) ?? new Set<string>(); r.add(left); adjacency.set(right, r);
+  };
+  for (const entity of snapshot.entities.values()) {
+    for (const link of entity.links) connect(entity.id, link.target);
+  }
+  const selected = new Set(roots);
+  let frontier = roots;
+  for (let hop = 0; hop < Math.max(1, Math.min(4, hops)); hop++) {
+    const next: string[] = [];
+    for (const current of frontier) {
+      for (const neighbor of adjacency.get(current) ?? []) {
+        if (selected.has(neighbor)) continue;
+        selected.add(neighbor);
+        next.push(neighbor);
+      }
+    }
+    frontier = next;
+  }
+  const entities = new Map([...snapshot.entities].filter(([id]) => selected.has(id)));
+  const edgeSet = new Set([...snapshot.edgeSet].filter((edge) => {
+    const separator = edge.indexOf("|");
+    return separator > 0 && selected.has(edge.slice(0, separator)) && selected.has(edge.slice(separator + 1));
+  }));
+  const domains = new Set([...entities.values()].map((entity) => entity.domain).filter(Boolean));
+  const sourceFileIndex = new Map<string, string[]>();
+  for (const [file, ids] of snapshot.sourceFileIndex) {
+    const kept = ids.filter((id) => selected.has(id));
+    if (kept.length > 0) sourceFileIndex.set(file, kept);
+  }
+  const degree = new Map<string, number>();
+  for (const id of selected) {
+    degree.set(id, [...(adjacency.get(id) ?? [])].filter((neighbor) => selected.has(neighbor)).length);
+  }
+  return { entities, edgeSet, domains, sourceFileIndex, degree };
+}
+
 // ---------------------------------------------------------------------------
 // Tokenization
 // ---------------------------------------------------------------------------

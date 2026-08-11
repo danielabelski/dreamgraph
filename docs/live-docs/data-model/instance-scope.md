@@ -1,14 +1,7 @@
 # Instance Scope
 
-> Manages the scope of an instance, ensuring that operations are contained within the defined boundaries. Prevents cross-instance contamination.
+> A shared abstraction governing isolation, containment, and policy enforcement boundaries between instances throughout the platform.. Intent: Highlight the cross-cutting concept underpinning instance isolation, policy validation, and registry management as surfaced in both implementation and testing.
 
-**Table:** `instance_scope`  
-**Storage:** memory  
-
-## Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| id | string | Unique identifier for the instance scope. |
-| masterDir | string | Directory path for the master instance. |
+**Table:** `N/A`  
+**Storage:** N/A  
 

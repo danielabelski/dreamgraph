@@ -109,6 +109,17 @@ export interface EnrichmentMetadata {
   model?: string;
   /** Self-reported confidence (0..1) returned by the LLM for this entity. */
   confidence?: number;
+  /** Evidence-reuse record for confidence-aware semantic neighborhood caching. */
+  semantic_cache?: {
+    coverage: number;
+    cache_confidence: number;
+    reused_neighbor_ids: string[];
+    source_files_considered: string[];
+    source_files_covered: string[];
+    source_files_read: string[];
+    conflicts: string[];
+    context_hops: number;
+  };
 }
 
 /** Optional semantic fields written by `enrich_parser_nodes` to any seed entity. */
@@ -154,7 +165,7 @@ export interface WorkflowStep {
   description: string;
 }
 
-export interface Workflow extends ResourceEntry {
+export interface Workflow extends ResourceEntry, EnrichableFields {
   trigger: string;
   steps: WorkflowStep[];
   /** Optional semantic classification derived from evidence, never from assumptions. */
@@ -225,7 +236,7 @@ export interface DataModelEntity extends ResourceEntry, EnrichableFields {
 // Capability Entity
 // ---------------------------------------------------------------------------
 
-export interface CapabilityEntity extends ResourceEntry {
+export interface CapabilityEntity extends ResourceEntry, EnrichableFields {
   category: string;
   status: string;
   /** Canonical entity ID this entry has been superseded by (per ADR-010). */
@@ -256,7 +267,7 @@ export interface DatastoreTable {
   rows_estimate?: number | null;
 }
 
-export interface Datastore extends ResourceEntry {
+export interface Datastore extends ResourceEntry, EnrichableFields {
   kind: "postgres" | "mysql" | "sqlite" | "mongo" | "redis" | "blob_storage" | "event_bus" | "other";
   /** Sanitized connection-string preview (no password). */
   url_hint?: string;
@@ -270,6 +281,8 @@ export interface Datastore extends ResourceEntry {
   tags?: string[];
   /** Lifecycle status — same vocabulary as other entities. */
   status?: string;
+  /** Semantic links to code/data nodes discovered during schema scanning and enrichment. */
+  links?: GraphLink[];
 }
 
 // ---------------------------------------------------------------------------
@@ -311,13 +324,15 @@ export type AuxiliaryEntityKind =
   | "automation_script"
   | "mcp_tool";
 
-export interface AuxiliaryEntity extends ResourceEntry {
+export interface AuxiliaryEntity extends ResourceEntry, EnrichableFields {
   kind: AuxiliaryEntityKind;
   uri: string;
   /** Free-form tags (e.g. "vitest", "github-actions", "tsconfig"). */
   tags?: string[];
   /** Per-kind metadata (counts, registered tool names, etc.). */
   meta?: Record<string, unknown>;
+  /** Semantic links to canonical graph entities. */
+  links?: GraphLink[];
 }
 
 export interface AuxiliaryEntitiesFile {

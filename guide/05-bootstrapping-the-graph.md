@@ -1,6 +1,6 @@
 # 5. Bootstrapping the graph
 
-> **TL;DR** — `dg scan my-project` reads your repo and seeds the graph. Then `dg enrich my-project` deepens it. After that, `dream_cycle` from your AI agent (or a schedule) starts compounding.
+> **TL;DR** — `dg scan my-project` discovers structure and then semantically enriches every canonical node with multi-hop context. Use `dg enrich my-project --skip-scan --force` when the source map is current but its knowledge is hollow. Use full bootstrap only for a fresh or fundamentally broken instance.
 
 A fresh instance has an empty graph. This page explains how to fill it.
 
@@ -21,8 +21,11 @@ Scan walks the attached repository, extracts:
 - **Data model hints** — schema files, type declarations, ORM models
 - **UI elements** — components, routes (front-end repos)
 - **Config and templates** — env vars, build config
+- **Configured PostgreSQL schema** — tables and ownership links when `DATABASE_URL` is set in the instance's `engine.env`
 
 …and writes them into the graph as features, workflow stubs, data-model entries, and UI-registry entries.
+
+Project-root `.gitignore` rules are honored during discovery. Build outputs, dependencies, generated files, and project-specific ignored paths are excluded before semantic analysis.
 
 Useful flags:
 
@@ -32,7 +35,7 @@ dg scan my-project --depth deep         # follows imports further
 dg scan my-project --targets features,data_model,workflows
 ```
 
-You can re-run scan whenever you want. Subsequent runs upsert: existing entities are updated, new ones added, removed source files mark entities as orphaned.
+You can re-run scan whenever you want. Subsequent runs upsert existing entities and discover new ones. Every structural scan then forces graph-wide semantic enrichment with at least three hops of context so the result is not left as parser-only inventory.
 
 ### `dg enrich` — fill in the gaps
 
@@ -40,16 +43,32 @@ You can re-run scan whenever you want. Subsequent runs upsert: existing entities
 dg enrich my-project
 dg enrich my-project --depth deep
 dg enrich my-project --targets workflows,capabilities
+dg enrich my-project --skip-scan --force
+dg enrich my-project --model-source architect
 ```
 
-Enrichment uses the LLM (and structural analysis) to:
+Enrichment uses either the standalone LLM configuration or, during an Architect session, the connected Architect model/adapter to:
 
-- Promote scaffolded stubs into described entities
-- Infer workflow steps from feature interactions
-- Suggest links between data-model entities
-- Surface system-level capabilities
+- Give every canonical node a substantive description of intent, behavior, rationale, and relationships
+- Infer workflow steps, contracts, capabilities, datastore ownership, and UI interaction/visual/layout knowledge
+- Discover semantic relations beyond direct file adjacency with multi-hop neighborhood evidence
+- Persist confidence, coverage, source evidence, and relationship rationale for later reuse
 
-If you skipped LLM setup, enrichment falls back to structural-only inference. It works, but the descriptions will be sparse.
+Already-enriched neighbors act as a confidence-aware semantic cache. DreamGraph reuses their persisted evidence when coverage is sufficient and reads source only for uncovered, conflicting, or low-confidence areas. This reduces repeated source reads and LLM cost across overlapping neighborhoods. Disable this only for diagnosis with `--no-semantic-cache`; tune the gates with `--semantic-cache-min-confidence` and `--semantic-cache-min-coverage`.
+
+If neither a standalone nor connected Architect LLM route is available, DreamGraph records deterministic fallback metadata but does not claim semantic completion. `graph_health_report` will continue to identify those nodes as needing enrichment.
+
+### Graph health before expensive maintenance
+
+Ask Architect to run `graph_health_report` before a broad repair. It reports semantic density, parser-only and hollow nodes, machine-name leakage, contract/workflow/datastore/UI coverage, connectivity, tensions, dream promotion, repository drift, and scan/enrichment age.
+
+Use the smallest operation that fits the evidence:
+
+1. **Enrich** when source topology is current but semantic coverage is poor.
+2. **Scan** when files, commits, datastore configuration, or scan age show structural drift.
+3. **Bootstrap** only when the instance is empty or the smaller operations cannot restore it.
+
+Architect can execute approved maintenance directly through DreamGraph MCP; you do not need to switch to the CLI.
 
 ### `dg curate` — quality pass
 
@@ -84,7 +103,7 @@ DreamGraph normally drives its own bootstrap chain the first time the LLM become
 
 `--force` bypasses the bootstrap-registry's fingerprint dedupe — useful when the same provider/model fingerprint was already recorded but you still want to re-run.
 
-For day-to-day work you almost never need this. Reach for `dg scan` / `dg enrich` first; reach for `dg bootstrap` when those aren't enough.
+For day-to-day work you almost never need this. Prefer enrich before scan, and scan before bootstrap. Long operations publish progress notifications and preserve completed batches so an interrupted client call does not erase useful work.
 
 ---
 
@@ -107,6 +126,7 @@ data/
   threat_log.json        # Nightmare-cycle findings
   index.json             # Cross-referencing index
   schedules.json         # Scheduled dream tasks
+  graph_maintenance.json # Scan/enrichment age, repository drift, datastore fingerprint, targeted schedules
   ...
 logs/
   daemon-<date>.log
@@ -158,7 +178,7 @@ dg scan my-project --depth deep
 dg enrich my-project
 ```
 
-You don't have to. The graph degrades gracefully. But a periodic re-scan keeps things sharp.
+Major scans and implementations also create bounded, targeted dream schedules around the affected entities. Those follow-up runs use a two-hop focus to stabilize relationships and missing abstractions without repeatedly dreaming over the entire graph.
 
 ---
 
@@ -189,6 +209,8 @@ Look for non-zero counts in:
 - **Features**, **workflows**, **data model entities**
 - **Validated edges** (zero is fine on day one — they grow with dream cycles)
 - **Tensions (active)** — having a few is healthy. Zero usually means scan was too shallow.
+
+Then ask Architect for a graph-health report. Node count alone is not the success criterion: semantic density, contracts, UI/datastore coverage, meaningful links, and freshness determine whether the graph can support reliable architectural reasoning.
 
 ---
 

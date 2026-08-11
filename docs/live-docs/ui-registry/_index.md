@@ -39,6 +39,7 @@
 | [standalone_architect_living_plan](standalone-architect-living-plan.md) | Standalone Architect Living Plan | active | Project daemon-owned living plan state inside the standalone… | html |
 | [architect_doom_first_run_download_consent](architect-doom-first-run-download-consent.md) | Architect Doom First-Run Recommended Download Consent | active | Require explicit user approval before the standalone Archite… | - |
 | [ui_dashboard_start_here_readiness_card](ui-dashboard-start-here-readiness-card.md) | Dashboard Start Here Readiness Card | active | Give a new Dashboard user a plain-language first-run readine… | dashboard_html |
+| [architect_cli_terminal_shell](architect-cli-terminal-shell.md) | Architect CLI Terminal Shell | active | Provide the terminal-native Architect entry surface for daem… | terminal, terminal-ink |
 
 ## data_display
 
@@ -81,6 +82,7 @@
 | [standalone_architect_browser_runtime_bootstrap](standalone-architect-browser-runtime-bootstrap.md) | Standalone Architect Browser Runtime Bootstrap | active | Replace initial loading placeholders with daemon-provided pr… | - |
 | [standalone_architect_tool_trace](standalone-architect-tool-trace.md) | Standalone Architect Tool Trace | active | Shows daemon-executed tool calls with status, duration, runt… | html |
 | [standalone_architect_compact_tool_trace_panel](standalone-architect-compact-tool-trace-panel.md) | Standalone Architect compact tool trace panel | active | Shows live daemon-emitted tool execution state for the curre… | - |
+| [standalone_architect_autonomy_auto_selection](standalone-architect-autonomy-auto-selection.md) | Standalone Architect Autonomy Auto Selection State | active | Mark the selected continuation option as running while the n… | standalone-web |
 
 ## layout
 
@@ -97,6 +99,7 @@
 | [ui_recommended_actions_bar](ui-recommended-actions-bar.md) | Recommended Actions Bar | active | Present structured suggested actions for a rendered DreamGra… | vscode |
 | [standalone_architect_chat_scope_pill](standalone-architect-chat-scope-pill.md) | Standalone Architect Chat Scope Pill | active | Lets operators choose whether a browser Architect prompt is … | html |
 | [standalone_architect_slash_command_runtime](standalone-architect-slash-command-runtime.md) | Standalone Architect Slash Command Runtime | active | Provide user-facing slash command affordances that dispatch … | html |
+| [standalone_architect_continuation_option_pills](standalone-architect-continuation-option-pills.md) | Standalone Architect Continuation Option Pills | active | Present safe and disabled continuation actions as visible bu… | standalone-web |
 
 ## data_input
 
@@ -106,6 +109,7 @@
 | [explorer-filters-panel](explorer-filters-panel.md) | Explorer Filters Panel | active | Controls the visible Explorer subgraph by applying semantic … | react |
 | [standalone_architect_model_route_selector](standalone-architect-model-route-selector.md) | Standalone Architect Model Route Selector | active | Lets the operator choose the standalone Architect adapter, A… | html |
 | [standalone_architect_terminal](standalone-architect-terminal.md) | Standalone Architect Terminal | active | Provide a daemon-owned xterm.js project terminal in the Stan… | html, node |
+| [architect-chat-prompt-input](architect-chat-prompt-input.md) | Architect Chat Prompt Input | active | Accepts project-scope or plan-scope Architect prompts and su… | standalone-browser |
 
 ## navigation
 
@@ -114,6 +118,25 @@
 | [standalone_architect_plan_list_item](standalone-architect-plan-list-item.md) | Standalone Architect Plan List Item | active | Let users select a standalone Architect plan from the left r… | - |
 | [standalone_architect_selected_plan_persistence](standalone-architect-selected-plan-persistence.md) | Standalone Architect Selected Plan Persistence | active | Restores the last selected standalone Architect plan after d… | html |
 | [standalone_architect_dynamic_center_tabs](standalone-architect-dynamic-center-tabs.md) | Standalone Architect Dynamic Center Tabs | active | Provide a descriptor-driven center workspace tab framework f… | - |
+
+## chat-ui
+
+| ID | Name | Status | Purpose | Platforms |
+|----|------|--------|---------|-----------|
+| [standalone_architect_chat_tool_trace_timeline](standalone-architect-chat-tool-trace-timeline.md) | Standalone Architect Chat Tool Trace Timeline | active | Render tool-using Architect chat turns in execution order: i… | standalone-browser, vitest |
+| [standalone_architect_continuation_report](standalone-architect-continuation-report.md) | Standalone Architect Continuation Report | active | Render completed Architect pass reports with readable summar… | standalone-web, browser |
+
+## panel
+
+| ID | Name | Status | Purpose | Platforms |
+|----|------|--------|---------|-----------|
+| [event_dock](event-dock.md) | Explorer Event Dock | active | Show the live Explorer graph event stream as a compact opera… | web |
+
+## visualization
+
+| ID | Name | Status | Purpose | Platforms |
+|----|------|--------|---------|-----------|
+| [pulse_overlay](pulse-overlay.md) | Explorer Pulse Overlay | active | Render transient visual pulses over graph nodes affected by … | web |
 
 ## Deprecated / Transitional Legacy Entries
 

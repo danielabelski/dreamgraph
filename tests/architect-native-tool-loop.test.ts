@@ -71,6 +71,7 @@ describe("Architect native tool loop continuation manifests", () => {
     const available = [
       tool("query_resource"),
       tool("query_architecture_decisions"),
+      tool("graph_health_report"),
       tool("search_source_code"),
       tool("read_source_code"),
       tool("list_directory"),
@@ -87,7 +88,7 @@ describe("Architect native tool loop continuation manifests", () => {
       },
     });
 
-    expect(selection.required_tools).toEqual(["read_source_code", "query_resource", "query_architecture_decisions", "patch_file", "enrich_seed_data", "run_command"]);
+    expect(selection.required_tools).toEqual(["read_source_code", "query_resource", "query_architecture_decisions", "graph_health_report", "patch_file", "enrich_seed_data", "run_command"]);
     expect(selection.unavailable_required_tools).toEqual([]);
     expect(selection.tools.map((entry) => entry.name)).toEqual(expect.arrayContaining([
       "read_source_code",
@@ -101,6 +102,7 @@ describe("Architect native tool loop continuation manifests", () => {
     const selection = selectArchitectTools([
       tool("query_resource"),
       tool("query_architecture_decisions"),
+      tool("graph_health_report"),
       tool("search_source_code"),
       tool("read_source_code"),
       tool("list_directory"),
@@ -109,10 +111,11 @@ describe("Architect native tool loop continuation manifests", () => {
       tool("enrich_seed_data"),
     ], "Continue with governed tools only. Add regression coverage in tests/standalone-architect-routes.test.ts and verify with vitest.");
 
-    expect(selection.required_tools).toEqual(["query_resource", "query_architecture_decisions", "read_source_code", "patch_file", "enrich_seed_data", "run_command"]);
-    expect(selection.tools.map((entry) => entry.name).slice(0, 6)).toEqual([
+    expect(selection.required_tools).toEqual(["query_resource", "query_architecture_decisions", "graph_health_report", "read_source_code", "patch_file", "enrich_seed_data", "run_command"]);
+    expect(selection.tools.map((entry) => entry.name).slice(0, 7)).toEqual([
       "query_resource",
       "query_architecture_decisions",
+      "graph_health_report",
       "read_source_code",
       "patch_file",
       "enrich_seed_data",
@@ -124,6 +127,7 @@ describe("Architect native tool loop continuation manifests", () => {
     const available = [
       "query_resource",
       "graph_rag_retrieve",
+      "graph_health_report",
       "query_api_surface",
       "search_source_code",
       "read_source_code",
@@ -152,12 +156,13 @@ describe("Architect native tool loop continuation manifests", () => {
       },
     });
 
-    expect(selection.required_tools).toEqual(["read_source_code", "query_resource", "query_architecture_decisions", "patch_file", "enrich_seed_data", "run_command"]);
+    expect(selection.required_tools).toEqual(["read_source_code", "query_resource", "query_architecture_decisions", "graph_health_report", "patch_file", "enrich_seed_data", "run_command"]);
     expect(selection.groups).toEqual(expect.arrayContaining(["core_read", "source_write", "verification", "graph_write", "adr"]));
-    expect(selection.tools.map((entry) => entry.name).slice(0, 6)).toEqual([
+    expect(selection.tools.map((entry) => entry.name).slice(0, 7)).toEqual([
       "read_source_code",
       "query_resource",
       "query_architecture_decisions",
+      "graph_health_report",
       "patch_file",
       "enrich_seed_data",
       "run_command",
@@ -176,6 +181,7 @@ describe("Architect native tool loop continuation manifests", () => {
       availableToolNames: [
         "query_resource",
         "query_architecture_decisions",
+        "graph_health_report",
         "search_source_code",
         "read_source_code",
         "list_directory",
@@ -190,7 +196,7 @@ describe("Architect native tool loop continuation manifests", () => {
       autonomy: false,
     });
 
-    expect(decision.required_tools).toEqual(["query_resource", "query_architecture_decisions", "read_source_code", "patch_file", "enrich_seed_data", "run_command"]);
+    expect(decision.required_tools).toEqual(["query_resource", "query_architecture_decisions", "graph_health_report", "read_source_code", "patch_file", "enrich_seed_data", "run_command"]);
     expect(decision.selected).toEqual(expect.arrayContaining([
       "query_resource",
       "search_source_code",
@@ -201,6 +207,40 @@ describe("Architect native tool loop continuation manifests", () => {
     ]));
     expect(decision.mutating).toBe(true);
     expect(decision.verifying).toBe(true);
+  });
+
+  it("requires health assessment and a targeted dream schedule for major implementation work", () => {
+    const decision = selectArchitectToolNames({
+      prompt: "Implement a new cross-module workflow and verify the feature with focused tests.",
+      availableToolNames: [
+        "query_resource", "query_architecture_decisions", "graph_health_report",
+        "read_source_code", "patch_file", "enrich_seed_data", "schedule_dream", "run_command",
+      ],
+      manifest: null,
+      autonomy: false,
+    });
+
+    expect(decision.required_tools).toEqual(expect.arrayContaining([
+      "graph_health_report",
+      "enrich_seed_data",
+      "schedule_dream",
+    ]));
+    expect(decision.unavailable_required_tools).toEqual([]);
+  });
+
+  it("exposes the governed MCP action for a user-requested re-scan", () => {
+    const decision = selectArchitectToolNames({
+      prompt: "Re-scan project and refresh UI metadata.",
+      availableToolNames: [
+        "query_resource", "query_architecture_decisions", "graph_health_report", "scan_project",
+      ],
+      manifest: null,
+      autonomy: false,
+    });
+
+    expect(decision.required_tools).toContain("graph_health_report");
+    expect(decision.selected).toContain("scan_project");
+    expect(decision.required_tools).not.toContain("bootstrap_instance");
   });
 
   it("always pins run_command when it is present in the native tool surface", () => {

@@ -4,6 +4,12 @@
 
 The cognitive engine is good at proposing. It's mediocre at deciding. You are the judge.
 
+## Start with graph health, not graph size
+
+Before a substantial architecture task, ask Architect to run `graph_health_report`. A large graph can still be poor if it is mostly filenames, folders, parser artifacts, machine identifiers, or descriptions such as source-file counts. A healthy graph has semantic names, responsibilities, workflows, contracts, capabilities, invariants, intent, causal relationships, and explicit UI/datastore ownership.
+
+The report explains how each observed gap affects reasoning and ranks the smallest useful maintenance operation. Approve enrichment when semantics are hollow, scanning when repository evidence is stale, datastore scanning when `DATABASE_URL` changed, normalization when dreams are backed up, or tension remediation when contradictions reduce confidence.
+
 ---
 
 ## The three curation actions

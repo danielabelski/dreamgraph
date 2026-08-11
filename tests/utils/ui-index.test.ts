@@ -52,9 +52,11 @@ describe("loadIndexableUIElements", () => {
       ],
     });
     const result = await loadIndexableUIElements();
-    expect(result).toEqual([
-      { id: "scoped1", name: "Scoped Element", source_repo: "openrct2", used_by: [], children: [], flows: [] },
-    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      id: "scoped1", name: "Scoped Element", purpose: "button",
+      source_repo: "openrct2", used_by: [], children: [], flows: [],
+    });
   });
 
   it("excludes entries missing id or name", async () => {
@@ -67,6 +69,33 @@ describe("loadIndexableUIElements", () => {
       ],
     });
     const result = await loadIndexableUIElements();
-    expect(result).toEqual([{ id: "good", name: "Good", source_repo: "r", used_by: [], children: [], flows: [] }]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: "good", name: "Good", source_repo: "r", used_by: [], children: [], flows: [] });
+  });
+
+  it("preserves rich UI knowledge for Explorer node inspection", async () => {
+    await writeRegistry({
+      elements: [{
+        id: "rich", name: "Rich Panel", purpose: "inspection", category: "composite",
+        source_repo: "r", description: "A rich semantic description", intent: "Explain graph health",
+        data_contract: { inputs: [{ name: "node", type: "Node", description: "Selected node", required: true }], outputs: [] },
+        interactions: [{ action: "select", description: "Selects a node" }],
+        implementations: [], used_by: ["feature.health"], children: ["ui.child"], tags: ["health"],
+        visual_semantics: { visual_role: "inspector" },
+        layout_semantics: { pattern: "inspector" },
+        links: [{ target: "ui.child", type: "ui_element", relationship: "composes", description: "Renders child", strength: "strong" }],
+      }],
+    });
+
+    const [result] = await loadIndexableUIElements();
+    expect(result).toMatchObject({
+      description: "A rich semantic description",
+      intent: "Explain graph health",
+      data_contract: { inputs: [expect.objectContaining({ name: "node" })] },
+      interactions: [expect.objectContaining({ action: "select" })],
+      visual_semantics: { visual_role: "inspector" },
+      layout_semantics: { pattern: "inspector" },
+      links: [expect.objectContaining({ target: "ui.child" })],
+    });
   });
 });

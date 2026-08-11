@@ -14,12 +14,13 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
-import { writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { setDataDirOverride } from "../../src/utils/paths.js";
 import { invalidateCache, setDataDirResolver } from "../../src/utils/cache.js";
+import { config } from "../../src/config/config.js";
 
 // --- LLM mock ---------------------------------------------------------------
 // Injected per-test via `setMockLlm`. Captures every call so assertions can
@@ -87,6 +88,8 @@ import {
   isAlreadyEnriched,
   bucketKey,
   chunk,
+  buildMultiHopContext,
+  buildSemanticCachePlan,
   type ParserNodeRecord,
   type PerNodeEnrichment,
 } from "../../src/tools/enrich-parser-nodes.js";
@@ -135,11 +138,26 @@ function llmResponseFor(nodes: ParserNodeRecord[], opts: Partial<PerNodeEnrichme
   return JSON.stringify({
     results: nodes.map((n) => ({
       id: n.id,
-      description: opts.description ?? `Enriched: ${n.name}`,
-      intent: opts.intent ?? `Represents the ${n.name} concept.`,
+      description: opts.description ?? `${n.name} represents an evidenced project concept and exists to coordinate its domain responsibility. It operates through the supplied source structure and participates in the named neighboring graph flows rather than standing as a file inventory.`,
+      intent: opts.intent ?? `Represent the ${n.name} design responsibility and its evidenced contribution to the surrounding system flow.`,
       purpose: opts.purpose ?? "domain-entity",
       tags: opts.tags ?? ["enriched"],
       feature_anchors: opts.feature_anchors ?? [],
+      relations: opts.relations ?? [],
+      ui_knowledge: opts.ui_knowledge ?? {
+        data_contract: {
+          inputs: [],
+          outputs: [{ name: "rendered_view", type: "ui", description: "Renders the evidenced interface", trigger: "render" }],
+        },
+        interactions: [],
+        visual_semantics: {
+          visual_role: "interactive control", emphasis: "primary", density: "comfortable",
+          chrome: "minimal", state_styling: [],
+        },
+        layout_semantics: { pattern: "flow", alignment: "leading", sizing_behavior: "content_sized", responsive_behavior: ["wrap"], hierarchy: [] },
+        used_by: [],
+        children: [],
+      },
       confidence: opts.confidence ?? 0.85,
     })),
   });
@@ -161,6 +179,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete config.repos.semantic_cache_test;
   invalidateCache();
   if (tmpDir && existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -208,6 +227,114 @@ describe("isParserOrigin / isAlreadyEnriched / bucketKey / chunk", () => {
   it("chunk slices into batches of N", () => {
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
     expect(chunk([], 3)).toEqual([]);
+  });
+
+  it("builds relation context beyond one hop", () => {
+    const first = parserNode({ id: "first", links: [{ target: "second", type: "workflow", relationship: "starts", description: "first starts second", strength: "strong" }] });
+    const second = parserNode({ id: "second", links: [{ target: "third", type: "feature", relationship: "realizes", description: "second realizes third", strength: "strong" }] });
+    const third = feature({ id: "third" });
+    const context = buildMultiHopContext(first, [first, second, third], 3, 10);
+    expect(context.map((node) => node.id)).toEqual(expect.arrayContaining(["second", "third"]));
+  });
+});
+
+describe("buildSemanticCachePlan", () => {
+  const richNeighbor = (over: Partial<ParserNodeRecord> = {}): ParserNodeRecord => parserNode({
+    id: "semantic-neighbor",
+    description: "This service owns the shared request contract and validates it before coordinating the domain workflow. It exists so callers and downstream persistence use one consistent interpretation of the operation.",
+    intent: "Keep the shared operation contract consistent across its callers and downstream dependencies.",
+    purpose: "domain-service",
+    tags: ["contract", "workflow"],
+    links: [{ target: "cache-root", type: "data_model", relationship: "supports", description: "Shares the operation contract", strength: "weak" }],
+    enrichment: {
+      enriched: true,
+      enriched_at: "2026-08-10T12:00:00.000Z",
+      enricher: "enrich_parser_nodes/1.1",
+      confidence: 0.92,
+    },
+    ...over,
+  });
+
+  it("uses a confident enriched neighbor to cover shared source evidence", () => {
+    const root = parserNode({ id: "cache-root", source_files: ["src/shared.ts"] });
+    const plan = buildSemanticCachePlan(root, [richNeighbor({ source_files: ["src/shared.ts"] })], {
+      enabled: true,
+      minConfidence: 0.72,
+      minCoverage: 0.75,
+      sourceModifiedAt: new Map([["src/shared.ts", Date.parse("2026-08-10T11:00:00.000Z")]]),
+    });
+
+    expect(plan.sufficient).toBe(true);
+    expect(plan.reused_neighbor_ids).toEqual(["semantic-neighbor"]);
+    expect(plan.source_files_covered).toEqual(["src/shared.ts"]);
+    expect(plan.source_files_to_read).toEqual([]);
+    expect(plan.cache_confidence).toBeGreaterThanOrEqual(0.72);
+  });
+
+  it("rejects low-confidence neighbor semantics and reads the source", () => {
+    const root = parserNode({ id: "cache-root", source_files: ["src/shared.ts"] });
+    const neighbor = richNeighbor({
+      source_files: ["src/shared.ts"],
+      enrichment: {
+        enriched: true,
+        enriched_at: "2026-08-10T12:00:00.000Z",
+        enricher: "enrich_parser_nodes/1.1",
+        confidence: 0.2,
+      },
+    });
+    const plan = buildSemanticCachePlan(root, [neighbor], {
+      enabled: true,
+      minConfidence: 0.72,
+      minCoverage: 0.75,
+      sourceModifiedAt: new Map([["src/shared.ts", Date.parse("2026-08-10T11:00:00.000Z")]]),
+    });
+
+    expect(plan.sufficient).toBe(false);
+    expect(plan.low_confidence_neighbor_ids).toEqual(["semantic-neighbor"]);
+    expect(plan.source_files_to_read).toEqual(["src/shared.ts"]);
+  });
+
+  it("does not let high stated confidence turn hollow knowledge into cache evidence", () => {
+    const root = parserNode({ id: "cache-root", source_files: ["src/shared.ts"] });
+    const neighbor = richNeighbor({
+      source_files: ["src/shared.ts"],
+      description: "85 source file(s) in src/",
+      intent: undefined,
+      purpose: undefined,
+      tags: [],
+      key_fields: [],
+      enrichment: {
+        enriched: true,
+        enriched_at: "2026-08-10T12:00:00.000Z",
+        enricher: "legacy-enricher",
+        confidence: 0.99,
+      },
+    });
+    const plan = buildSemanticCachePlan(root, [neighbor], {
+      enabled: true,
+      minConfidence: 0.72,
+      minCoverage: 0.75,
+      sourceModifiedAt: new Map([["src/shared.ts", Date.parse("2026-08-10T11:00:00.000Z")]]),
+    });
+
+    expect(plan.sufficient).toBe(false);
+    expect(plan.low_confidence_neighbor_ids).toEqual(["semantic-neighbor"]);
+    expect(plan.source_files_to_read).toEqual(["src/shared.ts"]);
+  });
+
+  it("treats source newer than enrichment as a cache conflict", () => {
+    const root = parserNode({ id: "cache-root", source_files: ["src/shared.ts"] });
+    const plan = buildSemanticCachePlan(root, [richNeighbor({ source_files: ["src/shared.ts"] })], {
+      enabled: true,
+      minConfidence: 0.72,
+      minCoverage: 0.75,
+      sourceModifiedAt: new Map([["src/shared.ts", Date.parse("2026-08-10T13:00:00.000Z")]]),
+    });
+
+    expect(plan.sufficient).toBe(false);
+    expect(plan.conflicts).toEqual(["source_newer_than_cache:src/shared.ts:semantic-neighbor"]);
+    expect(plan.source_files_covered).toEqual([]);
+    expect(plan.source_files_to_read).toEqual(["src/shared.ts"]);
   });
 });
 
@@ -344,6 +471,119 @@ describe("mergeEnrichment", () => {
 // ---------------------------------------------------------------------------
 
 describe("enrichParserNodesProgrammatic — integration", () => {
+  it("reuses a fresh enriched neighborhood as semantic cache without rereading covered source", async () => {
+    const repoRoot = join(tmpDir, "semantic-cache-repo");
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(join(repoRoot, "src", "shared.ts"), "export const sharedContract = 'semantic-cache';\n", "utf-8");
+    config.repos.semantic_cache_test = repoRoot;
+
+    const root = parserNode({
+      id: "cache-root",
+      name: "Cached Consumer",
+      source_repo: "semantic_cache_test",
+      source_files: ["src/shared.ts"],
+    });
+    const neighbor = parserNode({
+      id: "cache-neighbor",
+      name: "Shared Contract Owner",
+      source_repo: "semantic_cache_test",
+      source_files: ["src/shared.ts"],
+      description: "Shared Contract Owner defines the validated request shape consumed by Cached Consumer. It owns interpretation of the shared operation and relates callers to the workflow that persists the resulting state.",
+      intent: "Provide one trusted semantic contract for consumers of the shared domain operation.",
+      purpose: "contract-owner",
+      tags: ["contract", "shared"],
+      enrichment: {
+        enriched: true,
+        enriched_at: "2099-01-01T00:00:00.000Z",
+        enricher: "enrich_parser_nodes/1.1",
+        confidence: 0.95,
+      },
+    });
+    await writeData("data_model.json", [root, neighbor]);
+    await writeData("features.json", []);
+    mockState.responses = [llmResponseFor([root])];
+
+    const res = await enrichParserNodesProgrammatic({ target: "data_model", batchSize: 1 });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.semantic_cache).toMatchObject({
+      nodes_served_from_cache: 1,
+      source_reads_avoided: 1,
+      source_file_reads: 0,
+    });
+
+    const messages = mockState.calls[0].messages as Array<{ role: string; content: string }>;
+    const prompt = messages.find((message) => message.role === "user")?.content ?? "";
+    expect(prompt).toContain('"semantic_cache_entry_refs"');
+    expect(prompt).toContain("Semantic neighborhood catalog");
+    expect(prompt).toContain("Provide one trusted semantic contract");
+    expect(prompt).not.toContain("export const sharedContract");
+
+    const persisted = await readData<ParserNodeRecord[]>("data_model.json");
+    expect(persisted.find((node) => node.id === "cache-root")?.enrichment?.semantic_cache).toMatchObject({
+      coverage: 0.75,
+      reused_neighbor_ids: ["cache-neighbor"],
+      source_files_read: [],
+      context_hops: 3,
+    });
+  });
+
+  it("deduplicates shared source excerpts across nodes in one batch", async () => {
+    const repoRoot = join(tmpDir, "semantic-cache-repo");
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    const marker = "UNIQUE_SHARED_SOURCE_EVIDENCE";
+    await writeFile(join(repoRoot, "src", "shared.ts"), `export const evidence = "${marker}";\n`, "utf-8");
+    config.repos.semantic_cache_test = repoRoot;
+    const nodes = [
+      parserNode({ id: "shared-a", name: "Shared A", source_repo: "semantic_cache_test", source_files: ["src/shared.ts"] }),
+      parserNode({ id: "shared-b", name: "Shared B", source_repo: "semantic_cache_test", source_files: ["src/shared.ts"] }),
+    ];
+    await writeData("data_model.json", nodes);
+    await writeData("features.json", []);
+    mockState.responses = [llmResponseFor(nodes)];
+
+    const res = await enrichParserNodesProgrammatic({ target: "data_model", batchSize: 2 });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.semantic_cache).toMatchObject({
+      source_file_reads: 1,
+      source_file_cache_hits: 1,
+      prompt_source_reuses: 1,
+    });
+    const messages = mockState.calls[0].messages as Array<{ role: string; content: string }>;
+    const prompt = messages.find((message) => message.role === "user")?.content ?? "";
+    expect(prompt.split(marker)).toHaveLength(2);
+  });
+
+  it("makes an enriched node available to later batches in the same run", async () => {
+    const repoRoot = join(tmpDir, "semantic-cache-repo");
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(join(repoRoot, "src", "shared.ts"), "export interface SharedFlow { id: string }\n", "utf-8");
+    config.repos.semantic_cache_test = repoRoot;
+    const nodes = [
+      parserNode({ id: "first-pass", name: "First Pass", source_repo: "semantic_cache_test", source_files: ["src/shared.ts"] }),
+      parserNode({ id: "second-pass", name: "Second Pass", source_repo: "semantic_cache_test", source_files: ["src/shared.ts"] }),
+    ];
+    await writeData("data_model.json", nodes);
+    await writeData("features.json", []);
+    mockState.responses = [llmResponseFor([nodes[0]]), llmResponseFor([nodes[1]])];
+
+    const res = await enrichParserNodesProgrammatic({ target: "data_model", batchSize: 1 });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.semantic_cache).toMatchObject({
+      nodes_served_from_cache: 1,
+      source_reads_avoided: 1,
+      source_file_reads: 1,
+      source_file_cache_hits: 0,
+    });
+    const secondMessages = mockState.calls[1].messages as Array<{ role: string; content: string }>;
+    const secondPrompt = secondMessages.find((message) => message.role === "user")?.content ?? "";
+    expect(secondPrompt).toContain('"policy": "reuse_semantic_cache"');
+    expect(secondPrompt).toContain('"id": "first-pass"');
+    expect(secondPrompt).not.toContain("export interface SharedFlow");
+  });
+
   it("uses deterministic structural fallback when no provider is available", async () => {
     mockState.available = false;
     await writeData("data_model.json", [parserNode()]);
@@ -367,7 +607,7 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     expect(after[0].tags).toContain("structural-fallback");
   });
 
-  it("filters non-parser-origin and already-enriched entries", async () => {
+  it("enriches every non-enriched graph node regardless of scanner origin", async () => {
     const nodes: ParserNodeRecord[] = [
       parserNode({ id: "parser-1" }),
       parserNode({ id: "parser-2-already", enrichment: { enriched: true, enriched_at: "t", enricher: "e" } }),
@@ -375,19 +615,19 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     ];
     await writeData("data_model.json", nodes);
     await writeData("features.json", []);
-    mockState.responses = [llmResponseFor([nodes[0]])];
+    mockState.responses = [llmResponseFor([nodes[0], nodes[2]])];
 
     const res = await enrichParserNodesProgrammatic({ target: "data_model" });
     expect(res.success).toBe(true);
     if (!res.success) return;
-    expect(res.data.total_eligible).toBe(1);
-    expect(res.data.total_enriched).toBe(1);
+    expect(res.data.total_eligible).toBe(2);
+    expect(res.data.total_enriched).toBe(2);
     expect(mockState.calls).toHaveLength(1);
 
     const after = await readData<ParserNodeRecord[]>("data_model.json");
     expect(after.find((n) => n.id === "parser-1")?.enrichment?.enriched).toBe(true);
     expect(after.find((n) => n.id === "parser-2-already")?.enrichment?.enricher).toBe("e");
-    expect(after.find((n) => n.id === "manual-1")?.enrichment).toBeUndefined();
+    expect(after.find((n) => n.id === "manual-1")?.enrichment?.enriched).toBe(true);
   });
 
   it("re-enriches when force=true", async () => {
@@ -541,6 +781,28 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     });
   }
 
+  it("salvages valid nodes when another result in the same batch fails validation", async () => {
+    const nodes = [
+      parserNode({ id: "valid-node", name: "Valid Node" }),
+      parserNode({ id: "invalid-node", name: "Invalid Node" }),
+    ];
+    await writeData("data_model.json", nodes);
+    await writeData("features.json", []);
+    const payload = JSON.parse(llmResponseFor(nodes)) as { results: Array<Record<string, unknown>> };
+    payload.results[1].description = "too short";
+    payload.results[1].intent = "shallow";
+    mockState.responses = [JSON.stringify(payload)];
+
+    const res = await enrichParserNodesProgrammatic({ target: "data_model", batchSize: 2 });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.semantic_coverage).toMatchObject({ llm_enriched: 1, fallback_nodes: 1 });
+
+    const after = await readData<ParserNodeRecord[]>("data_model.json");
+    expect(after.find((node) => node.id === "valid-node")?.enrichment?.model).toBe("mock-model");
+    expect(after.find((node) => node.id === "invalid-node")?.enrichment?.model).toBe("deterministic_fallback");
+  });
+
   it("malformed LLM response for a batch is recorded and run continues", async () => {
     const nodes = [parserNode({ id: "n1" }), parserNode({ id: "n2" })];
     await writeData("data_model.json", nodes);
@@ -653,6 +915,7 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     if (!res.success) return;
     expect(res.data.files_processed).toEqual(["ui"]);
     expect(res.data.total_enriched).toBe(1);
+    expect(res.data.ui_relation_gaps).toEqual(["ui_button_pay"]);
 
     const out = await readData<{ elements: Array<Record<string, unknown>> }>(
       "ui_registry.json",
@@ -662,7 +925,86 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     // UI's own purpose field MUST be preserved (role tag), not overwritten by the LLM's purpose.
     expect(el.purpose).toBe("button");
     // intent should be set from LLM output.
-    expect(el.intent).toBe("Represents the PayButton concept.");
+    expect(el.intent).toContain("PayButton");
+    const options = mockState.calls[0].options as {
+      jsonSchema?: { name?: string; schema?: { properties?: { results?: { items?: { required?: string[]; properties?: Record<string, unknown> } } } } };
+    };
+    expect(options.jsonSchema?.name).toBe("dreamgraph_ui_enrichment_batch");
+    expect(options.jsonSchema?.schema?.properties?.results?.items?.required).toContain("ui_knowledge");
+    expect(options.jsonSchema?.schema?.properties?.results?.items?.properties).toHaveProperty("ui_knowledge");
+  });
+
+  it("keeps rich UI enrichment and unions scanner facts when the model adds no relation", async () => {
+    await writeData("data_model.json", []);
+    await writeData("features.json", []);
+    await writeData("ui_registry.json", uiRegistryFile([
+      scannerUiElement({
+        data_contract: {
+          inputs: [{ name: "amount", type: "number", description: "Source-declared payment amount", required: true }],
+          outputs: [{ name: "button_surface", type: "ui", description: "Scanner-observed button surface", trigger: "render" }],
+        },
+        interactions: [{ action: "onClick", description: "Scanner-observed click handler" }],
+        children: ["ui_payment_icon"],
+        links: [{ target: "ui_payment_icon", type: "ui_element", relationship: "composes", strength: "strong" }],
+      }),
+      scannerUiElement({
+        id: "ui_payment_icon",
+        name: "PaymentIcon",
+        source_file: "src/ui/PaymentIcon.tsx",
+        enrichment: {
+          enriched: true,
+          enriched_at: "2026-08-10T20:18:05.456Z",
+          enricher: "existing",
+          model: "mock-model",
+          confidence: 0.9,
+        },
+      }),
+    ]));
+    mockState.responses = [
+      llmResponseFor([parserNode({ id: "ui_button_pay", name: "PayButton" })], {
+        ui_knowledge: {
+          data_contract: {
+            inputs: [],
+            outputs: [{ name: "rendered_view", type: "ui", description: "Rich payment action surface", trigger: "render" }],
+          },
+          interactions: [],
+          visual_semantics: {
+            visual_role: "payment action", emphasis: "primary", density: "comfortable",
+            chrome: "minimal", state_styling: [],
+          },
+          layout_semantics: {
+            pattern: "flow", alignment: "leading", sizing_behavior: "content_sized",
+            responsive_behavior: ["wrap"], hierarchy: [],
+          },
+          used_by: [],
+          children: [],
+        },
+      }),
+    ];
+
+    const res = await enrichParserNodesProgrammatic({ target: "ui" });
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+    expect(res.data.semantic_coverage).toMatchObject({ llm_enriched: 1, fallback_nodes: 0 });
+    expect(res.data.errors).toEqual([]);
+
+    const out = await readData<{ elements: Array<Record<string, any>> }>("ui_registry.json");
+    const button = out.elements.find((element) => element.id === "ui_button_pay")!;
+    expect(button.enrichment).toMatchObject({ enriched: true, model: "mock-model" });
+    expect(button.children).toContain("ui_payment_icon");
+    expect(button.links).toEqual(expect.arrayContaining([
+      expect.objectContaining({ target: "ui_payment_icon", relationship: "composes" }),
+    ]));
+    expect(button.data_contract.inputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "amount" }),
+    ]));
+    expect(button.data_contract.outputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "button_surface" }),
+      expect.objectContaining({ name: "rendered_view" }),
+    ]));
+    expect(button.interactions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "onClick" }),
+    ]));
   });
 
   it('target="ui" skips UI elements without source_repo (manual entries)', async () => {
@@ -711,7 +1053,7 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     expect(mockState.calls.length).toBe(0);
   });
 
-  it('target="all" processes data_model, features, and ui', async () => {
+  it('target="all" processes every populated canonical graph store', async () => {
     await writeData("data_model.json", [parserNode({ id: "dm1" })]);
     await writeData("features.json", [
       parserNode({
@@ -720,17 +1062,19 @@ describe("enrichParserNodesProgrammatic — integration", () => {
         provenance: { scanner: "native", language: "c", qualified_name: "F" },
       }),
     ]);
+    await writeData("capabilities.json", [parserNode({ id: "c1", name: "Capability" })]);
     await writeData("ui_registry.json", uiRegistryFile([scannerUiElement({ id: "ui1", name: "UI1" })]));
     mockState.responses = [
       llmResponseFor([parserNode({ id: "dm1" })]),
       llmResponseFor([parserNode({ id: "f1", name: "Feature" })]),
+      llmResponseFor([parserNode({ id: "c1", name: "Capability" })]),
       llmResponseFor([parserNode({ id: "ui1", name: "UI1" })]),
     ];
 
     const res = await enrichParserNodesProgrammatic({ target: "all" });
     expect(res.success).toBe(true);
     if (!res.success) return;
-    expect(res.data.files_processed.sort()).toEqual(["data_model", "features", "ui"]);
-    expect(res.data.total_enriched).toBe(3);
+    expect(res.data.files_processed.sort()).toEqual(["capabilities", "data_model", "features", "ui"]);
+    expect(res.data.total_enriched).toBe(4);
   });
 });

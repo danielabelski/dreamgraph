@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const routesSource = () => readFileSync(join(process.cwd(), "src", "architect", "routes.ts"), "utf8");
+const routesSource = () => readFileSync(join(process.cwd(), "src", "architect", "routes.ts"), "utf8").replace(/\r\n/g, "\n");
 
 describe("shell integration slices 5 and 6", () => {
   it("keeps the terminal panel height-bounded for xterm vertical fill", () => {

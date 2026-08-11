@@ -94,6 +94,32 @@ describe("native UI scanner", () => {
     } finally { await cleanup(); }
   });
 
+  it("extracts React contracts, interactions, semantics, and JSX composition links", async () => {
+    const { scan, cleanup } = await scanWith([
+      {
+        rel: "src/Parent.tsx",
+        content: `import { Child } from "./Child";
+export function Parent({ items, onChoose, title = "Items" }) {
+  return <section className="panel grid"><h2>{title}</h2><Child items={items}/><button onClick={onChoose}>Choose</button></section>;
+}`,
+      },
+      { rel: "src/Child.tsx", content: "export function Child({ items }) { return <ul>{items.map(String)}</ul>; }" },
+    ]);
+    try {
+      const { elements } = await extractNativeUiElements(scan);
+      const parent = elements.find((element) => element.name === "Parent")!;
+      const child = elements.find((element) => element.name === "Child")!;
+      expect(parent.data_contract.inputs.map((input) => input.name)).toEqual(["items", "onChoose", "title"]);
+      expect(parent.data_contract.outputs).toEqual([expect.objectContaining({ name: "rendered_view" })]);
+      expect(parent.interactions).toEqual([expect.objectContaining({ action: "click" })]);
+      expect(parent.visual_semantics?.visual_role).toContain("parent");
+      expect(parent.layout_semantics?.pattern).toBe("grid");
+      expect(parent.children).toContain(child.id);
+      expect(parent.links).toEqual([expect.objectContaining({ target: child.id, relationship: "composes" })]);
+      expect(child.used_by).toContain(parent.id);
+    } finally { await cleanup(); }
+  });
+
   it("falls back to filename when React file has no matching export", async () => {
     const { scan, cleanup } = await scanWith([
       {

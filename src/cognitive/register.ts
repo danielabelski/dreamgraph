@@ -715,8 +715,14 @@ export function registerCognitiveTools(server: McpServer): void {
         .describe(
           "Whether to automatically run normalization after dreaming (default: true)."
         ),
+      focus_entities: z.array(z.string().min(1)).max(100).optional()
+        .describe("Optional changed graph entity ids. When supplied, dreaming is restricted to these nodes and their bounded semantic neighborhood."),
+      focus_hops: z.number().int().min(1).max(4).optional()
+        .describe("Neighborhood depth for targeted dreaming (default: 2)."),
+      focus_reason: z.string().max(500).optional()
+        .describe("Why this graph region needs stabilization, retained in tool/audit context."),
     },
-    async ({ strategy, max_dreams, auto_normalize }) => {
+    async ({ strategy, max_dreams, auto_normalize, focus_entities, focus_hops, focus_reason }) => {
       recordActivity(); // v5.2 — track activity for idle triggers
       const startTime = Date.now();
       const strat = strategy ?? "all";
@@ -755,7 +761,11 @@ export function registerCognitiveTools(server: McpServer): void {
           const tensionsReactivated = await engine.processRecheckWindows();
 
           // Step 2: Dream (with duplicate suppression built-in)
-          const dreamResult = await dream(strat, maxD);
+          const dreamResult = await dream(strat, maxD, {
+            entity_ids: focus_entities ?? [],
+            hops: focus_hops ?? 2,
+            reason: focus_reason,
+          });
 
           let normResult = undefined;
           let promoted = 0;
@@ -895,6 +905,7 @@ export function registerCognitiveTools(server: McpServer): void {
               nodes: dreamResult.nodes.length,
               edges: dreamResult.edges.length,
             },
+            focus_entities: dreamResult.focus_entities,
             duplicates_merged: dreamResult.duplicates_merged,
             decayed: {
               nodes: decayResult.decayedNodes,

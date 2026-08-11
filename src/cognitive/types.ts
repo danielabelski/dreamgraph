@@ -882,12 +882,16 @@ export interface DreamCycleInput {
   strategy?: DreamStrategy;
   max_dreams?: number;
   auto_normalize?: boolean;
+  focus_entities?: string[];
+  focus_hops?: number;
+  focus_reason?: string;
 }
 
 export interface DreamCycleOutput {
   cycle_number: number;
   state_transitions: string[];
   dreams_generated: { nodes: number; edges: number };
+  focus_entities?: string[];
   duplicates_merged: number;
   decayed: { nodes: number; edges: number };
   normalization?: {
@@ -1031,6 +1035,8 @@ export type SemanticElementCategory =
 export interface SemanticElement {
   id: string;
   name: string;
+  /** Rich semantic account of what the element is, why it exists, how it behaves, and where it fits. */
+  description?: string;
   purpose: string;
   category: SemanticElementCategory;
 

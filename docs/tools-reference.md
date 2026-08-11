@@ -51,6 +51,14 @@ Adversarial security scan: AWAKE → NIGHTMARE → AWAKE.
 
 Current state, cycle counts, graph stats, validation metrics, tension stats, promotion config. No parameters.
 
+#### `graph_health_report`
+
+Read-only architectural quality assessment for the active instance. Reports semantic density, enriched and parser-only nodes, hollow descriptions, machine-name leakage, contract/workflow/datastore/UI coverage, linked nodes, disconnected feature clusters, unresolved tensions, dream promotion, repository drift, and scan/enrichment age. Recommendations are evidence-based and ordered by the smallest capable operation: enrich before scan, scan before bootstrap, except when repository drift requires structural discovery first.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `include_recommendations` | boolean | true | Include ranked, user-approval maintenance actions and their reasoning impact. The report never executes them. |
+
 #### `get_dream_insights`
 
 Strongest hypotheses, entity clusters, expiring dreams, active tensions, health assessment.
@@ -240,6 +248,8 @@ Create a scheduled cognitive action with a trigger policy.
 | `max_runs` | number | no | unlimited | Total executions before auto-disable |
 | `enabled` | boolean | no | true | Whether the schedule is active |
 
+For a targeted stabilization dream, put `focus_entities`, `focus_hops`, and `focus_reason` in the action `parameters`. v13 automatically creates bounded two-hop schedules after major graph changes and reuses matching active schedules to avoid unbounded queue growth.
+
 #### `list_schedules`
 
 List all schedules with status and execution summary. No parameters.
@@ -374,7 +384,7 @@ End an active lucid dream session — persist accepted edges and return to AWAKE
 
 ---
 
-## General Tools (38)
+## General Tools (39)
 
 Registered in [src/tools/register.ts](../src/tools/register.ts). These provide I/O, visualization, documentation, and operational knowledge capabilities.
 
@@ -628,26 +638,34 @@ Both modes auto-strip template stubs (`_schema`, `_fields`, `_note` entries), in
 
 #### `enrich_parser_nodes`
 
-Autonomous batch enrichment for parser-discovered nodes. Filters entities where `provenance.scanner === "native"` (for features / data_model) or `source_kind === "scanner"` with non-empty `source_repo` (for UI registry elements) and where `enrichment.enriched !== true`, buckets them by `repo + domain`, and calls the configured dreamer LLM in batches to fill in `intent`, `purpose`, semantic `description`, `tags`, and proposed `feature_anchors` (weak `GraphLinks`). The original parser description is preserved in `description_raw` on first enrichment. UI elements retain their existing `purpose` field as the role tag — only `intent`, `description_raw`, `tags`, `links`, and `enrichment` are written. Per-batch atomic persistence — partial progress survives crashes. Designed to be called once after `scan_project` instead of looping `enrich_seed_data`.
+Graph-wide semantic enrichment for every canonical node: features, workflows, data models, capabilities, UI elements, datastores, and auxiliary entities. It chooses the configured standalone LLM or connected Architect model/adapter, traverses at least two graph hops (three by default), selectively reads source evidence, and writes substantive descriptions, intent, purpose, tags, confidence, semantic relations, and source/coverage metadata. UI elements also require data contracts, interactions, visual semantics, layout semantics, ownership, and composition links. The original mechanical description is preserved in `description_raw` on first enrichment.
+
+Already-enriched neighborhood nodes are confidence-aware semantic cache entries. When their completeness, freshness, source coverage, and relationship coverage meet the configured gates, their persisted evidence is reused and redundant source reads are omitted. Conflicting or low-confidence areas still trigger source-backed analysis. Writes are atomic per batch, progress notifications keep CLI calls observable, and partial progress survives interruption.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target` | enum | `all` | `data_model`, `features`, `ui`, `all` (= all three), or the deprecated `both` (= features + data_model, no UI; aliased for one back-compat cycle, removed in a future release) |
-| `max_nodes` | number (1–5000) | 500 | Cap on total eligible nodes processed in one call |
+| `target` | enum | `all` | `data_model`, `features`, `workflows`, `capabilities`, `ui`, `datastores`, `auxiliary`, `all`, or deprecated `both` |
+| `max_nodes` | number (1–1,000,000) | 1,000,000 | Hard cap on nodes processed in one call |
 | `batch_size` | number (1–50) | 10 | Nodes per LLM call within a `repo::domain` bucket |
 | `dry_run` | boolean | false | Run the LLM but skip persistence |
 | `force` | boolean | false | Re-enrich nodes that already have `enrichment.enriched === true` |
 | `feature_context_size` | number (0–100) | 20 | Sibling features included per bucket for anchor grounding |
+| `context_hops` | number (2–6) | 3 | Semantic graph hops traversed for every node |
+| `relation_context_size` | number (5–100) | 40 | Maximum related nodes supplied as semantic context |
+| `model_source` | enum | `auto` | `auto`, `standalone`, or `architect` |
+| `semantic_cache` | boolean | true | Reuse sufficiently complete, confident, fresh neighborhood evidence |
+| `semantic_cache_min_confidence` | number (0–1) | 0.72 | Minimum completeness-adjusted confidence for cache evidence |
+| `semantic_cache_min_coverage` | number (0–1) | 0.75 | Minimum source/relationship coverage before omitting a source read |
 
-**Returns:** `{ files_processed[], total_eligible, total_enriched, total_skipped, batches_run, llm_calls, tokens_used, feature_anchors_written, errors[], notes[], dry_run }`. The `notes[]` array carries the `"both"`-deprecation warning when applicable.
+**Returns:** per-store and total eligibility/enrichment counts, semantic coverage, relation counts, batch/call/token totals, route/fallback evidence, semantic-cache hits and source-read savings, stabilization schedules, errors, and notes.
 
-**UI eligibility gate:** Only UI registry entries with `source_kind === "scanner"` *and* a non-empty `source_repo` are candidates. Manual / SDK / user-guidance entries (no `source_repo`) remain in the registry untouched and are also excluded from `index.json`. `source_repo` is the indexing/enrichment gate; `source_kind` is descriptive only.
+**Eligibility:** Every non-enriched canonical node is eligible, regardless of origin; `force=true` refreshes every selected node. Source-bound UI entries retain their role tag while their description, intent, contracts, interaction model, visual/layout knowledge, and semantic links are refreshed.
 
-**LLM unavailable:** Returns `error.code === "LLM_UNAVAILABLE"` without touching any file. Provider-agnostic — any configured provider (OpenAI / OpenRouter / sampling) works through the standard LLM seam.
+**LLM unavailable or invalid:** Deterministic fallback metadata may preserve structural progress, but `enriched` remains false and semantic coverage remains incomplete. Fallback output is never presented as successful LLM enrichment.
 
 #### `scan_project`
 
-Automated project scan with LLM enrichment. Scans the project directory structure, reads key source files, then uses the configured dreamer LLM to generate rich semantic entries for features, workflows, and data model entities. Non-destructive — always uses merge mode. Falls back to structural-only analysis if no LLM is configured. **Automatically triggers a full dream cycle** (`strategy="all"`) after scan completes (Phase 3), so the knowledge graph begins growing immediately.
+Automated project scan followed by mandatory graph-wide semantic enrichment. Discovery honors the project-root `.gitignore`, scans requested repositories and UI/native sources, and introspects configured PostgreSQL tables when `DATABASE_URL` is present. It then forces `enrich_parser_nodes(target="all", context_hops=3)` so every canonical node is evaluated with source-backed multi-hop context. The result reports incomplete semantic coverage explicitly when no valid LLM route can satisfy the node contracts.
 
 This is a convenience orchestrator. All individual tools (`init_graph`, `enrich_seed_data`, `register_ui_element`) remain available for manual or targeted enrichment.
 
@@ -657,7 +675,7 @@ This is a convenience orchestrator. All individual tools (`init_graph`, `enrich_
 | `targets` | string[] | all four | Subset of `["features", "workflows", "data_model", "ui"]` to populate. The `ui` target runs the native UI scanner over `.tsx/.jsx/.vue/.svelte/.razor/.xaml` files (v10.3). |
 | `repos` | string[] | all configured | Specific repo names to scan. |
 
-**Returns:** Summary with counts for repos scanned, files discovered, UI files detected, technology detected, features/workflows/data_model inserted/updated/total, **auxiliary entities (test_suite/configuration/automation_script/mcp_tool) inserted/updated/total**, **UI scanner counters (`ui.inserted/updated/skipped_protected/total_for_repo`)** when the `ui` target ran, index entries rebuilt, LLM tokens used, and any warnings.
+**Returns:** Summary with repository/file discovery, ignored-path behavior, coarse extraction, native data/UI results, PostgreSQL scan/link counts, mandatory semantic coverage, cache/source-read metrics, index entries, targeted stabilization schedules, LLM usage, partial-mode state, and warnings. Phase and batch progress is streamed through MCP notifications.
 
 **Phase 2.5 — auxiliary entity merge (v8.2):** After LLM enrichment and before index rebuild, `scan_project` classifies every scanned file into one of four auxiliary kinds (tests / config / scripts / MCP tools) and persists them to `data/auxiliary_entities.json` via `mergeAuxiliaryEntities`. The rebuilt `index.json` includes one row per auxiliary entry with `type` set to the kind. See [data-model.md](data-model.md#auxiliary-entities-auxiliary_entitiesjson) for schema.
 

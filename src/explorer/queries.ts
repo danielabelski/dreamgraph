@@ -166,9 +166,12 @@ function findEntity(raw: GraphRawSnapshot, id: string, type: ExplorerNodeType): 
     case "data_model":
       return (raw.dataModel as DataModelEntity[]).find((d) => d.id === id) ?? null;
     case "capability":
-      return (raw.capabilities as CapabilityEntity[]).find((c) => c.id === id) ?? null;
+      return (raw.capabilities as CapabilityEntity[]).find((c) => c.id === id) ??
+        (raw.auxiliary ?? []).find((entity) => entity.id === id) ?? null;
     case "datastore":
       return (raw.datastores as Datastore[]).find((d) => d.id === id) ?? null;
+    case "ui_element":
+      return (raw.uiElements ?? []).find((element) => element.id === id) ?? null;
     case "dream_node":
       return (raw.dreamGraph.nodes ?? []).find((n: DreamNode) => n.id === id) ?? null;
     case "tension":

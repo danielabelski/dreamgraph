@@ -22,6 +22,7 @@
 | standalone-architect-cli-bridge | feature | related_to | moderate | auto-backlink |
 | feature_architect_plugin_tabs | feature | related_to | moderate | auto-backlink |
 | architect_plugin_tab_snapshot_action | feature | related_to | moderate | auto-backlink |
+| architect-cli-terminal-surface | feature | related_to | moderate | auto-backlink |
 
 **Tags:** standalone-architect, adaptive-future-engine, future-review, daemon-governed, daemon-owned, daemon-served-route, provider-routing
 

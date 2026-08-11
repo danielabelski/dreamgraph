@@ -72,8 +72,19 @@ export function registerBootstrapInstanceTool(server: McpServer): void {
             "selected mode even if it was already recorded for this fingerprint.",
         ),
     },
-    async ({ mode, force }) => {
+    async ({ mode, force }, extra) => {
       logger.info(`bootstrap_instance: mode=${mode}, force=${force}`);
+      const sendProgress = (message: string, progress: number, total?: number): void => {
+        extra.sendNotification({
+          method: "notifications/progress" as const,
+          params: {
+            progressToken: (extra._meta as Record<string, unknown>)?.progressToken as string | number ?? "bootstrap",
+            progress,
+            ...(total !== undefined ? { total } : {}),
+            message,
+          },
+        }).catch(() => {});
+      };
 
       const result = await safeExecute<BootstrapInstanceResult>(
         async (): Promise<ToolResponse<BootstrapInstanceResult>> => {
@@ -120,7 +131,12 @@ export function registerBootstrapInstanceTool(server: McpServer): void {
 
           if (resolvedMode === "full") {
             try {
-              await bootstrapNewInstance();
+              await bootstrapNewInstance({
+                force: true,
+                onProgress: (message, step, total) => {
+                  sendProgress(message, step, total);
+                },
+              });
               success_ = true;
               outcome = "full bootstrap chain completed";
             } catch (err) {
@@ -130,11 +146,14 @@ export function registerBootstrapInstanceTool(server: McpServer): void {
               logger.error(`bootstrap_instance: ${outcome}`);
             }
           } else {
-            const re = await runReEnrichment();
+            const re = await runReEnrichment(
+              undefined,
+              (message, batch) => sendProgress(message, batch),
+            );
             adrsRecorded = re.adrs_recorded;
-            success_ = re.ran;
+            success_ = re.ran && re.semantic_complete;
             outcome = re.ran
-              ? `re-enrichment ok: ${re.adrs_recorded} new ADRs (${re.total_adrs} total)`
+              ? `re-enrichment ${re.semantic_complete ? "complete" : "incomplete"}: ${re.nodes_enriched} nodes, ${re.adrs_recorded} new ADRs (${re.total_adrs} total)`
               : `re-enrichment skipped: ${re.reason}`;
           }
 

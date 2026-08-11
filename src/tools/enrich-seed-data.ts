@@ -40,6 +40,8 @@ import { loadIndexableUIElements } from "../utils/ui-index.js";
 import { success, error, safeExecute } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 import { atomicWriteFile } from "../utils/atomic-write.js";
+import { scheduleTargetedDreamStabilization } from "../cognitive/targeted-dreams.js";
+import { updateGraphMaintenanceState } from "../cognitive/graph-maintenance-state.js";
 import type {
   Feature,
   Workflow,
@@ -52,6 +54,7 @@ import type {
   WorkflowStep,
   EntityField,
   EntityRelationship,
+  EnrichmentMetadata,
   ToolResponse,
 } from "../types/index.js";
 
@@ -253,6 +256,14 @@ type DataModelEntry = z.infer<typeof DataModelEntrySchema>;
 type CapabilityEntry = z.infer<typeof CapabilityEntrySchema>;
 type SystemOverviewEntry = z.infer<typeof SystemOverviewEntrySchema>;
 
+function curatedEnrichmentMetadata(): EnrichmentMetadata {
+  return {
+    enriched: true,
+    enriched_at: new Date().toISOString(),
+    enricher: "enrich_seed_data/curated",
+  };
+}
+
 function toGraphLink(raw: FeatureEntry["links"][number]): GraphLink {
   // Both branches of GraphLinkLenient already produce the GraphLink shape,
   // but the union type loses the precise `type` literal. Re-narrow here.
@@ -289,6 +300,7 @@ function entryToFeature(entry: FeatureEntry): Feature {
     domain: entry.domain,
     keywords: entry.keywords,
     links: toGraphLinkArray(entry.links),
+    enrichment: curatedEnrichmentMetadata(),
   } as Feature;
 }
 
@@ -314,6 +326,7 @@ function entryToWorkflow(entry: WorkflowEntry): Workflow {
     ...(entry.superseded_by ? { superseded_by: entry.superseded_by } : {}),
     steps,
     links: toGraphLinkArray(entry.links),
+    enrichment: curatedEnrichmentMetadata(),
   } as Workflow;
 }
 
@@ -346,6 +359,7 @@ function entryToDataModel(entry: DataModelEntry): DataModelEntity {
     key_fields: keyFields,
     relationships,
     links: toGraphLinkArray(entry.links),
+    enrichment: curatedEnrichmentMetadata(),
   } as DataModelEntity;
 }
 
@@ -365,6 +379,7 @@ function entryToCapability(entry: CapabilityEntry): CapabilityEntity {
     domain: entry.domain,
     keywords: entry.keywords,
     links: toGraphLinkArray(entry.links),
+    enrichment: curatedEnrichmentMetadata(),
   } as CapabilityEntity;
 }
 
@@ -502,6 +517,11 @@ interface EnrichResult {
   total_entries: number;
   index_entries: number;
   validation_errors: string[];
+  targeted_dream_schedules: {
+    created: number;
+    reused: number;
+    schedule_ids: string[];
+  };
   message: string;
 }
 
@@ -520,6 +540,8 @@ export interface ExecuteEnrichSeedDataInput {
    * when they themselves call back into executeEnrichSeedData.
    */
   _skipIntegrityHooks?: boolean;
+  /** Internal aggregation guard: scan_project schedules one focused pass after all targets. */
+  _skipDreamScheduling?: boolean;
 }
 
 /**
@@ -698,6 +720,35 @@ export async function executeEnrichSeedData(
     }
   }
 
+  const targetedDreamSchedules: EnrichResult["targeted_dream_schedules"] = {
+    created: 0,
+    reused: 0,
+    schedule_ids: [],
+  };
+  const majorGraphChangeThreshold = Math.max(1, Number(process.env.DREAMGRAPH_MAJOR_GRAPH_CHANGE_NODES) || 20);
+  if (target !== "system_overview" && inserted + updated > 0) {
+    const now = new Date().toISOString();
+    await updateGraphMaintenanceState({
+      last_enrichment_at: now,
+      ...(inserted + updated >= majorGraphChangeThreshold ? { last_major_graph_change_at: now } : {}),
+    }).catch((err) => {
+      validationErrors.push(`Graph maintenance timestamp failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+  if (!input._skipDreamScheduling && target !== "system_overview" && inserted + updated >= majorGraphChangeThreshold) {
+    try {
+      const stabilization = await scheduleTargetedDreamStabilization({
+        entity_ids: validated.map((entry) => entry.id).filter(Boolean),
+        reason: `Major curated graph write changed ${inserted + updated} ${target} nodes`,
+      });
+      targetedDreamSchedules.created = stabilization.scheduled.length;
+      targetedDreamSchedules.reused = stabilization.reused.length;
+      targetedDreamSchedules.schedule_ids = [...stabilization.scheduled, ...stabilization.reused].map((schedule) => schedule.id);
+    } catch (err) {
+      validationErrors.push(`Targeted dream scheduling failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const modeLabel = mode === "replace" ? "Replaced" : "Enriched";
   const summary =
     `${modeLabel} ${target}: ${inserted} inserted, ${updated} updated, ${totalEntries} total entries. ` +
@@ -716,6 +767,7 @@ export async function executeEnrichSeedData(
     total_entries: totalEntries,
     index_entries: indexEntries,
     validation_errors: validationErrors,
+    targeted_dream_schedules: targetedDreamSchedules,
     message: summary,
   });
 }

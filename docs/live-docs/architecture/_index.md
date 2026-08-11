@@ -231,3 +231,9 @@
 | ✅ ADR-227 | [Architect plugin browser API is a versioned daemon projection](adr-227.md) | accepted | 2026-05-31T15:29:00.798Z | collaborative |
 | ✅ ADR-228 | [Standalone Architect Doom tab is a host-owned local-convenience emulator surface](adr-228.md) | accepted | 2026-05-31T19:14:21.143Z | collaborative |
 | ✅ ADR-229 | [Architect UI treats vertical space as expensive without sacrificing usability or coherency](adr-229.md) | accepted | 2026-06-01T10:10:37.560Z | human |
+| ✅ ADR-230 | [Normalize LLM provider results and gate model parameters through capabilities](adr-230.md) | accepted | 2026-06-05T19:42:12.518Z | collaborative |
+| ✅ ADR-231 | [Architect CLI rich TUI renderer uses Ink after dependency-free log-mode foundation](adr-231.md) | accepted | 2026-06-07T01:09:32.434Z | collaborative |
+| ✅ ADR-232 | [Architect CLI rich TUI is a distinct terminal surface with implementation-owned Ink dependency](adr-232.md) | accepted | 2026-06-07T01:26:40.466Z | human |
+| ✅ ADR-233 | [Chat output follows execution timeline with final report after tool trace](adr-233.md) | accepted | 2026-06-08T18:56:40.292Z | human |
+| ✅ ADR-234 | [Implementation status requires verified executable behavior, not plan/graph/doc updates](adr-234.md) | accepted | 2026-06-08T19:04:26.362Z | human |
+| ✅ ADR-235 | [Standalone Architect route boundary evidence is anchored on handleArchitectRoute](adr-235.md) | accepted | 2026-06-11T02:53:55.688Z | collaborative |

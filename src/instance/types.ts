@@ -243,6 +243,7 @@ export const DATA_STUBS: Record<string, unknown> = {
   "meta_log.json":          { analyses: [] },
   "system_story.json":      { chapters: [], weekly_digests: [], trends: {} },
   "schedules.json":         { schedules: [], execution_history: [] },
+  "graph_maintenance.json": { schema_version: "1.0.0", last_scan_at: null, last_enrichment_at: null, last_datastore_scan_at: null, last_major_graph_change_at: null, last_scan_git_heads: {}, datastore_connection_fingerprint: null, targeted_dream_schedule_ids: [] },
   "threat_log.json":        [],
   "dream_archetypes.json":  [],
   "capabilities.json":      [],
