@@ -1,12 +1,12 @@
 # DreamGraph Release Notes
 
-## v13.0.0 - Cognitive Maintenance
+## v13.1.0 - Additive Scan
 
-DreamGraph v13.0.0 makes graph health a first-class architectural responsibility. Scans now force graph-wide multi-hop semantic enrichment, enriched neighborhoods serve as confidence-aware caches, Architect diagnoses and proposes approved self-healing operations, configured PostgreSQL tables participate in ownership discovery, major changes schedule targeted stabilizing dreams, and Explorer renders nested knowledge consistently across every node type.
+DreamGraph v13.1.0 adds additive scanning: compatible full scans establish an evidence ledger, while incremental passes classify repository deltas, parse only material changes, reconcile support conservatively, and commit one graph revision with zero LLM calls by default.
 
-This release follows the governed seven-stage `release_workflow`: version alignment, documentation refresh, artifact packaging, release notes, commit/tag/push, GitHub release publication, and website update each require completion evidence before `v13.0.0` is treated as released.
+This release follows the governed seven-stage `release_workflow`: version alignment, documentation refresh, artifact packaging, release notes, commit/tag/push, GitHub release publication, and website update each require completion evidence before `v13.1.0` is treated as released.
 
-See [`../RELEASE_NOTES_v13.0.0.md`](../RELEASE_NOTES_v13.0.0.md) for the full distribution notes.
+See [`../RELEASE_NOTES_v13.1.0.md`](../RELEASE_NOTES_v13.1.0.md) for the full distribution notes.
 
 ## v12.6.0 - Hippodamus
 

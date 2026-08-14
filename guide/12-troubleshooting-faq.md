@@ -42,7 +42,7 @@ The installer only installs the extension if `code` is on PATH. Install manually
 ```bash
 cd extensions/vscode
 npm run build
-code --install-extension dreamgraph-vscode-13.0.0.vsix
+code --install-extension dreamgraph-vscode-13.1.0.vsix
 ```
 
 ---
@@ -109,7 +109,7 @@ Runtime dependencies didn't install. Fix:
 
 ```powershell
 # Windows
-cd "$env:USERPROFILE\.vscode\extensions\siteledger.dreamgraph-vscode-13.0.0"
+cd "$env:USERPROFILE\.vscode\extensions\siteledger.dreamgraph-vscode-13.1.0"
 npm install --omit=dev
 ```
 
@@ -296,3 +296,8 @@ Your code isn't touched. Only the DreamGraph instance data is erased.
 ## Next
 
 Last page — **[13. Glossary](13-glossary.md)** — definitions for every weird word in this guide.
+## Why does incremental scan require a full scan?
+
+Incremental scan requires a compatible committed `dreamgraph.scan_state.v1` baseline. A full scan is required when the baseline is missing or corrupt, the configured repository set changed, or the requested depth/targets are not covered. This is a fail-closed safety rule: DreamGraph will not infer deletions from incomplete evidence or silently perform expensive maintenance.
+
+Use `dg scan <instance> --incremental --dry-run` to inspect the reason. Run an explicit full scan to rebuild the baseline. If an incremental commit was interrupted, restart recovery uses the reconciliation journal; full scan remains the operator recovery path if incremental metadata must be disabled or rebuilt.

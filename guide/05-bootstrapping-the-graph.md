@@ -217,3 +217,14 @@ Then ask Architect for a graph-health report. Node count alone is not the succes
 ## Next
 
 Time to actually look at it: **[6. The VS Code extension](06-vs-code-extension.md)**.
+## Establishing an incremental baseline
+
+Run an explicit full scan before using incremental maintenance. The full scan publishes the compatible `scan_state.json` evidence baseline. Incremental requests fail closed when that baseline is missing, corrupt, or incompatible; they do not trigger a hidden full scan.
+
+Preview repository drift without mutation:
+
+```bash
+dg scan <instance> --incremental --dry-run
+```
+
+If the preview reports that a full scan is required, run the normal full scan deliberately, verify it, and retry the preview.

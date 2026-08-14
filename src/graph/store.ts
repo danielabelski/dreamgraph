@@ -10,6 +10,7 @@
 import { loadJsonArray, loadJsonData } from "../utils/cache.js";
 import { loadIndexableUIElements, type IndexableUIElement } from "../utils/ui-index.js";
 import { loadAuxiliaryEntities } from "../tools/auxiliary-store.js";
+import { withGraphRead } from "../utils/graph-reconciliation-barrier.js";
 import type {
   Feature,
   Workflow,
@@ -99,6 +100,10 @@ export interface GraphRawSnapshot {
  * Missing files yield typed empty defaults — never throws.
  */
 export async function loadGraphRaw(): Promise<GraphRawSnapshot> {
+  return withGraphRead(loadGraphRawUnlocked);
+}
+
+async function loadGraphRawUnlocked(): Promise<GraphRawSnapshot> {
   const [
     features,
     workflows,

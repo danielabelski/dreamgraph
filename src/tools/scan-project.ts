@@ -26,6 +26,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import ignore, { type Ignore } from "ignore";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -44,6 +45,17 @@ import { engine } from "../cognitive/engine.js";
 import { discoverAndRecordADRs } from "../instance/bootstrap.js";
 import { scheduleTargetedDreamStabilization } from "../cognitive/targeted-dreams.js";
 import type { ProjectScan, ScannedFile } from "./scan-types.js";
+import {
+  buildScanState,
+  commitScanState,
+  loadScanState,
+  previewIncrementalScan,
+  type ScanDeltaPreview,
+  type ScanTarget,
+  type StructuralEvidenceLedger,
+} from "./scan-state.js";
+import { makeScannedFile, reconcileAddedModifiedEntities, updateDerivedHubStates, withdrawStructuralEvidence } from "./incremental-reconciliation.js";
+import { withReconciliationTransaction } from "./reconciliation-transaction.js";
 import {
   stripTemplateStubs,
   mergeById,
@@ -519,10 +531,10 @@ Discovery rules:
 // `ensureStringArray`, `sanitizeEntry`) live in `./sanitize-entity.js`.
 // ---------------------------------------------------------------------------
 
-async function rebuildIndex(): Promise<number> {
-  const features = await loadJsonArray<Feature>("features.json");
-  const workflows = await loadJsonArray<Workflow>("workflows.json");
-  const dataModel = await loadJsonArray<DataModelEntity>("data_model.json");
+async function buildIndex(overrides: Partial<Record<"features.json" | "workflows.json" | "data_model.json", Record<string, unknown>[]>> = {}): Promise<ResourceIndex> {
+  const features = (overrides["features.json"] ?? await loadJsonArray<Feature>("features.json")) as Feature[];
+  const workflows = (overrides["workflows.json"] ?? await loadJsonArray<Workflow>("workflows.json")) as Workflow[];
+  const dataModel = (overrides["data_model.json"] ?? await loadJsonArray<DataModelEntity>("data_model.json")) as DataModelEntity[];
   const datastores = await loadJsonArray<Datastore>("datastores.json");
 
   const entities: Record<string, IndexEntry> = {};
@@ -569,10 +581,14 @@ async function rebuildIndex(): Promise<number> {
     logger.warn(`scan_project: failed to fold auxiliary entities into index: ${err instanceof Error ? err.message : err}`);
   }
 
-  const index: ResourceIndex = { entities };
+  return { entities };
+}
+
+async function rebuildIndex(): Promise<number> {
+  const index = await buildIndex();
   await atomicWriteFile(dataPath("index.json"), JSON.stringify(index, null, 2));
   invalidateCache("index.json");
-  return Object.keys(entities).length;
+  return Object.keys(index.entities).length;
 }
 
 async function writeSeed(filename: string, data: unknown): Promise<void> {
@@ -655,16 +671,46 @@ export interface ScanProjectResult {
     schedule_ids: string[];
     focus_entities: string[];
   };
+  delta_preview?: ScanDeltaPreview;
+  incremental_metrics?: {
+    parser_invocations: number;
+    unchanged_files_parsed: number;
+    llm_calls: number;
+    semantic_retained: number;
+    semantic_invalidated: number;
+    semantic_eligible: number;
+    semantic_reviewed_manual: number;
+    reasons: Record<string, number>;
+  };
   errors: string[];
   message: string;
+}
+
+type StructuralTarget = "features" | "workflows" | "data_model";
+type StructuralExtractor = (scan: ProjectScan) => Record<string, unknown>[];
+
+export interface IncrementalScanTestHooks {
+  /** Observes production registry routing without replacing orchestration. */
+  onExtractorSelected?: (target: StructuralTarget, scan: ProjectScan) => Promise<void> | void;
+  /** Controlled extractor fixture when content-sensitive deterministic evidence is required. */
+  extractorOverrides?: Partial<Record<StructuralTarget, StructuralExtractor>>;
+  /** Deterministic barrier used to mutate a fixture after extraction and before fingerprint validation. */
+  afterExtractionAttempt?: (attempt: number) => Promise<void> | void;
 }
 
 export interface RunScanOptions {
   depth?: "shallow" | "deep";
   targets?: string[];
   repos?: string[];
+  mode?: "full" | "incremental";
+  dry_run?: boolean;
+  enrich?: boolean;
   /** Optional progress callback (replaces MCP progress notifications) */
   onProgress?: (message: string, step: number, total: number) => void;
+  /** Test-only observation/barrier hooks; omitted by MCP, CLI, and production callers. */
+  test_hooks?: IncrementalScanTestHooks;
+  /** Internal bounded retry counter; production callers must not set this. */
+  _incremental_attempt?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -706,6 +752,193 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
   const unknown = targetRepos.filter(r => !config.repos[r]);
   if (unknown.length > 0) {
     throw new Error(`Unknown repos: ${unknown.join(", ")}. Available: ${availableRepos.join(", ")}`);
+  }
+
+  const mode = opts.mode ?? "full";
+  if (mode === "incremental") {
+    const selectedRepos = Object.fromEntries(targetRepos.map((name) => [name, config.repos[name]]));
+    progress("Previewing incremental repository evidence delta…");
+    const baseline = await loadScanState();
+    const deltaPreview = await previewIncrementalScan({
+      repos: selectedRepos,
+      depth,
+      targets: targetList as ScanTarget[],
+      ...(baseline.state ? { baseline: baseline.state } : {}),
+    });
+    if (deltaPreview.full_scan_required) {
+      throw new Error(`INCREMENTAL_BASELINE_REQUIRED: ${deltaPreview.reason ?? deltaPreview.baseline_status}. Run an explicit full scan.`);
+    }
+    const changedCount = deltaPreview.metrics.files_added + deltaPreview.metrics.files_modified +
+      deltaPreview.metrics.files_deleted + deltaPreview.metrics.files_renamed;
+    if (opts.dry_run === true || changedCount === 0) {
+      const summary = `Incremental ${opts.dry_run === true ? "preview" : "no-op"}: ${deltaPreview.metrics.files_added} added, ` +
+        `${deltaPreview.metrics.files_modified} modified, ${deltaPreview.metrics.files_deleted} deleted, ` +
+        `${deltaPreview.metrics.files_renamed} renamed, ${deltaPreview.metrics.files_unchanged} unchanged; zero graph churn.`;
+      return {
+        repos_scanned: 0, files_discovered: deltaPreview.metrics.files_discovered, ui_files_detected: 0,
+        technology: "", llm_used: false,
+        features: { inserted: 0, updated: 0, total: 0 },
+        workflows: { inserted: 0, updated: 0, total: 0 },
+        data_model: { inserted: 0, updated: 0, total: 0 },
+        index_entries: 0, llm_tokens_used: 0, delta_preview: deltaPreview, errors: [], message: summary,
+      };
+    }
+
+    const attempt = opts._incremental_attempt ?? 0;
+    const maxAttempts = 3;
+    const current = await buildScanState({
+      repos: selectedRepos, depth, targets: targetList as ScanTarget[],
+      operation: "incremental", previous: baseline.state,
+    });
+    const scans: ProjectScan[] = [];
+    const fileHashes: Record<string, Record<string, string>> = {};
+    for (const repoDelta of deltaPreview.repositories) {
+      const root = path.resolve(selectedRepos[repoDelta.repo_name]);
+      const snapshot = current.repos[repoDelta.repo_name];
+      const changed = [...repoDelta.added, ...repoDelta.modified, ...repoDelta.renamed.map((move) => move.to)];
+      fileHashes[repoDelta.repo_name] = Object.fromEntries(changed.map((file) => [file, snapshot.files[file].content_hash]));
+      const files = await Promise.all(changed.map(async (file) => {
+        const evidence = snapshot.files[file];
+        const captured = await fs.readFile(path.resolve(root, ...file.split("/")));
+        const capturedHash = `sha256:${createHash("sha256").update(captured).digest("hex")}`;
+        if (capturedHash !== evidence.content_hash) {
+          throw new Error("INCREMENTAL_SOURCE_CHANGED_DURING_CAPTURE");
+        }
+        return {
+          ...makeScannedFile(root, file, evidence.size),
+          content: captured.toString("utf8"),
+          content_hash: capturedHash,
+        };
+      }));
+      scans.push({
+        repoName: repoDelta.repo_name, repoRoot: root, technology: "incremental",
+        files, uiFiles: files.filter((file) => UI_FILE_PATTERNS.some((pattern) => pattern.test(file.rel))),
+        manifestContent: {}, topLevelDirs: [...new Set(files.map((file) => file.dirParts[0]).filter(Boolean))] as string[],
+        auxiliaryFiles: { test_suite: [], configuration: [], automation_script: [], mcp_tool: [] },
+      });
+    }
+
+    const staged = new Map<string, Record<string, unknown>[]>();
+    let ledger: StructuralEvidenceLedger | undefined = baseline.state?.evidence_ledger;
+    const counters = {
+      features: { inserted: 0, updated: 0, total: 0 },
+      workflows: { inserted: 0, updated: 0, total: 0 },
+      data_model: { inserted: 0, updated: 0, total: 0 },
+    };
+    const semanticMetrics = {
+      retained: 0, invalidated: 0, eligible: 0, reviewed_manual: 0,
+      reasons: {} as Record<string, number>,
+    };
+    const extractorRegistry: ReadonlyArray<{
+      target: StructuralTarget;
+      file: "features.json" | "workflows.json" | "data_model.json";
+      generate: StructuralExtractor;
+    }> = [
+      { target: "features", file: "features.json", generate: generateStructuralFeatures },
+      { target: "workflows", file: "workflows.json", generate: generateStructuralWorkflows },
+      { target: "data_model", file: "data_model.json", generate: generateStructuralDataModel },
+    ];
+    for (const spec of extractorRegistry) {
+      if (!targetList.includes(spec.target)) continue;
+      const existing = stripTemplateStubs(await loadJsonArray<Record<string, unknown>>(spec.file));
+      const incoming = (await Promise.all(scans.map(async (scan) => {
+        await opts.test_hooks?.onExtractorSelected?.(spec.target, scan);
+        const extractor = opts.test_hooks?.extractorOverrides?.[spec.target] ?? spec.generate;
+        return extractor(scan).map((entity) => ({
+          repo: scan.repoName, target: spec.target, kind: spec.target, entity,
+          file_hashes: fileHashes[scan.repoName],
+        }));
+      }))).flat();
+      const reconciled = reconcileAddedModifiedEntities({
+        existing,
+        incoming,
+        previous_ledger: ledger,
+        reconciliation_target: spec.target,
+        replaced_support_paths: deltaPreview.repositories.flatMap((repo) =>
+          [...repo.added, ...repo.modified, ...repo.renamed.map((move) => move.to)]
+            .map((file) => ({ repo: repo.repo_name, path: file }))
+        ),
+        revision: current.committed_revision,
+      });
+      const lifecycle = withdrawStructuralEvidence({
+        ledger: reconciled.ledger,
+        entities: reconciled.entities,
+        changes: deltaPreview.repositories.map((repo) => ({
+          repo: repo.repo_name, deleted: repo.deleted, renamed: repo.renamed,
+        })),
+        revision: current.committed_revision,
+      });
+      ledger = lifecycle.ledger;
+      semanticMetrics.retained += reconciled.semantic_metrics.retained;
+      semanticMetrics.invalidated += reconciled.semantic_metrics.invalidated;
+      semanticMetrics.eligible += reconciled.semantic_metrics.eligible;
+      semanticMetrics.reviewed_manual += reconciled.semantic_metrics.reviewed_manual;
+      for (const [reason, count] of Object.entries(reconciled.semantic_metrics.reasons)) {
+        semanticMetrics.reasons[reason] = (semanticMetrics.reasons[reason] ?? 0) + count;
+      }
+      const derived = updateDerivedHubStates(lifecycle.entities, lifecycle.ledger);
+      staged.set(spec.file, derived.entities);
+      counters[spec.target] = {
+        inserted: reconciled.inserted, updated: reconciled.updated + lifecycle.deprecated, total: derived.entities.length,
+      };
+    }
+    current.evidence_ledger = ledger;
+
+    await opts.test_hooks?.afterExtractionAttempt?.(attempt + 1);
+
+    // Extraction and the committed fingerprint must describe one stable byte snapshot.
+    const revalidated = await buildScanState({
+      repos: selectedRepos, depth, targets: targetList as ScanTarget[],
+      operation: "incremental", previous: baseline.state,
+    });
+    if (revalidated.committed_revision !== current.committed_revision) {
+      if (attempt + 1 < maxAttempts) {
+        return runScanProject({ ...opts, _incremental_attempt: attempt + 1 });
+      }
+      throw new Error(
+        `INCREMENTAL_SOURCE_UNSTABLE: repository evidence changed during all ${maxAttempts} extraction attempts; no graph state committed.`,
+      );
+    }
+
+    const stagedIndex = await buildIndex(Object.fromEntries(staged) as Partial<Record<"features.json" | "workflows.json" | "data_model.json", Record<string, unknown>[]>>);
+    const writes = [...staged].map(([file, entities]) => ({ file, content: JSON.stringify(entities, null, 2) }));
+    writes.push({ file: "index.json", content: JSON.stringify(stagedIndex, null, 2) });
+    writes.push({ file: "scan_state.json", content: JSON.stringify(current, null, 2) });
+    await withReconciliationTransaction({
+      expected_revision: baseline.state?.committed_revision ?? null,
+      next_revision: current.committed_revision,
+      writes,
+      read_current_revision: async () => (await loadScanState()).state?.committed_revision ?? null,
+    });
+    let explicitEnrichment: EnrichResult | undefined;
+    if (opts.enrich === true) {
+      const enriched = await enrichParserNodesProgrammatic({
+        target: "all", maxNodes: Number.MAX_SAFE_INTEGER, batchSize: 12,
+        dryRun: false, force: false, contextHops: 3, relationContextSize: 40,
+        modelSource: "auto", scheduleStabilization: false,
+      });
+      if (enriched.success) explicitEnrichment = enriched.data;
+    }
+    const incrementalIndexEntries = Object.keys(stagedIndex.entities).length;
+    return {
+      repos_scanned: scans.length, files_discovered: changedCount, ui_files_detected: scans.reduce((n, scan) => n + scan.uiFiles.length, 0),
+      technology: "incremental", llm_used: false,
+      features: counters.features, workflows: counters.workflows, data_model: counters.data_model,
+      semantic_enrichment: explicitEnrichment,
+      index_entries: incrementalIndexEntries, llm_tokens_used: explicitEnrichment?.tokens_used ?? 0, delta_preview: deltaPreview,
+      incremental_metrics: {
+        parser_invocations: scans.reduce((count, scan) => count + scan.files.length, 0),
+        unchanged_files_parsed: 0,
+        llm_calls: explicitEnrichment?.llm_calls ?? 0,
+        semantic_retained: semanticMetrics.retained,
+        semantic_invalidated: semanticMetrics.invalidated,
+        semantic_eligible: semanticMetrics.eligible,
+        semantic_reviewed_manual: semanticMetrics.reviewed_manual,
+        reasons: semanticMetrics.reasons,
+      },
+      errors: [],
+      message: `Incremental reconciliation committed ${changedCount} changed file(s) at ${current.committed_revision}; zero LLM calls.`,
+    };
   }
 
   const requestedMaxDepth = depth === "shallow" ? 3 : 10;
@@ -1298,8 +1531,48 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
     : "";
 
   const scanCompletedAt = new Date().toISOString();
+  let committedScanRevision: string | null = null;
+  try {
+    const prior = await loadScanState();
+    const selectedRepos = Object.fromEntries(targetRepos.map((name) => [name, config.repos[name]]));
+    const scanState = await buildScanState({
+      repos: selectedRepos,
+      depth,
+      targets: targetList as ScanTarget[],
+      operation: "full",
+      previous: prior.state,
+    });
+    let fullLedger: StructuralEvidenceLedger | undefined;
+    const fullSpecs = [
+      { target: "features" as const, file: "features.json" },
+      { target: "workflows" as const, file: "workflows.json" },
+      { target: "data_model" as const, file: "data_model.json" },
+    ];
+    for (const spec of fullSpecs) {
+      if (!targetList.includes(spec.target)) continue;
+      const entities = stripTemplateStubs(await loadJsonArray<Record<string, unknown>>(spec.file));
+      const incoming = entities.flatMap((entity) => {
+        const repo = typeof entity.source_repo === "string" ? entity.source_repo : "";
+        const snapshot = scanState.repos[repo];
+        if (!snapshot) return [];
+        return [{
+          repo, target: spec.target, kind: spec.target, entity,
+          file_hashes: Object.fromEntries(Object.entries(snapshot.files).map(([file, evidence]) => [file, evidence.content_hash])),
+        }];
+      });
+      fullLedger = reconcileAddedModifiedEntities({
+        existing: [], incoming, previous_ledger: fullLedger, revision: scanState.committed_revision,
+      }).ledger;
+    }
+    scanState.evidence_ledger = fullLedger;
+    await commitScanState(scanState);
+    committedScanRevision = scanState.committed_revision;
+  } catch (err) {
+    errors.push(`Scan-state baseline commit failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   await updateGraphMaintenanceState({
     last_scan_at: scanCompletedAt,
+    current_scan_state_revision: committedScanRevision,
     last_scan_git_heads: await captureRepositoryGitHeads(config.repos),
     datastore_connection_fingerprint: datastoreConnectionFingerprint(config.database.connectionString || process.env.DATABASE_URL),
     ...(changedNodeCount >= majorGraphChangeThreshold ? { last_major_graph_change_at: scanCompletedAt } : {}),
@@ -1353,7 +1626,7 @@ export function registerScanProjectTool(server: McpServer): void {
   server.tool(
     "scan_project",
     "Scan the project and populate the knowledge graph with features, workflows, and data model entities. " +
-    "Every scan and rescan finishes with mandatory LLM enrichment of every canonical node, " +
+    "Full scans preserve mandatory graph-wide enrichment; incremental scans reconcile evidence with zero LLM calls unless enrich=true. " +
     "using source evidence and at least two semantic graph hops. UI contracts, appearance, " +
     "layout, datastore tables, and cross-node relations are included. " +
     "Use this for quick initial enrichment — you can always refine with " +
@@ -1384,8 +1657,11 @@ export function registerScanProjectTool(server: McpServer): void {
         .describe(
           "Specific repo names to scan. Default: all configured repos.",
         ),
+      mode: z.enum(["full", "incremental"]).default("full").describe("full preserves existing behavior; incremental reconciles a compatible committed evidence baseline."),
+      dry_run: z.boolean().default(false).describe("Preview the incremental delta without parser, LLM, or graph writes."),
+      enrich: z.boolean().default(false).describe("Incremental only: explicitly run semantic enrichment after structural reconciliation. Default false."),
     },
-    async ({ depth, targets, repos }, extra) => {
+    async ({ depth, targets, repos, mode, dry_run, enrich }, extra) => {
       const VALID_TARGETS = ["features", "workflows", "data_model", "ui"];
       const targetList = targets ?? [...VALID_TARGETS];
 
@@ -1430,7 +1706,7 @@ export function registerScanProjectTool(server: McpServer): void {
 
       const result = await safeExecute<ScanProjectResult>(async (): Promise<ToolResponse<ScanProjectResult>> => {
         try {
-          const scanResult = await runScanProject({ depth, targets: targetList, repos, onProgress });
+          const scanResult = await runScanProject({ depth, targets: targetList, repos, mode, dry_run, enrich, onProgress });
           return success<ScanProjectResult>(scanResult);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

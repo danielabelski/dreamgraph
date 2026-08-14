@@ -13,6 +13,10 @@ export interface ScannedFile {
   ext: string;
   dirParts: string[];
   size: number;
+  /** Stable bytes captured for an incremental extractor invocation. */
+  content?: string;
+  /** Fingerprint of the exact captured bytes supplied to the extractor. */
+  content_hash?: string;
 }
 
 /**

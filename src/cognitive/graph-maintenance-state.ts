@@ -16,6 +16,7 @@ export interface GraphMaintenanceState {
   last_enrichment_at: string | null;
   last_datastore_scan_at: string | null;
   last_major_graph_change_at: string | null;
+  current_scan_state_revision: string | null;
   last_scan_git_heads: Record<string, string>;
   datastore_connection_fingerprint: string | null;
   targeted_dream_schedule_ids: string[];
@@ -28,6 +29,7 @@ function emptyState(): GraphMaintenanceState {
     last_enrichment_at: null,
     last_datastore_scan_at: null,
     last_major_graph_change_at: null,
+    current_scan_state_revision: null,
     last_scan_git_heads: {},
     datastore_connection_fingerprint: null,
     targeted_dream_schedule_ids: [],

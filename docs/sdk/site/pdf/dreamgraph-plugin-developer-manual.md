@@ -1,6 +1,6 @@
 ﻿---
 title: DreamGraph Plugin Developer Manual
-subtitle: Guide and Reference Manual --- v13.0.0 Cognitive Maintenance
+subtitle: Guide and Reference Manual --- v13.1.0 Additive Scan
 ---
 
 # Part I --- Plugin Developer Guide
@@ -11,7 +11,7 @@ subtitle: Guide and Reference Manual --- v13.0.0 Cognitive Maintenance
 # DreamGraph Plugin Developer Guide
 
 **Audience:** Engineers writing third-party plugins against `@dreamgraph/sdk`.
-**Engine baseline:** v13.0.0 "Cognitive Maintenance" (M0-M6 implemented; graph-health diagnostics, confidence-aware semantic enrichment, targeted dream stabilization, and structured Explorer knowledge inspection are current).
+**Engine baseline:** v13.1.0 "Additive Scan" (M0-M6 implemented; graph-health diagnostics, confidence-aware semantic enrichment, targeted dream stabilization, and structured Explorer knowledge inspection are current).
 **Companion:** see the [Plugin Reference Manual](../plugin-reference/00-index.md) for strict, normative tables.
 
 This guide is task-oriented. It walks you from "what is a plugin" through a working
@@ -1238,7 +1238,7 @@ See [`examples/action-checklist`](../../../examples/action-checklist/) for a com
 # DreamGraph Plugin Reference Manual
 
 **Audience:** Plugin authors and host implementors needing strict, normative tables.
-**Engine baseline:** v13.0.0 "Cognitive Maintenance".
+**Engine baseline:** v13.1.0 "Additive Scan".
 **Companion:** see the [Plugin Developer Guide](../plugin-developer-guide/00-index.md) for task-oriented walkthroughs.
 
 This reference is the source of truth. Where the guide and the reference disagree,

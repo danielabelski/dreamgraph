@@ -16,6 +16,7 @@ import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { config } from "../config/config.js";
 import { logger } from "./logger.js";
+import { withGraphRead } from "./graph-reconciliation-barrier.js";
 
 /** Minimum milliseconds between mtime checks for the same file. */
 const MIN_CHECK_MS = 5_000;
@@ -49,6 +50,10 @@ const cache = new Map<string, CacheEntry>();
  * underlying file changes (detected via mtime).
  */
 export async function loadJsonData<T = unknown>(filename: string): Promise<T> {
+  return withGraphRead(() => loadJsonDataUnlocked<T>(filename));
+}
+
+async function loadJsonDataUnlocked<T = unknown>(filename: string): Promise<T> {
   const filePath = resolve(dataDirResolver(), filename);
   const now = Date.now();
   const entry = cache.get(filename) as CacheEntry<T> | undefined;

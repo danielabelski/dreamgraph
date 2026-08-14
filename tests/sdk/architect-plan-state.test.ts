@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const root = await mkdtemp(join(tmpdir(), "dreamgraph-architect-state-"));
-vi.mock("../../src/utils/paths.js", () => ({ dataPath: (name: string) => join(root, name) }));
+vi.mock("../../src/utils/paths.js", () => ({
+  dataPath: (name: string) => join(root, name),
+  getDataDir: () => root,
+}));
 vi.mock("../../src/architect/plan-registry.js", () => ({ listPlanFiles: async () => ["living-dreamgraph.md", "other.md"] }));
 
 const { readArchitectPluginPlanState, writeArchitectPluginPlanState } = await import("../../src/plugins/architect-plan-state.js");

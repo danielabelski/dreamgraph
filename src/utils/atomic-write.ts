@@ -13,6 +13,7 @@
 
 import { open, rename, unlink } from "node:fs/promises";
 import { logger } from "./logger.js";
+import { withGraphMutation } from "./graph-reconciliation-barrier.js";
 
 const RENAME_RETRY_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 const RENAME_RETRY_DELAYS_MS = [25, 75, 150, 300, 600];
@@ -72,6 +73,14 @@ export async function atomicWriteFile(
   filePath: string,
   data: string,
   encoding: BufferEncoding = "utf-8",
+): Promise<void> {
+  return withGraphMutation(() => atomicWriteFileUnlocked(filePath, data, encoding));
+}
+
+async function atomicWriteFileUnlocked(
+  filePath: string,
+  data: string,
+  encoding: BufferEncoding,
 ): Promise<void> {
   const tmp = filePath + ".tmp";
   let fd;

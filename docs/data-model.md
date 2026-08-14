@@ -548,3 +548,8 @@ Append-only log of cognitive events dispatched through the event router. Each ev
 | `result_summary` | string | Brief outcome description |
 | `timestamp` | string | ISO timestamp |
 <!-- CONTINUATION TEST SLICE 4 -->
+## Incremental scan state and evidence lifecycle
+
+`scan_state.json` uses schema `dreamgraph.scan_state.v1`. It is the final publication marker for a committed full or incremental repository revision and records repository snapshots, content hashes, ignore/Git basis, covered targets, and the structural evidence ledger. Structural claims use stable semantic keys and explicit supporters rather than timestamps or line numbers.
+
+Source-derived lifecycle values are `active`, `stale_candidate`, `deprecated`, `orphaned`, and `purge_eligible`. Incremental reconciliation withdraws individual supporters, preserves independently supported claims and governed/non-source fields, and deprecates unsupported claims without automatic purge. Derived hubs are evaluated from grounded contributor IDs; datastore, ADR, plan, schedule, tension, plugin, manual, and protected UI knowledge is outside source-deletion authority.

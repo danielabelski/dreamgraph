@@ -13,6 +13,7 @@ import { z } from "zod";
 import { config } from "../config/config.js";
 import { dataPath } from "../utils/paths.js";
 import { logger } from "../utils/logger.js";
+import { withGraphRead } from "../utils/graph-reconciliation-barrier.js";
 import { safeExecute, success } from "../utils/errors.js";
 import type { ToolResponse, UIRegistryFile } from "../types/index.js";
 import type { CandidateEdgesFile, TensionFile, ValidatedEdgesFile } from "../cognitive/types.js";
@@ -21,6 +22,7 @@ import {
   loadGraphMaintenanceState,
   type GraphMaintenanceState,
 } from "../cognitive/graph-maintenance-state.js";
+import { loadScanState } from "./scan-state.js";
 
 const execFileAsync = promisify(execFile);
 const HOLLOW_DESCRIPTION = /\b\d+\s+source file\(s\)|generated assembly|detected by (?:the )?scanner|auto-created from datastore introspection|declared in .+\(line \d+\)/i;
@@ -273,6 +275,10 @@ function recommendation(
 }
 
 export async function assessGraphHealth(): Promise<GraphHealthReport> {
+  return withGraphRead(assessGraphHealthUnlocked);
+}
+
+async function assessGraphHealthUnlocked(): Promise<GraphHealthReport> {
   const [
     featuresRaw, workflowsRaw, dataModelRaw, capabilitiesRaw, datastoresRaw,
     auxiliaryRaw, uiRaw, candidates, validated, tensions, state,
@@ -379,7 +385,21 @@ export async function assessGraphHealth(): Promise<GraphHealthReport> {
     recommendations.push(recommendation(10, "Force semantic enrichment", "enrich_parser_nodes", { target: "all", force: true, context_hops: 3, model_source: "auto" }, "The source map is current but semantic coverage is incomplete.", "Refresh intent, contracts, UI knowledge, and multi-hop relations without an expensive source scan."));
   }
   if (!graphEmpty && repositoryStale) {
-    recommendations.push(recommendation(20, "Re-scan project", "scan_project", { depth: "deep" }, "Repository or scan-age evidence shows the fact graph may be stale.", "Discover structural changes and then run mandatory graph-wide enrichment."));
+    const baseline = await loadScanState();
+    if (baseline.status === "compatible" && baseline.state) {
+      recommendations.push(recommendation(
+        20, "Incrementally reconcile project", "scan_project",
+        { mode: "incremental", depth: baseline.state.depth, targets: baseline.state.targets_covered, dry_run: false, enrich: false },
+        "Repository drift exists and the committed scan baseline is compatible.",
+        "Reconcile only changed repository evidence through the same MCP path with zero default LLM calls.",
+      ));
+    } else {
+      recommendations.push(recommendation(
+        20, "Fully reconcile project", "scan_project", { mode: "full", depth: "deep" },
+        `Repository drift exists but the incremental baseline is ${baseline.status}.`,
+        "Create a governed authoritative baseline; full scan remains explicit recovery.",
+      ));
+    }
   }
   if (graphEmpty) {
     recommendations.push(recommendation(20, "Scan project", "scan_project", { depth: "deep" }, "The active instance has no canonical project graph.", "Build the initial evidence map before considering a broader bootstrap."));

@@ -34,6 +34,8 @@ must be started first with 'dg start <instance>'.
 Options:
   --depth <shallow|deep>    Scan depth (default: deep)
   --targets <list>          Comma-separated: features,workflows,data_model,ui
+  --incremental             Reconcile only repository evidence changed since the baseline
+  --dry-run                 Preview the incremental delta without parsing or graph writes
   --json                    Output raw JSON result
   --master-dir <path>       Override master directory
 `);
@@ -71,11 +73,17 @@ Options:
   if (typeof flags.targets === "string") {
     args.targets = flags.targets.split(",").map((t) => t.trim());
   }
+  if (flags.incremental === true) args.mode = "incremental";
+  if (flags["dry-run"] === true) {
+    args.dry_run = true;
+    if (args.mode === undefined) args.mode = "incremental";
+  }
 
   // 4. Call the scan_project tool
   if (!jsonOutput) {
-    console.log(`Scanning instance '${entry.name}' (${args.depth} mode)...`);
-    console.log("This may take a while if LLM enrichment is enabled.\n");
+    const operation = args.mode === "incremental" ? `incremental${args.dry_run === true ? " preview" : ""}` : "full";
+    console.log(`Scanning instance '${entry.name}' (${args.depth}, ${operation})...`);
+    if (operation === "full") console.log("This may take a while if LLM enrichment is enabled.\n");
   }
 
   try {
@@ -101,7 +109,19 @@ Options:
         }
 
         const d = parsed.data ?? parsed;
-        console.log("Scan complete!");
+        const delta = d.delta ?? d.delta_preview;
+        if (delta?.full_scan_required) {
+          console.error(`Incremental scan requires a full baseline: ${delta.reason ?? delta.baseline_status}`);
+          process.exitCode = 2;
+          return;
+        }
+        console.log(d.mode === "incremental" || delta ? "Incremental scan complete!" : "Scan complete!");
+        if (delta) {
+          console.log(`  Baseline:          ${delta.baseline_revision ?? delta.baseline_status}`);
+          console.log(`  Added/modified:    ${delta.metrics?.files_added ?? 0}/${delta.metrics?.files_modified ?? 0}`);
+          console.log(`  Deleted/renamed:   ${delta.metrics?.files_deleted ?? 0}/${delta.metrics?.files_renamed ?? 0}`);
+          console.log(`  Parser invocations:${delta.metrics?.parser_invocations ?? 0}`);
+        }
         console.log(`  Repos scanned:     ${d.repos_scanned ?? "?"}`);
         console.log(`  Files discovered:  ${d.files_discovered ?? "?"}`);
         console.log(`  LLM used:          ${d.llm_used ?? false}`);

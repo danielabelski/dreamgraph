@@ -25,6 +25,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { loadJsonArray, loadJsonData } from "../utils/cache.js";
+import { withGraphRead } from "../utils/graph-reconciliation-barrier.js";
 import { dataPath } from "../utils/paths.js";
 import { logger } from "../utils/logger.js";
 import type { Feature, Workflow, DataModelEntity } from "../types/index.js";
@@ -179,6 +180,10 @@ interface KnowledgeGraph {
 }
 
 async function loadKnowledgeGraph(): Promise<KnowledgeGraph> {
+  return withGraphRead(loadKnowledgeGraphUnlocked);
+}
+
+async function loadKnowledgeGraphUnlocked(): Promise<KnowledgeGraph> {
   const [features, workflows, dataModels] = await Promise.all([
     loadJsonArray<Feature>("features.json"),
     loadJsonArray<Workflow>("workflows.json"),

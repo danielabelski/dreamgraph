@@ -129,3 +129,31 @@ That's it. That's the loop.
 ## Next
 
 If you have more than one repo, that needs its own page: **[11. Multi-repo and monorepos](11-multi-repo.md)**.
+
+## Repository maintenance lifecycle
+
+Create or recover the authoritative baseline explicitly:
+
+```bash
+dg scan <instance> --depth deep
+```
+
+For normal maintenance, reconcile only repository evidence deltas:
+
+```bash
+dg scan <instance> --incremental
+```
+
+Preview the same MCP request without parsing or mutation:
+
+```bash
+dg scan <instance> --incremental --dry-run
+```
+
+Incremental scans do not run an LLM by default. When semantic completion is needed, request it separately:
+
+```bash
+dg enrich <instance> --skip-scan
+```
+
+If the baseline is missing, corrupt, or incompatible, run the explicit full scan. DreamGraph never silently substitutes a full scan for an incremental request.
