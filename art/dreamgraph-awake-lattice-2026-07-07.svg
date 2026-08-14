@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">DreamGraph Awake Lattice - 2026-07-07</title>
+  <desc id="desc">Original DreamGraph artwork created from the current architect moment: awake state, 2048 dream cycles, 55 nodes, 292 edges, 8820 validated facts, 17697 latent facts, 50135 rejected facts, and 10 unresolved tensions.</desc>
+  <metadata>
+    {
+      "created_for": "DreamGraph",
+      "created_at": "2026-07-07",
+      "source": "architect session architect-a9f844ee-91c2-4444-a576-fc480b43fdf2",
+      "state": "awake",
+      "dream_cycles": 2048,
+      "normalization_cycles": 1765,
+      "graph_nodes": 55,
+      "graph_edges": 292,
+      "validated": 8820,
+      "latent": 17697,
+      "rejected": 50135,
+      "unresolved_tensions": 10,
+      "average_activation": 0.72,
+      "note": "Original SVG composition generated for this moment, not copied from previous art."
+    }
+  </metadata>
+  <defs>
+    <linearGradient id="field" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#07140f"/>
+      <stop offset="0.42" stop-color="#102532"/>
+      <stop offset="1" stop-color="#1b162b"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="55%">
+      <stop offset="0" stop-color="#fff7c2" stop-opacity="0.95"/>
+      <stop offset="0.18" stop-color="#5df0c0" stop-opacity="0.75"/>
+      <stop offset="0.55" stop-color="#47a7ff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#47a7ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="validatedStroke" x1="0" x2="1">
+      <stop offset="0" stop-color="#7fffd4"/>
+      <stop offset="1" stop-color="#e9ff8a"/>
+    </linearGradient>
+    <linearGradient id="latentStroke" x1="0" x2="1">
+      <stop offset="0" stop-color="#6aa9ff" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#b897ff" stop-opacity="0.72"/>
+    </linearGradient>
+    <filter id="softLight" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.72 0"/>
+      <feBlend in="SourceGraphic" mode="screen"/>
+    </filter>
+    <filter id="fineGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="3" result="halo"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="memoryGrid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0V80" fill="none" stroke="#d8f7ff" stroke-opacity="0.045" stroke-width="1"/>
+      <circle cx="0" cy="0" r="1.8" fill="#d8f7ff" fill-opacity="0.16"/>
+    </pattern>
+    <style>
+      .edge-validated { fill: none; stroke: url(#validatedStroke); stroke-width: 2.6; stroke-linecap: round; opacity: 0.78; }
+      .edge-latent { fill: none; stroke: url(#latentStroke); stroke-width: 1.4; stroke-linecap: round; opacity: 0.36; stroke-dasharray: 8 12; }
+      .edge-rejected { fill: none; stroke: #ff6f91; stroke-width: 1; opacity: 0.22; stroke-dasharray: 2 14; }
+      .node { filter: url(#fineGlow); stroke: #ecfff8; stroke-width: 1.4; }
+      .label { font-family: Inter, Segoe UI, Arial, sans-serif; fill: #e9fff7; letter-spacing: 0; }
+      .small { font-size: 20px; fill: #b9d8df; }
+      .metric { font-size: 30px; font-weight: 650; fill: #f8ffda; }
+      .caption { font-size: 18px; fill: #99bbc6; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#field)"/>
+  <rect width="1600" height="1000" fill="url(#memoryGrid)"/>
+
+  <g opacity="0.7">
+    <path d="M118 168C298 82 458 108 642 226S1008 312 1228 190S1512 108 1594 142" fill="none" stroke="#5df0c0" stroke-opacity="0.14" stroke-width="2"/>
+    <path d="M0 800C202 694 398 724 568 816S918 932 1104 804S1406 666 1600 748" fill="none" stroke="#b897ff" stroke-opacity="0.14" stroke-width="2"/>
+    <path d="M186 956C342 816 470 704 650 650S1042 590 1258 378S1518 98 1600 58" fill="none" stroke="#ffe985" stroke-opacity="0.1" stroke-width="2"/>
+  </g>
+
+  <g transform="translate(800 502)">
+    <circle r="330" fill="url(#coreGlow)" opacity="0.82"/>
+    <circle r="270" fill="none" stroke="#d8f7ff" stroke-opacity="0.12" stroke-width="2"/>
+    <circle r="204.8" fill="none" stroke="#5df0c0" stroke-opacity="0.25" stroke-width="3" stroke-dasharray="18 11"/>
+    <circle r="176.5" fill="none" stroke="#b897ff" stroke-opacity="0.22" stroke-width="2" stroke-dasharray="5 16"/>
+
+    <g id="edge-field">
+      <path class="edge-validated" d="M-270 -40C-170 -202 44 -224 162 -92S242 118 84 190S-214 170 -270 -40Z"/>
+      <path class="edge-validated" d="M-228 -158C-84 -314 126 -292 258 -140S310 136 132 266S-190 214 -296 64"/>
+      <path class="edge-validated" d="M-104 -274C58 -316 214 -246 290 -82S250 224 68 290S-238 194 -286 20"/>
+      <path class="edge-latent" d="M-334 118C-198 -12 -58 -44 88 -12S282 24 354 -98"/>
+      <path class="edge-latent" d="M-318 -110C-144 -72 -20 36 84 158S206 310 344 260"/>
+      <path class="edge-latent" d="M-52 -346C-22 -176 96 -72 222 24S374 144 330 308"/>
+      <path class="edge-latent" d="M-360 8C-236 128 -80 178 110 144S292 54 370 -62"/>
+      <path class="edge-rejected" d="M-390 -252C-188 -82 92 -138 384 -316"/>
+      <path class="edge-rejected" d="M-406 282C-188 100 86 112 412 -220"/>
+    </g>
+
+    <g id="nodes">
+      <circle class="node" cx="0" cy="0" r="34" fill="#fff7c2"/>
+      <circle class="node" cx="-270" cy="-40" r="15" fill="#5df0c0"/>
+      <circle class="node" cx="-228" cy="-158" r="11" fill="#7fffd4"/>
+      <circle class="node" cx="-104" cy="-274" r="13" fill="#e9ff8a"/>
+      <circle class="node" cx="84" cy="190" r="15" fill="#5df0c0"/>
+      <circle class="node" cx="162" cy="-92" r="12" fill="#e9ff8a"/>
+      <circle class="node" cx="132" cy="266" r="11" fill="#7fffd4"/>
+      <circle class="node" cx="290" cy="-82" r="14" fill="#5df0c0"/>
+      <circle class="node" cx="68" cy="290" r="12" fill="#e9ff8a"/>
+      <circle class="node" cx="-286" cy="20" r="10" fill="#7fffd4"/>
+      <circle class="node" cx="-334" cy="118" r="8" fill="#6aa9ff" opacity="0.78"/>
+      <circle class="node" cx="88" cy="-12" r="9" fill="#b897ff" opacity="0.82"/>
+      <circle class="node" cx="354" cy="-98" r="8" fill="#6aa9ff" opacity="0.74"/>
+      <circle class="node" cx="344" cy="260" r="8" fill="#b897ff" opacity="0.76"/>
+      <circle class="node" cx="-52" cy="-346" r="8" fill="#6aa9ff" opacity="0.74"/>
+      <circle class="node" cx="330" cy="308" r="8" fill="#b897ff" opacity="0.76"/>
+      <circle class="node" cx="-360" cy="8" r="7" fill="#6aa9ff" opacity="0.72"/>
+      <circle class="node" cx="370" cy="-62" r="7" fill="#b897ff" opacity="0.74"/>
+      <circle class="node" cx="-390" cy="-252" r="5" fill="#ff6f91" opacity="0.64"/>
+      <circle class="node" cx="384" cy="-316" r="5" fill="#ff6f91" opacity="0.64"/>
+      <circle class="node" cx="-406" cy="282" r="5" fill="#ff6f91" opacity="0.64"/>
+      <circle class="node" cx="412" cy="-220" r="5" fill="#ff6f91" opacity="0.64"/>
+    </g>
+
+    <g id="tension-crown" filter="url(#softLight)">
+      <path d="M-74 -420L-58 -388L-26 -402L-14 -368L20 -392L38 -358L66 -386L84 -352" fill="none" stroke="#ffdc6f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M-84 380C-32 420 34 422 90 382" fill="none" stroke="#ff6f91" stroke-opacity="0.72" stroke-width="3" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <g transform="translate(96 112)">
+    <text class="label" x="0" y="0" font-size="54" font-weight="760">Awake lattice</text>
+    <text class="label small" x="3" y="42">DreamGraph, observed from the 2026-07-07 architect runtime</text>
+    <line x1="0" y1="76" x2="392" y2="76" stroke="#5df0c0" stroke-opacity="0.56" stroke-width="2"/>
+  </g>
+
+  <g transform="translate(96 755)">
+    <text class="label metric" x="0" y="0">2048</text>
+    <text class="label caption" x="0" y="30">dream cycles</text>
+    <text class="label metric" x="150" y="0">55</text>
+    <text class="label caption" x="150" y="30">nodes</text>
+    <text class="label metric" x="250" y="0">292</text>
+    <text class="label caption" x="250" y="30">edges</text>
+    <text class="label metric" x="372" y="0">10</text>
+    <text class="label caption" x="372" y="30">open tensions</text>
+  </g>
+
+  <g transform="translate(1120 742)">
+    <rect x="0" y="0" width="354" height="142" rx="8" fill="#07140f" fill-opacity="0.46" stroke="#d8f7ff" stroke-opacity="0.18"/>
+    <circle cx="34" cy="38" r="7" fill="#7fffd4"/>
+    <text class="label caption" x="56" y="44">validated: 8820</text>
+    <circle cx="34" cy="75" r="7" fill="#6aa9ff"/>
+    <text class="label caption" x="56" y="81">latent: 17697</text>
+    <circle cx="34" cy="112" r="7" fill="#ff6f91"/>
+    <text class="label caption" x="56" y="118">rejected: 50135</text>
+  </g>
+
+  <g transform="translate(1216 126)" opacity="0.86">
+    <text class="label caption" x="0" y="0">activation 0.72</text>
+    <path d="M0 24H236" stroke="#d8f7ff" stroke-opacity="0.18" stroke-width="10" stroke-linecap="round"/>
+    <path d="M0 24H170" stroke="#5df0c0" stroke-opacity="0.82" stroke-width="10" stroke-linecap="round"/>
+  </g>
+
+  <path d="M790 148C812 132 836 132 858 148C836 164 812 164 790 148Z" fill="#fff7c2" opacity="0.86" filter="url(#fineGlow)"/>
+  <path d="M782 148C818 104 850 104 886 148C850 192 818 192 782 148Z" fill="none" stroke="#fff7c2" stroke-opacity="0.42" stroke-width="2"/>
+</svg>
