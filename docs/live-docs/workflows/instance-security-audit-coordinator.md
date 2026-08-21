@@ -1,6 +1,6 @@
 # Instance Security Audit Coordinator
 
-> A coordinator for managing and overseeing security audits across different instances.. Intent: To ensure consistent and comprehensive security auditing across various instances, facilitating compliance and security posture assessment.
+> Instance Security Audit Coordinator is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

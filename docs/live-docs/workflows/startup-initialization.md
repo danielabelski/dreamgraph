@@ -1,6 +1,6 @@
 # Startup Initialization Process
 
-> This process initializes the DreamGraph server, setting up the necessary configurations and starting the server based on the specified transport mode. It also handles command-line arguments for configuration.
+> Startup Initialization Process is a parser-node evidenced from src/index.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Server start command  
 **Source files:** src/index.ts  

@@ -122,6 +122,17 @@ describe("Slice 5 runScanProject authoritative orchestration", () => {
     expect(nextState.committed_revision).not.toBe(nextState.previous_revision);
     const addedClaim = Object.values(nextState.evidence_ledger!.claims).find((claim) => claim.legacy_entity_id === "fixture_src_new_area");
     expect(addedClaim?.supports).toEqual([expect.objectContaining({ path: "src/new-area/added.ts", content_hash: nextState.repos.fixture.files["src/new-area/added.ts"].content_hash })]);
+    expect(nextState.coverage_ledger?.revision).toBe(nextState.committed_revision);
+    expect(Object.values(nextState.coverage_ledger?.nodes ?? {}).filter((node) => !node.semantic_state)).toEqual([]);
+    expect(Object.values(nextState.coverage_ledger?.nodes ?? {}).filter((node) => node.eligible).length).toBeGreaterThan(0);
+    expect(Object.values(nextState.coverage_ledger?.nodes ?? {}).filter((node) => !node.eligible))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ reason: "no_active_source_support" })]));
+    const ledgerBeforeNoChange = nextState.coverage_ledger;
+    const unchanged = await runScanProject({ mode: "incremental", repos: ["fixture"], targets: ["features"] });
+    expect(unchanged.delta_preview?.metrics.files_modified ?? 0).toBe(0);
+    expect(unchanged.delta_preview?.metrics.files_added ?? 0).toBe(0);
+    const converged = JSON.parse(await readFile(join(data, "scan_state.json"), "utf8")) as ScanState;
+    expect(converged.coverage_ledger).toEqual(ledgerBeforeNoChange);
   });
 
   it("replaces only modified-file support, preserves governed and unchanged knowledge, and converges with a fresh B extraction", async () => {

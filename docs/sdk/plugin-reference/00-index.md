@@ -1,7 +1,7 @@
 # DreamGraph Plugin Reference Manual
 
 **Audience:** Plugin authors and host implementors needing strict, normative tables.
-**Engine baseline:** v13.1.0 "Additive Scan".
+**Engine baseline:** v13.2.0 "Continuation Boundaries".
 **Companion:** see the [Plugin Developer Guide](../plugin-developer-guide/00-index.md) for task-oriented walkthroughs.
 
 This reference is the source of truth. Where the guide and the reference disagree,

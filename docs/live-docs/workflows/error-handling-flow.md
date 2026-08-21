@@ -1,6 +1,6 @@
 # Error Handling Flow
 
-> This flow manages errors that occur during application execution. It ensures that errors are logged and appropriate feedback is provided to users.
+> Error Handling Flow is a parser-node evidenced from src/utils/logger.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Error occurrence in the application  
 **Source files:** src/utils/logger.ts  

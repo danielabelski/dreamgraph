@@ -1,6 +1,6 @@
 # Testing Process
 
-> This process runs automated tests to ensure the application functions as expected. It verifies that changes do not introduce regressions.
+> Testing Process is a parser-node evidenced from tests/**/*.test.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Test command execution  
 **Source files:** tests/**/*.test.ts  

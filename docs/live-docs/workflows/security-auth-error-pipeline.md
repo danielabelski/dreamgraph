@@ -1,6 +1,6 @@
 # Security Authentication Error Pipeline
 
-> A workflow dedicated to managing authentication errors, coordinating error responses, and logging for security compliance.. Intent: To systematically handle authentication failures ensuring proper response and audit trail within the security domain.
+> Security Authentication Error Pipeline is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

@@ -1,5 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFile, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -32,6 +33,9 @@ const HEALTH_TIMEOUT_MS = Number.parseInt(process.env.DREAMGRAPH_BRIDGE_HEALTH_T
 const HEALTH_BUDGET_MS = Number.isFinite(HEALTH_TIMEOUT_MS) && HEALTH_TIMEOUT_MS > 0
   ? HEALTH_TIMEOUT_MS
   : 15_000;
+const AUDIT_BODY_LIMIT = 16 * 1024;
+const AUDIT_QUEUE_LIMIT = 256;
+const AUDIT_SHUTDOWN_BUDGET_MS = 2_000;
 
 function bail(code: number, message: string): never {
   try {
@@ -91,7 +95,6 @@ async function main(): Promise<void> {
 
   try {
     await withTimeout(upstream.connect(upstreamTransport), HEALTH_BUDGET_MS, "upstream MCP connect");
-    await withTimeout(upstream.listTools(), HEALTH_BUDGET_MS, "upstream tools/list probe");
   } catch (error) {
     bail(3, `failed to connect to upstream DreamGraph MCP at ${HOST_MCP_URL}: ${(error as Error).message}`);
   }
@@ -107,16 +110,23 @@ async function main(): Promise<void> {
     },
   );
 
+  let toolListPromise: ReturnType<typeof upstream.listTools> | undefined;
   server.setRequestHandler(ListToolsRequestSchema, async (req) => {
-    const result = await upstream.listTools(req.params);
-    if (result.tools.some((tool) => tool.name === RUN_COMMAND_TOOL.name)) {
-      return result;
+    toolListPromise ??= upstream.listTools(req.params);
+    let result;
+    try {
+      result = await toolListPromise;
+    } catch (error) {
+      toolListPromise = undefined;
+      throw error;
     }
+    if (result.tools.some((tool) => tool.name === RUN_COMMAND_TOOL.name)) return result;
     return { ...result, tools: [...result.tools, RUN_COMMAND_TOOL] };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const startedAtEpochMs = Date.now();
+    const correlationId = randomUUID();
     const inputJson = safeStringify(req.params.arguments ?? {});
     auditCallResult({
       tool: req.params.name,
@@ -126,6 +136,7 @@ async function main(): Promise<void> {
       status: "running",
       durationMs: 0,
       startedAtEpochMs,
+      correlationId,
     });
     try {
       const result = req.params.name === RUN_COMMAND_TOOL.name
@@ -140,6 +151,7 @@ async function main(): Promise<void> {
         status: isError ? "failed" : "completed",
         durationMs: Math.max(0, Date.now() - startedAtEpochMs),
         startedAtEpochMs,
+        correlationId,
       });
       return result;
     } catch (error) {
@@ -151,6 +163,7 @@ async function main(): Promise<void> {
         status: "failed",
         durationMs: Math.max(0, Date.now() - startedAtEpochMs),
         startedAtEpochMs,
+        correlationId,
       });
       throw error;
     }
@@ -180,6 +193,9 @@ async function shutdown(code: number): Promise<void> {
   } catch {
     // ignore shutdown failures
   }
+  await withTimeout(flushAuditQueue(), AUDIT_SHUTDOWN_BUDGET_MS, "bridge audit flush").catch((error) => {
+    process.stderr.write(`[architect-cli-mcp-bridge] audit flush incomplete: ${(error as Error).message}\n`);
+  });
   process.exit(code);
 }
 
@@ -323,7 +339,7 @@ function localTextResult(value: unknown, isError: boolean): LocalToolResult {
   };
 }
 
-function auditCallResult(record: {
+interface AuditRecord {
   tool: string;
   inputJson: string;
   resultJson: string;
@@ -331,11 +347,66 @@ function auditCallResult(record: {
   status: "running" | "completed" | "failed";
   durationMs: number;
   startedAtEpochMs: number;
-}): void {
+  correlationId: string;
+}
+
+const auditQueue: string[] = [];
+let auditDrain: Promise<void> | undefined;
+
+function boundedAuditBody(value: string): { body: string; bytes: number; sha256: string; truncated: boolean } {
+  const bytes = Buffer.byteLength(value, "utf8");
+  const sha256 = createHash("sha256").update(value).digest("hex");
+  if (bytes <= AUDIT_BODY_LIMIT) return { body: value, bytes, sha256, truncated: false };
+  return { body: value.slice(0, AUDIT_BODY_LIMIT), bytes, sha256, truncated: true };
+}
+
+function auditCallResult(record: AuditRecord): void {
   if (AUDIT_PATH.length === 0) return;
+  const input = boundedAuditBody(record.inputJson);
+  const result = boundedAuditBody(record.resultJson);
+  const line = `${JSON.stringify({
+    server: SERVER_NAME,
+    ...record,
+    inputJson: input.body,
+    resultJson: result.body,
+    inputBytes: input.bytes,
+    resultBytes: result.bytes,
+    inputSha256: input.sha256,
+    resultSha256: result.sha256,
+    inputTruncated: input.truncated,
+    resultTruncated: result.truncated,
+  })}\n`;
+  if (auditQueue.length >= AUDIT_QUEUE_LIMIT) {
+    const replaceable = auditQueue.findIndex((queued) => queued.includes('"status":"running"'));
+    if (replaceable >= 0) auditQueue.splice(replaceable, 1);
+    else {
+      process.stderr.write("[architect-cli-mcp-bridge] audit queue overflow; preserving existing terminal records\n");
+      return;
+    }
+  }
+  auditQueue.push(line);
+  auditDrain ??= drainAuditQueue();
+}
+
+async function drainAuditQueue(): Promise<void> {
   try {
-    appendFileSync(AUDIT_PATH, `${JSON.stringify({ server: SERVER_NAME, ...record })}\n`, { encoding: "utf8" });
+    while (auditQueue.length > 0) {
+      const line = auditQueue.shift()!;
+      await new Promise<void>((resolvePromise, reject) => {
+        appendFile(AUDIT_PATH, line, { encoding: "utf8" }, (error) => error ? reject(error) : resolvePromise());
+      });
+    }
   } catch (error) {
     process.stderr.write(`[architect-cli-mcp-bridge] failed to write audit record: ${(error as Error).message}\n`);
+  } finally {
+    auditDrain = undefined;
+    if (auditQueue.length > 0) auditDrain = drainAuditQueue();
+  }
+}
+
+async function flushAuditQueue(): Promise<void> {
+  while (auditDrain || auditQueue.length > 0) {
+    if (auditDrain) await auditDrain;
+    else auditDrain = drainAuditQueue();
   }
 }

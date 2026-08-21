@@ -1,6 +1,6 @@
 # Instance Management Process
 
-> This process manages the lifecycle of instances within the DreamGraph application, including creation, loading, and registration of instances. It ensures that instances are properly configured and isolated.
+> Instance Management Process is a parser-node evidenced from src/instance/index.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Instance command  
 **Source files:** src/instance/index.ts  

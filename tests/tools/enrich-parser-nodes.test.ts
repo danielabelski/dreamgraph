@@ -30,6 +30,7 @@ interface MockLlmState {
   available: boolean;
   responses: Array<string | { text: string; model?: string; tokensUsed?: number }>;
   throwAfter?: number;
+  throwMessage?: string;
   calls: Array<{ messages: unknown; options: unknown }>;
 }
 
@@ -48,7 +49,7 @@ vi.mock("../../src/cognitive/llm.js", async (importOriginal) => {
       const idx = mockState.calls.length;
       mockState.calls.push({ messages, options });
       if (mockState.throwAfter !== undefined && idx >= mockState.throwAfter) {
-        throw new Error("simulated LLM failure");
+        throw new Error(mockState.throwMessage ?? "simulated LLM failure");
       }
       const r = mockState.responses[idx];
       if (!r) throw new Error(`mock LLM: no response queued for call #${idx}`);
@@ -172,6 +173,7 @@ beforeEach(() => {
   mockState.responses = [];
   mockState.calls = [];
   mockState.throwAfter = undefined;
+  mockState.throwMessage = undefined;
   tmpDir = mkdtempSync(join(tmpdir(), "dg-enrich-parser-"));
   setDataDirOverride(tmpDir);
   setDataDirResolver(() => tmpDir);
@@ -1076,5 +1078,68 @@ describe("enrichParserNodesProgrammatic — integration", () => {
     if (!res.success) return;
     expect(res.data.files_processed.sort()).toEqual(["capabilities", "data_model", "features", "ui"]);
     expect(res.data.total_enriched).toBe(4);
+  });
+
+  it("persists a production checkpoint, resumes only remaining nodes, and makes the unchanged completed run provider-free", async () => {
+    const nodes = ["resume-a", "resume-b", "resume-c"].map((id) => parserNode({ id, name: id }));
+    await writeData("features.json", nodes);
+    await writeData("data_model.json", []);
+    mockState.responses = nodes.map((node) => llmResponseFor([node]));
+
+    await expect(enrichParserNodesProgrammatic({
+      target: "features",
+      batchSize: 1,
+      onProgress: (_message, batch) => {
+        if (batch === 1) throw new Error("simulated process interruption");
+      },
+    })).rejects.toThrow("simulated process interruption");
+
+    const interrupted = await readData<{
+      nodes: Record<string, { state: string; attempts: number }>;
+      provider_fingerprint: string;
+    }>("enrichment_state.json");
+    expect(interrupted.provider_fingerprint).toContain("mock");
+    expect(interrupted.nodes["resume-a"]).toMatchObject({ state: "enriched", attempts: 1 });
+    expect(interrupted.nodes["resume-b"]).toMatchObject({ state: "pending", attempts: 0 });
+    expect(mockState.calls).toHaveLength(1);
+
+    const resumed = await enrichParserNodesProgrammatic({ target: "features", batchSize: 1 });
+    expect(resumed.success).toBe(true);
+    if (!resumed.success) return;
+    expect(resumed.data.total_enriched).toBe(2);
+    expect(resumed.data.enrichment_checkpoint).toMatchObject({ remaining: 0, complete: true });
+    expect(mockState.calls).toHaveLength(3);
+
+    const completedAgain = await enrichParserNodesProgrammatic({ target: "features", batchSize: 1 });
+    expect(completedAgain.success).toBe(true);
+    if (!completedAgain.success) return;
+    expect(completedAgain.data.llm_calls).toBe(0);
+    expect(completedAgain.data.enrichment_checkpoint).toMatchObject({ remaining: 0, complete: true });
+    expect(mockState.calls).toHaveLength(3);
+  });
+
+  it("retries a production transient provider failure from its durable checkpoint", async () => {
+    const node = parserNode({ id: "retry-timeout", name: "Retry Timeout" });
+    await writeData("features.json", [node]);
+    await writeData("data_model.json", []);
+    mockState.throwAfter = 0;
+    mockState.throwMessage = "simulated transient timeout";
+
+    const failed = await enrichParserNodesProgrammatic({ target: "features", batchSize: 1 });
+    expect(failed.success).toBe(true);
+    if (!failed.success) return;
+    const checkpoint = await readData<{ nodes: Record<string, { state: string; attempts: number; reason?: string }> }>("enrichment_state.json");
+    expect(checkpoint.nodes["retry-timeout"]).toMatchObject({
+      state: "failed_retryable", attempts: 1, reason: "transient_timeout",
+    });
+    expect(failed.data.total_enriched).toBe(0);
+
+    mockState.throwAfter = undefined;
+    mockState.responses = [llmResponseFor([node]), llmResponseFor([node])];
+    const resumed = await enrichParserNodesProgrammatic({ target: "features", batchSize: 1 });
+    expect(resumed.success).toBe(true);
+    if (!resumed.success) return;
+    expect(resumed.data.total_enriched).toBe(1);
+    expect(resumed.data.enrichment_checkpoint).toMatchObject({ remaining: 0, complete: true });
   });
 });

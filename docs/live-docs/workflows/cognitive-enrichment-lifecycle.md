@@ -1,6 +1,6 @@
 # Cognitive Enrichment Lifecycle
 
-> A workflow describing the process from graph enrichment (cross-link, keyword, and metadata injection) through cognitive dreaming and validation to federated pattern exchange.. Intent: This concept is necessary to represent the architectural progression from raw enrichment (graph_enrichment), through dream speculation (dreamgraph_src_cognitive), to federation and normalization, as seen across core scripts and cognitive modules.
+> Cognitive Enrichment Lifecycle is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

@@ -9,6 +9,7 @@ import ignore, { type Ignore } from "ignore";
 import { atomicWriteFile } from "../utils/atomic-write.js";
 import { dataPath, getDataDir } from "../utils/paths.js";
 import { shouldSkipScanDirectory } from "./scanner-artifact-policy.js";
+import type { ScanCoverageLedger } from "./coverage-ledger.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,6 +64,11 @@ export interface ScanState {
   status: "committed";
   /** Stable source-structural claims captured by the committed scan. */
   evidence_ledger?: StructuralEvidenceLedger;
+  /**
+   * Truthful terminal file outcomes and per-node semantic eligibility for this
+   * committed revision. Optional only for backward-compatible v1 baselines.
+   */
+  coverage_ledger?: ScanCoverageLedger;
 }
 
 export type EvidenceTarget = "features" | "workflows" | "data_model" | "ui" | "auxiliary";

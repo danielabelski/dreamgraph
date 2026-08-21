@@ -1,6 +1,6 @@
 # Graph Data Enrichment Pipeline
 
-> Processes raw graph data files to add domain labels, keywords, and cross-links for enhanced knowledge graph utility.. Intent: To improve the quality, connectivity, and semantic richness of graph data for downstream cognitive processing and querying.
+> Graph Data Enrichment Pipeline is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

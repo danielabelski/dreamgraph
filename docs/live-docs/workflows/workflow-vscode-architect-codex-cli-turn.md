@@ -1,6 +1,6 @@
 # VS Code Architect Codex CLI Turn
 
-> Routes an Architect user or autonomy continuation turn through the native Codex CLI adapter while preserving DreamGraph MCP authority, live tool-trace UX, login recovery, and pending-review reconciliation.
+> VS Code Architect Codex CLI Turn is a parser-node evidenced from extensions/vscode/src/chat-panel.ts, extensions/vscode/src/architect-core/adapters/codex-cli/provider-port.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** User selects codex-cli as the Architect provider and submits a chat turn or autonomy continuation.  
 **Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/architect-core/adapters/codex-cli/provider-port.ts, extensions/vscode/src/architect-core/adapters/codex-cli/orchestrator.ts  

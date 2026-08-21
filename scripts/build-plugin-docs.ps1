@@ -150,7 +150,7 @@ title: DreamGraph Plugin Developer Documentation
 
 # DreamGraph Plugin Developer Documentation
 
-Engine baseline: **v13.1.0 "Additive Scan"**.
+Engine baseline: **v13.2.0 "Continuation Boundaries"**.
 
 ## Plugin Developer Guide
 
@@ -210,7 +210,7 @@ Write-Host "Assembling combined manuscript..." -ForegroundColor Cyan
 $combined = New-Object System.Text.StringBuilder
 [void]$combined.AppendLine("---")
 [void]$combined.AppendLine("title: DreamGraph Plugin Developer Manual")
-[void]$combined.AppendLine("subtitle: Guide and Reference Manual --- v13.1.0 Additive Scan")
+[void]$combined.AppendLine("subtitle: Guide and Reference Manual --- v13.2.0 Continuation Boundaries")
 [void]$combined.AppendLine("---")
 [void]$combined.AppendLine("")
 [void]$combined.AppendLine("# Part I --- Plugin Developer Guide")

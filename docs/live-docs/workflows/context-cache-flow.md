@@ -1,6 +1,6 @@
 # Deep Insights Context Cache Flow
 
-> Represents the data manipulation logic bounded in ContextCache objects driving plumbing of large-context crumbs for both batch llm synthesis and slot-sliced adapters communicated to composite prompt runners or orchestration logic.. Intent: This process laces thread of low-level fetchers/storage threat consequenceally involved in agent runs, making persistent defenses visible in contracts..
+> Deep Insights Context Cache Flow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

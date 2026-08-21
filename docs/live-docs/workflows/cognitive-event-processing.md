@@ -1,6 +1,6 @@
 # Cognitive Event Processing
 
-> A system for processing events triggered by cognitive actions, managing state transitions and handling interruptions.. Intent: To provide a structured way to handle events driven by cognitive state changes, ensuring stability and consistency across cycles.
+> Cognitive Event Processing is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

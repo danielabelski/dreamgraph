@@ -1,6 +1,6 @@
 # MCP Tool Invocation Flow
 
-> The ordered workflow for registering, authorizing, and executing MCP protocol tools as part of discipline runtime enforcement.. Intent: To clarify the connection and sequencing between server registration, tool delegation, session/state transitions, and enforcement policies for plugin tools.
+> MCP Tool Invocation Flow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

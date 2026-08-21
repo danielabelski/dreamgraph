@@ -1,6 +1,6 @@
 # Advisory Context Fallback
 
-> A resilience pattern where context fetch failures are bounded, cached, and degraded into empty results instead of interrupting LLM work.. Intent: This should exist because the deep-insights fetchers implement a reusable architectural behavior for timeout-bounded advisory enrichment across extension context gathering.
+> Advisory Context Fallback is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

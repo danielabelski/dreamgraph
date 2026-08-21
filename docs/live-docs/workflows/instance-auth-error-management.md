@@ -1,6 +1,6 @@
 # Instance Authentication Error Management
 
-> A cross-cutting error management workflow and feature set that handles authentication failures, error responses, and recovery pipelines.. Intent: To provide a robust and consistent mechanism to manage authentication errors that occur during instance authentication validation.
+> Instance Authentication Error Management is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

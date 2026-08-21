@@ -1,6 +1,6 @@
 # Event Triggered Workflow
 
-> A workflow system that activates processes based on specific events detected by the event router.. Intent: To automate responses and processes based on real-time events, improving system responsiveness and efficiency.
+> Event Triggered Workflow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

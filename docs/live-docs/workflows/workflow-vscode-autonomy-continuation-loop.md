@@ -1,6 +1,6 @@
 # VS Code Autonomy Continuation Loop
 
-> After each Architect pass, the extension broadcasts visible autonomy status, parses the structured continuation envelope, and may self-continue according to the selected mode and remaining pass/time budget. Header dropdown selections are persisted before later settings-sync paths rebuild autonomy state.
+> VS Code Autonomy Continuation Loop is a parser-node evidenced from extensions/vscode/src/chat-panel.ts, extensions/vscode/src/autonomy-loop.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** A user submits an Architect chat turn, selects an autonomy mode from the chat header, or an eligible continuation pass completes.  
 **Source files:** extensions/vscode/src/chat-panel.ts, extensions/vscode/src/autonomy-loop.ts, extensions/vscode/src/autonomy.ts, extensions/vscode/src/reporting.ts, extensions/vscode/src/test/slice5-ui.test.ts, docs/workflows/workflow-vscode-autonomy-continuation-loop.md  

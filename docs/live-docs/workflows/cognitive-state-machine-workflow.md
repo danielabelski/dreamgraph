@@ -1,6 +1,6 @@
 # Cognitive State Machine Workflow
 
-> Workflow managing the state transitions of the cognitive engine including awake, rem, normalizing, and nightmare states.. Intent: To orchestrate the cognitive engine's dream cycle states ensuring orderly state transitions and data consistency.
+> Cognitive State Machine Workflow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

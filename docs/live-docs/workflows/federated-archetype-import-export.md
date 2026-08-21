@@ -1,6 +1,6 @@
 # Federated Archetype Import/Export
 
-> Workflow for securely exporting and importing anonymized architectural archetypes between system instances as part of federated learning.. Intent: Enables cross-instance pattern transfer to accelerate vulnerability detection, best practice dissemination, and multi-site learning without leaking sensitive code.
+> Federated Archetype Import/Export is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

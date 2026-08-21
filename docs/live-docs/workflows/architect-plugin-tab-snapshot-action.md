@@ -1,6 +1,6 @@
 # Architect Plugin Tab Snapshot and Action Dispatch
 
-> Project a manifest-declared Architect plugin tab into standalone Architect, load an explicit plan-bound daemon snapshot, dispatch a schema-validated governed action, persist state using revision checks, and return refreshed snapshot-derived summary and badge data.
+> Architect Plugin Tab Snapshot and Action Dispatch is a parser-node evidenced from src/plugins/architect-contributions.ts, src/plugins/architect-plan-state.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Standalone Architect lists a plugin tab, loads a plan snapshot, or posts a structured plugin tab action.  
 **Source files:** src/plugins/architect-contributions.ts, src/plugins/architect-plan-state.ts, src/architect/routes.ts, examples/action-checklist/index.js, tests/sdk/architect-routes.test.ts, tests/standalone-architect-routes.test.ts  

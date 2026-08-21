@@ -1,6 +1,6 @@
 # Audit-Aware Snapshot Lifecycle
 
-> A continuous constraint enforcing audit and reporting sidecar eventness into the operational flows for explorer's multi-versioning Snapshots.. Intent: Implies enriching all major state transition logic in explorers (fetchSnapshot etc) with runtime events/post-trace hooks for deeply-integrated compliance inspection or anomaly post-mortem.
+> Audit-Aware Snapshot Lifecycle is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

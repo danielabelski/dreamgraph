@@ -1,6 +1,6 @@
 # Plugin Discovery Process
 
-> DreamGraph v9.0.0 active plugin discovery and load workflow triggered during application/server startup. The host scans configured plugin roots, validates manifests, evaluates trust/enablement state, constructs authoritative runtime PluginContext instances for accepted plugins, activates eligible plugins, and records inventory/telemetry. This workflow is shipped behavior, not a future host-loading roadmap item.
+> Plugin Discovery Process is a parser-node evidenced from src/plugins/manager.ts, src/cli/commands/plugin.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Application or server startup  
 **Source files:** src/plugins/manager.ts, src/cli/commands/plugin.ts, docs/live-docs/workflows/_index.md, docs/site/workflows/_index.md, docs/sdk/plugin-developer-guide/10-lifecycle-and-installation.md  

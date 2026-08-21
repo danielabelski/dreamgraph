@@ -1,6 +1,6 @@
 # Plugin Discipline Session Manager
 
-> Manages sessions and transitions for plugin discipline enforcement workflow.. Intent: To support plugin management with session lifecycle and phase transition controls enforcing tool usage discipline.
+> Plugin Discipline Session Manager is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

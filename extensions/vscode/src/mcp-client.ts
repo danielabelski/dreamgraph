@@ -45,7 +45,7 @@ export class McpClient implements vscode.Disposable {
     );
 
     this._client = new Client(
-      { name: "dreamgraph-vscode", version: "13.1.0" },
+      { name: "dreamgraph-vscode", version: "13.2.0" },
       { capabilities: {} },
     );
 

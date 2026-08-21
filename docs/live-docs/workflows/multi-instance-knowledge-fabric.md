@@ -1,6 +1,6 @@
 # Multi-Instance Knowledge Fabric
 
-> A stitching layer for propagating, constraining, and learning from federated pattern archetypes across DreamGraph nodes: description, adoption, and assessment spanning implementations.. Intent: This normalization layer would enable full traceability/content hash acceptance in bringing outside engineering-edged bottlenecks or current provenance circles into learning flow.
+> Multi-Instance Knowledge Fabric is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

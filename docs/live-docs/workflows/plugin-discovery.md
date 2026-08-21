@@ -1,6 +1,6 @@
 # Plugin Discovery Process
 
-> This process identifies and loads available plugins/extensions for the DreamGraph application. It ensures that all necessary plugins are registered and ready for use.
+> Plugin Discovery Process is a parser-node evidenced from src/discipline/register.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Server startup  
 **Source files:** src/discipline/register.ts  

@@ -10,10 +10,15 @@ import type { LlmMessage } from "../cognitive/llm.js";
 import { mcpListTools } from "../cli/utils/mcp-call.js";
 import { getArchitectProjectRoot } from "./plan-registry.js";
 import { createArchitectToolResultPreview, type ArchitectToolTraceEntry } from "./native-tool-loop.js";
-import type { ArchitectContinuationToolManifest } from "./continuation.js";
 import { resolveArchitectNarrativeDensity, type ArchitectVerbosityMode } from "./verbosity.js";
 
 export type ArchitectCliAdapter = "codex-cli" | "copilot-cli";
+
+/** Concrete controller-derived tool needs for one CLI execution. */
+export interface ArchitectCliToolRequirements {
+  required_tools: string[];
+  preferred_tools: string[];
+}
 
 export interface ArchitectCliBridgeRoute {
   enabled: true;
@@ -24,7 +29,6 @@ export interface ArchitectCliBridgeRoute {
   advertised_tools: string[];
   required_tools: string[];
   unavailable_required_tools: string[];
-  continuation_tool_manifest: ArchitectContinuationToolManifest | null;
   iterations: number;
   stop_reason: string;
   fallback_reason: string | null;
@@ -67,7 +71,7 @@ export interface RunArchitectCliBridgeInput {
   model: string;
   timeoutMs: number;
   verbosityMode?: ArchitectVerbosityMode;
-  toolManifest?: ArchitectContinuationToolManifest | null;
+  toolRequirements?: ArchitectCliToolRequirements | null;
   signal?: AbortSignal;
   onToolTrace?: (entry: ArchitectToolTraceEntry) => void;
 }
@@ -131,7 +135,7 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
 
   const upstreamTools = await mcpListTools(mcpPort);
   const availableToolNames = resolveArchitectCliBridgeToolNames(upstreamTools.map((tool) => tool.name));
-  const continuationManifest = resolveCliContinuationManifest(input.toolManifest, availableToolNames);
+  const toolRequirements = resolveCliToolRequirements(input.toolRequirements, availableToolNames);
   const missingTools = REQUIRED_DREAMGRAPH_TOOLS.filter((name) => !availableToolNames.includes(name));
   if (missingTools.length > 0) {
     throw new Error(`ARCHITECT_CLI_BRIDGE_MCP_TOOL_MISMATCH: missing required DreamGraph MCP tool(s): ${missingTools.join(", ")}`);
@@ -142,7 +146,7 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
   const auditDir = join(scratchDir, "audit");
   const auditPath = join(auditDir, `${runId}.ndjson`);
   const bridgeSpawn = resolveBridgeSpawn();
-  const prompt = serializeCliPrompt(input.messages, input.userMessage, input.adapter, continuationManifest.manifest);
+  const prompt = serializeCliPrompt(input.messages, input.userMessage, input.adapter, toolRequirements.requirements);
   const model = input.model && input.model !== "auto" ? input.model : undefined;
   const timeoutMs = Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
     ? Math.max(30_000, Math.min(input.timeoutMs, CLI_DEFAULT_TIMEOUT_MS))
@@ -202,9 +206,8 @@ export async function runArchitectCliBridge(input: RunArchitectCliBridgeInput): 
         available_tool_count: availableToolNames.length,
         advertised_tool_count: availableToolNames.length,
         advertised_tools: availableToolNames,
-        required_tools: continuationManifest.manifest?.required_tools ?? [],
-        unavailable_required_tools: continuationManifest.unavailable_required_tools,
-        continuation_tool_manifest: continuationManifest.manifest,
+        required_tools: toolRequirements.requirements?.required_tools ?? [],
+        unavailable_required_tools: toolRequirements.unavailable_required_tools,
         iterations: 1,
         stop_reason: processResult.timedOut ? "cli_timed_out" : processResult.exitCode !== 0 ? "cli_failed" : failureReason ? "cli_empty_response" : "cli_completed",
         fallback_reason: failureReason,
@@ -575,7 +578,7 @@ export function serializeCliPrompt(
   messages: LlmMessage[],
   userMessage: string,
   adapter: ArchitectCliAdapter,
-  toolManifest?: ArchitectContinuationToolManifest | null,
+  toolRequirements?: ArchitectCliToolRequirements | null,
 ): string {
   const contextMessages = messages.filter((message) => message.role !== "user");
   return [
@@ -588,7 +591,7 @@ export function serializeCliPrompt(
     "ADR contract: if the pass introduces a new durable architectural policy, reverses a guard rail, or creates a lasting cross-module decision, record it with record_architecture_decision; otherwise report the ADRs consulted and why no new ADR was needed.",
     "Do not use provider-native shell/read/write routes; use dreamgraph:run_command, read_source_code, patch_file, query_resource, query_architecture_decisions, and related DreamGraph MCP tools.",
     "The user request appears only in CURRENT USER REQUEST. Do not reconstruct it from prior sections.",
-    createArchitectCliContinuationManifestSection(toolManifest),
+    createArchitectCliToolRequirementsSection(toolRequirements),
     "",
     ...contextMessages.map((message) => `## ${message.role.toUpperCase()}\n${message.content}`),
     "",
@@ -597,44 +600,31 @@ export function serializeCliPrompt(
   ].join("\n\n");
 }
 
-export function createArchitectCliContinuationManifestSection(toolManifest?: ArchitectContinuationToolManifest | null): string {
-  if (!toolManifest) {
-    return "Continuation tool manifest: none for this pass.";
-  }
-  const required = toolManifest.required_tools.length > 0 ? toolManifest.required_tools.join(", ") : "none";
-  const preferred = toolManifest.preferred_tools.length > 0 ? toolManifest.preferred_tools.join(", ") : "none";
-  const unavailable = (toolManifest.unavailable_required_tools ?? []).length > 0
-    ? toolManifest.unavailable_required_tools!.join(", ")
-    : "none";
+export function createArchitectCliToolRequirementsSection(toolRequirements?: ArchitectCliToolRequirements | null): string {
+  if (!toolRequirements) return "Execution tool requirements: none beyond the adapter baseline.";
+  const required = toolRequirements.required_tools.length > 0 ? toolRequirements.required_tools.join(", ") : "none";
+  const preferred = toolRequirements.preferred_tools.length > 0 ? toolRequirements.preferred_tools.join(", ") : "none";
   return [
-    "Continuation tool manifest for this bounded pass:",
+    "Concrete tool requirements for this execution:",
     `- required_tools: ${required}`,
     `- preferred_tools: ${preferred}`,
-    `- unavailable_required_tools: ${unavailable}`,
-    "Required and preferred entries name governed dreamgraph MCP tools. If a required tool is unavailable, classify it as unavailable with policy or registry evidence instead of using a provider-native substitute.",
+    "These are controller-derived execution requirements. If a required tool is unavailable, report registry or policy evidence instead of using a provider-native substitute.",
   ].join("\n");
 }
 
-function resolveCliContinuationManifest(
-  manifest: ArchitectContinuationToolManifest | null | undefined,
+function resolveCliToolRequirements(
+  requirements: ArchitectCliToolRequirements | null | undefined,
   availableToolNames: readonly string[],
-): { manifest: ArchitectContinuationToolManifest | null; unavailable_required_tools: string[] } {
-  if (!manifest) return { manifest: null, unavailable_required_tools: [] };
+): { requirements: ArchitectCliToolRequirements | null; unavailable_required_tools: string[] } {
+  if (!requirements) return { requirements: null, unavailable_required_tools: [] };
   const available = new Set(availableToolNames);
-  const required = normalizeCliManifestTools(manifest.required_tools);
-  const preferred = normalizeCliManifestTools(manifest.preferred_tools);
+  const required = normalizeCliRequirementTools(requirements.required_tools);
+  const preferred = normalizeCliRequirementTools(requirements.preferred_tools);
   const unavailable = required.filter((tool) => !available.has(tool));
-  return {
-    manifest: {
-      required_tools: required,
-      preferred_tools: preferred,
-      unavailable_required_tools: unavailable,
-    },
-    unavailable_required_tools: unavailable,
-  };
+  return { requirements: { required_tools: required, preferred_tools: preferred }, unavailable_required_tools: unavailable };
 }
 
-function normalizeCliManifestTools(names: readonly string[]): string[] {
+function normalizeCliRequirementTools(names: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const name of names) {

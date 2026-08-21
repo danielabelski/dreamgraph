@@ -1,6 +1,6 @@
 # Archetype Validation Workflow
 
-> Workflow validating transferred or internalized DreamArchetypes against instance policies, disciplines, or UI compatibility manifest.. Intent: Strong federated and plugin workflows policed in validations—DRY assertion logic for generalizing these paths.
+> Archetype Validation Workflow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

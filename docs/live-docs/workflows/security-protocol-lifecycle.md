@@ -1,6 +1,6 @@
 # Security Protocol Lifecycle Workflow
 
-> An overarching workflow managing lifecycle transitions, orchestration, and auditing for security protocols.. Intent: To coordinate protocol state transitions, auditing, and compliance enforcement in an integrated workflow.
+> Security Protocol Lifecycle Workflow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

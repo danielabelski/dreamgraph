@@ -1,6 +1,6 @@
 {
   "name": "dreamgraph",
-  "version": "13.1.0",
+  "version": "13.2.0",
   "description": "Graph-first cognitive daemon with MCP tools, CLI, dashboard, Explorer, and VS Code integration",
   "engines": {
     "node": ">=20.0.0"
@@ -24,6 +24,8 @@
   },
   "scripts": {
     "benchmark:token-economy": "node scripts/benchmark-token-economy.mjs",
+    "benchmark:scan-mcp": "node scripts/benchmark-scan-mcp.mjs",
+    "verify:scan-mcp-release": "vitest run tests/tools/scan-state.test.ts tests/tools/scan-project-incremental-e2e.test.ts tests/tools/coverage-ledger.test.ts tests/tools/enrichment-state.test.ts tests/tools/graph-health.test.ts tests/tools/enrich-parser-nodes.test.ts tests/architect-cli-bridge.test.ts tests/cli-mcp-call.test.ts tests/architect-timeout-streaming.test.ts tests/instance-isolation.test.ts && npm run benchmark:scan-mcp && npm run build",
     "build": "tsc -b && npm run build:explorer",
     "build:server": "tsc -b",
     "build:explorer": "npm --prefix explorer install --no-audit --no-fund && npm --prefix explorer run build",
@@ -40,8 +42,8 @@
     "@dreamgraph/sdk"
   ],
   "dependencies": {
-    "@dreamgraph/host": "13.1.0",
-    "@dreamgraph/sdk": "13.1.0",
+    "@dreamgraph/host": "13.2.0",
+    "@dreamgraph/sdk": "13.2.0",
     "@modelcontextprotocol/sdk": "^1.17.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
@@ -69,7 +71,7 @@
     "web-tree-sitter": "^0.20.8",
     "ws": "^8.21.0",
     "zod": "^3.23.8",
-    "@dreamgraph/token-economy": "13.1.0"
+    "@dreamgraph/token-economy": "13.2.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

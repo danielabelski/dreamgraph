@@ -1,6 +1,6 @@
 # Instance Authentication Error Handling Pattern
 
-> A unified error handling pattern for managing authentication failures, response generation, and audit recording within instance authentication workflows.. Intent: To ensure consistent error responses and audit logging for instance authentication failures across the system.
+> Instance Authentication Error Handling Pattern is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

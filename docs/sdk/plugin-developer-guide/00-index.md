@@ -1,7 +1,7 @@
 # DreamGraph Plugin Developer Guide
 
 **Audience:** Engineers writing third-party plugins against `@dreamgraph/sdk`.
-**Engine baseline:** v13.1.0 "Additive Scan" (M0-M6 implemented; graph-health diagnostics, confidence-aware semantic enrichment, targeted dream stabilization, and structured Explorer knowledge inspection are current).
+**Engine baseline:** v13.2.0 "Continuation Boundaries" (CLI continuation isolation, native API continuation ownership, autonomous target completion, graph-health diagnostics, and structured Explorer knowledge inspection are current).
 **Companion:** see the [Plugin Reference Manual](../plugin-reference/00-index.md) for strict, normative tables.
 
 This guide is task-oriented. It walks you from "what is a plugin" through a working

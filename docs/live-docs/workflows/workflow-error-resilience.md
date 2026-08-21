@@ -1,6 +1,6 @@
 # Workflow Error Resilience
 
-> A workflow pattern integrating error handling flows with session and task management to guarantee robust execution.. Intent: To provide resilient management of disciplinary sessions and task executions by capturing and handling errors gracefully.
+> Workflow Error Resilience is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

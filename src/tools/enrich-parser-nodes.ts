@@ -77,6 +77,16 @@ import {
 } from "../architect/cli-bridge.js";
 import { updateGraphMaintenanceState } from "../cognitive/graph-maintenance-state.js";
 import { scheduleTargetedDreamStabilization } from "../cognitive/targeted-dreams.js";
+import { loadScanState } from "./scan-state.js";
+import {
+  classifyEnrichmentFailure,
+  createEnrichmentRun,
+  loadEnrichmentRun,
+  persistEnrichmentRun,
+  recordEnrichmentOutcome,
+  resumableNodeIds,
+  type EnrichmentRunState,
+} from "./enrichment-state.js";
 import type {
   ToolResponse,
   GraphLink,
@@ -214,6 +224,14 @@ interface EnrichResult {
     created: number;
     reused: number;
     schedule_ids: string[];
+  };
+  enrichment_checkpoint: {
+    file: string;
+    run_id: string;
+    scan_revision: string;
+    provider_fingerprint: string;
+    remaining: number;
+    complete: boolean;
   };
   adaptive_future_audit?: AdaptiveFutureAuditTrail;
 }
@@ -1498,6 +1516,27 @@ async function executeEnrichParserNodes(
       : new Set<TargetFile>([resolvedTarget]);
   const targets = everyTarget.filter((target) => selected.has(target.key) && (resolvedTarget !== "all" || target.entries.length > 0));
   const allNodes = everyTarget.flatMap((target) => target.entries);
+  const scanBaseline = await loadScanState();
+  const scanRevision = scanBaseline.state?.committed_revision ?? "legacy-unscoped";
+  const providerFingerprint = [
+    route.layer,
+    route.provenance.provider ?? "none",
+    route.model ?? "none",
+    standaloneFallbackRoute?.provenance.provider ?? "none",
+    standaloneFallbackRoute?.model ?? "none",
+  ].join(":");
+  const checkpointFile = dataPath("enrichment_state.json");
+  const eligibleIds = targets.flatMap((target) =>
+    target.entries.filter((entry) => entry.id && (opts.force || !isAlreadyEnriched(entry))).map((entry) => entry.id),
+  );
+  const loadedCheckpoint = opts.dryRun ? null : await loadEnrichmentRun(checkpointFile);
+  let checkpoint: EnrichmentRunState = loadedCheckpoint &&
+    loadedCheckpoint.scan_revision === scanRevision &&
+    loadedCheckpoint.provider_fingerprint === providerFingerprint
+      ? loadedCheckpoint
+      : createEnrichmentRun(scanRevision, providerFingerprint, eligibleIds);
+  const resumableIds = new Set(resumableNodeIds(checkpoint));
+  if (!opts.dryRun && !loadedCheckpoint) await persistEnrichmentRun(checkpointFile, checkpoint);
   const semanticGraph = buildSemanticAdjacency(allNodes);
   const graphTypeById = new Map<string, GraphNodeType>(allNodes.map((node) => [node.id, node.graph_type ?? "capability"]));
   const sourceMtimeCache = new Map<string, Promise<number | null>>();
@@ -1545,6 +1584,14 @@ async function executeEnrichParserNodes(
       prompt_neighbor_reuses: 0,
     },
     targeted_dream_schedules: { created: 0, reused: 0, schedule_ids: [] },
+    enrichment_checkpoint: {
+      file: checkpointFile,
+      run_id: checkpoint.run_id,
+      scan_revision: checkpoint.scan_revision,
+      provider_fingerprint: checkpoint.provider_fingerprint,
+      remaining: resumableIds.size,
+      complete: resumableIds.size === 0,
+    },
   };
 
   if (route.layer === "deterministic_fallback") {
@@ -1570,7 +1617,9 @@ async function executeEnrichParserNodes(
   for (const t of targets) {
     result.files_processed.push(t.key);
 
-    const eligible = t.entries.filter((e) => e.id && (opts.force || !isAlreadyEnriched(e)));
+    const eligible = t.entries.filter((e) =>
+      e.id && (opts.force || !isAlreadyEnriched(e)) && (opts.dryRun || resumableIds.has(e.id)),
+    );
     result.total_eligible += eligible.length;
     result.semantic_coverage.total_nodes += eligible.length;
 
@@ -1741,6 +1790,7 @@ async function executeEnrichParserNodes(
 
         let parsed: PerNodeEnrichment[] = [];
         let modelUsed: string | undefined;
+        let retryableFailureReason: string | undefined;
         const fallbackNodeIds = new Set<string>();
 
         if (route.layer === "deterministic_fallback") {
@@ -1838,11 +1888,18 @@ async function executeEnrichParserNodes(
               }
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              result.errors.push(`Batch (${bkey}, ${batch.length} nodes): ${msg}; deterministic fallback used.`);
+              const classified = classifyEnrichmentFailure(err);
+              if (classified.state === "failed_retryable") {
+                retryableFailureReason = classified.reason;
+                result.errors.push(`Batch (${bkey}, ${batch.length} nodes): ${msg}; checkpointed as retryable.`);
+                parsed = [];
+              } else {
+                result.errors.push(`Batch (${bkey}, ${batch.length} nodes): ${msg}; deterministic fallback used.`);
+                parsed = batch.map(structuralEnrichmentFor);
+                modelUsed = "deterministic_fallback";
+                for (const node of batch) fallbackNodeIds.add(node.id);
+              }
               logger.warn(result.errors[result.errors.length - 1]);
-              parsed = batch.map(structuralEnrichmentFor);
-              modelUsed = "deterministic_fallback";
-              for (const node of batch) fallbackNodeIds.add(node.id);
             }
           }
         }
@@ -1862,6 +1919,9 @@ async function executeEnrichParserNodes(
           if (!enrichment) {
             result.total_skipped++;
             result.errors.push(`Node ${node.id}: missing in enrichment response`);
+            if (!opts.dryRun) checkpoint = recordEnrichmentOutcome(checkpoint, node.id, retryableFailureReason
+              ? { state: "failed_retryable", reason: retryableFailureReason }
+              : { state: "failed_terminal", reason: "missing_enrichment_response" });
             continue;
           }
           const { node: merged, anchorsAdded, relationsAdded } = mergeEnrichment(
@@ -1932,6 +1992,10 @@ async function executeEnrichParserNodes(
           batchRelations += relationsAdded;
           if (fallbackNodeIds.has(node.id)) result.semantic_coverage.fallback_nodes++;
           else result.semantic_coverage.llm_enriched++;
+          if (!opts.dryRun) checkpoint = recordEnrichmentOutcome(checkpoint, node.id, {
+            state: "enriched",
+            ...(fallbackNodeIds.has(node.id) ? { reason: "evidence_only_fallback" } : {}),
+          });
         }
 
         result.total_enriched += batchEnriched;
@@ -1941,12 +2005,6 @@ async function executeEnrichParserNodes(
           `Semantic enrichment batch ${result.batches_run}: ${batchEnriched}/${batch.length} persisted candidates, ` +
           `${fallbackNodeIds.size} fallback, ${result.semantic_coverage.llm_enriched}/${result.semantic_coverage.total_nodes} LLM-enriched overall`,
         );
-        opts.onProgress?.(
-          `Semantic enrichment batch ${result.batches_run}: ${batchEnriched}/${batch.length} persisted, ` +
-          `${fallbackNodeIds.size} fallback`,
-          result.batches_run,
-        );
-
         // Per-batch persistence: crash-safe — work done so far survives.
         if (!opts.dryRun && batchEnriched > 0) {
           try {
@@ -1991,6 +2049,12 @@ async function executeEnrichParserNodes(
             result.errors.push(`Persist ${t.filename}: ${msg}`);
           }
         }
+        if (!opts.dryRun) await persistEnrichmentRun(checkpointFile, checkpoint);
+        opts.onProgress?.(
+          `Semantic enrichment batch ${result.batches_run}: ${batchEnriched}/${batch.length} persisted, ` +
+          `${fallbackNodeIds.size} fallback`,
+          result.batches_run,
+        );
 
         if (nodesProcessed >= opts.maxNodes) break;
       }
@@ -1999,6 +2063,10 @@ async function executeEnrichParserNodes(
   }
 
   result.duration_ms = Date.now() - started;
+  const remainingCheckpointIds = resumableNodeIds(checkpoint);
+  result.enrichment_checkpoint.remaining = remainingCheckpointIds.length;
+  result.enrichment_checkpoint.complete = remainingCheckpointIds.length === 0;
+  if (!opts.dryRun) await persistEnrichmentRun(checkpointFile, checkpoint);
   if (result.ui_relation_gaps.length > 0) {
     result.notes.push(
       `${result.ui_relation_gaps.length} richly enriched UI node(s) still lack an evidenced relation; ` +

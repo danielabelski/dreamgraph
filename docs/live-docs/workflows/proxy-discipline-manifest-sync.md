@@ -1,6 +1,6 @@
 # Proxy Discipline Manifest Sync
 
-> Synchronizes discipline phase/permission metadata from rule formation in serialized manifests into offering new capabilities downstream within graph-driven domains.. Intent: Enable passing new or modified feature permissions/configurations as states to enforcing artifacts or behavior as modeled on the manifestation.
+> Proxy Discipline Manifest Sync is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

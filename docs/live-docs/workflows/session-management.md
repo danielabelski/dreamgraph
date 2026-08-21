@@ -1,6 +1,6 @@
 # Session Management Process
 
-> This workflow manages user sessions, including creating, validating, and terminating sessions as users interact with the application.
+> Session Management Process is a parser-node evidenced from src/discipline/session.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** User logs in or out  
 **Source files:** src/discipline/session.ts  

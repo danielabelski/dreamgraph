@@ -1,6 +1,6 @@
 # Federated Cognitive Initialization
 
-> Combined mechanism coordinating cognitive model configuration across multiple instance types, using bootstrap fingerprint validation and federated exchange patterns.. Intent: This is needed to surface how multi-instance cultural policies adopt bootstrap combos and import archetypes as trusted intelligence elements across runtime deployments.
+> Federated Cognitive Initialization is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

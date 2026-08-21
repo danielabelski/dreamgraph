@@ -1,6 +1,6 @@
 # UI Migration Gap Analysis
 
-> A workflow and evidence structure that compares source and target semantic UI elements to produce porting steps, mappings, and gaps.. Intent: The UI registry exposes explicit migration-plan types and generation tools, suggesting a distinct workflow entity is missing between the registry and the broader UI migration plan model.
+> UI Migration Gap Analysis is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

@@ -1,6 +1,6 @@
 # Cognitive Audit
 
-> A process to audit cognitive operations and ensure consistency within the cognitive engine.. Intent: To provide an oversight mechanism for cognitive processes, ensuring they adhere to specified protocols and produce consistent results.
+> Cognitive Audit is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

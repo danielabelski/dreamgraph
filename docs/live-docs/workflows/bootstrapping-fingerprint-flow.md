@@ -1,6 +1,6 @@
 # Bootstrapping Fingerprint Flow
 
-> Defines the repeatable orchestration and runtime log point whereby cognitive model, provider, and endpoint triplets dictate instance feature calculation and collaborative thread handoff.. Intent: Represents the orchestration layer implied by value/object readiness and initialization network moment across registry, cognitive execution, and extension/plugin relations.
+> Bootstrapping Fingerprint Flow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

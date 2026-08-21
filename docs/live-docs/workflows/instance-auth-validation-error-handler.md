@@ -1,6 +1,6 @@
 # Instance Authentication Validation Error Handler
 
-> Workflow pattern dedicated to handling errors and failures during instance authentication validation.. Intent: To modularize and centralize error handling for authentication validation to improve maintainability and robustness.
+> Instance Authentication Validation Error Handler is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

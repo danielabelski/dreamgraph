@@ -46,6 +46,12 @@ export interface PassOutcomeSignal {
   progressStatus: ProgressStatus;
   nextStepIsNearTrivial?: boolean;
   nextStepIsDefining?: boolean;
+  /** Task-level state; completing a slice/checkpoint is not target completion. */
+  requestedTargetComplete?: boolean;
+  intermediateCheckpointComplete?: boolean;
+  locallyActionableRemainingWork?: boolean;
+  genuineBlocker?: boolean;
+  externalMaintenanceTimeout?: boolean;
   /** True when the pass produced no tool calls, no file edits, no
    * envelope summary, and no recommended actions — i.e. the model
    * "reported" only autonomy counters. */
@@ -344,8 +350,8 @@ export function shouldContinueAfterPass(
   signal: PassOutcomeSignal,
   actionSet?: RecommendedActionSet,
 ): ContinuationDecision {
-  if (signal.goalSufficientlyReached) {
-    return { shouldContinue: false, reason: 'Stopped: original goal sufficiently reached.', selectionMode: 'none' };
+  if (signal.requestedTargetComplete ?? signal.goalSufficientlyReached) {
+    return { shouldContinue: false, reason: 'Stopped: original goal sufficiently reached; user-requested completion target is complete.', selectionMode: 'none' };
   }
   if (signal.awaitingUserInput) {
     // The assistant explicitly handed control back to the user (asked
@@ -359,8 +365,27 @@ export function shouldContinueAfterPass(
   if (signal.progressStatus === 'stalled') {
     return { shouldContinue: false, reason: 'Stopped: progress has stalled.', selectionMode: 'none' };
   }
-  if (signal.hasBlockingFailure) {
-    return { shouldContinue: false, reason: 'Stopped: blocking failure encountered.', selectionMode: 'none' };
+  if (signal.genuineBlocker ?? signal.hasBlockingFailure) {
+    return { shouldContinue: false, reason: 'Stopped: genuine blocker encountered.', selectionMode: 'none' };
+  }
+  const eligibleLocalAction = actionSet?.actions.some((action) => action.eligible && action.withinScope) ?? false;
+  const locallyActionable = signal.locallyActionableRemainingWork ?? (signal.hasClearNextStep || eligibleLocalAction);
+  if (state.mode === 'autonomous' && locallyActionable && signal.nextStepWithinScope) {
+    if (state.totalAuthorizedPasses && state.remainingAutoPasses <= 0) {
+      return { shouldContinue: false, reason: 'Stopped: pass budget exhausted.', selectionMode: 'none' };
+    }
+    if (signal.uncertainty === 'high') {
+      return { shouldContinue: false, reason: 'Stopped: uncertainty too high for safe continuation.', selectionMode: 'none' };
+    }
+    return {
+      shouldContinue: true,
+      reason: signal.intermediateCheckpointComplete
+        ? 'Continuing automatically: intermediate checkpoint complete and requested target remains actionable.'
+        : signal.externalMaintenanceTimeout
+          ? 'Continuing automatically: external maintenance timed out but local requested work remains actionable.'
+          : 'Continuing automatically: requested target remains incomplete with locally actionable work.',
+      selectionMode: 'self',
+    };
   }
   // NOTE: post-anchor re-reading is NOT a stop condition. The token-economy
   // remedy at task level is structural pressure (write-reservation prompt in
@@ -378,7 +403,7 @@ export function shouldContinueAfterPass(
   if ((state.consecutiveEmptyPasses ?? 0) >= 2) {
     return { shouldContinue: false, reason: 'Paused: two empty passes in a row — select an action or type "resume" to continue.', selectionMode: 'user' };
   }
-  if (!signal.hasClearNextStep) {
+  if (!locallyActionable) {
     // Pause for user selection rather than hard-stopping. The webview will show
     // any action chips that were broadcast; the user can select one or type "resume".
     return { shouldContinue: false, reason: 'Paused: no clear next step identified — select an action or type "resume" to continue.', selectionMode: 'user' };

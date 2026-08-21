@@ -237,3 +237,8 @@
 | ✅ ADR-233 | [Chat output follows execution timeline with final report after tool trace](adr-233.md) | accepted | 2026-06-08T18:56:40.292Z | human |
 | ✅ ADR-234 | [Implementation status requires verified executable behavior, not plan/graph/doc updates](adr-234.md) | accepted | 2026-06-08T19:04:26.362Z | human |
 | ✅ ADR-235 | [Standalone Architect route boundary evidence is anchored on handleArchitectRoute](adr-235.md) | accepted | 2026-06-11T02:53:55.688Z | collaborative |
+| ✅ ADR-236 | [Incremental reconciliation uses a journaled cross-store commit boundary](adr-236.md) | accepted | 2026-08-14T11:02:47.551Z | collaborative |
+| ✅ ADR-237 | [Committed graph revisions are isolated by an instance read/write reconciliation barrier](adr-237.md) | accepted | 2026-08-14T11:14:01.695Z | collaborative |
+| ✅ ADR-238 | [Revision-scoped bridge discovery cache and bounded asynchronous audit evidence](adr-238.md) | accepted | 2026-08-21T20:09:32.665Z | collaborative |
+| ✅ ADR-239 | [Layer-owned typed timeout and cancellation outcomes for governed CLI/MCP execution](adr-239.md) | accepted | 2026-08-21T20:22:48.605Z | collaborative |
+| ✅ ADR-240 | [Separate API continuation envelopes from CLI execution and keep autonomous targets authoritative](adr-240.md) | accepted | 2026-08-21T20:59:39.591Z | collaborative |

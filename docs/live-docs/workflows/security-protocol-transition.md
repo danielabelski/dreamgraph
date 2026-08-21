@@ -1,6 +1,6 @@
 # Security Protocol Transition
 
-> A workflow managing transitions between different security protocols.. Intent: To manage and streamline the transition processes between various security protocols in response to system state changes or security audits.
+> Security Protocol Transition is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

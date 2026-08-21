@@ -185,7 +185,11 @@ export function inferPassOutcomeSignal(content: string | undefined): PassOutcome
     /uncertain|not sure|insufficient data|confidence: low/.test(lower) ? 'high'
       : /partial|likely|appears|confidence: medium/.test(lower) ? 'medium'
         : 'low';
-  const hasClearNextStep = /recommended next step|next step|i can continue|continue into the next slice|proceed next/.test(lower) || goalSufficientlyReached;
+  const hasClearNextStep = /recommended next step|next step|i can continue|continue into the next slice|proceed next|remaining (?:work|slices?)|pending (?:work|slices?)/.test(lower) || goalSufficientlyReached;
+  const requestedTargetComplete = goalSufficientlyReached && !/remaining (?:work|slices?)|pending (?:work|slices?)|still (?:need|needs|incomplete)|not (?:yet )?complete/.test(lower);
+  const intermediateCheckpointComplete = /checkpoint|slice|verification/.test(lower) && /complete|completed|passed|verified/.test(lower) && !requestedTargetComplete;
+  const externalMaintenanceTimeout = /(?:maintenance|scan|enrichment|dream).*timed?\s*out|timed?\s*out.*(?:maintenance|scan|enrichment|dream)/.test(lower);
+  const locallyActionableRemainingWork = hasClearNextStep && !awaitingUserInput && !hasBlockingFailure;
   const nextStepWithinScope = !/outside current scope|out of scope/.test(lower);
   const nextStepIsNearTrivial = /minor follow-up|small cleanup|trivial next step|quick verification/.test(lower);
   const nextStepIsDefining = /defining next step|significant|structural next slice|host-controlled continuation loop|clickable recommended/.test(lower);
@@ -199,6 +203,11 @@ export function inferPassOutcomeSignal(content: string | undefined): PassOutcome
     progressStatus,
     nextStepIsNearTrivial,
     nextStepIsDefining,
+    requestedTargetComplete,
+    intermediateCheckpointComplete,
+    locallyActionableRemainingWork,
+    genuineBlocker: hasBlockingFailure,
+    externalMaintenanceTimeout,
     awaitingUserInput,
   };
 }

@@ -76,6 +76,7 @@ import { extractNativeDataModel, hasNativeCodeFiles } from "./native-data-model.
 import { extractNativeUiElements, hasScannableUiFiles } from "./native-ui-scanner.js";
 import { applyScannerUiElements } from "./ui-registry.js";
 import { enrichParserNodesProgrammatic, type EnrichResult } from "./enrich-parser-nodes.js";
+import { buildCoverageLedger, validateCoverageLedger } from "./coverage-ledger.js";
 import { runDatastoreScan } from "./db-senses.js";
 import { autoSeedPrimaryDatastore } from "../instance/datastore-bootstrap.js";
 import {
@@ -883,6 +884,20 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
       };
     }
     current.evidence_ledger = ledger;
+    const coverageCanonical: Array<{ target: string; entity: Record<string, unknown> }> = [];
+    for (const spec of extractorRegistry) {
+      const entities = staged.get(spec.file) ?? stripTemplateStubs(await loadJsonArray<Record<string, unknown>>(spec.file));
+      coverageCanonical.push(...entities.map((entity) => ({ target: spec.target, entity })));
+    }
+    const coverageUi = await loadIndexableUIElements();
+    coverageCanonical.push(...coverageUi.map((entity) => ({ target: "ui", entity: entity as unknown as Record<string, unknown> })));
+    const coverageAuxiliary = await loadAuxiliaryEntities();
+    coverageCanonical.push(...coverageAuxiliary.entries.map((entity) => ({ target: "auxiliary", entity: entity as unknown as Record<string, unknown> })));
+    current.coverage_ledger = buildCoverageLedger(current, coverageCanonical);
+    const incrementalCoverageErrors = validateCoverageLedger(current.coverage_ledger);
+    if (incrementalCoverageErrors.length > 0) {
+      throw new Error(`SCAN_COVERAGE_INVALID: ${incrementalCoverageErrors.join("; ")}`);
+    }
 
     await opts.test_hooks?.afterExtractionAttempt?.(attempt + 1);
 
@@ -1565,6 +1580,20 @@ export async function runScanProject(opts: RunScanOptions = {}): Promise<ScanPro
       }).ledger;
     }
     scanState.evidence_ledger = fullLedger;
+    const canonical: Array<{ target: string; entity: Record<string, unknown> }> = [];
+    for (const spec of fullSpecs) {
+      const entities = stripTemplateStubs(await loadJsonArray<Record<string, unknown>>(spec.file));
+      canonical.push(...entities.map((entity) => ({ target: spec.target, entity })));
+    }
+    const uiElements = await loadIndexableUIElements();
+    canonical.push(...uiElements.map((entity) => ({ target: "ui", entity: entity as unknown as Record<string, unknown> })));
+    const auxiliary = await loadAuxiliaryEntities();
+    canonical.push(...auxiliary.entries.map((entity) => ({ target: "auxiliary", entity: entity as unknown as Record<string, unknown> })));
+    scanState.coverage_ledger = buildCoverageLedger(scanState, canonical);
+    const coverageErrors = validateCoverageLedger(scanState.coverage_ledger);
+    if (coverageErrors.length > 0) {
+      throw new Error(`SCAN_COVERAGE_INVALID: ${coverageErrors.join("; ")}`);
+    }
     await commitScanState(scanState);
     committedScanRevision = scanState.committed_revision;
   } catch (err) {

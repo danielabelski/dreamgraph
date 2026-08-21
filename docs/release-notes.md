@@ -1,5 +1,21 @@
 # DreamGraph Release Notes
 
+## v13.2.0 - Continuation Boundaries
+
+DreamGraph v13.2.0 removes Architect continuation-envelope mechanics from Codex CLI, Copilot CLI, and the standalone CLI bridge contract. Native API/controller continuation remains intact; controllers project only concrete execution tool requirements into CLI requests and evaluate requested-target completion above normalized CLI results.
+
+Autonomous Architect execution now distinguishes requested-target completion from intermediate checkpoint completion, actionable remaining work, genuine blockers, user decisions, and explicit resource-policy stops. A completed slice, verification pass, or status summary no longer ends the run while approved local work remains actionable. See [`../RELEASE_NOTES_v13.2.0.md`](../RELEASE_NOTES_v13.2.0.md) and ADR-240.
+
+## Scan completion and Codex MCP production rollout
+
+Committed full and incremental scans now publish a revision-scoped `coverage_ledger` alongside `scan_state.json`. Every canonical node is classified: active source-backed claims are eligible and begin as `pending` or retain `enriched`; nodes without active source support are `not_eligible` with the stable reason `no_active_source_support`. Graph health uses only eligible nodes as its enrichment denominator. Older scan state without a ledger remains readable and falls back to legacy health accounting until the next committed scan.
+
+`enrich_parser_nodes` now persists `enrichment_state.json` after every production batch. The checkpoint records scan revision, provider/model route fingerprint, per-node attempts and outcomes, and resumes only pending or policy-retryable nodes. Completed, skipped, terminal, and ineligible outcomes are not replayed; an unchanged completed run makes zero provider calls. Existing instances without checkpoint state create it on their next enrichment invocation.
+
+Timeout and cancellation follow ADR-239: one layer owns the typed terminal outcome, correlation and elapsed-stage evidence are retained, cancellation propagates upstream, and mutations are never automatically replayed. The Codex stdio bridge keeps JSON-RPC stdout protocol-pure, sends diagnostics on stderr, caches discovery only within one upstream session, emits progress notifications for long governed tools, and retains ordered bounded audit evidence with payload byte size and integrity hashes.
+
+Operators should run `npm run verify:scan-mcp-release`. It covers authoritative reconciliation, production coverage publication, enrichment interruption/resume, eligible-node graph health, bridge audit/cache behavior, typed timeouts, Codex streaming/progress, instance isolation, the deterministic four-route benchmark, and the TypeScript/Explorer build. Interpret deterministic benchmark timings as bridge bookkeeping only; live daemon/Codex timings must be reported separately from provider latency. Rollback requires no state migration: older readers ignore the optional ledger/checkpoint, and newer readers safely accept older state files.
+
 ## v13.1.0 - Additive Scan
 
 DreamGraph v13.1.0 adds additive scanning: compatible full scans establish an evidence ledger, while incremental passes classify repository deltas, parse only material changes, reconcile support conservatively, and commit one graph revision with zero LLM calls by default.

@@ -1,6 +1,6 @@
 # Bootstrap Run Audit
 
-> Encapsulated pattern tracking LLM bootstrap attempts along origin, completion result, reason, and fingerprint for instance/process compliance.. Intent: Elevated because tracking registry outcomes - including failures - is both a data workflow and an audit discipline, implementing per-instance fingerprint control resilience.
+> Bootstrap Run Audit is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

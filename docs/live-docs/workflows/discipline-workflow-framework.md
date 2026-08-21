@@ -1,6 +1,6 @@
 # Discipline Workflow Framework
 
-> A framework for defining and executing disciplinary workflows and processes within the DreamGraph system.. Intent: To establish a structured framework that supports the execution of various disciplinary workflows, ensuring consistency and reliability.
+> Discipline Workflow Framework is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

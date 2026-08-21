@@ -328,6 +328,9 @@ test("codex orchestrator: success writes isolated config, spawns codex exec with
   assert.equal(result.provider, "codex-cli");
   assert.equal(result.runId, "codex-run-001");
   assert.equal(result.failure, undefined);
+  assert.equal("continuation" in result, false);
+  assert.equal("continuationEnvelope" in result, false);
+  assert.equal("continuationToken" in result, false);
   assert.deepEqual(processLog.resolveCalls, ["codex"]);
   assert.equal(processLog.rootHelpCalls, 1);
   assert.equal(processLog.execHelpCalls, 1);

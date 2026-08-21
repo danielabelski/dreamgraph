@@ -371,6 +371,50 @@ export function synthesizeArchitectRecoveredContinuation(input: ArchitectEvidenc
   return { envelope: null, report, diagnostics };
 }
 
+export function synthesizeArchitectCliPassResult(input: {
+  assistantText: string;
+  context: ArchitectContinuationContext;
+  tool_trace_summary?: string[];
+  locally_actionable_remaining_work?: boolean;
+  requested_target_complete?: boolean;
+}): ArchitectContinuationParseResult {
+  const text = sanitizeText(input.assistantText || "CLI execution completed.", 4_000);
+  const lower = text.toLowerCase();
+  const inferredRemaining = /remaining (?:work|slices?)|pending (?:work|slices?)|next step|still (?:need|needs)|not (?:yet )?complete|continue (?:with|to|into)/.test(lower);
+  const inferredComplete = /all requested (?:work|targets?) (?:is|are) complete|requested target (?:is )?complete|fully complete|release workflow (?:has )?completed successfully/.test(lower) && !inferredRemaining;
+  const targetComplete = input.requested_target_complete ?? inferredComplete;
+  const actionable = !targetComplete && (input.locally_actionable_remaining_work ?? inferredRemaining);
+  const action: ArchitectRecommendedAction | null = actionable ? {
+    id: "continue-requested-target",
+    label: "Continue requested completion target",
+    rationale: "The CLI pass completed, but the user-requested target remains incomplete and locally actionable.",
+    kind: "continue",
+    prompt: "Continue the original user-requested completion target. Inspect current state, perform the next locally actionable work, and stop only for target completion or a genuine blocker requiring user input.",
+    safe: true,
+    recommended: true,
+    required_tools: [],
+    preferred_tools: [],
+    disabled_reason: null,
+  } : null;
+  const envelope: ArchitectContinuationEnvelope = {
+    schema: ARCHITECT_CONTINUATION_SCHEMA,
+    pass_id: "cli-execution",
+    status: "completed",
+    summary: text || "CLI execution completed.",
+    work_completed: [],
+    files_touched: [],
+    graph_entities_touched: [],
+    tool_trace_summary: input.tool_trace_summary ?? [],
+    graph_plan_updates: [],
+    evidence: input.tool_trace_summary ?? [],
+    blockers: [],
+    uncertainty: actionable || targetComplete ? 0 : 0.5,
+    stop_reason: targetComplete ? "requested_target_complete" : null,
+    recommended_actions: action ? [action] : [],
+  };
+  return { envelope, report: buildArchitectPassReport(envelope, [], input.context.now), diagnostics: [] };
+}
+
 export function synthesizeArchitectRouteFailureContinuation(input: ArchitectRouteFailureContinuationInput): ArchitectContinuationParseResult {
   const reason = sanitizeText(input.reason || "architect_route_failed", 240);
   const diagnostics = [reason, "architect_route_failed_before_envelope_parse"];

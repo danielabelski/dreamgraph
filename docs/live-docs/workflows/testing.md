@@ -1,6 +1,6 @@
 # Testing Process
 
-> This process runs automated tests to ensure the functionality and reliability of the application. It verifies that the application behaves as expected.
+> Testing Process is a parser-node evidenced from tests/cognitive-producers.test.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Test command executed  
 **Source files:** tests/cognitive-producers.test.ts  

@@ -6,6 +6,7 @@ import {
   decideArchitectContinuation,
   decodeArchitectContinuationToken,
   parseArchitectContinuationEnvelope,
+  synthesizeArchitectCliPassResult,
   synthesizeArchitectRecoveredContinuation,
   synthesizeArchitectRouteFailureContinuation,
 } from "../src/architect/continuation.js";
@@ -614,5 +615,33 @@ describe("Architect continuation contract", () => {
       selected_action: null,
     });
     expect(decision.continuation_token).toBeTruthy();
+  });
+});
+
+
+describe("CLI execution result normalization", () => {
+  const cliContext = { selected_plan_id: null, chat_scope: "project" as const, completed_passes: 1, max_passes: 4, now };
+
+  it("accepts a normal CLI result without continuation-envelope metadata and continues above the adapter", () => {
+    const parseResult = synthesizeArchitectCliPassResult({
+      assistantText: "Checkpoint complete. Remaining work is locally actionable; next step is to run verification.",
+      context: cliContext,
+      tool_trace_summary: ["patch_file: completed"],
+    });
+    const decision = decideArchitectContinuation({ parseResult, context: cliContext, autonomyAllowsContinue: true });
+    expect(parseResult.diagnostics).toEqual([]);
+    expect(parseResult.report.blockers).toEqual([]);
+    expect(decision.status).toBe("continue");
+    expect(decision.reason).toBe("recommended_action_selected");
+  });
+
+  it("stops when a CLI result says the user-requested target is fully complete", () => {
+    const parseResult = synthesizeArchitectCliPassResult({
+      assistantText: "All requested work is complete.",
+      context: cliContext,
+    });
+    const decision = decideArchitectContinuation({ parseResult, context: cliContext, autonomyAllowsContinue: true });
+    expect(decision.status).toBe("stopped");
+    expect(decision.reason).toBe("no_safe_continuation_action");
   });
 });

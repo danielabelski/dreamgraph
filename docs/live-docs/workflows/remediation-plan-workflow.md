@@ -1,6 +1,6 @@
 # Remediation Plan Workflow
 
-> A structured workflow abstraction for remediation plans consisting of ordered steps, test suggestions, and effort estimates.. Intent: Provides a conceptual and workflow bridge between cognitive_intervention outputs and workflow step definitions, promoting stronger cross-linking between workflow and cognitive domains.
+> Remediation Plan Workflow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

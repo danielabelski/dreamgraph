@@ -1,6 +1,6 @@
 # REM Cycle Quarantine Process
 
-> A workflow capturing the isolation and management of in-progress or unverified data during interrupted or adversarial REM cycles, as handled by the cognitive engine.. Intent: This workflow synthesizes the error-isolation and self-healing behavior suggested by the cognitive engine comments, enabling robust recovery and data integrity.
+> REM Cycle Quarantine Process is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

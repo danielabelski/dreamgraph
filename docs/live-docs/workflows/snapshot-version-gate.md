@@ -1,6 +1,6 @@
 # Snapshot Version Gate
 
-> A compatibility boundary that validates explorer graph snapshot versions before the UI accepts data.. Intent: The explorer API enforces a hard version contract with SnapshotVersionError, so this deserves recognition as an architectural gate between daemon-produced graph data and client rendering.
+> Snapshot Version Gate is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

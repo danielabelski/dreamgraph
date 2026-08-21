@@ -1,6 +1,6 @@
 # REST API Interaction Workflow
 
-> A user interaction workflow that orchestrates REST API calls to expose graph data and enable client extensions.. Intent: To formalize the flow of user requests through REST endpoints to backend cognitive and graph services, ensuring clear separation of concerns.
+> REST API Interaction Workflow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

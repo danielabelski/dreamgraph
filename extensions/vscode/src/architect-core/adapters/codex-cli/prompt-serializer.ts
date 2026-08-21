@@ -80,7 +80,7 @@ function renderToolsManifest(manifest: CliToolsManifest): string {
   lines.push(`  - ${manifest.server}:read_source_code is a safe core_read tool and is preferred when the target file, entity, or bounded line range is already known.`);
   lines.push(`  - ${manifest.server}:search_source_code is only a locator/fallback for finding anchors; switch back to read_source_code for focused inspection once the target is known.`);
   lines.push(`  - read_source_file is not a Codex/DreamGraph tool name. Normalize that wording to read_source_code before classifying the failure as a missing tool.`);
-  lines.push(`  - Codex provider-native shell/read restrictions do not apply to listed ${manifest.server} MCP tools. If a listed MCP read fails, classify it as missing_tool, policy_blocked, schema_args_failure, continuation_authorization_needed, or runtime_mcp_failure based on the actual tool error.`);
+  lines.push(`  - Codex provider-native shell/read restrictions do not apply to listed ${manifest.server} MCP tools. If a listed MCP read fails, classify it as missing_tool, policy_blocked, schema_args_failure, tool_authorization_needed, or runtime_mcp_failure based on the actual tool error.`);
   lines.push(`  - ${manifest.server}:modify_api_surface property metadata updates require class_name. If a property update fails schema validation, retry with class_name rather than treating the tool as unavailable.`);
   lines.push("");
   lines.push("Exposed command execution routes:");

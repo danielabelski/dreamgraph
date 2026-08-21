@@ -1,6 +1,6 @@
 # Settings Persistence Flow
 
-> This flow manages the saving and loading of user settings and configurations. It ensures that user preferences are retained across sessions.
+> Settings Persistence Flow is a parser-node evidenced from src/config/config.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** User updates settings  
 **Source files:** src/config/config.ts  

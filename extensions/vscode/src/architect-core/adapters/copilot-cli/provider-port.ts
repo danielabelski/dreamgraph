@@ -596,7 +596,7 @@ export function createCopilotCliProviderPort(
       // User cancellation takes precedence over any other failure.
       // Throw a typed AbortError so the pass driver / chat panel can
       // distinguish "user pressed stop" from "Copilot CLI exited
-      // non-zero" and skip autonomy continuation.
+      // non-zero" and skip ordinary result normalization.
       //
       // Attribution: prefer the EXTERNAL signal's reason (set by the
       // chat-panel: either the user clicking Stop, or the wrapper

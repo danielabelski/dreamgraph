@@ -1,6 +1,6 @@
 # Data Loading Process
 
-> This process handles the loading of various data files necessary for the application to function correctly. It ensures that all required data is available before the application begins processing requests.
+> Data Loading Process is a parser-node evidenced from src/api/routes.ts, src/instance/index.ts. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Server initialization  
 **Source files:** src/api/routes.ts, src/instance/index.ts  

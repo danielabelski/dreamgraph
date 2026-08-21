@@ -1,6 +1,6 @@
 # Cognitive Federated Archetype Exchange Validation
 
-> Speculative but systematic validation organizer mediating cognitive 'archetype' learning streams among federated partner engines based on historical, fingerprinted cognitive_registry bootstraps.. Intent: It parts federated lessons beyond local snapshot history, type matching learned archetype signaling, and protocol-compatible normalization enforcement.
+> Cognitive Federated Archetype Exchange Validation is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

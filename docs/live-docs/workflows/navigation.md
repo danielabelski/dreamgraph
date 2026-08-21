@@ -1,6 +1,6 @@
 # Navigation Flow
 
-> This workflow handles the navigation within the DreamGraph application, allowing users to move between different views and components seamlessly.
+> Navigation Flow is a parser-node evidenced from explorer/src/App.tsx. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** User navigates through the application  
 **Source files:** explorer/src/App.tsx  

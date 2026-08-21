@@ -1,6 +1,6 @@
 # Graph Enrichment Process
 
-> This process enhances the knowledge graph by adding additional metadata, keywords, and links between entities. It improves the cognitive engine's ability to reason and generate insights.
+> Graph Enrichment Process is a parser-node evidenced from scripts/enrich-graph.mjs. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Graph data update  
 **Source files:** scripts/enrich-graph.mjs  

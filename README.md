@@ -1,8 +1,8 @@
 ![DreamGraph](assets/dreamgraph.jpeg)
 
-# DreamGraph v13.1.0 - Additive Scan
+# DreamGraph v13.2.0 - Continuation Boundaries
 
-![Version](https://img.shields.io/badge/version-13.1.0-blue)
+![Version](https://img.shields.io/badge/version-13.2.0-blue)
 ![VS%20Code](https://img.shields.io/badge/VS%20Code-extension-0098FF?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-enabled-7C3AED)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -14,7 +14,7 @@
 
 **New here?** Use the [DreamGraph Easy Start guide](guide/00-easy-start.md) for a short path from install to Dashboard, Explorer, and Architect.
 
-**v13.1.0 - Additive Scan** adds daemon-authoritative incremental repository reconciliation. After a compatible full-scan baseline, `dg scan --incremental` classifies content changes, reparses only material evidence, preserves governed semantic knowledge, commits graph stores behind the reconciliation barrier, and makes enrichment an explicit follow-up instead of an implicit LLM cost.
+**v13.2.0 - Continuation Boundaries** makes CLI adapters continuation-envelope agnostic and keeps autonomous Architect execution working until the user-requested target is complete or genuinely blocked. Native API continuation remains controller-owned, while the v13.1 additive-scan, timeout/cancellation, audit, provenance, and MCP transport guarantees remain intact.
 
 DreamGraph is a governed architecture cognition layer for MCP-enabled software projects. It combines an instance-scoped daemon, CLI, architect beta, VS Code extension, dashboard, and a persistent knowledge graph so project understanding is grounded in source, ADRs, workflows, tests, runtime observations, and human review rather than any single file read or isolated chat turn.
 

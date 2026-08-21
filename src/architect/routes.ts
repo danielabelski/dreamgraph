@@ -83,6 +83,7 @@ import {
   decideArchitectContinuation,
   decodeArchitectContinuationToken,
   parseArchitectContinuationEnvelope,
+  synthesizeArchitectCliPassResult,
   synthesizeArchitectRecoveredContinuation,
   synthesizeArchitectRouteFailureContinuation,
   type ArchitectContinuationState,
@@ -4808,7 +4809,10 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
         model: architectConfig.model,
         timeoutMs: architectConfig.timeoutMs,
         verbosityMode,
-        toolManifest: continuationToolManifest,
+        toolRequirements: continuationToolManifest ? {
+          required_tools: continuationToolManifest.required_tools,
+          preferred_tools: continuationToolManifest.preferred_tools,
+        } : null,
         signal: executionController.signal,
         onToolTrace: (entry) => {
           toolTrace = mergeArchitectToolTraceEntries(toolTrace, entry);
@@ -4985,7 +4989,7 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
 
   const normalizedAssistantText = typeof assistantText === "string" ? assistantText.trim() : "";
   const routeFailureReason = classifyStandaloneRouteFailure(fallbackReason, normalizedAssistantText, adapter);
-  const assistantMissingEnvelope = normalizedAssistantText.length > 0 && !hasArchitectContinuationEnvelope(normalizedAssistantText);
+  const assistantMissingEnvelope = !isCliAdapterRoute && normalizedAssistantText.length > 0 && !hasArchitectContinuationEnvelope(normalizedAssistantText);
   if (assistantMissingEnvelope) {
     fallbackReason = fallbackReason ?? "assistant_text_missing_continuation_envelope";
   }
@@ -5008,6 +5012,12 @@ async function handleArchitectChatRequest(req: IncomingMessage, res: ServerRespo
       context: continuationContext,
       tool_trace_summary: toolTrace.map((entry) => `${entry.tool}: ${entry.status}`),
     })
+    : isCliAdapterRoute
+      ? synthesizeArchitectCliPassResult({
+        assistantText: finalAssistantContent,
+        context: continuationContext,
+        tool_trace_summary: toolTrace.map((entry) => `${entry.tool}: ${entry.status} ${entry.result_preview || ""}`.trim()),
+      })
     : assistantMissingEnvelope
       ? synthesizeArchitectRecoveredContinuation({
         reason: "assistant_text_missing_continuation_envelope",

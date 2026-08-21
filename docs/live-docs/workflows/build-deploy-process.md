@@ -1,6 +1,6 @@
 # Build and Deploy Process
 
-> This process automates the building and deployment of the application. It compiles the TypeScript code and prepares the application for production use.
+> Build and Deploy Process is a parser-node evidenced from package.json, tsconfig.json. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** Build command execution  
 **Source files:** package.json, tsconfig.json  

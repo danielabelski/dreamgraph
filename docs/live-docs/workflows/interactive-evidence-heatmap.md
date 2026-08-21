@@ -1,6 +1,6 @@
 # Interactive Evidence Heatmap
 
-> Composite visualization metamodel spanning multiple activated event aggregates over exploratory space/function interaction 'at heat'.. Intent: Binds canvas-control enrichers, user sequence summarizers, and result-repositories for concurrency analyses and pattern surfacing.
+> Interactive Evidence Heatmap is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

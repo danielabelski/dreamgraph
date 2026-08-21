@@ -1,6 +1,6 @@
 # Entity Verification Flow
 
-> A workflow to verify, score, and propagate confidence levels for entities and edges, surfaced through the UI for user/auditor awareness.. Intent: Supports the explicit status/confidence verification found in the webview protocol, which is critical for normalized graph quality.
+> Entity Verification Flow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

@@ -1,6 +1,6 @@
 # Regularized Plugin Bootstrapping
 
-> An architectural constraint and join model ensuring each plugin is successfully and safely bootstrapped once/best for each valid model config/fingerprint at deployment.. Intent: Substantiated by the bootstrapping semantics emergent in plugin+registry interaction and needed for anomaly remediation.
+> Regularized Plugin Bootstrapping is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

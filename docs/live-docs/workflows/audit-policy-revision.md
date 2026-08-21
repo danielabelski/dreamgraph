@@ -1,6 +1,6 @@
 # Audit Policy Revision
 
-> A workflow for revising and updating audit policies based on past audit results and changing security landscapes.. Intent: This concept should exist to ensure that audit policies remain effective and are updated in response to new security threats or compliance requirements.
+> Audit Policy Revision is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

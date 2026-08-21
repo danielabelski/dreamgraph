@@ -83,8 +83,7 @@ export interface CodexCliFailure {
     | "policy-blocked"
     | "schema-args-failure"
     | "provider-native-restriction"
-    | "continuation-authorization-needed"
-    | "missing-continuation-envelope"
+    | "tool-authorization-needed"
     | "runtime-mcp-failure"
     | "mcp-load-failed"
     | "registry-mismatch"
@@ -136,7 +135,7 @@ const SCHEMA_ARGUMENT_FAILURE_RE =
   /\b(?:invalid\s+(?:arguments?|args|input|params?)|schema(?:\s+validation)?|missing\s+required|required\s+(?:property|field)|unexpected\s+(?:argument|field|property)|unknown\s+(?:argument|field|property)|must\s+include|class_name)\b/i;
 const POLICY_BLOCKED_FAILURE_RE =
   /\b(?:blocked by policy|policy denial|policy denied|not allowed by policy|read-only sandbox|writing is blocked|rejected by user approval settings|user approval settings)\b/i;
-const CONTINUATION_AUTH_FAILURE_RE =
+const TOOL_AUTHORIZATION_FAILURE_RE =
   /\b(?:requires?\s+(?:authorization|approval)|authorization\s+required|approval\s+required|not\s+authorized|manual\s+authorization|user\s+cancelled\s+MCP\s+tool\s+call)\b/i;
 const MISSING_TOOL_FAILURE_RE =
   /\b(?:unknown tool|tool not found|no such tool|missing tool|tool .*not listed|not found.*tool|does not exist)\b/i;
@@ -414,7 +413,7 @@ export async function runCodexCli(
     const failure = processSucceeded && !terminalTranscriptFailure
       ? recorded.length === 0 && (transcriptWitnessedDreamGraphCalls || hasCancelledMcpToolCallFailure(transcript))
         ? transcriptMcpAuditMissingFailure(transcript)
-        : mcpRuntimeFailureFor(transcript, toolCalls) ?? missingContinuationEnvelopeFailure(transcript, toolCalls)
+        : mcpRuntimeFailureFor(transcript, toolCalls)
       : spawnFailureFor(spawn, transcript, toolCalls);
     const endedAtEpochMs = deps.clock.nowMs();
 
@@ -450,18 +449,6 @@ export async function runCodexCli(
       }
     }
   }
-}
-
-function missingContinuationEnvelopeFailure(transcript: CodexCliTranscript, toolCalls: readonly ClassifiedToolCall[]): CodexCliFailure | undefined {
-  if (countSuccessfulDreamGraphToolCalls(toolCalls) === 0) return undefined;
-  if (/```architect_continuation\s*[\s\S]*?```/i.test(transcript.assistantText || "")) return undefined;
-  const tools = toolCalls.map((entry) => `${entry.call.server}.${entry.call.tool}`).join(", ");
-  return {
-    code: "CONTINUATION_ENVELOPE_MISSING",
-    cause: "missing-continuation-envelope",
-    preSpawn: false,
-    message: `Codex CLI produced assistant text after DreamGraph MCP tool work but no architect_continuation envelope. Observed tools: ${tools || "none recorded"}.`,
-  };
 }
 
 function notifyRunId(input: CodexCliRunInput, runId: string): void {
@@ -706,16 +693,16 @@ function detailedMcpToolFailureFor(
           : schemaFailureGuidance(text),
       });
     }
-    if (CONTINUATION_AUTH_FAILURE_RE.test(text)) {
+    if (TOOL_AUTHORIZATION_FAILURE_RE.test(text)) {
       return dreamgraphToolFailure({
         code: "DREAMGRAPH_TOOL_AUTHORIZATION_NEEDED",
-        cause: "continuation-authorization-needed",
+        cause: "tool-authorization-needed",
         server,
         tool: rawTool,
         successfulDreamGraphCalls,
         transcript,
         guidance:
-          "The tool exists, but the pass needs an explicit bounded continuation authorization rather than a missing-tool recovery.",
+          "The tool exists, but its execution requires explicit authorization rather than a missing-tool recovery.",
       });
     }
     if (POLICY_BLOCKED_FAILURE_RE.test(text)) {

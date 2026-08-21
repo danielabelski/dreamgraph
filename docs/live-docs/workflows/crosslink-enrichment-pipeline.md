@@ -1,6 +1,6 @@
 # Cross-Link Enrichment Pipeline
 
-> A pipeline that supplements data model entities with enriched metadata, links, and keywords for improved reasoning and fact normalization.. Intent: Bridges generic entity definitions to their enriched, interconnected graph representations—critical for advanced cognitive workflows.
+> Cross-Link Enrichment Pipeline is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

@@ -1,6 +1,6 @@
 # DreamGraph Architecture
 
-Version: **13.1.0**
+Version: **13.2.0**
 License: **DreamGraph Source-Available Community License v2.0**
 
 ## Overview
@@ -104,6 +104,7 @@ src/
   src/architect/pulse.ts
   src/architect/repo-setup.ts
   src/architect/routes.ts
+  src/architect/timeout-hierarchy.ts
   src/architect/token-economy/standalone-store.ts
   src/architect/tool-selection.ts
   src/architect/verbosity.ts
@@ -239,24 +240,29 @@ src/
   src/tools/auxiliary-store.ts
   src/tools/bootstrap-instance.ts
   src/tools/code-senses.ts
+  src/tools/coverage-ledger.ts
   src/tools/db-senses.ts
   src/tools/enrich-parser-nodes.ts
   src/tools/enrich-seed-data.ts
+  src/tools/enrichment-state.ts
   src/tools/get-workflow.ts
   src/tools/git-senses.ts
   src/tools/graph-edge-mutations.ts
   src/tools/graph-health.ts
   src/tools/graph-integrity.ts
+  src/tools/incremental-reconciliation.ts
   src/tools/init-graph.ts
   src/tools/living-docs-exporter.ts
   src/tools/native-data-model.ts
   src/tools/native-ui-scanner.ts
   src/tools/plugin-ops.ts
   src/tools/query-resource.ts
+  src/tools/reconciliation-transaction.ts
   src/tools/register.ts
   src/tools/runtime-senses.ts
   src/tools/sanitize-entity.ts
   src/tools/scan-project.ts
+  src/tools/scan-state.ts
   src/tools/scan-types.ts
   src/tools/scanner-artifact-policy.ts
   src/tools/search-data-model.ts
@@ -272,6 +278,7 @@ src/
   src/utils/cache.ts
   src/utils/engine-env.ts
   src/utils/errors.ts
+  src/utils/graph-reconciliation-barrier.ts
   src/utils/json-store.ts
   src/utils/logger.ts
   src/utils/metrics.ts
@@ -465,6 +472,7 @@ scripts/
   scripts/add-backlinks.mjs
   scripts/audit-nodes.mjs
   scripts/audit-orphans.mjs
+  scripts/benchmark-scan-mcp.mjs
   scripts/benchmark-token-economy.mjs
   scripts/build-plugin-docs.ps1
   scripts/enrich-graph.mjs

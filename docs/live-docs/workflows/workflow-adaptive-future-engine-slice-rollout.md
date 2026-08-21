@@ -1,6 +1,6 @@
 # Adaptive Future Engine Slice Rollout
 
-> Rollout workflow for implementing and releasing Adaptive Future Engine slices. Slice 12 is implemented, verified, documented, and released as v11.0.0 - Adaptive Future Engine with synchronized package/docs/release artifacts and GitHub release tag v11.0.0.
+> Adaptive Future Engine Slice Rollout is a parser-node evidenced from plans/ADAPTIVE_FUTURE_ENGINE_IMPLEMENTATION_SLICES.md, plans/ADAPTIVE_FUTURE_ENGINE_IMPLEMENTATION_LOG.md. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:**   
 **Source files:** plans/ADAPTIVE_FUTURE_ENGINE_IMPLEMENTATION_SLICES.md, plans/ADAPTIVE_FUTURE_ENGINE_IMPLEMENTATION_LOG.md, src/cognitive/adaptive-future-scaffold.ts, src/tools/enrich-parser-nodes.ts, src/tools/solidify-insight.ts, docs/adaptive-future-engine.md, guide/14-adaptive-future-engine.md, RELEASE_NOTES_v11.0.0.md  

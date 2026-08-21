@@ -1,6 +1,6 @@
 {
   "name": "dreamgraph-explorer",
-  "version": "13.1.0",
+  "version": "13.2.0",
   "private": true,
   "type": "module",
   "description": "DreamGraph Explorer SPA — graphical graph browser served by the daemon at /explorer/",

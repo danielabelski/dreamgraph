@@ -325,6 +325,9 @@ test("orchestrator: happy path runs all six steps and returns ok=true", async ()
   assert.equal(result.failure, undefined);
   assert.equal(result.provider, "copilot-cli");
   assert.equal(result.runId, "run-fixture-001");
+  assert.equal("continuation" in result, false);
+  assert.equal("continuationEnvelope" in result, false);
+  assert.equal("continuationToken" in result, false);
   assert.ok(result.totalDurationMs >= 0);
 
   // Step 1: resolve + help probe.

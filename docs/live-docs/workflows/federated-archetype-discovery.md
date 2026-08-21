@@ -1,6 +1,6 @@
 # Federated Archetype Discovery Workflow
 
-> Patterns by which architectures, discovered or validated in one instance (archetypes), are shared and injected as hypotheses or detection heuristics in multiple instances via federation. Governs exchange policies, anonymized schema-building, and updates to local cognitive and enrichment flows.. Intent: This allows hypothesis export/import across deployments and logically couples enrichment flow adaptation to patterns detected externally.
+> Federated Archetype Discovery Workflow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

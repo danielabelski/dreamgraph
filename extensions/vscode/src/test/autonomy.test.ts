@@ -101,3 +101,69 @@ test('getAutonomyInstructionBlock includes visible counters and reporting contra
   assert.match(block, /output into chat after each pass/i);
   assert.match(block, /counters must remain visible/i);
 });
+
+
+test("autonomous completion model continues after an intermediate checkpoint with actionable slices", () => {
+  const decision = shouldContinueAfterPass(createAutonomyState("autonomous", 4), {
+    ...lowSignal,
+    goalSufficientlyReached: false,
+    requestedTargetComplete: false,
+    intermediateCheckpointComplete: true,
+    locallyActionableRemainingWork: true,
+  });
+  assert.equal(decision.shouldContinue, true);
+  assert.match(decision.reason, /intermediate checkpoint/);
+});
+
+test("autonomous completion model continues after verification while target remains incomplete", () => {
+  const decision = shouldContinueAfterPass(createAutonomyState("autonomous", 4), {
+    ...lowSignal,
+    goalSufficientlyReached: false,
+    requestedTargetComplete: false,
+    intermediateCheckpointComplete: true,
+    locallyActionableRemainingWork: true,
+  });
+  assert.equal(decision.shouldContinue, true);
+});
+
+test("checkpoint summary with remaining actionable work is not final completion", () => {
+  const decision = shouldContinueAfterPass(createAutonomyState("autonomous", 4), {
+    ...lowSignal,
+    goalSufficientlyReached: true,
+    requestedTargetComplete: false,
+    intermediateCheckpointComplete: true,
+    locallyActionableRemainingWork: true,
+  });
+  assert.equal(decision.shouldContinue, true);
+});
+
+test("requested target completion stops autonomous execution", () => {
+  const decision = shouldContinueAfterPass(createAutonomyState("autonomous", 4), {
+    ...lowSignal,
+    requestedTargetComplete: true,
+  });
+  assert.equal(decision.shouldContinue, false);
+  assert.match(decision.reason, /user-requested completion target/);
+});
+
+test("genuine blocker requiring user input stops autonomous execution", () => {
+  const decision = shouldContinueAfterPass(createAutonomyState("autonomous", 4), {
+    ...lowSignal,
+    requestedTargetComplete: false,
+    locallyActionableRemainingWork: false,
+    genuineBlocker: true,
+  });
+  assert.equal(decision.shouldContinue, false);
+  assert.match(decision.reason, /genuine blocker/);
+});
+
+test("external maintenance timeout does not terminate locally actionable implementation", () => {
+  const decision = shouldContinueAfterPass(createAutonomyState("autonomous", 4), {
+    ...lowSignal,
+    requestedTargetComplete: false,
+    locallyActionableRemainingWork: true,
+    externalMaintenanceTimeout: true,
+  });
+  assert.equal(decision.shouldContinue, true);
+  assert.match(decision.reason, /maintenance timed out/);
+});

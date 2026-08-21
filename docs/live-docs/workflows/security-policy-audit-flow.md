@@ -1,6 +1,6 @@
 # Security Policy Audit Flow
 
-> A workflow abstraction managing the audit trail and coordination of security policy changes and validation.. Intent: To streamline and coordinate security policy audits, ensuring audit trails are tightly integrated with policy enforcement workflows.
+> Security Policy Audit Flow is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

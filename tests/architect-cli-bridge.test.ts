@@ -1,25 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import { createArchitectCliContinuationManifestSection, serializeCliPrompt } from "../src/architect/cli-bridge.js";
+import { createArchitectCliToolRequirementsSection, serializeCliPrompt } from "../src/architect/cli-bridge.js";
 
-describe("Architect CLI bridge continuation manifest", () => {
-  it("serializes governed MCP tool requirements for continuation passes", () => {
-    const section = createArchitectCliContinuationManifestSection({
+describe("Architect CLI bridge execution requirements", () => {
+  it("serializes concrete governed MCP tool requirements without continuation semantics", () => {
+    const section = createArchitectCliToolRequirementsSection({
       required_tools: ["read_source_code", "patch_file"],
       preferred_tools: ["run_command", "register_ui_element"],
-      unavailable_required_tools: ["record_architecture_decision"],
     });
 
-    expect(section).toContain("Continuation tool manifest for this bounded pass:");
+    expect(section).toContain("Concrete tool requirements for this execution:");
     expect(section).toContain("required_tools: read_source_code, patch_file");
     expect(section).toContain("preferred_tools: run_command, register_ui_element");
-    expect(section).toContain("unavailable_required_tools: record_architecture_decision");
-    expect(section).toContain("governed dreamgraph MCP tools");
+    expect(section).toContain("controller-derived execution requirements");
+    expect(section).not.toContain("Continuation tool manifest");
     expect(section).toContain("instead of using a provider-native substitute");
   });
 
-  it("keeps non-continuation prompts explicit", () => {
-    expect(createArchitectCliContinuationManifestSection(null)).toBe("Continuation tool manifest: none for this pass.");
+  it("keeps ordinary CLI prompts free of continuation-envelope expectations", () => {
+    expect(createArchitectCliToolRequirementsSection(null)).toBe("Execution tool requirements: none beyond the adapter baseline.");
   });
 
   it("does not duplicate the user request in the CLI bridge prompt", () => {

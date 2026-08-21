@@ -137,7 +137,7 @@
 | cognitive_cycle | Cognitive Cycle | derived from grounded behavioral evidence | 0 |
 | cognitive_rem_cycle | Cognitive REM Cycle | derived from grounded behavioral evidence | 0 |
 | fact_snapshot_integration | Fact Snapshot Integration Hub | derived from grounded behavioral evidence | 0 |
-| release_workflow | Release Workflow | A new DreamGraph version is ready to publish and the release owner starts the release pass. | 7 |
+| release_workflow | Release Workflow | A new DreamGraph version is ready to publish and the release owner starts the release pass. | 0 |
 | rem_cycle_quarantine | REM Cycle Quarantine Process | derived from grounded behavioral evidence | 0 |
 | fact_snapshot_augmentation | Fact Snapshot Augmentation | derived from grounded behavioral evidence | 0 |
 | chat_message_audit_flow | Chat Message Audit Flow | derived from grounded behavioral evidence | 0 |
@@ -195,3 +195,6 @@
 | archetype_validation_workflow | Archetype Validation Workflow | derived from grounded behavioral evidence | 0 |
 | attachment_trace_flow | Attachment Trace Flow | derived from grounded behavioral evidence | 0 |
 | regularized_plugin_bootstrapping | Regularized Plugin Bootstrapping | derived from grounded behavioral evidence | 0 |
+| plugin_ui_registry_sync | Plugin UI Registry Sync | derived from grounded behavioral evidence | 0 |
+| workflow_incremental_evidence_lifecycle | Incremental Evidence Lifecycle | Explicit scan_project mode=incremental or dg scan --incremental request after a compatible full baseline | 6 |
+| workflow_scan_completion_and_mcp_performance | Scan Completion and MCP Performance Remediation | Committed scan, enrichment continuation, or Codex/daemon MCP invocation | 6 |

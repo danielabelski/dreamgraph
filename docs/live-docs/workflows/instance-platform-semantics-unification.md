@@ -1,6 +1,6 @@
 # Cross-platform Instance/Registry Semantics Hub
 
-> A harmonization abstraction for instance-powered registries (tool, plugin, UI) which ensures contract and migration semantics are uniformly mapped, registered, introspected or migrated across organizational or product boundaries.. Intent: Current workflow treats instance and UI contract flows quasi-independently—this node emerges from observing platform migration, instance lifecycle and cooperative registry mechanisms, enabling true cross-domain portability.
+> Cross-platform Instance/Registry Semantics Hub is a parser-node evidenced by the canonical graph record. Its declared fields, source provenance, and explicit links define how it participates in the project while semantic model output is unavailable. This evidence-only account is intentionally provisional and will be replaced by the next successful LLM enrichment pass.
 
 **Trigger:** derived from grounded behavioral evidence  
 

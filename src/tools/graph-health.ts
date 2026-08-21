@@ -23,6 +23,7 @@ import {
   type GraphMaintenanceState,
 } from "../cognitive/graph-maintenance-state.js";
 import { loadScanState } from "./scan-state.js";
+import { summarizeCoverage } from "./coverage-ledger.js";
 
 const execFileAsync = promisify(execFile);
 const HOLLOW_DESCRIPTION = /\b\d+\s+source file\(s\)|generated assembly|detected by (?:the )?scanner|auto-created from datastore introspection|declared in .+\(line \d+\)/i;
@@ -80,6 +81,14 @@ export interface GraphHealthReport {
   metrics: {
     semantic_density: number;
     enriched_nodes: GraphHealthMetric;
+    enrichment_debt: {
+      scan_revision: string | null;
+      eligible: number;
+      pending: number;
+      failed_retryable: number;
+      failed_terminal: number;
+      skipped: number;
+    };
     parser_only_nodes: number;
     hollow_descriptions: number;
     machine_name_leakage: number;
@@ -323,7 +332,12 @@ async function assessGraphHealthUnlocked(): Promise<GraphHealthReport> {
   const currentDbFingerprint = datastoreConnectionFingerprint(config.database.connectionString || process.env.DATABASE_URL);
   const databaseChanged = currentDbFingerprint !== null && currentDbFingerprint !== state.datastore_connection_fingerprint;
 
-  const enrichedCount = nodes.filter((node) => node.enrichment?.enriched === true).length;
+  const scanBaseline = await loadScanState();
+  const coverage = scanBaseline.status === "compatible" ? scanBaseline.state?.coverage_ledger : undefined;
+  const coverageSummary = coverage ? summarizeCoverage(coverage) : null;
+  const eligibleCoverageNodes = coverage ? Object.values(coverage.nodes).filter((node) => node.eligible) : [];
+  const enrichedCount = coverageSummary?.enriched ?? nodes.filter((node) => node.enrichment?.enriched === true).length;
+  const enrichmentDenominator = coverageSummary?.eligible ?? total;
   const parserOnly = nodes.filter(isParserOnly).length;
   const hollow = nodes.filter((node) => !isRichDescription(node)).length;
   const machineNames = nodes.filter(looksMachineNamed).length;
@@ -346,7 +360,7 @@ async function assessGraphHealthUnlocked(): Promise<GraphHealthReport> {
   const promotedCandidates = candidates.results.filter((result) => result.status === "validated").length || validated.edges.length;
   const promotionRate = promotionBase > 0 ? Math.min(1, promotedCandidates / promotionBase) : 0;
   const linkedMetric = metric(connected.linked, total, total > 0);
-  const enrichedMetric = metric(enrichedCount, total, total > 0);
+  const enrichedMetric = metric(enrichedCount, enrichmentDenominator, enrichmentDenominator > 0);
   const contractMetric = metric(contractCount, uiNodes.length, uiNodes.length > 0);
   const workflowMetric = metric(workflowCount, groups.workflow.length, groups.workflow.length > 0);
   const datastoreMetric = metric(datastoreCovered, datastoreTotal, dbConfigured);
@@ -358,7 +372,15 @@ async function assessGraphHealthUnlocked(): Promise<GraphHealthReport> {
   };
   if (total === 0) observe("empty_graph", "critical", "No canonical graph nodes are present.", "Architectural planning and retrieval have no project model to ground decisions.");
   if (parserOnly > 0) observe("parser_only_nodes", parserOnly / Math.max(total, 1) > 0.2 ? "critical" : "warning", `${parserOnly} parser-origin nodes lack successful LLM enrichment.`, "Mechanical nodes bias retrieval toward syntax and filenames instead of intent and responsibility.");
-  if (enrichedCount < total && total > 0) observe("unenriched_canonical_nodes", enrichedCount / total < 0.7 ? "critical" : "warning", `${total - enrichedCount}/${total} canonical nodes lack successful enrichment metadata.`, "Architect cannot distinguish deliberately modeled knowledge from unresolved structural discoveries with the same confidence.");
+  if (enrichedCount < enrichmentDenominator && enrichmentDenominator > 0) {
+    const debt = enrichmentDenominator - enrichedCount;
+    observe(
+      "unenriched_eligible_nodes",
+      enrichedCount / enrichmentDenominator < 0.7 ? "critical" : "warning",
+      `${debt}/${enrichmentDenominator} enrichment-eligible nodes remain unresolved for ${coverage?.revision ?? "the current legacy baseline"}.`,
+      "Pending or failed eligible knowledge lowers semantic confidence; ineligible canonical nodes are excluded from this debt.",
+    );
+  }
   if (hollow > 0) observe("hollow_descriptions", hollow / Math.max(total, 1) > 0.25 ? "critical" : "warning", `${hollow} nodes lack a substantive intent/how/why description.`, "Shallow descriptions weaken semantic matching, causal analysis, and implementation planning.");
   if (machineNames > 0) observe("machine_name_leakage", "warning", `${machineNames} nodes expose identifier-shaped names.`, "Machine labels make graph evidence harder to interpret and can collapse distinct architectural concepts.");
   if (semanticDensity < 0.65 && total > 0) observe("low_semantic_density", semanticDensity < 0.4 ? "critical" : "warning", `Semantic density is ${(semanticDensity * 100).toFixed(1)}%.`, "Sparse intent, contracts, and relations reduce retrieval precision and cross-node reasoning depth.");
@@ -377,7 +399,7 @@ async function assessGraphHealthUnlocked(): Promise<GraphHealthReport> {
   const recommendations: GraphMaintenanceRecommendation[] = [];
   const graphEmpty = total === 0;
   const repositoryStale = scanAge == null || scanAge > scanStaleHours || drift.modified >= majorChangeFiles || drift.commits > 0;
-  const semanticPoor = parserOnly > 0 || hollow > 0 || enrichedCount < total || semanticDensity < 0.65 || richUiCount < uiNodes.length;
+  const semanticPoor = parserOnly > 0 || hollow > 0 || enrichedCount < enrichmentDenominator || semanticDensity < 0.65 || richUiCount < uiNodes.length;
   // Smallest-capable operation ordering is deliberate: enrich before scan;
   // scan before bootstrap. Drift is the exception because enrichment cannot
   // discover source entities that are absent from the graph.
@@ -442,7 +464,17 @@ async function assessGraphHealthUnlocked(): Promise<GraphHealthReport> {
       auxiliary: groups.auxiliary.length, total,
     },
     metrics: {
-      semantic_density: Number(semanticDensity.toFixed(4)), enriched_nodes: enrichedMetric, parser_only_nodes: parserOnly,
+      semantic_density: Number(semanticDensity.toFixed(4)),
+      enriched_nodes: enrichedMetric,
+      enrichment_debt: {
+        scan_revision: coverage?.revision ?? null,
+        eligible: enrichmentDenominator,
+        pending: eligibleCoverageNodes.filter((node) => node.semantic_state === "pending").length,
+        failed_retryable: eligibleCoverageNodes.filter((node) => node.semantic_state === "failed_retryable").length,
+        failed_terminal: eligibleCoverageNodes.filter((node) => node.semantic_state === "failed_terminal").length,
+        skipped: eligibleCoverageNodes.filter((node) => node.semantic_state === "skipped").length,
+      },
+      parser_only_nodes: parserOnly,
       hollow_descriptions: hollow, machine_name_leakage: machineNames, contract_coverage: contractMetric,
       workflow_coverage: workflowMetric, datastore_coverage: datastoreMetric, ui_coverage: uiMetric,
       linked_nodes: linkedMetric, orphan_features: connected.orphanFeatures,
